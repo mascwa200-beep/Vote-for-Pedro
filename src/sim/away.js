@@ -1,12 +1,12 @@
-// Away teams, resolved on the d20.
+// Away teams.
 //
-// You pick who beams down. Checks roll against a DC, the captain's ability
+// You pick who beams down. Outcomes come from capability against difficulty
 // modifiers apply, officers contribute their own expertise, and the result is
 // shown as arithmetic the player can audit. People can be hurt, and people can
 // die, and the ones who die are the ones you sent.
 
 import { emit } from '../core/events.js';
-import { check, formatCheck, describeDC, DC } from '../rules/dice.js';
+import { resolve, formatResolution, describeDifficulty, DIFFICULTY as DC } from '../rules/resolve.js';
 
 export const HAZARD_LEVEL = {
   routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy },
@@ -120,10 +120,18 @@ export class AwayTeam {
     if (this.difficulty) targetDC = this.difficulty.dc(targetDC);
 
     const advantage = this.character?.hasAdvantageOn(spec.ability) ?? false;
-    const roll = check(rng, {
-      modifier, dc: targetDC, advantage,
+    // Training damps the swing rather than only shifting it. A veteran is not
+    // merely better on average; they are more *consistent*, which is the thing
+    // a flat die could never express and the reason this is not a d20 any more.
+    const steady = this.character?.hasFeat('tactical_genius') ? 0.5
+      : Math.min(0.45, Math.max(0, (modifier - 2) * 0.06));
+
+    const roll = resolve(rng, {
+      capability: modifier,
+      difficulty: targetDC,
+      advantage,
+      steady,
       luck: this.difficulty?.luck ?? 0,
-      critRange: this.character?.hasFeat('tactical_genius') ? 19 : 20,
       label: label || spec.label,
     });
 
@@ -133,8 +141,8 @@ export class AwayTeam {
     const result = {
       ...roll, checkType, spec, parts, officer,
       injured: null, killed: null, securityLost: 0,
-      formatted: formatCheck(roll, spec.label),
-      difficultyLabel: describeDC(targetDC),
+      formatted: formatResolution(roll, spec.label),
+      difficultyLabel: describeDifficulty(targetDC),
     };
 
     // Consequences scale with how badly it went, not merely whether it failed.

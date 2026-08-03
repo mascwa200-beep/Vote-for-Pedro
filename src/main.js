@@ -46,15 +46,39 @@ const BACKGROUND_SKILL = {
 };
 
 
-/** Render a d20 result as an auditable card: the die, the breakdown, the verdict. */
+/**
+ * Render an outcome as an auditable card: the verdict, the arithmetic that
+ * produced it, and the prose.
+ *
+ * Gameplay no longer rolls a d20, so this shows a margin — how comfortably or
+ * how badly — rather than a die face. Everything else is unchanged: the terms
+ * are still itemised, and the player can still see exactly which ability, which
+ * officer and which circumstance contributed what.
+ */
 function rollCard(r) {
   const cls = r.criticalSuccess ? 'crit' : r.criticalFailure ? 'fumble' : '';
   const breakdown = (r.parts ?? [])
     .filter((p) => p.value !== 0)
     .map((p) => `${p.source} ${p.value >= 0 ? '+' : ''}${p.value}`)
     .join('  ·  ');
+
+  // The margin bar: centred on the pass mark, filling right for a comfortable
+  // success and left for a bad failure. It reads at a glance in a way a number
+  // does not, which matters when the same modal is telling you an officer died.
+  const margin = typeof r.margin === 'number' ? r.margin : null;
+  const bar = margin === null ? null : el('div', { class: 'marginbar' }, [
+    el('i', {
+      class: margin >= 0 ? 'good' : 'bad',
+      style: {
+        width: `${Math.min(50, Math.abs(margin) * 3.2)}%`,
+        [margin >= 0 ? 'left' : 'right']: '50%',
+      },
+    }),
+  ]);
+
   return el('div', { class: `rollcard ${cls}`.trim() }, [
     el('div', { class: 'dieline', text: r.formatted ?? '' }),
+    bar,
     breakdown ? el('div', { class: 'breakdown', text: breakdown }) : null,
     r.text ? el('div', { class: 'breakdown', text: r.text }) : null,
   ]);

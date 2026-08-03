@@ -50,11 +50,18 @@ personal traits that are
 genuine trades rather than bonuses — *Reckless* gives advantage on every
 attack and disadvantage on every saving throw. Feats are chosen on promotion.
 
-**Everything uncertain resolves on a d20.** Ability modifiers, proficiency,
-advantage and disadvantage, natural 20s and natural 1s, degrees of success.
-The arithmetic is always shown and always itemised — which ability, which
-officer, which circumstance. Away missions, negotiations, and analyses all run
-through it.
+**The character sheet is D&D. The gameplay is not.** Ability scores,
+proficiency, feats, levels and advantage all still exist and still matter — but
+nothing in play resolves on a twenty-sided die. Outcomes are a *margin*:
+capability against difficulty, plus a bounded random swing, giving not just
+whether you succeeded but how comfortably. A flat die means a brilliant officer
+fumbles routine work one time in twenty forever; a bounded swing means being
+better makes you reliably better, and training makes you *consistent* as well
+as capable — something a d20 cannot express at all.
+
+The arithmetic is still shown and still itemised: which ability, which officer,
+which circumstance. What changed is the shape of the uncertainty, not how
+auditable it is.
 
 **Twelve difficulties, named up the command ladder** — Story, Cadet, Ensign,
 Lieutenant, Lieutenant Commander, Commander, Captain, Commodore, Rear Admiral,
@@ -118,7 +125,13 @@ If WebGL is unavailable the 2D display this game shipped with takes over,
 complete and unchanged. "No WebGL" means a different picture, not a broken
 game.
 
-**Combat.** Four independent shield facings. Subsystem targeting. STO-style
+**Combat.** Six independent shield facings — fore, aft, port, starboard, and
+now dorsal and ventral, because a ship in three dimensions can be shot at from
+above and below and pretending otherwise means climbing hits armour that
+geometrically is not there. Firing arcs are cones rather than angles, so a
+forward bank does not bear on something directly over the saucer merely because
+it is ahead in plan view. Hostile captains climb and dive to reach the facing
+you are not presenting. Subsystem targeting. STO-style
 power distribution across weapons, shields, engines, and auxiliary, with an
 EPS grid that takes real seconds to rebalance. Firing arcs, range falloff,
 shield bleedthrough, torpedo piercing, cloaks, boarding parties, hull fires,
@@ -184,7 +197,7 @@ engagement resolves identically on a 60 Hz and a 120 Hz panel.
 src/core/     rng, clock, event bus, consequence ledger, game state, saves
 src/gfx/      vector maths, WebGL, procedural meshes, hull blueprints, scene
 src/lang/     normalisation, phonetics, edit distance, gazetteer, intent lexicon
-src/rules/    d20 dice, character sheet, reputation tracks, difficulty ladder
+src/rules/    outcome resolution, character sheet, reputation, difficulty ladder
 src/sim/      ship, power, combat, AI, officers, skills, loadout, away teams, diplomacy
 src/world/    galaxy graph, encounters, and the systems/ships/crews/factions data
 src/missions/ mission state machine and the episode definitions
@@ -202,7 +215,7 @@ and 31 procedurally generated hulls averaging 230 triangles each.
 
 ```sh
 npm start      # serve at http://localhost:8099
-npm test       # 227 tests — RNG determinism, combat maths, dice, saves, balance
+npm test       # 235 tests — RNG determinism, combat maths, dice, saves, balance
 npm run build  # regenerate dist/starfleet-command.html
 
 ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh   # build the APK

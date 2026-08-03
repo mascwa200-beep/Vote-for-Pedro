@@ -514,39 +514,41 @@ try {
   await page.waitForTimeout(600);
   await dismissModals(page);
 
-  // ------------------------------------------------ the dice
+  // ------------------------------------------------ outcome resolution
+  //
+  // Gameplay no longer rolls a die. These checks assert the mechanism
+  // deterministically wherever they can, rather than sampling for both
+  // outcomes — a lucky run is a real possibility and must not fail the build.
   const dice = await page.evaluate(async () => {
     const g = globalThis.__app.game;
     const team = g.buildAwayTeam(['science', 'medical', 'tactical'], true);
-    const roll = (dc) => team.check(g.rng, 'science', { dc, hazard: 'routine' });
+    const attempt = (dc) => team.check(g.rng, 'science', { dc, hazard: 'routine' });
 
-    const sample = Array.from({ length: 30 }, () => roll(12));
-    // Assert the mechanism deterministically rather than sampling for both
-    // outcomes: a lucky run of 30 successes is a real possibility and would
-    // otherwise fail the build for no reason.
-    const impossible = Array.from({ length: 12 }, () => roll(60));
-    const trivial = Array.from({ length: 12 }, () => roll(-20));
+    const sample = Array.from({ length: 30 }, () => attempt(12));
+    const hopeless = Array.from({ length: 20 }, () => attempt(90));
+    const trivial = Array.from({ length: 20 }, () => attempt(-40));
 
     return {
       captured: globalThis.__app.recentRolls.length,
-      allInRange: sample.every((r) => r.natural >= 1 && r.natural <= 20),
+      noDie: sample.every((r) => r.natural === undefined),
+      marginDecides: sample.every((r) => r.success === (r.margin >= 0)),
       arithmeticShown: sample.every((r) => r.parts.length > 0),
-      // The die actually varies rather than returning a constant.
-      distinctFaces: new Set(sample.map((r) => r.natural)).size,
-      // Only a natural 20 beats an impossible DC; only a natural 1 fails a
-      // trivial one. Both are guaranteed by the rules, whatever the modifier.
-      impossibleOnlyOnNat20: impossible.every((r) => r.success === (r.natural === 20)),
-      trivialOnlyFailsOnNat1: trivial.every((r) => r.success === (r.natural !== 1)),
+      // The outcome actually varies rather than returning a constant.
+      distinctMargins: new Set(sample.map((r) => Math.round(r.margin))).size,
+      // The swing is bounded, so a wide enough gap is decided by capability.
+      hopelessAllFail: hopeless.every((r) => !r.success),
+      trivialAllPass: trivial.every((r) => r.success),
     };
   });
-  check('d20 rolls stay in range', dice.allInRange);
-  check('every roll itemises where its modifier came from', dice.arithmeticShown);
-  check('the die actually varies', dice.distinctFaces >= 5, `${dice.distinctFaces} distinct faces in 30 rolls`);
-  check('a natural 20 is the only thing that beats an impossible DC',
-    dice.impossibleOnlyOnNat20);
-  check('a natural 1 is the only thing that fails a trivial DC',
-    dice.trivialOnlyFailsOnNat1);
-  check('rolls are captured for the audit log', dice.captured >= 30, `${dice.captured}`);
+  check('gameplay does not roll a d20', dice.noDie);
+  check('the margin decides the outcome', dice.marginDecides);
+  check('every outcome itemises where its modifier came from', dice.arithmeticShown);
+  check('the outcome actually varies', dice.distinctMargins >= 5,
+    `${dice.distinctMargins} distinct margins in 30 attempts`);
+  check('a wide enough capability gap decides it either way',
+    dice.hopelessAllFail && dice.trivialAllPass,
+    `hopeless ${dice.hopelessAllFail}, trivial ${dice.trivialAllPass}`);
+  check('outcomes are captured for the audit log', dice.captured >= 30, `${dice.captured}`);
 
   // Difficulty must actually move the DCs.
   const dcShift = await page.evaluate(async () => {

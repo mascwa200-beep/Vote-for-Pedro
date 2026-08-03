@@ -18,18 +18,48 @@ function preferredRange(ship) {
   return 800;
 }
 
-/** Steer toward an absolute bearing. */
-function steerTo(ship, x, y) {
+/** Steer toward a point, in both axes. */
+function steerTo(ship, x, y, z = null) {
   ship.desiredHeading = Math.atan2(y - ship.y, x - ship.x) * 180 / Math.PI;
+  if (z !== null) {
+    const flat = Math.hypot(x - ship.x, y - ship.y);
+    ship.desiredPitch = Math.atan2(z - (ship.z ?? 0), flat) * 180 / Math.PI;
+  }
 }
 
-/** Present the healthiest shield facing toward the threat. */
+/**
+ * Present the healthiest shield facing toward the threat.
+ *
+ * Only the four lateral facings are candidates. Dorsal and ventral exist and
+ * take fire, but rolling a starship onto its back to put its belly toward an
+ * attacker is not a manoeuvre any captain here would order, and an AI that did
+ * it would look broken rather than clever.
+ */
 function presentStrongestShield(ship, threat) {
   const strongest = ['fore', 'starboard', 'aft', 'port']
     .reduce((best, f) => (ship.shieldPctOf(f) > ship.shieldPctOf(best) ? f : best), 'fore');
   const toThreat = Math.atan2(threat.y - ship.y, threat.x - ship.x) * 180 / Math.PI;
   const offset = { fore: 0, starboard: -90, aft: 180, port: 90 }[strongest];
   ship.desiredHeading = toThreat + offset;
+  ship.desiredPitch = 0;
+}
+
+/**
+ * Climb or dive to come at the target from a facing it is not presenting.
+ *
+ * The whole point of a third axis is that it is a way to get at a weak shield
+ * without having to out-turn anybody. An aggressive captain uses it; a
+ * defensive one levels off, because a ship that is climbing is a ship that is
+ * not shooting straight.
+ */
+function chooseElevation(ship, target, doctrine, rng) {
+  const dorsalWeak = target.shieldPctOf('dorsal') < target.shieldPctOf('ventral');
+  const bias = dorsalWeak ? 1 : -1;
+  const commitment = doctrine === 'aggressive' ? 1 : doctrine === 'ambush' ? 0.8 : 0.45;
+  const spread = ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1);
+  // Aim to sit above or below the target rather than level with it.
+  const wantOffset = bias * commitment * 220 * (0.7 + 0.3 * spread);
+  return (target.z ?? 0) + wantOffset;
 }
 
 export function chooseAction(ship, engagement, dt, opts = {}) {
@@ -83,7 +113,7 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
     steerTo(ship, target.x, target.y);
     ship.throttle = 1;
     if (distance < 40) {
-      target.takeDamage(ship.maxHull * 0.35, { bearing: target.bearingFrom(ship), type: 'kinetic', rng });
+      target.takeDamage(ship.maxHull * 0.35, { direction: target.directionFrom(ship), type: 'kinetic', rng });
       ship.destroy('deliberate collision');
       engagement.onDestroyed(ship, ship);
       engagement.pushLog(`${ship.name} rammed us.`, 'tactical');
@@ -94,7 +124,7 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   // ---- Cloak-and-strike ----
   if (doctrine === 'ambush' && ship.cloakCapable) {
     if (ship.cloaked) {
-      steerTo(ship, target.x, target.y);
+      steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
       ship.throttle = 0.9;
       // Decloak inside knife range with everything charged.
       if (distance < want * 0.8) {
@@ -115,15 +145,18 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   // ---- Manoeuvre ----
   if (decide) {
     if (distance > want * 1.15) {
-      steerTo(ship, target.x, target.y);
+      steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
       ship.throttle = doctrine === 'aggressive' ? 1 : 0.8;
     } else if (distance < want * 0.55) {
       // Too close for a cruiser's arcs — open the range.
       if (doctrine === 'attrition' || doctrine === 'territorial') {
-        steerTo(ship, ship.x - (target.x - ship.x), ship.y - (target.y - ship.y));
+        steerTo(ship,
+          ship.x - (target.x - ship.x),
+          ship.y - (target.y - ship.y),
+          (ship.z ?? 0) - ((target.z ?? 0) - (ship.z ?? 0)));
         ship.throttle = 0.7;
       } else {
-        steerTo(ship, target.x, target.y);
+        steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
         ship.throttle = 0.5;
       }
     } else {
@@ -134,6 +167,8 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
         const toTarget = Math.atan2(target.y - ship.y, target.x - ship.x) * 180 / Math.PI;
         const lead = doctrine === 'aggressive' ? 0 : 25;
         ship.desiredHeading = toTarget + (ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1)) * lead;
+        // Hold the elevation that keeps the target's weaker face toward us.
+        ship.desiredPitch = ship.elevationTo(target);
       }
       ship.throttle = 0.55;
     }

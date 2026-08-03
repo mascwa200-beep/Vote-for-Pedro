@@ -161,16 +161,28 @@ benefit.
 
 ## Combat
 
-### Shields have four facings
+### Shields have six facings
 
-Fore, aft, port, and starboard are tracked independently. Damage lands on the
-facing it arrives on. A shot that comes in over the bow does nothing to your
-aft shield, and once a facing is down, everything on that side reaches the
-hull directly.
+Fore, aft, port, starboard, **dorsal and ventral** are tracked independently.
+Damage lands on the facing it arrives on. A shot that comes in over the bow does
+nothing to your aft shield, and once a facing is down, everything on that side
+reaches the hull directly.
 
-This is why **turning matters**. When one facing is stripped, present a fresh
-one. The AI does this too — a damaged cruiser will deliberately show you its
-strongest side.
+The two vertical facings are what the third dimension costs and what it buys.
+An attacker who climbs above you is hitting your dorsal shield, not your bow —
+and hostile captains know it. An aggressive commander will deliberately work
+their way above or below you to reach whichever of the two you have let run
+down, because getting at a weak facing that way does not require out-turning
+you.
+
+This is why **turning matters**, and why **pitching** now matters too. When one
+facing is stripped, present a fresh one. `Come about` brings the target into
+your forward arc in both axes at once. Climbing is slower than turning on every
+hull in the game, so using the vertical is a real trade rather than a free extra
+direction to run in.
+
+Firing arcs are cones, not angles: a forward phaser bank does not bear on
+something directly above the saucer merely because it is ahead in plan view.
 
 Even a healthy shield bleeds about 8% of every hit through to the hull.
 Torpedoes pierce a further 25% on top of that, which is their entire purpose:
@@ -292,24 +304,42 @@ Shooting first is remembered and makes every subsequent hail harder.
 
 ---
 
-## The dice
+## How outcomes are decided
 
-Every uncertain action — an away team forcing a door, a negotiation, a
-science analysis — resolves on a **d20** against a target number. If you have
-played a tabletop RPG, you already know this system.
+Your captain is a role-playing character sheet — ability scores, proficiency,
+feats, levels, the lot. But nothing in play rolls a twenty-sided die.
+
+Every uncertain action — an away team forcing a door, a negotiation, a science
+analysis — produces a **margin**: your capability against the difficulty, plus
+a bounded random swing.
 
 ```
-d20 [14] + 7 = 21 vs DC 15 — success
+Science analysis: +6.2 — success
+Science +4  ·  Proficiency +3  ·  T'Pren +5  ·  Hazardous −4
 ```
 
 The arithmetic is always shown, and always itemised: which ability, which
-proficiency, which officer, which circumstance. Nothing is hidden.
+proficiency, which officer, which circumstance. Nothing is hidden. What you get
+back is not just whether it worked but *how comfortably*, and everything
+downstream reads that margin.
 
-- **Natural 20 always succeeds. Natural 1 always fails.** No modifier changes that.
-- **Advantage** rolls twice and keeps the higher; **disadvantage** keeps the
-  lower. They cancel each other exactly.
-- **Degree of success** matters, not just pass or fail. A comfortable success
-  is nearly free; a critical failure hurts people.
+**Why not a die.** A d20 is flat: every face is equally likely, which means a
+brilliant officer fumbles routine work one time in twenty forever, and no amount
+of expertise ever changes that. It also throws away information — a failure by
+one point and a failure by fifteen are the same failure. The margin fixes both.
+
+- **Being better makes you reliably better.** A capable captain is not 30%
+  more likely to succeed at a hard task than an incompetent one; they are
+  several times more likely.
+- **Training makes you consistent, not merely strong.** A veteran's outcomes
+  cluster tightly around what they are capable of. This is the thing a flat die
+  cannot express at all.
+- **Nothing is ever certain.** The swing is bounded but never zero. Hopeless
+  work occasionally comes off; trivial work is occasionally fumbled.
+- **Advantage** takes the better of two swings, **disadvantage** the worse.
+  They cancel each other exactly.
+- **The size of the margin drives the consequences.** A comfortable success is
+  nearly free. A disastrous failure gets people killed.
 
 ### Your six abilities
 

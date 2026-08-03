@@ -1,38 +1,94 @@
 // A ship in the simulation — player or otherwise.
 //
-// Shields are four independent facings. Subsystems degrade independently and
+// Shields are six independent facings. Subsystems degrade independently and
 // affect what the ship can actually do. Crew is a resource that dies.
 
 import { PowerGrid } from './power.js';
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
 
-export const FACINGS = ['fore', 'aft', 'port', 'starboard'];
+// Six facings, not four.
+//
+// A ship is a solid in space and can be shot at from above and below, and once
+// the simulation has a third axis, pretending otherwise means an attacker who
+// climbs is hitting a shield that geometrically is not there. The dorsal and
+// ventral facings are the real cost of going 3D: they touch damage resolution,
+// the AI, the display, saves, and balance. They are worth paying for once.
+export const FACINGS = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'];
 
 export const FACING_LABEL = {
   fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
+  dorsal: 'Dorsal', ventral: 'Ventral',
 };
+
+/**
+ * Ship-local axes, in simulation coordinates: +x is the bow, +y is starboard,
+ * +z is dorsal. The renderer maps this to its own +y-up convention; nothing
+ * else in the simulation needs to care.
+ */
+export const FACING_AXIS = {
+  fore: [1, 0, 0],
+  aft: [-1, 0, 0],
+  starboard: [0, 1, 0],
+  port: [0, -1, 0],
+  dorsal: [0, 0, 1],
+  ventral: [0, 0, -1],
+};
+
+const DEG = Math.PI / 180;
+
+/** A horizontal bearing in degrees, as a unit direction. */
+export function bearingToDirection(bearing) {
+  const b = bearing * DEG;
+  return [Math.cos(b), Math.sin(b), 0];
+}
 
 /** Modifiers that add rather than multiply. */
 export const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
 
 export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
-/** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
-export function facingForBearing(bearing) {
-  let b = ((bearing % 360) + 360) % 360;
-  if (b > 180) b -= 360;              // normalise to -180..180
-  if (b >= -45 && b <= 45) return 'fore';
-  if (b > 45 && b < 135) return 'starboard';
-  if (b < -45 && b > -135) return 'port';
-  return 'aft';
+/**
+ * Which shield facing covers a direction, given in ship-local coordinates.
+ *
+ * The dominant axis wins. This is the six-sided generalisation of the old
+ * quadrant test and agrees with it exactly in the plane: a bearing of 45°
+ * still lands on the bow, 46° still lands to starboard.
+ */
+export function facingForDirection(dir) {
+  const [x, y, z] = dir;
+  const ax = Math.abs(x);
+  const ay = Math.abs(y);
+  const az = Math.abs(z);
+  if (ax >= ay && ax >= az) return x >= 0 ? 'fore' : 'aft';
+  if (ay >= az) return y >= 0 ? 'starboard' : 'port';
+  return z >= 0 ? 'dorsal' : 'ventral';
 }
 
-/** Is `bearing` inside a weapon's firing arc? */
-export function inArc(bearing, weapon) {
-  let rel = bearing - (weapon.facing ?? 0);
-  rel = ((rel % 360) + 360) % 360;
-  if (rel > 180) rel -= 360;
-  return Math.abs(rel) <= (weapon.degrees ?? 360) / 2;
+/** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
+export function facingForBearing(bearing) {
+  return facingForDirection(bearingToDirection(bearing));
+}
+
+/**
+ * Is a direction inside a weapon's firing arc?
+ *
+ * A cone test rather than an angle comparison, so an arc restricts elevation as
+ * well as bearing — a forward phaser bank does not bear on something directly
+ * above the saucer just because it is ahead in plan view.
+ *
+ * Accepts a local direction vector or, for the two-dimensional callers that
+ * predate this, a plain bearing in degrees.
+ */
+export function inArc(dirOrBearing, weapon) {
+  const dir = Array.isArray(dirOrBearing) ? dirOrBearing : bearingToDirection(dirOrBearing);
+  const half = (weapon.degrees ?? 360) / 2;
+  if (half >= 180) return true;
+
+  const axis = bearingToDirection(weapon.facing ?? 0);
+  const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+  const cos = (dir[0] * axis[0] + dir[1] * axis[1] + dir[2] * axis[2]) / len;
+  // Guard the floating-point edge so a shot exactly on the arc boundary is in.
+  return cos >= Math.cos(half * DEG) - 1e-9;
 }
 
 export class Ship {
@@ -55,9 +111,12 @@ export class Ship {
     // ---- durability ----
     this.maxHull = cls.hull;
     this.hull = cls.hull;
-    this.maxShield = cls.shields / 4;          // per facing
+    // Divided six ways rather than four. The total pool is unchanged; what
+    // changes is that each facing holds less of it and there are two more
+    // surfaces to be hit through.
+    this.maxShield = cls.shields / FACINGS.length;
     this.shields = Object.fromEntries(FACINGS.map((f) => [f, this.maxShield]));
-    this.shieldRegen = cls.shieldRegen / 4;    // per facing per second
+    this.shieldRegen = cls.shieldRegen / FACINGS.length;
     this.shieldsUp = true;
 
     // ---- crew ----
@@ -66,11 +125,17 @@ export class Ship {
     this.injured = 0;
 
     // ---- movement ----
-    this.x = 0; this.y = 0;
+    // x/y is the plane, z is altitude. Heading is a compass bearing and pitch
+    // is nose-up in degrees; roll is carried for the renderer and for banking
+    // into a turn, and has no effect on where weapons bear.
+    this.x = 0; this.y = 0; this.z = 0;
     this.heading = 0;              // degrees, 0 = +x
+    this.pitch = 0;                // degrees, + = nose up
+    this.roll = 0;                 // degrees, + = starboard wing down
     this.throttle = 0;             // 0..1 of impulse
     this.desiredHeading = 0;
-    this.velocity = { x: 0, y: 0 };
+    this.desiredPitch = 0;
+    this.velocity = { x: 0, y: 0, z: 0 };
 
     // ---- systems ----
     this.power = new PowerGrid(cls.powerCap);
@@ -124,7 +189,7 @@ export class Ship {
     const prevMaxHull = this.maxHull;
 
     this.maxHull = this.cls.hull * this.mods.hullMax;
-    this.maxShield = (this.cls.shields / 4) * this.mods.shieldMax;
+    this.maxShield = (this.cls.shields / FACINGS.length) * this.mods.shieldMax;
 
     if (prevMaxShield > 0) {
       const ratio = this.maxShield / prevMaxShield;
@@ -163,7 +228,7 @@ export class Ship {
   get hullPct() { return this.maxHull > 0 ? this.hull / this.maxHull : 0; }
   get shieldPct() {
     const total = FACINGS.reduce((n, f) => n + this.shields[f], 0);
-    return this.maxShield > 0 ? total / (this.maxShield * 4) : 0;
+    return this.maxShield > 0 ? total / (this.maxShield * FACINGS.length) : 0;
   }
   shieldPctOf(facing) {
     return this.maxShield > 0 ? this.shields[facing] / this.maxShield : 0;
@@ -204,7 +269,46 @@ export class Ship {
     return (speedFactor + (this.evasive ? 0.16 : 0)) * this.mod('defense');
   }
 
-  /** Bearing from this ship to a point, relative to current heading. */
+  /**
+   * A world-space offset expressed in this ship's own frame.
+   *
+   * Yaw first, then pitch — the inverse of how the orientation is applied — so
+   * the result is a unit vector in the ship-local axes that FACING_AXIS and
+   * inArc are defined against. Roll is deliberately not undone: rolling the
+   * ship spins the hull about its own nose and moves nothing relative to it.
+   */
+  localDirection(dx, dy, dz) {
+    const h = this.heading * DEG;
+    const ch = Math.cos(h);
+    const sh = Math.sin(h);
+    const x1 = dx * ch + dy * sh;
+    const y1 = -dx * sh + dy * ch;
+
+    const p = (this.pitch ?? 0) * DEG;
+    const cp = Math.cos(p);
+    const sp = Math.sin(p);
+    const x2 = x1 * cp + dz * sp;
+    const z2 = -x1 * sp + dz * cp;
+
+    const len = Math.hypot(x2, y1, z2) || 1;
+    return [x2 / len, y1 / len, z2 / len];
+  }
+
+  /** Direction to a target, in this ship's frame. */
+  directionTo(target) {
+    return this.localDirection(target.x - this.x, target.y - this.y, (target.z ?? 0) - (this.z ?? 0));
+  }
+
+  /** Direction an attacker lies in, in this ship's frame — which facing it hits. */
+  directionFrom(source) {
+    return this.localDirection(source.x - this.x, source.y - this.y, (source.z ?? 0) - (this.z ?? 0));
+  }
+
+  /**
+   * Horizontal bearing to a target, relative to current heading.
+   * Retained because plenty of the game reasons in the plane — the AI's
+   * steering, the log lines, the 2D display — and none of that needs elevation.
+   */
   bearingTo(target) {
     const abs = Math.atan2(target.y - this.y, target.x - this.x) * 180 / Math.PI;
     let rel = abs - this.heading;
@@ -222,8 +326,15 @@ export class Ship {
     return rel;
   }
 
+  /** Elevation angle to a target in degrees, + = above us. */
+  elevationTo(target) {
+    const dz = (target.z ?? 0) - (this.z ?? 0);
+    const flat = Math.hypot(target.x - this.x, target.y - this.y);
+    return Math.atan2(dz, flat) * 180 / Math.PI;
+  }
+
   distanceTo(target) {
-    return Math.hypot(target.x - this.x, target.y - this.y);
+    return Math.hypot(target.x - this.x, target.y - this.y, (target.z ?? 0) - (this.z ?? 0));
   }
 
   // ---------------- per-step update ----------------
@@ -240,20 +351,38 @@ export class Ship {
       this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
     }
 
-    // Movement.
+    // Movement — yaw, then pitch, then integrate along the nose.
     let diff = this.desiredHeading - this.heading;
     diff = ((diff % 360) + 360) % 360;
     if (diff > 180) diff -= 360;
     const maxTurn = this.turnRate * dt;
-    this.heading += Math.abs(diff) <= maxTurn ? diff : Math.sign(diff) * maxTurn;
-    this.heading = ((this.heading % 360) + 360) % 360;
+    const yawStep = Math.abs(diff) <= maxTurn ? diff : Math.sign(diff) * maxTurn;
+    this.heading = (((this.heading + yawStep) % 360) + 360) % 360;
+
+    // Pitching is slower than yawing on every hull here. Starships are built
+    // around a horizontal plane and a captain who climbs to escape is trading
+    // time for the manoeuvre, which is what makes elevation a real decision
+    // rather than a free extra direction to run in.
+    const wantPitch = Math.max(-70, Math.min(70, this.desiredPitch ?? 0));
+    const pitchDiff = wantPitch - this.pitch;
+    const maxPitch = this.turnRate * 0.55 * dt;
+    this.pitch += Math.abs(pitchDiff) <= maxPitch ? pitchDiff : Math.sign(pitchDiff) * maxPitch;
+
+    // Bank into the turn. Cosmetic, but it is what makes a hull read as flying
+    // rather than sliding, and it costs one lerp.
+    const wantRoll = Math.max(-38, Math.min(38, -yawStep / Math.max(dt, 1e-6) * 0.9));
+    this.roll += (wantRoll - this.roll) * Math.min(1, dt * 2.2);
 
     const speed = this.maxSpeed * this.throttle;
-    const rad = this.heading * Math.PI / 180;
-    this.velocity.x = Math.cos(rad) * speed;
-    this.velocity.y = Math.sin(rad) * speed;
+    const h = this.heading * DEG;
+    const p = this.pitch * DEG;
+    const flat = Math.cos(p) * speed;
+    this.velocity.x = Math.cos(h) * flat;
+    this.velocity.y = Math.sin(h) * flat;
+    this.velocity.z = Math.sin(p) * speed;
     this.x += this.velocity.x * dt;
     this.y += this.velocity.y * dt;
+    this.z = (this.z ?? 0) + this.velocity.z * dt;
 
     // Shield regeneration — suppressed while cloaked or shields down.
     if (this.shieldsUp && !this.cloaked && this.subsystems.shields > 0.05) {
@@ -311,10 +440,16 @@ export class Ship {
    * Apply damage at a bearing.
    * @returns {object} { shieldDamage, hullDamage, facing, penetrated, crewKilled }
    */
-  takeDamage(amount, { bearing = 0, type = 'energy', shieldPiercing = 0, rng = null, subsystem = null } = {}) {
+  takeDamage(amount, {
+    bearing = 0, direction = null, type = 'energy',
+    shieldPiercing = 0, rng = null, subsystem = null,
+  } = {}) {
     if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
 
-    const facing = facingForBearing(bearing);
+    // A direction covers all six facings; a bare bearing is the planar case and
+    // is still accepted, because plenty of damage in this game — boarding,
+    // hazards, collisions — has no meaningful elevation.
+    const facing = direction ? facingForDirection(direction) : facingForBearing(bearing);
     let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist')));
 
     // Borg-style adaptation: repeated damage of one type stops working.
@@ -506,7 +641,19 @@ export class Ship {
       torpedoes: data.torpedoes ?? s.torpedoes, antimatter: data.antimatter ?? 100,
       fires: data.fires ?? 0, coreEjected: data.coreEjected ?? false,
     });
+    // Shield migration, from four facings to six.
+    //
+    // A save written before the third axis existed has no dorsal or ventral
+    // entry, and its four values were recorded against a per-facing maximum a
+    // half larger than the current one. Spreading over the defaults supplies
+    // the two new facings at full charge, and the clamp keeps the old four from
+    // reading as over-full. An old commission therefore loads as a ship that
+    // has been to a starbase, which is the kindest reading available and the
+    // only one that cannot produce a shield above its own maximum.
     s.shields = { ...s.shields, ...(data.shields ?? {}) };
+    for (const f of FACINGS) {
+      s.shields[f] = Math.max(0, Math.min(s.maxShield, s.shields[f] ?? s.maxShield));
+    }
     s.subsystems = { ...s.subsystems, ...(data.subsystems ?? {}) };
     s.power = PowerGrid.load(data.power, s.cls.powerCap);
     return s;
