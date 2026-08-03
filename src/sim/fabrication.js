@@ -18,6 +18,7 @@
 // needs two days is a plan you commit to rather than a button you press.
 
 import { emit } from '../core/events.js';
+import { clamp } from '../core/num.js';
 
 /**
  * What a ship carries that can be turned into something else.
@@ -235,10 +236,15 @@ export function advanceFabrication(game, hours) {
  */
 export function salvageWreck(game, rng, { tier = 3 } = {}) {
   game.stores = game.stores ?? { ...STARTING_STORES };
+  // Both call sites take the tier from real ship data, so this is defence in
+  // depth — but salvage writes straight into stores, and stores are saved. A
+  // negative tier would have *removed* materials from a wreck the player had
+  // just stripped, and a NaN one would have made the whole hold unusable.
+  const t = clamp(tier, 1, 10);
   const haul = {
-    duranium: Math.round(rng.range(4, 10) * tier * 0.5),
-    isolinear: Math.round(rng.range(2, 7) * tier * 0.4),
-    salvage: Math.round(rng.range(3, 9) * tier * 0.5),
+    duranium: Math.round(rng.range(4, 10) * t * 0.5),
+    isolinear: Math.round(rng.range(2, 7) * t * 0.4),
+    salvage: Math.round(rng.range(3, 9) * t * 0.5),
   };
   for (const [m, n] of Object.entries(haul)) game.stores[m] = (game.stores[m] ?? 0) + n;
   emit('salvage', haul);
