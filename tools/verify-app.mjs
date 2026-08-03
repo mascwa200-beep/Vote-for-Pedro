@@ -443,24 +443,35 @@ try {
   const dice = await page.evaluate(async () => {
     const g = globalThis.__app.game;
     const team = g.buildAwayTeam(['science', 'medical', 'tactical'], true);
-    const results = [];
-    for (let i = 0; i < 20; i++) {
-      const r = team.check(g.rng, 'science', { dc: 12, hazard: 'routine' });
-      results.push({ natural: r.natural, total: r.total, dc: r.dc, success: r.success, parts: r.parts.length });
-    }
+    const roll = (dc) => team.check(g.rng, 'science', { dc, hazard: 'routine' });
+
+    const sample = Array.from({ length: 30 }, () => roll(12));
+    // Assert the mechanism deterministically rather than sampling for both
+    // outcomes: a lucky run of 30 successes is a real possibility and would
+    // otherwise fail the build for no reason.
+    const impossible = Array.from({ length: 12 }, () => roll(60));
+    const trivial = Array.from({ length: 12 }, () => roll(-20));
+
     return {
-      results,
       captured: globalThis.__app.recentRolls.length,
-      allInRange: results.every((r) => r.natural >= 1 && r.natural <= 20),
-      arithmeticShown: results.every((r) => r.parts > 0),
-      someSucceed: results.some((r) => r.success),
-      someFail: results.some((r) => !r.success),
+      allInRange: sample.every((r) => r.natural >= 1 && r.natural <= 20),
+      arithmeticShown: sample.every((r) => r.parts.length > 0),
+      // The die actually varies rather than returning a constant.
+      distinctFaces: new Set(sample.map((r) => r.natural)).size,
+      // Only a natural 20 beats an impossible DC; only a natural 1 fails a
+      // trivial one. Both are guaranteed by the rules, whatever the modifier.
+      impossibleOnlyOnNat20: impossible.every((r) => r.success === (r.natural === 20)),
+      trivialOnlyFailsOnNat1: trivial.every((r) => r.success === (r.natural !== 1)),
     };
   });
   check('d20 rolls stay in range', dice.allInRange);
   check('every roll itemises where its modifier came from', dice.arithmeticShown);
-  check('checks both succeed and fail', dice.someSucceed && dice.someFail);
-  check('rolls are captured for the audit log', dice.captured >= 20, `${dice.captured}`);
+  check('the die actually varies', dice.distinctFaces >= 5, `${dice.distinctFaces} distinct faces in 30 rolls`);
+  check('a natural 20 is the only thing that beats an impossible DC',
+    dice.impossibleOnlyOnNat20);
+  check('a natural 1 is the only thing that fails a trivial DC',
+    dice.trivialOnlyFailsOnNat1);
+  check('rolls are captured for the audit log', dice.captured >= 30, `${dice.captured}`);
 
   // Difficulty must actually move the DCs.
   const dcShift = await page.evaluate(async () => {
