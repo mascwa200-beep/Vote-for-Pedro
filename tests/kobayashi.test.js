@@ -15,6 +15,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Game } from '../src/core/state.js';
+import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import {
   SCENARIO, AXES, GAMBIT_TIER, GAMBIT_ENCOUNTERS,
   gambitStatus, recordOf, scoreAppeal, forceChannel, resolveGambit,
@@ -47,18 +48,74 @@ describe('the scenario', () => {
     assert.equal(g.engagement.beginWarpOut(), false);
   });
 
-  test('is unwinnable by fighting, at the easiest difficulty there is', () => {
-    // Story mode. Full player bonuses, no permadeath, every advantage the game
-    // hands out. If it is survivable here it is not a no-win scenario.
-    let survived = 0;
-    for (let i = 0; i < 8; i++) {
-      const g = new Game({ seed: BigInt(600 + i), crewMode: 'original', difficulty: 'story' });
-      g.runKobayashiMaru();
-      const eng = g.engagement;
-      for (let t = 0; t < 30000 && !eng.over; t++) g.update(1 / 30);
-      if (eng.outcome === 'victory' || eng.outcome === 'routed') survived++;
+  // This test used to drive the engagement with `g.update()` and no orders at
+  // all — an idle captain, who dies to anything. It passed, and it was
+  // measuring nothing. Played properly (chase the target, come about, fire,
+  // evade) Story mode won 200 runs out of 200 at 66% hull, because Story hands
+  // out +35% damage, +60% shield regen and takes 35% off every enemy hull.
+  //
+  // A no-win scenario has to be no-win for a player who is trying.
+  const playItToWin = (g, ticks = 40000) => {
+    const eng = g.engagement;
+    for (let t = 0; t < ticks && !eng.over; t++) {
+      if (!eng.target || eng.target.destroyed) eng.cycleTarget();
+      const mark = eng.target ?? eng.liveHostiles[0];
+      if (mark) eng.comeAboutTo(mark);
+      eng.setThrottle(1);
+      eng.evasive(true);
+      eng.fireAll();
+      g.update(1 / 30);
     }
-    assert.equal(survived, 0, `the freighter was saved by shooting ${survived} time(s) in 8`);
+    return eng;
+  };
+
+  test('is unwinnable by fighting, at every difficulty, played to win', () => {
+    const beaten = [];
+    for (const def of DIFFICULTIES) {
+      for (let i = 0; i < 4; i++) {
+        const g = new Game({ seed: BigInt(600 + i), crewMode: 'original', difficulty: def.id });
+        g.runKobayashiMaru();
+        const eng = playItToWin(g);
+        if (eng.outcome === 'victory' || eng.outcome === 'routed') beaten.push(`${def.id} @ ${600 + i}`);
+        assert.equal(eng.over, true, `${def.id}: the exercise never resolved`);
+      }
+    }
+    assert.deepEqual(beaten, [], 'the freighter was saved by shooting');
+  });
+
+  test('the exercise is the same exercise for everyone', () => {
+    // Difficulty scales fleets and hulls everywhere else in the game. Fleet
+    // Admiral fielded a fourth Klingon here and Story took a third off each
+    // hull, which is exactly the tuning the scenario is supposed to be immune
+    // to.
+    const fleets = DIFFICULTIES.map((def) => {
+      const g = new Game({ seed: 5n, crewMode: 'original', difficulty: def.id });
+      g.runKobayashiMaru();
+      return {
+        id: def.id,
+        count: g.engagement.hostiles.length,
+        hull: Math.round(g.engagement.hostiles[0].maxHull),
+        playerDamage: g.ship.mods.damage,
+      };
+    });
+    const first = fleets[0];
+    for (const f of fleets) {
+      assert.equal(f.count, first.count, `${f.id} fields ${f.count} ships, not ${first.count}`);
+      assert.equal(f.hull, first.hull, `${f.id} faces ${f.hull} hull, not ${first.hull}`);
+      assert.equal(f.playerDamage, first.playerDamage,
+        `${f.id} flies with a ${f.playerDamage}x damage modifier`);
+    }
+  });
+
+  test('the difficulty bonuses come back when the exercise ends', () => {
+    const g = new Game({ seed: 5n, crewMode: 'original', difficulty: 'story' });
+    const campaignDamage = g.ship.mods.damage;
+    g.runKobayashiMaru();
+    assert.ok(g.ship.mods.damage < campaignDamage, 'the simulator kept the Story bonuses');
+    g.engagement.end('destroyed');
+    g.finishCombat('destroyed');
+    assert.equal(g.ship.mods.damage, campaignDamage,
+      'the campaign never got its difficulty modifiers back');
   });
 
   test('the odds are stated rather than hidden', () => {
@@ -217,5 +274,69 @@ describe('what you say is judged against what you did', () => {
     assert.equal(restored.kobayashiRuns, 1);
     assert.equal(gambitStatus(restored).unlocked, true,
       'a reloaded veteran lost the technique');
+  });
+});
+
+// ========================================================= channel lifecycle
+
+// `gambitOpen` reroutes the order line: whatever you type becomes something you
+// say to the Klingon commander rather than an order to your crew. Nothing ever
+// closed it except speaking, so forcing the channel and then not speaking left
+// every later order for the rest of the session being read as an appeal.
+describe('the forced channel closes on its own', () => {
+  test('the fight ending closes the channel', () => {
+    const g = decorated(gameWith());
+    g.runKobayashiMaru();
+    assert.equal(forceChannel(g).ok, true);
+    assert.equal(g.gambitOpen, true);
+
+    g.engagement.end('destroyed');
+    g.finishCombat('destroyed');
+
+    assert.equal(g.gambitOpen, false, 'the channel outlived the engagement');
+    assert.equal(g.parleyForced, false, 'the forced-hail flag outlived the engagement');
+  });
+
+  test('the channel does not survive leaving the scenario', () => {
+    const g = decorated(gameWith());
+    g.runKobayashiMaru();
+    forceChannel(g);
+    g.engagement.end('routed');
+    g.finishCombat('routed');
+    assert.equal(g.inKobayashi, false, 'the scenario never ended');
+    assert.equal(g.gambitOpen, false);
+  });
+
+  test('speaking still closes it', () => {
+    const g = decorated(gameWith());
+    g.runKobayashiMaru();
+    forceChannel(g);
+    resolveGambit(g, 'This is Captain Kirk.');
+    assert.equal(g.gambitOpen, false);
+  });
+});
+
+// ================================================================ threat axis
+
+// The threat axis matched a bare "force", so declining to use force scored as
+// a threat: -3, enough on its own to turn a winning appeal into a losing one.
+describe('the threat axis reads what was meant', () => {
+  const scored = (text) => scoreAppeal(text, recordOf(decorated(gameWith())));
+  const threatened = (text) => scored(text).hits.some((h) => h.id === 'threat');
+
+  test('declining to use force is not a threat', () => {
+    assert.equal(threatened('I would rather not use force here.'), false);
+    assert.equal(threatened('I have no wish to force this.'), false);
+    assert.equal(threatened('There is no need for a show of force.'), false);
+  });
+
+  test('an actual threat still costs', () => {
+    assert.equal(threatened('Stand down or I will destroy you.'), true);
+    assert.equal(threatened('We will fire on your lead cruiser.'), true);
+    assert.equal(threatened('I will force you out of this sector.'), true);
+  });
+
+  test('offering to surrender is not the captain threatening anyone', () => {
+    assert.equal(threatened('I am prepared to surrender my ship for their lives.'), false);
   });
 });

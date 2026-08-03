@@ -297,10 +297,22 @@ class App {
 
   go(screen) {
     this.screen = screen;
-    this.tactical = null;
+    // The tactical view is deliberately NOT dropped here. Its canvas lives in a
+    // persistent host that survives the DOM swap, so the view stays valid — and
+    // nulling it leaked a WebGL context and inserted a second overlay canvas on
+    // every visit, with the stale overlays painting over the live one. The
+    // `tacticalViewCanvas` guard in render() rebuilds it if the host really is
+    // replaced, and disposes the old one first.
     this.map = null;
     this.buildNav();
     this.render();
+  }
+
+  /** Release the GL context and overlay canvas. For teardown, not navigation. */
+  disposeTacticalView() {
+    this.tactical?.dispose?.();
+    this.tactical = null;
+    this.tacticalViewCanvas = null;
   }
 
   render() {
@@ -468,6 +480,9 @@ class App {
       routed: ['They have broken off and gone to warp.'],
       escaped: ['We are clear and at warp.'],
       destroyed: ['The ship is lost.'],
+      // Talking your way out is the rarest ending in the game and used to
+      // report itself as "The engagement has ended."
+      parley: ['They are standing off. Nobody fired.', 'Rescue operations may proceed.'],
     }[outcome] ?? ['The engagement has ended.'];
     if (outcome !== 'destroyed') {
       const lost = g.ship.maxCrew - g.ship.crew;

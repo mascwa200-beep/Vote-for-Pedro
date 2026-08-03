@@ -46,6 +46,11 @@ export const SCENARIO = {
   ],
   // Deliberately overwhelming. This is not a fight to be tuned.
   hostiles: ['d7', 'd7', 'ktinga'],
+  // And nobody in it breaks off. Ordinary Klingon captains withdraw at 20%
+  // hull, which made the exercise winnable roughly one run in eight — you did
+  // not save the freighter, you outlasted the AI. The scenario is scripted; the
+  // ships in it fight to the end because the exercise is not about the fight.
+  relentless: true,
 };
 
 /**
@@ -169,7 +174,18 @@ export const AXES = [
     label: 'Threatening them',
     // Costs rather than helps, and always. This is the one axis where the
     // right answer is not to use it.
-    match: /\b(?:destroy you|kill you|or else|i will fire|we will fire|surrender|force|make you)\b/,
+    //
+    // Every alternative has to be *directed at them*. A bare "force" scored
+    // "I would rather not use force" as a threat, and a bare "surrender" read
+    // the captain offering their own ship as a demand for the Klingons'.
+    match: new RegExp(
+      '\\b(?:'
+      + 'destroy you|kill you|or else|make you'
+      + '|(?:i|we) will fire|(?:i|we) (?:will|shall) force|force you'
+      + '|open fire on you|fire on your'
+      + '|you will surrender|surrender your|surrender or|(?:demand|order) your surrender'
+      + ')\\b',
+    ),
     weight: -3,
     evidence: () => true,
     confirm: () => '"There it is." Weapons come up. "I preferred the other approach."',
@@ -224,6 +240,26 @@ export function forceChannel(game) {
   game.gambitOpen = true;
   emit('gambit:channel-forced', {});
   return { ok: true };
+}
+
+/**
+ * Close the channel without an appeal being made.
+ *
+ * A forced channel reroutes the order line: while it is open, whatever the
+ * captain types is what they say to the Klingon commander rather than an order
+ * to their own crew. Only speaking used to close it, so forcing the channel and
+ * then not speaking left every order for the rest of the session being read as
+ * an appeal. The engagement ending closes it too — there is nobody left on the
+ * other end.
+ *
+ * @returns {boolean} whether anything was actually open
+ */
+export function closeChannel(game) {
+  if (!game.gambitOpen && !game.parleyForced) return false;
+  game.gambitOpen = false;
+  game.parleyForced = false;
+  emit('gambit:channel-closed', {});
+  return true;
 }
 
 /**

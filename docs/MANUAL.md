@@ -317,6 +317,12 @@ fighting.** Three cruisers, no escape course, three hundred and eighty-one
 people on a freighter you should not be near. That is not a difficulty value
 to be tuned around — it is what the exercise is for.
 
+Which is why **the difficulty setting does not reach inside it.** The simulator
+runs the same program for a cadet and a fleet admiral: the same three ships,
+the same hulls, and your own ship flying as designed rather than with whatever
+the ladder normally hands you. Nobody in it breaks off, either. It is an
+exercise, and an exercise you can turn down is not one.
+
 There is a way out. You do not have it yet.
 
 **What it costs.** Tier 5 standing with the Klingon Empire, and a ledger that
@@ -506,6 +512,9 @@ What actually changes:
 
 - **Story** — nothing is permanently lost, the ship cannot be destroyed, and
   failed rolls of 1 are re-rolled twice. The episodes without the arithmetic.
+  Losing the ship is not free, though: salvage crews bring her back under tow
+  at 30% hull, no shields and a quarter magazine, and the loss goes into the
+  record. You keep your commission, not your paintwork.
 - **Cadet** — officers can be wounded but not killed.
 - **Ensign** — permadeath and ship loss switch on.
 - **Lieutenant** — the intended experience. No thumb on the scale either way.

@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Game } from '../src/core/state.js';
-import { Ship } from '../src/sim/ship.js';
+import { Ship, FACINGS } from '../src/sim/ship.js';
 import { RNG } from '../src/core/rng.js';
 import { Character, CAREERS } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
@@ -557,5 +557,90 @@ test('each way out of a trap actually gets you out', () => {
     d.g.resolveEncounter('trap_wait');
     assert.equal(d.g.encounter, null, `${t.id}: waiting did not clear the trap`);
     assert.ok(d.g.clock.stardate > sdBefore, `${t.id}: waiting cost no time`);
+  }
+});
+
+// ============================================================ shield transfer
+
+// Reinforcing takes a fraction from every other facing and dumps it into one,
+// which is capped at 1.2x max. With six facings the intake was 1.75 facings'
+// worth against headroom of 0.2 — most of the charge simply evaporated, turning
+// an emergency defensive move into a large net loss. Whatever the cap absorbs
+// is what the other facings should pay, and no more.
+test('reinforcing a shield does not destroy the charge it cannot hold', () => {
+  const ship = new Ship('constitution', { rng: new RNG(7n) });
+  const total = (s) => FACINGS.reduce((n, f) => n + s.shields[f], 0);
+
+  const before = total(ship);
+  assert.ok(ship.reinforceShield('fore'));
+  const after = total(ship);
+
+  assert.ok(after <= before + 1e-9, 'reinforcing created charge out of nothing');
+  assert.ok(
+    after >= before - 1e-9,
+    `reinforcing destroyed ${(before - after).toFixed(1)} of ${before.toFixed(1)} shield charge`,
+  );
+  assert.ok(ship.shields.fore > ship.maxShield, 'the reinforced facing did not gain');
+});
+
+test('reinforcing stops drawing once the target facing is capped', () => {
+  const ship = new Ship('constitution', { rng: new RNG(9n) });
+  const cap = ship.maxShield * 1.2;
+  ship.shields.fore = cap;
+  const others = FACINGS.filter((f) => f !== 'fore').map((f) => ship.shields[f]);
+
+  ship.reinforceShield('fore');
+
+  assert.ok(Math.abs(ship.shields.fore - cap) < 1e-9, 'a full facing kept charging');
+  FACINGS.filter((f) => f !== 'fore').forEach((f, i) => {
+    assert.ok(
+      Math.abs(ship.shields[f] - others[i]) < 1e-9,
+      `${f} paid for a transfer that could not be received`,
+    );
+  });
+});
+
+test('a reinforced facing draws proportionally from the others', () => {
+  const ship = new Ship('constitution', { rng: new RNG(11n) });
+  ship.shields.aft = ship.maxShield;          // full
+  ship.shields.port = ship.maxShield * 0.25;  // nearly gone
+  const aftBefore = ship.shields.aft;
+  const portBefore = ship.shields.port;
+
+  ship.reinforceShield('fore');
+
+  const aftPaid = aftBefore - ship.shields.aft;
+  const portPaid = portBefore - ship.shields.port;
+  assert.ok(aftPaid > portPaid, 'the fuller facing did not carry more of the load');
+  assert.ok(portPaid >= 0, 'a facing gained charge from a transfer away from it');
+});
+
+// ============================================================== ship loss
+
+// Story and Cadet both promise, on the difficulty screen, that "the ship cannot
+// be lost". Nothing read the flag: losing your ship on Story ended the
+// commission exactly as it does on Fleet Admiral. The screen has said this
+// since the ladder shipped.
+test('the difficulties that promise the ship cannot be lost keep the promise', () => {
+  for (const def of DIFFICULTIES) {
+    const g = gameWith({ difficulty: def.id });
+    g.startCombat([new Ship('d7', { name: 'IKS Test' })]);
+    g.ship.destroy('test');
+    g.engagement.end('destroyed');
+    g.finishCombat('destroyed');
+
+    if (def.shipLoss) {
+      assert.equal(g.over, true, `${def.id}: the ship was lost and the commission continued`);
+      continue;
+    }
+    assert.equal(g.over, false, `${def.id}: the screen says the ship cannot be lost, and it was`);
+    assert.equal(g.ship.destroyed, false, `${def.id}: the ship is still a wreck`);
+    assert.ok(g.ship.hullPct > 0, `${def.id}: the ship came back with no hull`);
+    // Survivable, not free — you are towed in, and it shows.
+    assert.ok(g.ship.hullPct < 0.5, `${def.id}: losing the ship cost nothing at all`);
+    assert.ok(
+      g.log.some((l) => /tow|salvage|adrift|hulk|scuttl/i.test(l.text ?? '')),
+      `${def.id}: nothing in the log says what happened to the ship`,
+    );
   }
 });

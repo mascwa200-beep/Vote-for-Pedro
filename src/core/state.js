@@ -21,7 +21,9 @@ import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
 import { SYSTEM_BY_ID } from '../world/systems.data.js';
 
 import { MissionBook } from '../missions/engine.js';
-import { SCENARIO as KOBAYASHI, gambitStatus, forceChannel, resolveGambit, recordOf } from '../missions/kobayashi.js';
+import {
+  SCENARIO as KOBAYASHI, gambitStatus, forceChannel, resolveGambit, recordOf, closeChannel,
+} from '../missions/kobayashi.js';
 import { EPISODES } from '../missions/episodes/index.js';
 
 import { Character } from '../rules/character.js';
@@ -122,6 +124,10 @@ export class Game {
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
+    // Explicitly false rather than undefined: `over` is read as a boolean all
+    // over the UI and the save, and an unset field reads as "not over" by luck.
+    this.over = false;
+    this.overReason = null;
     this.latinum = 500;
 
     // ---- stores and the machine shop ----
@@ -155,7 +161,14 @@ export class Game {
     this.ship.applyMods(this.loadout.shipMods());
     // The captain's own abilities are part of the ship's performance.
     if (this.character) this.ship.applyMods(this.character.shipMods());
-    if (this.difficulty) this.ship.applyMods(this.difficulty.playerMods());
+    // Difficulty is a setting on the campaign, not on a training simulator.
+    // Inside a scripted scenario the player flies the ship as designed, because
+    // an exercise that got easier when you moved a slider would not be an
+    // exercise. Story mode's bonuses alone turned the no-win scenario into a
+    // 40-out-of-40 win at 66% hull.
+    if (this.difficulty && !this.scriptedScenario) {
+      this.ship.applyMods(this.difficulty.playerMods());
+    }
 
     // The biofunction monitor and a physician captain both reduce casualties
     // from hull hits, not merely on away missions.
@@ -665,9 +678,14 @@ export class Game {
   startCombat(hostiles, opts = {}) {
     if (!hostiles.length) return null;
 
-    const fleet = this.scaleHostileFleet(hostiles);
-    const enemyMods = this.difficulty.enemyMods();
-    for (const s of fleet) s.applyMods(enemyMods);
+    // A scripted scenario fields exactly the ships it names, unmodified. Both
+    // levers otherwise apply: Fleet Admiral added a fourth Klingon to the
+    // Kobayashi Maru and Story took a third off every hull in it.
+    const fleet = opts.scripted ? hostiles : this.scaleHostileFleet(hostiles);
+    if (!opts.scripted) {
+      const enemyMods = this.difficulty.enemyMods();
+      for (const s of fleet) s.applyMods(enemyMods);
+    }
 
     // Signature powers are once per engagement, so a new one restores them.
     this.character?.refresh();
@@ -728,11 +746,20 @@ export class Game {
 
     this.engagement = null;
     this.firstStrike = false;
+    // The scenario and any channel forced open inside it end with the fight.
+    // Left set, `gambitOpen` turns every later typed order into an appeal to a
+    // Klingon commander who is no longer there.
+    closeChannel(this);
+    this.inKobayashi = false;
+    if (this.scriptedScenario) {
+      this.scriptedScenario = false;
+      this.applyAllMods();   // hand the difficulty bonuses back
+    }
     this.mode = MODES.BRIDGE;
     this.setAlert(outcome === 'destroyed' ? 'red' : 'normal');
     emit('combat:resolved', { outcome, killed });
 
-    if (outcome === 'destroyed') this.gameOver('ship lost with all hands');
+    if (outcome === 'destroyed') this.loseTheShip();
   }
 
   // ------------------------------------------------------------------ missions
@@ -864,6 +891,39 @@ export class Game {
     }
   }
 
+  /**
+   * The ship has been destroyed. Whether that ends the commission is a
+   * difficulty setting the game already advertises and never honoured.
+   *
+   * Story and Cadet both say, on the difficulty screen, that "the ship cannot
+   * be lost". Nothing read the flag, so losing your ship on Story ended the
+   * commission exactly as it does on Fleet Admiral. It is not free at the lower
+   * rungs either — you are towed in with a third of a hull and the log says so.
+   */
+  loseTheShip() {
+    if (this.difficulty?.def?.shipLoss !== false) {
+      return this.gameOver('ship lost with all hands');
+    }
+
+    this.ship.restore();
+    this.ship.hull = this.ship.maxHull * 0.3;
+    for (const f of Object.keys(this.ship.shields)) this.ship.shields[f] = 0;
+    this.ship.shieldsUp = false;
+    this.ship.torpedoes = Math.floor(this.ship.maxTorpedoes * 0.25);
+    this.ship.antimatter = Math.min(this.ship.antimatter, 35);
+
+    this.pushLog(
+      `${this.ship.name} was left adrift and under tow. Salvage crews have her at `
+      + '30% hull, no shields, and a quarter magazine. The record stands.',
+      'engineering',
+    );
+    this.ledger.record('ship_crippled', {
+      text: `${this.ship.name} lost and recovered at ${this.location?.name ?? 'unknown'}`,
+      system: this.locationId,
+    });
+    emit('ship:recovered', { ship: this.ship });
+  }
+
   gameOver(reason) {
     this.over = true;
     this.overReason = reason;
@@ -900,6 +960,16 @@ export class Game {
       fabrication: this.fabrication,
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
+
+      // Runtime flags. These are cheap to write and expensive to lose: the
+      // promotion feat vanishes without `pendingFeats`, and the ion pod comes
+      // back from the dead without `podJettisoned`.
+      pendingFeats: this.pendingFeats ?? 0,
+      podJettisoned: this.podJettisoned === true,
+      firstStrike: this.firstStrike === true,
+      inKobayashi: this.inKobayashi === true,
+      gambitOpen: this.gambitOpen === true,
+      parleyForced: this.parleyForced === true,
     };
   }
 
@@ -929,33 +999,41 @@ export class Game {
       return { hours: 0, lines: [] };
     }
 
+    // Time passes during a firefight; damage control does not get to rebuild
+    // your shields in the middle of one. Without this guard, backgrounding the
+    // app for three days mid-engagement returned hull 20% -> 43%, shields
+    // 0% -> 100% and fires 3 -> 0 while a Klingon was still shooting.
+    const fighting = !!this.engagement && !this.engagement.over;
+
     const ship = this.ship;
     const before = { hull: ship.hullPct, fires: ship.fires };
 
     // Repair: a full hull from nothing would take about a fortnight underway,
     // which is slower than a starbase and faster than nothing.
-    if (ship.hullPct < 1 && !ship.destroyed) {
+    if (!fighting && ship.hullPct < 1 && !ship.destroyed) {
       const perHour = ship.maxHull / (14 * 24);
       ship.repair(perHour * pending * ship.mod('repairRate'));
     }
 
     // Fires go out. Slowly, and one at a time.
-    if (ship.fires > 0) ship.fires = Math.max(0, ship.fires - Math.floor(pending / 6));
+    if (!fighting && ship.fires > 0) ship.fires = Math.max(0, ship.fires - Math.floor(pending / 6));
 
     // Shields recharge to full given a quiet watch.
-    if (pending > 2 && ship.shieldsUp) {
+    if (!fighting && pending > 2 && ship.shieldsUp) {
       for (const f of Object.keys(ship.shields)) ship.shields[f] = ship.maxShield;
     }
 
     // The crew heals, and the dead stay dead.
-    for (const officer of this.crew.officers) {
-      if (officer.alive && officer.injured) officer.recover?.(pending);
+    if (!fighting) {
+      for (const officer of this.crew.officers) {
+        if (officer.alive && officer.injured) officer.recover?.(pending);
+      }
     }
 
     // The machine shop works too. A two-day job is a two-day job whether you
     // are watching it or not — which is what makes committing to one a
     // decision rather than a button.
-    const finished = advanceFabrication(this, pending);
+    const finished = fighting ? null : advanceFabrication(this, pending);
     if (finished) {
       this.pushLog(`${finished.recipe.name} completed while you were away. ${finished.text}`, 'engineering');
     }
@@ -963,7 +1041,9 @@ export class Game {
     // One stardate unit is roughly a day.
     this.clock.advanceStardate(pending / 24);
 
-    const lines = absenceReport(pending, { ship, forfeited });
+    const lines = fighting
+      ? [`${pending < 24 ? `${Math.round(pending)} hours` : `${(pending / 24).toFixed(1)} days`} have passed, and we are still under fire. Nothing has been repaired.`]
+      : absenceReport(pending, { ship, forfeited });
     if (before.fires > 0 && ship.fires === 0) {
       lines.push('All fires are out. Damage control has secured the affected decks.');
     }
@@ -993,7 +1073,15 @@ export class Game {
       name: ['IKS Kh’Tevak', 'IKS Amar', 'IKS Klothos'][i] ?? `IKS Vessel ${i + 1}`,
     }));
     for (const line of KOBAYASHI.briefing) this.pushLog(line, 'computer');
-    this.startCombat(hostiles, { name: KOBAYASHI.title, canWarpOut: false });
+    // Fixed parameters for everyone, at every rung of the ladder.
+    this.scriptedScenario = true;
+    this.applyAllMods();
+    this.startCombat(hostiles, {
+      name: KOBAYASHI.title,
+      canWarpOut: false,
+      relentless: KOBAYASHI.relentless,
+      scripted: true,
+    });
   }
 
   /** Whether the technique is available, and if not, why not. */
@@ -1106,6 +1194,15 @@ export class Game {
     g.fabrication = data.fabrication ?? null;
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
+
+    // Older saves predate these fields; they load as their off state rather
+    // than as undefined, so a `=== true` check downstream stays meaningful.
+    g.pendingFeats = data.pendingFeats ?? 0;
+    g.podJettisoned = data.podJettisoned === true;
+    g.firstStrike = data.firstStrike === true;
+    g.inKobayashi = data.inKobayashi === true;
+    g.gambitOpen = data.gambitOpen === true;
+    g.parleyForced = data.parleyForced === true;
 
     g.applyAllMods();
     return g;

@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 import { RNG, hashSeed } from '../src/core/rng.js';
 import { Ship, facingForBearing, inArc, FACINGS } from '../src/sim/ship.js';
 import { PowerGrid, effectiveness } from '../src/sim/power.js';
-import { Engagement, rangeFactor } from '../src/sim/combat.js';
+import {
+  Engagement, rangeFactor, ARENA_RADIUS, MAX_WEAPON_RANGE, WITHDRAW_SECONDS,
+} from '../src/sim/combat.js';
 import { CaptainProgress, RANKS } from '../src/sim/skills.js';
 import { Loadout, startingLoadout } from '../src/sim/loadout.js';
 import { Ledger } from '../src/core/ledger.js';
@@ -731,4 +733,203 @@ test('combat losses are written to the ledger permanently', () => {
   g.finishCombat('victory');
   assert.equal(g.ledger.destroyedShips.length, 1);
   assert.ok(g.ledger.standingOf('orion') < 0);
+});
+
+// ================================================================ the arena
+//
+// These exist because fuzzing 220 engagements produced one that never ended: a
+// Jem'Hadar attack ship at 13% hull ran to 64,574 units — twenty-one times the
+// tactical volume and fifty-four times the longest weapon range — was never
+// flagged as fleeing, and so satisfied no end condition. It could not be
+// reached and could not reach us. That is survivable when you can disengage,
+// and a permanent soft-lock when you cannot: the Tholian web and the Kobayashi
+// Maru both set canWarpOut = false.
+
+test('nothing can leave the tactical arena', () => {
+  const g = new Game({ seed: 41n, crewMode: 'original' });
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  const eng = g.engagement;
+  const runner = eng.hostiles[0];
+
+  // Point it straight out and hold the throttle down for ten minutes.
+  runner.desiredHeading = 0;
+  runner.heading = 0;
+  for (let i = 0; i < 18000; i++) {
+    runner.throttle = 1;
+    runner.desiredHeading = 0;
+    g.update(1 / 30);
+    if (eng.over) break;
+  }
+
+  const out = Math.hypot(runner.x, runner.y, runner.z ?? 0);
+  assert.ok(out <= ARENA_RADIUS * 1.05,
+    `a hostile reached ${Math.round(out)} units; the arena is ${ARENA_RADIUS}`);
+});
+
+test('a fight nobody can reach ends instead of running forever', () => {
+  const g = new Game({ seed: 42n, crewMode: 'original' });
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  const eng = g.engagement;
+  // Put it well beyond any weapon, which is the state the fuzzer found.
+  const far = eng.hostiles[0];
+  far.x = 60000; far.y = 0; far.z = 0;
+
+  for (let i = 0; i < 3000 && !eng.over; i++) g.update(1 / 30);
+  assert.equal(eng.over, true, 'the engagement never resolved');
+  assert.equal(eng.outcome, 'routed');
+});
+
+test('an unreachable hostile still ends a fight you are not allowed to leave', () => {
+  // The soft-lock proper. Webbed, and the only hostile has run out of reach.
+  const g = new Game({ seed: 43n, crewMode: 'original' });
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  const eng = g.engagement;
+  eng.canWarpOut = false;
+  eng.webbed = true;
+  eng.hostiles[0].x = 60000;
+
+  for (let i = 0; i < 3000 && !eng.over; i++) g.update(1 / 30);
+  assert.equal(eng.over, true, 'no way to win, no way to leave, and it never ended');
+});
+
+test('the web does not outlive the ship that spun it', () => {
+  const g = new Game({ seed: 44n, crewMode: 'original' });
+  g.startCombat([
+    new Ship('tholian_web_spinner', { faction: 'tholian', name: 'Lattice Warden' }),
+    new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' }),
+  ]);
+  const eng = g.engagement;
+  eng.webbed = true;
+  eng.canWarpOut = false;
+
+  // Kill the spinner; the other hostile keeps the fight going.
+  eng.hostiles[0].destroyed = true;
+  for (let i = 0; i < 200 && !eng.over; i++) g.update(1 / 30);
+
+  assert.equal(eng.webbed, false, 'the web survived its caster');
+  assert.equal(eng.canWarpOut, true, 'still pinned by a ship that no longer exists');
+});
+
+// =============================================================== withdrawal
+
+// Fleeing had no exit. A ship broke off, cloaked, outran you, and then stayed
+// on the board as a live hostile for the rest of the engagement — blocking
+// every end condition that asks whether any hostile is left.
+// "All hostiles fleeing" already ended a fight where everyone ran. The gap was
+// the mix: one ship breaks off while another keeps fighting, and the runner
+// then sits on the board forever — unreachable, unkillable, and enough on its
+// own to stop the engagement resolving.
+test('a hostile that breaks off and gets clear actually leaves', () => {
+  const g = new Game({ seed: 77n, crewMode: 'original' });
+  g.startCombat([
+    new Ship('bird_of_prey', { name: 'IKS Runner' }),
+    new Ship('d7', { name: 'IKS Stayer' }),
+  ]);
+  const eng = g.engagement;
+  const [runner, stayer] = eng.hostiles;
+  const park = (ship, range) => {
+    ship.x = eng.player.x + range; ship.y = eng.player.y; ship.z = eng.player.z ?? 0;
+    ship.throttle = 0;
+  };
+
+  runner.fleeing = true;
+  eng.setTarget(runner);
+
+  // Just short of the threshold the runner is still in the fight.
+  for (let t = 0; t < Math.floor(WITHDRAW_SECONDS * 30) - 4; t++) {
+    park(runner, MAX_WEAPON_RANGE + 400);
+    park(stayer, 400);
+    eng.update(1 / 30);
+  }
+  assert.equal(eng.over, false, 'the fight ended before the runner was clear');
+  assert.equal(runner.withdrawn ?? false, false, 'the runner left too early');
+
+  for (let t = 0; t < 60; t++) {
+    park(runner, MAX_WEAPON_RANGE + 400);
+    park(stayer, 400);
+    eng.update(1 / 30);
+  }
+  assert.equal(runner.withdrawn, true, 'the runner never got away');
+  assert.equal(eng.over, false, 'one ship leaving ended a fight the other was still in');
+  assert.equal(eng.target, stayer, 'the reticle stayed locked on a ship that had gone');
+  assert.deepEqual(eng.liveHostiles, [stayer]);
+
+  // And with the last one gone under its own power, it is a rout, not a kill.
+  stayer.fleeing = true;
+  for (let t = 0; t < 60; t++) eng.update(1 / 30);
+  assert.equal(eng.outcome, 'routed', 'letting them run counted as destroying them');
+});
+
+test('a hostile that stays in range is not treated as having withdrawn', () => {
+  const g = new Game({ seed: 78n, crewMode: 'original' });
+  g.startCombat([new Ship('bird_of_prey', { name: 'IKS Stubborn' })]);
+  const eng = g.engagement;
+  const s = eng.hostiles[0];
+  s.fleeing = true;
+  s.throttle = 0;
+
+  for (let t = 0; t < 30 * 30; t++) {
+    s.x = eng.player.x + 200; s.y = eng.player.y; s.z = eng.player.z ?? 0;
+    if (eng.over) break;
+    eng.update(1 / 30);
+  }
+  assert.equal(s.withdrawn ?? false, false, 'a ship 200 units away was allowed to escape');
+});
+
+test('destroying every hostile is still a victory, not a rout', () => {
+  const g = new Game({ seed: 79n, crewMode: 'original' });
+  g.startCombat([new Ship('bird_of_prey', { name: 'IKS Doomed' })]);
+  const eng = g.engagement;
+  eng.hostiles[0].destroy('test');
+  eng.update(1 / 30);
+  assert.equal(eng.outcome, 'victory');
+});
+
+// ============================================================== fight fuzzing
+
+// Fuzzing 220 engagements once turned up one that never ended: a Jem'Hadar
+// attack ship at 13% hull ran to 64,574 units — 21x the tactical volume and 54x
+// the longest weapon range. It was never flagged `fleeing`, so "all hostiles
+// routed" never fired; it could not be reached and could not reach us. Paired
+// with a Tholian web (which revokes warp-out) that is a permanent soft-lock.
+//
+// This test is the standing proof that fights terminate. It drives the player
+// as a player would — an idle captain against an unarmed freighter is a
+// standoff by construction and proves nothing.
+test('every fight ends, and nothing leaves the arena', () => {
+  const HOSTILES = [
+    'bird_of_prey', 'd7', 'warbird', 'jem_hadar_attack', 'galor', 'marauder',
+    'tholian_web_spinner', 'orion_raider', 'vorcha', 'keldon', 'freighter',
+  ];
+  const DIFFS = ['story', 'cadet', 'commander', 'captain'];
+  let maxRadius = 0;
+  const unresolved = [];
+
+  for (let i = 0; i < 112; i++) {
+    const seed = BigInt(31000 + i);
+    const id = HOSTILES[i % HOSTILES.length];
+    const g = new Game({ seed, crewMode: 'original', difficulty: DIFFS[i % DIFFS.length] });
+    const count = 1 + (i % 3);
+    g.startCombat(Array.from({ length: count }, (_, k) => new Ship(id, { name: `Hostile ${k + 1}` })));
+    const eng = g.engagement;
+
+    for (let t = 0; t < 30000 && !eng.over; t++) {
+      if (!eng.target || eng.target.destroyed) eng.cycleTarget();
+      const mark = eng.target ?? eng.liveHostiles[0];
+      if (mark) eng.comeAboutTo(mark);
+      eng.setThrottle(1);
+      eng.fireAll();
+      g.update(1 / 30);
+      for (const s of [eng.player, ...eng.hostiles]) {
+        maxRadius = Math.max(maxRadius, Math.hypot(s.x, s.y, s.z ?? 0));
+        assert.ok(Number.isFinite(s.x + s.y + (s.z ?? 0) + s.heading + s.hull),
+          `${id} went non-finite at seed ${seed}`);
+      }
+    }
+    if (!eng.over) unresolved.push(`${id} x${count} @ ${seed}`);
+  }
+
+  assert.deepEqual(unresolved, [], 'fights that never ended');
+  assert.ok(maxRadius <= ARENA_RADIUS + 1,
+    `a ship reached ${Math.round(maxRadius)} units, outside the ${ARENA_RADIUS}-unit arena`);
 });
