@@ -40,7 +40,8 @@ than a 3D MMO.
 
 **Your captain is a character sheet.** Six ability scores on a 27-point buy,
 twelve playable species with real mechanical traits, seven origins, seven
-career tracks each with a signature power, and personal traits that are
+career tracks each with a signature power usable once per engagement, and
+personal traits that are
 genuine trades rather than bonuses — *Reckless* gives advantage on every
 attack and disadvantage on every saving throw. Feats are chosen on promotion.
 
@@ -55,7 +56,10 @@ Lieutenant, Lieutenant Commander, Commander, Captain, Commodore, Rear Admiral,
 Vice Admiral, Admiral, Fleet Admiral. They change what the game is willing to
 do to you: whether officers die permanently, whether the ship can be lost,
 how hard the target numbers are, and — the main lever at the top — how many
-hostiles arrive at once. Fleet Admiral is ironman.
+hostiles arrive at once. A single same-tier opponent stays beatable at every
+rung (tested); what changes is that patrols stop arriving one at a time, and
+that some fights are meant to be broken off rather than won. Fleet Admiral is
+ironman.
 
 **Two-axis reputation.** *Standing* is how a faction feels this week and
 decides who fires on sight. *Reputation* is what you have earned over a

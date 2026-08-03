@@ -70,6 +70,7 @@ export function availableHails(factionId, context = {}) {
 export function resolveHail(rng, optionId, {
   factionId, standing = 0, diplomacyBonus = 0,
   winning = false, playerHullPct = 1, enemyHullPct = 1, firstStrike = false,
+  forced = false,
 } = {}) {
   const faction = FACTIONS[factionId];
   const option = HAIL_OPTIONS.find((o) => o.id === optionId);
@@ -101,6 +102,9 @@ export function resolveHail(rng, optionId, {
       break;
     case 'fanatic':
     case 'assimilate':
+      // A forced parley gets a hearing even here — it does not guarantee
+      // agreement, only that somebody answers.
+      if (forced) { chance += 0.35; break; }
       return {
         outcome: 'ignored',
         text: faction.doctrine === 'assimilate'

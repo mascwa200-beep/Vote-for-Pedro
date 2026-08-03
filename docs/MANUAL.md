@@ -291,6 +291,25 @@ array is one tap if you would rather not do arithmetic.
 on 19–20. *Master Engineer* lets you recover an ejected core. *Survivor* lets
 you live through what would destroy the ship, once per commission.
 
+### Signature powers
+
+Your career grants one large effect, usable **once per engagement**. It is on
+the Tactical screen under *Captain*, and it recharges when the next fight
+starts.
+
+| Career | Power | Effect |
+|---|---|---|
+| Command | Take the Conn | Every bridge officer cooldown clears at once |
+| Tactical | Called Shot | The next hit that lands is a guaranteed critical on a subsystem |
+| Engineering | Miracle Worker | Restores 30% hull and puts every fire out |
+| Science | Insight | Reveals the target's weakest facing; accuracy and criticals up for 20s |
+| Medical | Triage | A wounded officer returns to duty; casualties halved for 30s |
+| Diplomatic Corps | Parley | Forces a hearing from a faction whose doctrine refuses the channel — including the Jem'Hadar |
+| Intelligence | Prior Knowledge | Every hostile loses six seconds of weapon cycle; you gain accuracy and defence |
+
+Parley is the only way to get the Dominion to answer at all. It buys a
+conversation, not agreement.
+
 ---
 
 ## Difficulty
@@ -316,8 +335,14 @@ Target numbers shift with difficulty too: −3 on Story, +8 at Fleet Admiral.
 
 The difficulty curve leans on **being outnumbered** rather than on enemies
 becoming damage sponges. A single same-tier opponent stays beatable at every
-rung with good play; what changes at the top is that they stop arriving one at
-a time — up to 3.2× as many hulls.
+rung — that is a tested guarantee, not a claim. What changes at the top is that
+patrols stop arriving one at a time: a lone raider stays lone until Vice
+Admiral, but a three-ship patrol becomes six by Fleet Admiral.
+
+Two same-tier ships is roughly a four-to-one disadvantage, not two-to-one —
+they concentrate fire while you divide yours. That fight is one to **break
+off**, not win. `get us out of here` starts an eight-second warp-out, and it
+works: disengaging is a real outcome, not a failure state.
 
 ---
 

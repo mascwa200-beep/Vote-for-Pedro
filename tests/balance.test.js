@@ -18,6 +18,8 @@ import { Ship } from '../src/sim/ship.js';
 import { Character } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { SHIP_CLASSES, SHIP_LIST } from '../src/world/ships.data.js';
+import { Engagement } from '../src/sim/combat.js';
+import { DifficultySettings } from '../src/rules/difficulty.js';
 
 /** Keep the nose on the target, keep moving, and route power sensibly. */
 function pilot(g) {
@@ -86,12 +88,73 @@ test('Story difficulty cannot lose the ship at all', () => {
 
 // ---------------------------------------------------------------- the ceiling
 
-test('a tier-appropriate ship can still win at the hardest difficulty', () => {
-  // Fleet Admiral must be brutal, not impossible. A Sovereign against a
-  // single same-tier opponent should come through more often than not.
-  const r = duel({ playerClass: 'sovereign', enemyClass: 'vorcha', difficulty: 'fleet_admiral' });
-  assert.ok(r.survivalRate >= 0.5,
-    `Sovereign survived only ${r.survived}/${r.runs} against one Vor'cha at Fleet Admiral`);
+/**
+ * A true one-on-one, bypassing the difficulty's fleet-size lever so the
+ * per-ship stat ladder can be measured on its own. Above Vice Admiral
+ * `startCombat` fields reinforcements, which is a separate axis.
+ */
+function singleOpponent({ playerClass, enemyClass, difficulty, runs = 10 }) {
+  const settings = new DifficultySettings(difficulty);
+  let survived = 0;
+  for (let seed = 0; seed < runs; seed++) {
+    const g = new Game({
+      seed: BigInt(seed + 1), crewMode: 'original', difficulty, shipClass: playerClass,
+      character: new Character({ speciesId: 'andorian', careerId: 'tactical' }),
+    });
+    const enemy = new Ship(enemyClass, { faction: SHIP_CLASSES[enemyClass].faction, name: 'Test' });
+    enemy.applyMods(settings.enemyMods());
+    g.engagement = new Engagement(g.ship, [enemy], g.rng);
+    g.mode = 'combat';
+    for (let i = 0; i < 40000 && !g.engagement.over; i++) {
+      if (i % 15 === 0) pilot(g);
+      g.engagement.update(1 / 30);
+      g.ship.update(1 / 30, g.rng);
+    }
+    if (g.engagement.outcome !== 'destroyed') survived++;
+  }
+  return { survived, runs, survivalRate: survived / runs };
+}
+
+test('a single same-tier opponent stays beatable at every rung', () => {
+  // This is the promise the difficulty text makes at the top of the ladder:
+  // "any single opponent is still beatable; they simply stop arriving one at
+  // a time." If that ever stops being true, the ladder has become a wall.
+  for (const d of DIFFICULTIES) {
+    const r = singleOpponent({
+      playerClass: 'sovereign', enemyClass: 'vorcha', difficulty: d.id, runs: 8,
+    });
+    assert.ok(r.survivalRate >= 0.5,
+      `${d.name}: a Sovereign survived only ${r.survived}/${r.runs} against one Vor'cha`);
+  }
+});
+
+test('being outnumbered is survivable by disengaging', () => {
+  // At the top of the ladder you are outnumbered, and two same-tier ships is
+  // roughly a four-to-one disadvantage — a fight you are meant to break off,
+  // not win. That escape hatch has to actually work.
+  let escaped = 0;
+  const runs = 10;
+  for (let seed = 0; seed < runs; seed++) {
+    const g = new Game({
+      seed: BigInt(seed + 1), crewMode: 'original', difficulty: 'fleet_admiral',
+      shipClass: 'sovereign',
+      character: new Character({ speciesId: 'andorian', careerId: 'tactical' }),
+    });
+    g.startCombat([new Ship('vorcha', { faction: 'klingon', name: 'Test' })]);
+    assert.ok(g.engagement.hostiles.length > 1, 'Fleet Admiral should outnumber you');
+    for (let i = 0; i < 50000 && g.engagement && !g.engagement.over; i++) {
+      if (i % 15 === 0) {
+        const e = g.engagement;
+        if (g.ship.hullPct < 0.5 && e.warpOutTimer <= 0) e.beginWarpOut();
+        if (e.warpOutTimer > 0) { g.ship.throttle = 1; g.ship.evasive = true; }
+        else { e.comeAboutTo(e.target); g.ship.throttle = 0.6; }
+      }
+      g.update(1 / 30);
+    }
+    if (g.engagement?.outcome === 'escaped') escaped++;
+  }
+  assert.ok(escaped >= runs * 0.8,
+    `a captain who breaks off should get away: ${escaped}/${runs}`);
 });
 
 test('the hardest difficulty is still dangerous', () => {
@@ -100,14 +163,14 @@ test('the hardest difficulty is still dangerous', () => {
   assert.ok(r.lost > 0, 'an Excelsior should not reliably beat a Negh’Var at Fleet Admiral');
 });
 
-test('no difficulty is an unwinnable wall in a same-tier duel', () => {
+test('no difficulty is an unwinnable wall for a tier-appropriate ship', () => {
   // Every rung gets checked, because the wall appeared silently at the top.
   for (const d of DIFFICULTIES) {
-    const r = duel({
+    const r = singleOpponent({
       playerClass: 'constitution_refit', enemyClass: 'ktinga', difficulty: d.id, runs: 6,
     });
     assert.ok(r.survived > 0,
-      `${d.name}: a Constitution refit never survived a K't'inga (${r.lost}/${r.runs} losses)`);
+      `${d.name}: a Constitution refit never survived a K't'inga (${r.runs - r.survived}/${r.runs} losses)`);
   }
 });
 
@@ -140,13 +203,27 @@ test('difficulty makes the same fight measurably harder', () => {
 });
 
 test('being outnumbered is the main lever at high difficulty', () => {
-  // Enemy counts rise faster than enemy hulls; that is the intended shape.
-  const first = DIFFICULTIES[0];
-  const last = DIFFICULTIES.at(-1);
-  const countGrowth = last.enemyCount / first.enemyCount;
-  const hullGrowth = last.enemyHull / first.enemyHull;
-  assert.ok(countGrowth > hullGrowth * 1.5,
-    `count grew ${countGrowth.toFixed(2)}x but hull grew ${hullGrowth.toFixed(2)}x — enemies are becoming sponges`);
+  // Originally this compared numbers in the difficulty table, which is exactly
+  // how the lever stayed disconnected for so long. Drive a real fight instead.
+  const fielded = (difficulty) => {
+    const g = new Game({ seed: 1n, crewMode: 'original', difficulty });
+    g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'Test' })]);
+    return g.engagement.hostiles.length;
+  };
+  assert.ok(fielded('fleet_admiral') > fielded('lieutenant'),
+    'the top of the ladder must actually field more hulls in a real engagement');
+
+  // Measure the ramp above the intended baseline, not above Story's assisted
+  // floor — Story's generosity otherwise inflates every ratio equally.
+  const base = DIFFICULTIES.find((d) => d.id === 'lieutenant');
+  const top = DIFFICULTIES.at(-1);
+  const countRamp = top.enemyCount / base.enemyCount;
+  const hullRamp = top.enemyHull / base.enemyHull;
+  const damageRamp = top.enemyDamage / base.enemyDamage;
+  assert.ok(countRamp > hullRamp && countRamp > damageRamp,
+    `above Lieutenant: count ${countRamp.toFixed(2)}x, hull ${hullRamp.toFixed(2)}x, `
+    + `damage ${damageRamp.toFixed(2)}x — count should dominate`);
+  assert.ok(hullRamp <= 1.35, `enemy hull ramps ${hullRamp.toFixed(2)}x above baseline — sponges`);
 });
 
 test('no enemy hull becomes an absurd damage sponge', () => {

@@ -495,6 +495,110 @@ class App {
     haptic('confirm');
   }
 
+  /**
+   * Career signature powers: one big effect, once per engagement.
+   *
+   * Each reuses machinery that already exists — buffs, repair, cooldowns —
+   * rather than inventing a parallel system.
+   */
+  useSignature() {
+    const g = this.game;
+    const c = g?.character;
+    const eng = g?.engagement;
+    if (!c || c.signatureUsed) { audio.play('ui_deny'); return false; }
+
+    const career = c.career;
+    let line = '';
+
+    switch (c.careerId) {
+      case 'command': {
+        // Take the Conn — every bridge officer is ready again.
+        for (const o of g.crew.officers) o.cooldowns = {};
+        line = 'Every station reports ready.';
+        break;
+      }
+      case 'tactical': {
+        // Called Shot — the next hit that lands is a guaranteed critical.
+        if (!eng) { audio.play('ui_deny'); return false; }
+        eng.guaranteedCrits += 1;
+        if (!eng.targetedSubsystem) eng.targetSubsystem('weapons');
+        line = `Called shot on their ${eng.targetedSubsystem}. Standing by.`;
+        break;
+      }
+      case 'engineering': {
+        const before = g.ship.hullPct;
+        g.ship.repair(g.ship.maxHull * 0.3);
+        g.ship.fires = 0;
+        line = `Hull integrity ${Math.round(before * 100)}% to ${Math.round(g.ship.hullPct * 100)}%. Fires are out.`;
+        break;
+      }
+      case 'science': {
+        // Insight — see everything, and roll better for twenty seconds.
+        g.ship.addBuff({
+          id: 'insight', label: 'Insight', until: 20,
+          mods: { accuracy: 1.25, critChance: 0.15 },
+        });
+        c.insightUntil = 20;
+        if (eng?.target) {
+          const t = eng.target;
+          const weakest = FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore');
+          line = `${t.name}: weakest facing is ${weakest}, hull at ${Math.round(t.hullPct * 100)}%.`;
+        } else {
+          line = 'Full spectrum analysis running.';
+        }
+        break;
+      }
+      case 'medical': {
+        // Triage — one officer back on their feet, and fewer losses after.
+        const wounded = g.crew.officers.find((o) => o.alive && o.injured);
+        if (wounded) { wounded.injured = false; wounded.injurySeverity = 0; }
+        g.ship.addBuff({
+          id: 'triage', label: 'Triage', until: 30, mods: { crewProtect: 0.5 },
+        });
+        line = wounded
+          ? `${wounded.name} is back on duty. Sickbay is holding.`
+          : 'Sickbay is prepped. Casualties will be lighter.';
+        break;
+      }
+      case 'diplomatic': {
+        // Parley — they will hear you out whatever their doctrine says.
+        if (!eng) { audio.play('ui_deny'); return false; }
+        g.parleyForced = true;
+        line = 'Channel forced open. They are listening whether they meant to or not.';
+        this.openHail(eng.hostiles[0]?.faction);
+        break;
+      }
+      case 'intelligence': {
+        // Prior Knowledge — you move first, and they lose a beat.
+        if (eng) {
+          for (const s of eng.liveHostiles) {
+            for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, 6);
+            if (s.cloaked) s.decloak();
+          }
+        }
+        g.ship.addBuff({
+          id: 'prior_knowledge', label: 'Prior Knowledge', until: 15,
+          mods: { accuracy: 1.2, defense: 1.4 },
+        });
+        line = 'We know what they are about to do. Six seconds of it.';
+        break;
+      }
+      default:
+        audio.play('ui_deny');
+        return false;
+    }
+
+    c.signatureUsed = true;
+    g.pushLog(`${career.signature}: ${line}`, 'captain');
+    if (this.settings.voice) audio.speak(line);
+    audio.play('ui_confirm');
+    audio.play('computer_ack');
+    haptic('confirm');
+    this.showMessage(career.signature, [line]);
+    this.render();
+    return true;
+  }
+
   useDevice(id) {
     const g = this.game;
     if (!g.loadout.useDevice(id)) { audio.play('ui_deny'); return; }

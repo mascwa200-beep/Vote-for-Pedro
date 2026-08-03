@@ -26,6 +26,18 @@ import { Character } from '../rules/character.js';
 import { Reputation, REP_TRACKS } from '../rules/reputation.js';
 import { DifficultySettings, DEFAULT_DIFFICULTY } from '../rules/difficulty.js';
 
+/**
+ * Ceiling on hostiles in one engagement. Beyond this the tactical display
+ * stops being readable on a phone, whatever the difficulty asks for.
+ */
+const MAX_HOSTILES = 6;
+
+/** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
+const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
+
+const ROMAN = ['', '', 'II', 'III', 'IV', 'V', 'VI'];
+const romanNumeral = (n) => ROMAN[n] ?? String(n);
+
 /** Events the Idealist trait doubles reputation for. */
 const PEACEFUL_EVENTS = new Set([
   'distress_answered', 'colony_saved', 'first_contact', 'treaty_signed',
@@ -121,13 +133,19 @@ export class Game {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0,
     };
     this.ship.applyMods(this.progress.shipMods());
     this.ship.applyMods(this.loadout.shipMods());
     // The captain's own abilities are part of the ship's performance.
     if (this.character) this.ship.applyMods(this.character.shipMods());
     if (this.difficulty) this.ship.applyMods(this.difficulty.playerMods());
+
+    // The biofunction monitor and a physician captain both reduce casualties
+    // from hull hits, not merely on away missions.
+    const crewProtect = this.loadout.special('crewProtect')
+      + (this.character?.mechanic('casualtyReduction') ?? 0);
+    if (crewProtect) this.ship.applyMods({ crewProtect });
 
     const eps = this.loadout.special('powerTransfer');
     if (eps) this.ship.power.transferRate = 55 + eps;
@@ -399,6 +417,9 @@ export class Game {
 
     const result = resolveHail(this.rng, optionId, {
       factionId,
+      // The Diplomatic Corps signature forces a hearing from a faction whose
+      // doctrine would otherwise refuse the channel outright.
+      forced: this.parleyForced === true,
       standing: this.ledger.standingOf(factionId),
       diplomacyBonus: this.progress.diplomacyBonus,
       winning: eng ? this.ship.hullPct > enemyHull : false,
@@ -407,6 +428,7 @@ export class Game {
       firstStrike: this.firstStrike,
     });
 
+    this.parleyForced = false;
     this.pushLog(result.text, 'comms');
     if (result.standingDelta) {
       this.ledger.adjustStanding(factionId, result.standingDelta, 'Hail');
@@ -439,16 +461,53 @@ export class Game {
 
   // ------------------------------------------------------------------ combat
 
+  /**
+   * Difficulty's main lever above Lieutenant is how many hulls arrive, not how
+   * much each one absorbs. Reinforcements are cloned from the classes already
+   * present, so an encounter never has to know the difficulty setting.
+   *
+   * Capital ships are exempt: two Borg cubes is not a harder fight, it is a
+   * different genre. Anything at tier 7 or above arrives alone.
+   */
+  scaleHostileFleet(hostiles) {
+    const wanted = this.difficulty.enemyCount(hostiles.length);
+    if (wanted <= hostiles.length) return hostiles;
+
+    const capital = hostiles.some((s) => (s.cls.tier ?? 1) >= 7);
+    if (capital) return hostiles;
+
+    // Never field more than the tactical display can stay readable with.
+    const target = Math.min(wanted, MAX_HOSTILES);
+    const fleet = [...hostiles];
+    for (let i = fleet.length; i < target; i++) {
+      const source = hostiles[i % hostiles.length];
+      fleet.push(new Ship(source.classId, {
+        name: `${stripSuffix(source.name)} ${romanNumeral(Math.floor(i / hostiles.length) + 1)}`,
+        faction: source.faction,
+      }));
+    }
+    return fleet;
+  }
+
+  /**
+   * Every fight in the game passes through here — encounters, mission-scripted
+   * combat, and anything added later — so difficulty is applied to the enemy
+   * at this one point rather than at each generator.
+   */
   startCombat(hostiles, opts = {}) {
     if (!hostiles.length) return null;
-    // The difficulty setting is applied to the enemy here rather than at
-    // construction, so an encounter can be built without knowing about it.
+
+    const fleet = this.scaleHostileFleet(hostiles);
     const enemyMods = this.difficulty.enemyMods();
-    for (const s of hostiles) s.applyMods(enemyMods);
+    for (const s of fleet) s.applyMods(enemyMods);
+
+    // Signature powers are once per engagement, so a new one restores them.
+    this.character?.refresh();
+
     this.setAlert('red');
-    this.engagement = new Engagement(this.ship, hostiles, this.rng, opts);
+    this.engagement = new Engagement(this.ship, fleet, this.rng, opts);
     this.mode = MODES.COMBAT;
-    this.engagement.pushLog(`${hostiles.length} hostile contact${hostiles.length > 1 ? 's' : ''}.`, 'tactical');
+    this.engagement.pushLog(`${fleet.length} hostile contact${fleet.length > 1 ? 's' : ''}.`, 'tactical');
     emit('combat:begin', this.engagement);
     return this.engagement;
   }

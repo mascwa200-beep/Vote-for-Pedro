@@ -1851,9 +1851,9 @@ const SHIP_CLASSES = {
     impulse: 0.75, turnRate: 7.5, maxWarp: 9.2, warpEfficiency: 1.25,
     powerCap: 240,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 212, cycle: 3.0, ...arc(0, 250) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 244, cycle: 3.0, ...arc(0, 250) },
       { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 168, cycle: 3.0, ...arc(180, 250) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 470, cycle: 6.5, ...arc(0, 90) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 545, cycle: 6.5, ...arc(0, 90) },
       { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 400, cycle: 7.2, ...arc(180, 90) },
     ],
     slots: { tactical: 4, engineering: 4, science: 3, device: 3 },
@@ -2026,9 +2026,9 @@ const SHIP_CLASSES = {
     impulse: 0.72, turnRate: 7.0, maxWarp: 9.2, warpEfficiency: 1.3,
     powerCap: 240,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 220, cycle: 3.0, ...arc(0, 270) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 252, cycle: 3.0, ...arc(0, 270) },
       { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 138, cycle: 3.0, ...arc(180, 240) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 480, cycle: 6.4, ...arc(0, 120) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 560, cycle: 6.4, ...arc(0, 120) },
     ],
     slots: { tactical: 3, engineering: 4, science: 4, device: 3 },
     boffSeats: [
@@ -2045,9 +2045,9 @@ const SHIP_CLASSES = {
     impulse: 0.68, turnRate: 5.5, maxWarp: 9.6, warpEfficiency: 1.5,
     powerCap: 265, saucerSeparation: true,
     weapons: [
-      { id: 'phaser_dorsal', type: 'beam', name: 'Dorsal Phaser Array', damage: 258, cycle: 2.8, ...arc(0, 300) },
+      { id: 'phaser_dorsal', type: 'beam', name: 'Dorsal Phaser Array', damage: 330, cycle: 2.8, ...arc(0, 300) },
       { id: 'phaser_ventral', type: 'beam', name: 'Ventral Phaser Array', damage: 168, cycle: 2.8, ...arc(180, 300) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 560, cycle: 6.0, ...arc(0, 120) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 720, cycle: 6.0, ...arc(0, 120) },
       { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 480, cycle: 7.0, ...arc(180, 120) },
     ],
     slots: { tactical: 4, engineering: 5, science: 4, device: 4 },
@@ -2065,8 +2065,8 @@ const SHIP_CLASSES = {
     impulse: 0.7, turnRate: 6.5, maxWarp: 9.5, warpEfficiency: 1.45,
     powerCap: 270, auxBonus: 35,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 226, cycle: 2.9, ...arc(0, 300) },
-      { id: 'torpedo_pod', type: 'torpedo', name: 'Sensor Pod Launcher', damage: 520, cycle: 6.5, ...arc(0, 180) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 262, cycle: 2.9, ...arc(0, 300) },
+      { id: 'torpedo_pod', type: 'torpedo', name: 'Sensor Pod Launcher', damage: 600, cycle: 6.5, ...arc(0, 180) },
     ],
     slots: { tactical: 3, engineering: 4, science: 6, device: 3 },
     boffSeats: [
@@ -2083,8 +2083,8 @@ const SHIP_CLASSES = {
     impulse: 0.92, turnRate: 13.0, maxWarp: 9.975, warpEfficiency: 1.7,
     powerCap: 250, auxBonus: 30,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 196, cycle: 2.9, ...arc(0, 300) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Tubes', damage: 470, cycle: 6.2, ...arc(0, 120) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 222, cycle: 2.9, ...arc(0, 300) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Tubes', damage: 530, cycle: 6.2, ...arc(0, 120) },
     ],
     slots: { tactical: 3, engineering: 3, science: 5, device: 3 },
     boffSeats: [
@@ -2101,7 +2101,7 @@ const SHIP_CLASSES = {
     impulse: 1.05, turnRate: 20.0, maxWarp: 9.5, warpEfficiency: 1.0,
     powerCap: 245, ablative: true,
     weapons: [
-      { id: 'pulse_fwd', type: 'cannon', name: 'Pulse Phaser Cannons', damage: 232, cycle: 2.0, ...arc(0, 45) },
+      { id: 'pulse_fwd', type: 'cannon', name: 'Pulse Phaser Cannons', damage: 248, cycle: 2.0, ...arc(0, 45) },
       { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 108, cycle: 3.0, ...arc(0, 200) },
       { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedoes', damage: 700, cycle: 7.0, ...arc(0, 60) },
     ],
@@ -2120,9 +2120,9 @@ const SHIP_CLASSES = {
     impulse: 0.82, turnRate: 8.0, maxWarp: 9.9, warpEfficiency: 1.6,
     powerCap: 285,
     weapons: [
-      { id: 'phaser_dorsal', type: 'beam', name: 'Type-XII Phaser Arrays', damage: 286, cycle: 2.7, ...arc(0, 300) },
+      { id: 'phaser_dorsal', type: 'beam', name: 'Type-XII Phaser Arrays', damage: 330, cycle: 2.7, ...arc(0, 300) },
       { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 184, cycle: 2.7, ...arc(180, 260) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedo Bay', damage: 720, cycle: 5.8, ...arc(0, 120) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedo Bay', damage: 820, cycle: 5.8, ...arc(0, 120) },
       { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 580, cycle: 6.8, ...arc(180, 120) },
     ],
     slots: { tactical: 5, engineering: 5, science: 4, device: 4 },
@@ -2286,6 +2286,9 @@ const FACINGS = ['fore', 'aft', 'port', 'starboard'];
 const FACING_LABEL = {
   fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
 };
+
+/** Modifiers that add rather than multiply. */
+const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
 const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
@@ -2368,7 +2371,7 @@ class Ship {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0,
     };
     this.buffs = [];               // { id, label, until, mods }
 
@@ -2381,7 +2384,7 @@ class Ship {
   applyMods(mods) {
     for (const [k, v] of Object.entries(mods)) {
       if (typeof v !== 'number') continue;
-      if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') this.mods[k] += v;
+      if (ADDITIVE_MODS.has(k)) this.mods[k] += v;
       else this.mods[k] = (this.mods[k] ?? 1) * v;
     }
     this.recomputeDerived();
@@ -2413,7 +2416,7 @@ class Ship {
     for (const b of this.buffs) {
       const v = b.mods?.[key];
       if (typeof v !== 'number') continue;
-      if (key === 'critChance' || key === 'critSeverity' || key === 'damageResist') value += v;
+      if (ADDITIVE_MODS.has(key)) value += v;
       else value *= v;
     }
     return value;
@@ -2614,11 +2617,16 @@ class Ship {
 
     this.hull -= hullDamage;
 
-    // Crew casualties scale with how hard the hull was hit.
+    // Crew casualties scale with how hard the hull was hit, less whatever
+    // medical provision the ship carries — the biofunction monitor, a
+    // physician captain, and Triage all feed the same number.
     let crewKilled = 0;
     if (hullDamage > 0 && this.maxCrew > 0) {
       const severity = hullDamage / this.maxHull;
-      crewKilled = Math.floor(this.maxCrew * severity * 0.55 * (rng ? rng.range(0.5, 1.5) : 1));
+      const protection = 1 - Math.min(0.85, this.mod('crewProtect'));
+      crewKilled = Math.floor(
+        this.maxCrew * severity * 0.55 * protection * (rng ? rng.range(0.5, 1.5) : 1),
+      );
       crewKilled = Math.min(this.crew, crewKilled);
       this.crew -= crewKilled;
       this.injured += Math.floor(crewKilled * 1.6);
@@ -2780,6 +2788,7 @@ class Ship {
 
 __exports.FACINGS = FACINGS;
 __exports.FACING_LABEL = FACING_LABEL;
+__exports.ADDITIVE_MODS = ADDITIVE_MODS;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
 __exports.facingForBearing = facingForBearing;
 __exports.inArc = inArc;
@@ -5836,6 +5845,8 @@ __define("src/sim/skills.js", function (__exports, __require) {
 //
 // Skill points buy modifiers that go straight into Ship.mods, so a point in
 // Beam Weapons is a real number in the damage formula, not a cosmetic tier.
+
+const { ADDITIVE_MODS } = __require("src/sim/ship.js");
 const RANKS = [
   { id: 'ensign', name: 'Ensign', tier: 1, xp: 0, skillPoints: 2 },
   { id: 'lieutenant_jg', name: 'Lieutenant JG', tier: 1, xp: 800, skillPoints: 2 },
@@ -5973,7 +5984,7 @@ class CaptainProgress {
       const skill = SKILLS[id];
       if (!skill) continue;
       for (const [k, v] of Object.entries(skill.mods ?? {})) {
-        if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') {
+        if (ADDITIVE_MODS.has(k)) {
           mods[k] = (mods[k] ?? 0) + v * ranks;
         } else {
           mods[k] = (mods[k] ?? 1) * (1 + v * ranks);
@@ -6027,6 +6038,8 @@ __define("src/sim/loadout.js", function (__exports, __require) {
 //
 // Consoles are the fine-tuning layer over the skill tree — same modifier
 // system, but swappable at a starbase without spending skill points.
+
+const { ADDITIVE_MODS } = __require("src/sim/ship.js");
 const CONSOLES = {
   // --- Tactical ---
   phaser_relay: { id: 'phaser_relay', slot: 'tactical', name: 'Phaser Relay', tier: 1,
@@ -6124,7 +6137,7 @@ class Loadout {
       const c = CONSOLES[id];
       if (!c?.mods) continue;
       for (const [k, v] of Object.entries(c.mods)) {
-        if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') {
+        if (ADDITIVE_MODS.has(k)) {
           mods[k] = (mods[k] ?? 0) + v;
         } else {
           mods[k] = (mods[k] ?? 1) * (1 + v);
@@ -6421,6 +6434,8 @@ class Engagement {
     this.targetedSubsystem = null;
     this.autoFire = true;
     this.warpOutTimer = 0;
+    // Consumed by the Tactical career's Called Shot.
+    this.guaranteedCrits = 0;
     this.canWarpOut = opts.canWarpOut !== false;
 
     this.placeCombatants();
@@ -6576,7 +6591,14 @@ class Engagement {
       * attacker.power.factor('weapons') * attacker.subsystems.weapons
       * this.rng.range(0.9, 1.1);
 
-    const crit = this.rng.chance(attacker.mod('critChance'));
+    // A Called Shot spends itself on the next hit that lands, guaranteeing
+    // the critical rather than merely improving the odds.
+    let crit = this.rng.chance(attacker.mod('critChance'));
+    if (attacker === this.player && this.guaranteedCrits > 0) {
+      crit = true;
+      this.guaranteedCrits--;
+      this.pushLog('Called shot — direct hit.', 'tactical');
+    }
     if (crit) damage *= 1 + attacker.mod('critSeverity');
 
     const bearing = target.bearingFrom(attacker);
@@ -7257,6 +7279,7 @@ function availableHails(factionId, context = {}) {
 function resolveHail(rng, optionId, {
   factionId, standing = 0, diplomacyBonus = 0,
   winning = false, playerHullPct = 1, enemyHullPct = 1, firstStrike = false,
+  forced = false,
 } = {}) {
   const faction = FACTIONS[factionId];
   const option = HAIL_OPTIONS.find((o) => o.id === optionId);
@@ -7288,6 +7311,9 @@ function resolveHail(rng, optionId, {
       break;
     case 'fanatic':
     case 'assimilate':
+      // A forced parley gets a hearing even here — it does not guarantee
+      // agreement, only that somebody answers.
+      if (forced) { chance += 0.35; break; }
       return {
         outcome: 'ignored',
         text: faction.doctrine === 'assimilate'
@@ -9204,8 +9230,8 @@ const DIFFICULTIES = [
     description:
       'Enemies field more hulls and shoot straighter. Antimatter runs down faster, '
       + 'and the difference between a good power routing and a lazy one starts to show.',
-    enemyDamage: 1.07, enemyHull: 1.05, enemyCount: 1.2, enemyAccuracy: 1.03,
-    playerDamage: 0.99, shieldRegen: 0.9, repairRate: 0.9,
+    enemyDamage: 1.04, enemyHull: 1.03, enemyCount: 1.05, enemyAccuracy: 1.02,
+    playerDamage: 1.0, shieldRegen: 0.9, repairRate: 0.9,
     dcShift: 1, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.15,
     xpRate: 1.1, fuelUse: 1.15, resourceRate: 0.9,
@@ -9218,8 +9244,8 @@ const DIFFICULTIES = [
     description:
       'Wolf packs instead of single raiders. Repairs take longer than the next engagement gives you. '
       + 'Away missions start costing people.',
-    enemyDamage: 1.14, enemyHull: 1.1, enemyCount: 1.4, enemyAccuracy: 1.06,
-    playerDamage: 0.98, shieldRegen: 0.85, repairRate: 0.8,
+    enemyDamage: 1.08, enemyHull: 1.06, enemyCount: 1.15, enemyAccuracy: 1.04,
+    playerDamage: 0.99, shieldRegen: 0.85, repairRate: 0.8,
     dcShift: 2, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.3,
     xpRate: 1.2, fuelUse: 1.25, resourceRate: 0.8,
@@ -9232,8 +9258,8 @@ const DIFFICULTIES = [
     description:
       'The galaxy fights properly. Enemy captains use their doctrines well, hazards bite, '
       + 'and there is no comfortable route through a contested sector.',
-    enemyDamage: 1.21, enemyHull: 1.15, enemyCount: 1.6, enemyAccuracy: 1.09,
-    playerDamage: 0.97, shieldRegen: 0.8, repairRate: 0.72,
+    enemyDamage: 1.12, enemyHull: 1.09, enemyCount: 1.25, enemyAccuracy: 1.06,
+    playerDamage: 0.99, shieldRegen: 0.8, repairRate: 0.72,
     dcShift: 3, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.5,
     xpRate: 1.35, fuelUse: 1.35, resourceRate: 0.72,
@@ -9246,8 +9272,8 @@ const DIFFICULTIES = [
     description:
       'Autosave only — the record stands as written. Enemy formations are heavier than your hull '
       + 'was designed for, and resupply is a luxury.',
-    enemyDamage: 1.28, enemyHull: 1.2, enemyCount: 1.9, enemyAccuracy: 1.12,
-    playerDamage: 0.96, shieldRegen: 0.72, repairRate: 0.62,
+    enemyDamage: 1.16, enemyHull: 1.12, enemyCount: 1.4, enemyAccuracy: 1.08,
+    playerDamage: 0.98, shieldRegen: 0.72, repairRate: 0.62,
     dcShift: 4, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.7,
     xpRate: 1.5, fuelUse: 1.5, resourceRate: 0.62,
@@ -9260,8 +9286,8 @@ const DIFFICULTIES = [
     description:
       'One ship against numbers written for a task force. Any single opponent is still beatable; '
       + 'they simply stop arriving one at a time.',
-    enemyDamage: 1.36, enemyHull: 1.24, enemyCount: 2.2, enemyAccuracy: 1.15,
-    playerDamage: 0.95, shieldRegen: 0.65, repairRate: 0.55,
+    enemyDamage: 1.2, enemyHull: 1.15, enemyCount: 1.55, enemyAccuracy: 1.1,
+    playerDamage: 0.98, shieldRegen: 0.65, repairRate: 0.55,
     dcShift: 5, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.9,
     xpRate: 1.7, fuelUse: 1.65, resourceRate: 0.55,
@@ -9274,8 +9300,8 @@ const DIFFICULTIES = [
     description:
       'Hostiles arrive in packs, coordinate, and do not break off. Repairs barely keep pace with the last '
       + 'engagement. Plan the war, not the battle.',
-    enemyDamage: 1.44, enemyHull: 1.28, enemyCount: 2.5, enemyAccuracy: 1.18,
-    playerDamage: 0.94, shieldRegen: 0.58, repairRate: 0.48,
+    enemyDamage: 1.24, enemyHull: 1.18, enemyCount: 1.7, enemyAccuracy: 1.12,
+    playerDamage: 0.97, shieldRegen: 0.58, repairRate: 0.48,
     dcShift: 6, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 2.1,
     xpRate: 1.9, fuelUse: 1.8, resourceRate: 0.48,
@@ -9289,8 +9315,8 @@ const DIFFICULTIES = [
     description:
       'You are always outnumbered and usually outgunned. Every away mission can take someone. '
       + 'The record is what survives, not the ship.',
-    enemyDamage: 1.52, enemyHull: 1.32, enemyCount: 2.8, enemyAccuracy: 1.21,
-    playerDamage: 0.93, shieldRegen: 0.5, repairRate: 0.4,
+    enemyDamage: 1.28, enemyHull: 1.21, enemyCount: 1.85, enemyAccuracy: 1.14,
+    playerDamage: 0.97, shieldRegen: 0.5, repairRate: 0.4,
     dcShift: 7, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 2.4,
     xpRate: 2.2, fuelUse: 2.0, resourceRate: 0.4,
@@ -9304,8 +9330,8 @@ const DIFFICULTIES = [
     description:
       'Ironman. If the ship is lost, the commission is over and the record closes where it closes. '
       + 'There is no reload, because there is nothing to reload to.',
-    enemyDamage: 1.6, enemyHull: 1.36, enemyCount: 3.2, enemyAccuracy: 1.25,
-    playerDamage: 0.92, shieldRegen: 0.45, repairRate: 0.35,
+    enemyDamage: 1.32, enemyHull: 1.24, enemyCount: 2.0, enemyAccuracy: 1.16,
+    playerDamage: 0.96, shieldRegen: 0.45, repairRate: 0.35,
     dcShift: 8, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 2.7,
     xpRate: 2.6, fuelUse: 2.2, resourceRate: 0.35,
@@ -9368,9 +9394,16 @@ class DifficultySettings {
     };
   }
 
-  /** How many hostiles to field where the encounter asks for `n`. */
+  /**
+   * How many hostiles to field where the encounter asks for `n`.
+   *
+   * Floored rather than rounded, with a small bias: the intent is that
+   * *patrols* get bigger up the ladder, not that every lone raider arrives
+   * with a friend. A single contact stays single until the very top, while a
+   * three-ship patrol grows steadily.
+   */
   enemyCount(n) {
-    return Math.max(1, Math.round(n * this.scale('enemyCount')));
+    return Math.max(1, Math.floor(n * this.scale('enemyCount') + 0.35));
   }
 
   save() { return { id: this.id }; }
@@ -9416,6 +9449,18 @@ const { EPISODES } = __require("src/missions/episodes/index.js");
 const { Character } = __require("src/rules/character.js");
 const { Reputation, REP_TRACKS } = __require("src/rules/reputation.js");
 const { DifficultySettings, DEFAULT_DIFFICULTY } = __require("src/rules/difficulty.js");
+
+/**
+ * Ceiling on hostiles in one engagement. Beyond this the tactical display
+ * stops being readable on a phone, whatever the difficulty asks for.
+ */
+const MAX_HOSTILES = 6;
+
+/** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
+const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
+
+const ROMAN = ['', '', 'II', 'III', 'IV', 'V', 'VI'];
+const romanNumeral = (n) => ROMAN[n] ?? String(n);
 
 /** Events the Idealist trait doubles reputation for. */
 const PEACEFUL_EVENTS = new Set([
@@ -9510,13 +9555,19 @@ class Game {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0,
     };
     this.ship.applyMods(this.progress.shipMods());
     this.ship.applyMods(this.loadout.shipMods());
     // The captain's own abilities are part of the ship's performance.
     if (this.character) this.ship.applyMods(this.character.shipMods());
     if (this.difficulty) this.ship.applyMods(this.difficulty.playerMods());
+
+    // The biofunction monitor and a physician captain both reduce casualties
+    // from hull hits, not merely on away missions.
+    const crewProtect = this.loadout.special('crewProtect')
+      + (this.character?.mechanic('casualtyReduction') ?? 0);
+    if (crewProtect) this.ship.applyMods({ crewProtect });
 
     const eps = this.loadout.special('powerTransfer');
     if (eps) this.ship.power.transferRate = 55 + eps;
@@ -9788,6 +9839,9 @@ class Game {
 
     const result = resolveHail(this.rng, optionId, {
       factionId,
+      // The Diplomatic Corps signature forces a hearing from a faction whose
+      // doctrine would otherwise refuse the channel outright.
+      forced: this.parleyForced === true,
       standing: this.ledger.standingOf(factionId),
       diplomacyBonus: this.progress.diplomacyBonus,
       winning: eng ? this.ship.hullPct > enemyHull : false,
@@ -9796,6 +9850,7 @@ class Game {
       firstStrike: this.firstStrike,
     });
 
+    this.parleyForced = false;
     this.pushLog(result.text, 'comms');
     if (result.standingDelta) {
       this.ledger.adjustStanding(factionId, result.standingDelta, 'Hail');
@@ -9828,16 +9883,53 @@ class Game {
 
   // ------------------------------------------------------------------ combat
 
+  /**
+   * Difficulty's main lever above Lieutenant is how many hulls arrive, not how
+   * much each one absorbs. Reinforcements are cloned from the classes already
+   * present, so an encounter never has to know the difficulty setting.
+   *
+   * Capital ships are exempt: two Borg cubes is not a harder fight, it is a
+   * different genre. Anything at tier 7 or above arrives alone.
+   */
+  scaleHostileFleet(hostiles) {
+    const wanted = this.difficulty.enemyCount(hostiles.length);
+    if (wanted <= hostiles.length) return hostiles;
+
+    const capital = hostiles.some((s) => (s.cls.tier ?? 1) >= 7);
+    if (capital) return hostiles;
+
+    // Never field more than the tactical display can stay readable with.
+    const target = Math.min(wanted, MAX_HOSTILES);
+    const fleet = [...hostiles];
+    for (let i = fleet.length; i < target; i++) {
+      const source = hostiles[i % hostiles.length];
+      fleet.push(new Ship(source.classId, {
+        name: `${stripSuffix(source.name)} ${romanNumeral(Math.floor(i / hostiles.length) + 1)}`,
+        faction: source.faction,
+      }));
+    }
+    return fleet;
+  }
+
+  /**
+   * Every fight in the game passes through here — encounters, mission-scripted
+   * combat, and anything added later — so difficulty is applied to the enemy
+   * at this one point rather than at each generator.
+   */
   startCombat(hostiles, opts = {}) {
     if (!hostiles.length) return null;
-    // The difficulty setting is applied to the enemy here rather than at
-    // construction, so an encounter can be built without knowing about it.
+
+    const fleet = this.scaleHostileFleet(hostiles);
     const enemyMods = this.difficulty.enemyMods();
-    for (const s of hostiles) s.applyMods(enemyMods);
+    for (const s of fleet) s.applyMods(enemyMods);
+
+    // Signature powers are once per engagement, so a new one restores them.
+    this.character?.refresh();
+
     this.setAlert('red');
-    this.engagement = new Engagement(this.ship, hostiles, this.rng, opts);
+    this.engagement = new Engagement(this.ship, fleet, this.rng, opts);
     this.mode = MODES.COMBAT;
-    this.engagement.pushLog(`${hostiles.length} hostile contact${hostiles.length > 1 ? 's' : ''}.`, 'tactical');
+    this.engagement.pushLog(`${fleet.length} hostile contact${fleet.length > 1 ? 's' : ''}.`, 'tactical');
     emit('combat:begin', this.engagement);
     return this.engagement;
   }
@@ -10330,6 +10422,9 @@ function tacticalScreen(app) {
   // --- Power ---
   side.append(powerPanel(app));
 
+  // --- Career signature power ---
+  side.append(signaturePanel(app));
+
   // --- Bridge officer abilities ---
   side.append(abilitiesPanel(app));
 
@@ -10363,6 +10458,23 @@ function tacticalScreen(app) {
 
   side.append(panel('Tactical Log', eng.log.slice(-8).reverse().map(logLine)));
   return root;
+}
+
+
+/** The captain's own once-per-engagement power. */
+function signaturePanel(app) {
+  const g = app.game;
+  const c = g.character;
+  if (!c) return el('div');
+  const career = c.career;
+  const used = c.signatureUsed;
+  return panel('Captain', [
+    button(career.signature, used ? null : tap(() => app.useSignature(), 'ui_confirm'), {
+      color: used ? 'ghost' : 'peach',
+      sub: used ? 'Already used this engagement.' : career.signatureText,
+      disabled: used,
+    }),
+  ], used ? '' : 'warn');
 }
 
 function powerPanel(app) {
@@ -12553,6 +12665,110 @@ class App {
     g.pushLog(`${officer.name}: ${ability.say ?? line}`, officer.station);
     if (this.settings.voice) audio.speak(ability.say ?? line);
     haptic('confirm');
+  }
+
+  /**
+   * Career signature powers: one big effect, once per engagement.
+   *
+   * Each reuses machinery that already exists — buffs, repair, cooldowns —
+   * rather than inventing a parallel system.
+   */
+  useSignature() {
+    const g = this.game;
+    const c = g?.character;
+    const eng = g?.engagement;
+    if (!c || c.signatureUsed) { audio.play('ui_deny'); return false; }
+
+    const career = c.career;
+    let line = '';
+
+    switch (c.careerId) {
+      case 'command': {
+        // Take the Conn — every bridge officer is ready again.
+        for (const o of g.crew.officers) o.cooldowns = {};
+        line = 'Every station reports ready.';
+        break;
+      }
+      case 'tactical': {
+        // Called Shot — the next hit that lands is a guaranteed critical.
+        if (!eng) { audio.play('ui_deny'); return false; }
+        eng.guaranteedCrits += 1;
+        if (!eng.targetedSubsystem) eng.targetSubsystem('weapons');
+        line = `Called shot on their ${eng.targetedSubsystem}. Standing by.`;
+        break;
+      }
+      case 'engineering': {
+        const before = g.ship.hullPct;
+        g.ship.repair(g.ship.maxHull * 0.3);
+        g.ship.fires = 0;
+        line = `Hull integrity ${Math.round(before * 100)}% to ${Math.round(g.ship.hullPct * 100)}%. Fires are out.`;
+        break;
+      }
+      case 'science': {
+        // Insight — see everything, and roll better for twenty seconds.
+        g.ship.addBuff({
+          id: 'insight', label: 'Insight', until: 20,
+          mods: { accuracy: 1.25, critChance: 0.15 },
+        });
+        c.insightUntil = 20;
+        if (eng?.target) {
+          const t = eng.target;
+          const weakest = FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore');
+          line = `${t.name}: weakest facing is ${weakest}, hull at ${Math.round(t.hullPct * 100)}%.`;
+        } else {
+          line = 'Full spectrum analysis running.';
+        }
+        break;
+      }
+      case 'medical': {
+        // Triage — one officer back on their feet, and fewer losses after.
+        const wounded = g.crew.officers.find((o) => o.alive && o.injured);
+        if (wounded) { wounded.injured = false; wounded.injurySeverity = 0; }
+        g.ship.addBuff({
+          id: 'triage', label: 'Triage', until: 30, mods: { crewProtect: 0.5 },
+        });
+        line = wounded
+          ? `${wounded.name} is back on duty. Sickbay is holding.`
+          : 'Sickbay is prepped. Casualties will be lighter.';
+        break;
+      }
+      case 'diplomatic': {
+        // Parley — they will hear you out whatever their doctrine says.
+        if (!eng) { audio.play('ui_deny'); return false; }
+        g.parleyForced = true;
+        line = 'Channel forced open. They are listening whether they meant to or not.';
+        this.openHail(eng.hostiles[0]?.faction);
+        break;
+      }
+      case 'intelligence': {
+        // Prior Knowledge — you move first, and they lose a beat.
+        if (eng) {
+          for (const s of eng.liveHostiles) {
+            for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, 6);
+            if (s.cloaked) s.decloak();
+          }
+        }
+        g.ship.addBuff({
+          id: 'prior_knowledge', label: 'Prior Knowledge', until: 15,
+          mods: { accuracy: 1.2, defense: 1.4 },
+        });
+        line = 'We know what they are about to do. Six seconds of it.';
+        break;
+      }
+      default:
+        audio.play('ui_deny');
+        return false;
+    }
+
+    c.signatureUsed = true;
+    g.pushLog(`${career.signature}: ${line}`, 'captain');
+    if (this.settings.voice) audio.speak(line);
+    audio.play('ui_confirm');
+    audio.play('computer_ack');
+    haptic('confirm');
+    this.showMessage(career.signature, [line]);
+    this.render();
+    return true;
   }
 
   useDevice(id) {

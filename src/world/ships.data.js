@@ -88,9 +88,9 @@ export const SHIP_CLASSES = {
     impulse: 0.75, turnRate: 7.5, maxWarp: 9.2, warpEfficiency: 1.25,
     powerCap: 240,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 212, cycle: 3.0, ...arc(0, 250) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 244, cycle: 3.0, ...arc(0, 250) },
       { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 168, cycle: 3.0, ...arc(180, 250) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 470, cycle: 6.5, ...arc(0, 90) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 545, cycle: 6.5, ...arc(0, 90) },
       { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 400, cycle: 7.2, ...arc(180, 90) },
     ],
     slots: { tactical: 4, engineering: 4, science: 3, device: 3 },
@@ -263,9 +263,9 @@ export const SHIP_CLASSES = {
     impulse: 0.72, turnRate: 7.0, maxWarp: 9.2, warpEfficiency: 1.3,
     powerCap: 240,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 220, cycle: 3.0, ...arc(0, 270) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 252, cycle: 3.0, ...arc(0, 270) },
       { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 138, cycle: 3.0, ...arc(180, 240) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 480, cycle: 6.4, ...arc(0, 120) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 560, cycle: 6.4, ...arc(0, 120) },
     ],
     slots: { tactical: 3, engineering: 4, science: 4, device: 3 },
     boffSeats: [
@@ -282,9 +282,9 @@ export const SHIP_CLASSES = {
     impulse: 0.68, turnRate: 5.5, maxWarp: 9.6, warpEfficiency: 1.5,
     powerCap: 265, saucerSeparation: true,
     weapons: [
-      { id: 'phaser_dorsal', type: 'beam', name: 'Dorsal Phaser Array', damage: 258, cycle: 2.8, ...arc(0, 300) },
+      { id: 'phaser_dorsal', type: 'beam', name: 'Dorsal Phaser Array', damage: 330, cycle: 2.8, ...arc(0, 300) },
       { id: 'phaser_ventral', type: 'beam', name: 'Ventral Phaser Array', damage: 168, cycle: 2.8, ...arc(180, 300) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 560, cycle: 6.0, ...arc(0, 120) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 720, cycle: 6.0, ...arc(0, 120) },
       { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 480, cycle: 7.0, ...arc(180, 120) },
     ],
     slots: { tactical: 4, engineering: 5, science: 4, device: 4 },
@@ -302,8 +302,8 @@ export const SHIP_CLASSES = {
     impulse: 0.7, turnRate: 6.5, maxWarp: 9.5, warpEfficiency: 1.45,
     powerCap: 270, auxBonus: 35,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 226, cycle: 2.9, ...arc(0, 300) },
-      { id: 'torpedo_pod', type: 'torpedo', name: 'Sensor Pod Launcher', damage: 520, cycle: 6.5, ...arc(0, 180) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 262, cycle: 2.9, ...arc(0, 300) },
+      { id: 'torpedo_pod', type: 'torpedo', name: 'Sensor Pod Launcher', damage: 600, cycle: 6.5, ...arc(0, 180) },
     ],
     slots: { tactical: 3, engineering: 4, science: 6, device: 3 },
     boffSeats: [
@@ -320,8 +320,8 @@ export const SHIP_CLASSES = {
     impulse: 0.92, turnRate: 13.0, maxWarp: 9.975, warpEfficiency: 1.7,
     powerCap: 250, auxBonus: 30,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 196, cycle: 2.9, ...arc(0, 300) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Tubes', damage: 470, cycle: 6.2, ...arc(0, 120) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 222, cycle: 2.9, ...arc(0, 300) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Tubes', damage: 530, cycle: 6.2, ...arc(0, 120) },
     ],
     slots: { tactical: 3, engineering: 3, science: 5, device: 3 },
     boffSeats: [
@@ -338,7 +338,7 @@ export const SHIP_CLASSES = {
     impulse: 1.05, turnRate: 20.0, maxWarp: 9.5, warpEfficiency: 1.0,
     powerCap: 245, ablative: true,
     weapons: [
-      { id: 'pulse_fwd', type: 'cannon', name: 'Pulse Phaser Cannons', damage: 232, cycle: 2.0, ...arc(0, 45) },
+      { id: 'pulse_fwd', type: 'cannon', name: 'Pulse Phaser Cannons', damage: 248, cycle: 2.0, ...arc(0, 45) },
       { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 108, cycle: 3.0, ...arc(0, 200) },
       { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedoes', damage: 700, cycle: 7.0, ...arc(0, 60) },
     ],
@@ -357,9 +357,9 @@ export const SHIP_CLASSES = {
     impulse: 0.82, turnRate: 8.0, maxWarp: 9.9, warpEfficiency: 1.6,
     powerCap: 285,
     weapons: [
-      { id: 'phaser_dorsal', type: 'beam', name: 'Type-XII Phaser Arrays', damage: 286, cycle: 2.7, ...arc(0, 300) },
+      { id: 'phaser_dorsal', type: 'beam', name: 'Type-XII Phaser Arrays', damage: 330, cycle: 2.7, ...arc(0, 300) },
       { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 184, cycle: 2.7, ...arc(180, 260) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedo Bay', damage: 720, cycle: 5.8, ...arc(0, 120) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedo Bay', damage: 820, cycle: 5.8, ...arc(0, 120) },
       { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 580, cycle: 6.8, ...arc(180, 120) },
     ],
     slots: { tactical: 5, engineering: 5, science: 4, device: 4 },

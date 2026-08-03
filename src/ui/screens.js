@@ -246,6 +246,9 @@ export function tacticalScreen(app) {
   // --- Power ---
   side.append(powerPanel(app));
 
+  // --- Career signature power ---
+  side.append(signaturePanel(app));
+
   // --- Bridge officer abilities ---
   side.append(abilitiesPanel(app));
 
@@ -279,6 +282,23 @@ export function tacticalScreen(app) {
 
   side.append(panel('Tactical Log', eng.log.slice(-8).reverse().map(logLine)));
   return root;
+}
+
+
+/** The captain's own once-per-engagement power. */
+function signaturePanel(app) {
+  const g = app.game;
+  const c = g.character;
+  if (!c) return el('div');
+  const career = c.career;
+  const used = c.signatureUsed;
+  return panel('Captain', [
+    button(career.signature, used ? null : tap(() => app.useSignature(), 'ui_confirm'), {
+      color: used ? 'ghost' : 'peach',
+      sub: used ? 'Already used this engagement.' : career.signatureText,
+      disabled: used,
+    }),
+  ], used ? '' : 'warn');
 }
 
 function powerPanel(app) {

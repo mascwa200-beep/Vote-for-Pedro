@@ -3,6 +3,8 @@
 // Consoles are the fine-tuning layer over the skill tree — same modifier
 // system, but swappable at a starbase without spending skill points.
 
+import { ADDITIVE_MODS } from './ship.js';
+
 export const CONSOLES = {
   // --- Tactical ---
   phaser_relay: { id: 'phaser_relay', slot: 'tactical', name: 'Phaser Relay', tier: 1,
@@ -102,7 +104,7 @@ export class Loadout {
       const c = CONSOLES[id];
       if (!c?.mods) continue;
       for (const [k, v] of Object.entries(c.mods)) {
-        if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') {
+        if (ADDITIVE_MODS.has(k)) {
           mods[k] = (mods[k] ?? 0) + v;
         } else {
           mods[k] = (mods[k] ?? 1) * (1 + v);

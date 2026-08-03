@@ -79,8 +79,8 @@ export const DIFFICULTIES = [
     description:
       'Enemies field more hulls and shoot straighter. Antimatter runs down faster, '
       + 'and the difference between a good power routing and a lazy one starts to show.',
-    enemyDamage: 1.07, enemyHull: 1.05, enemyCount: 1.2, enemyAccuracy: 1.03,
-    playerDamage: 0.99, shieldRegen: 0.9, repairRate: 0.9,
+    enemyDamage: 1.04, enemyHull: 1.03, enemyCount: 1.05, enemyAccuracy: 1.02,
+    playerDamage: 1.0, shieldRegen: 0.9, repairRate: 0.9,
     dcShift: 1, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.15,
     xpRate: 1.1, fuelUse: 1.15, resourceRate: 0.9,
@@ -93,8 +93,8 @@ export const DIFFICULTIES = [
     description:
       'Wolf packs instead of single raiders. Repairs take longer than the next engagement gives you. '
       + 'Away missions start costing people.',
-    enemyDamage: 1.14, enemyHull: 1.1, enemyCount: 1.4, enemyAccuracy: 1.06,
-    playerDamage: 0.98, shieldRegen: 0.85, repairRate: 0.8,
+    enemyDamage: 1.08, enemyHull: 1.06, enemyCount: 1.15, enemyAccuracy: 1.04,
+    playerDamage: 0.99, shieldRegen: 0.85, repairRate: 0.8,
     dcShift: 2, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.3,
     xpRate: 1.2, fuelUse: 1.25, resourceRate: 0.8,
@@ -107,8 +107,8 @@ export const DIFFICULTIES = [
     description:
       'The galaxy fights properly. Enemy captains use their doctrines well, hazards bite, '
       + 'and there is no comfortable route through a contested sector.',
-    enemyDamage: 1.21, enemyHull: 1.15, enemyCount: 1.6, enemyAccuracy: 1.09,
-    playerDamage: 0.97, shieldRegen: 0.8, repairRate: 0.72,
+    enemyDamage: 1.12, enemyHull: 1.09, enemyCount: 1.25, enemyAccuracy: 1.06,
+    playerDamage: 0.99, shieldRegen: 0.8, repairRate: 0.72,
     dcShift: 3, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.5,
     xpRate: 1.35, fuelUse: 1.35, resourceRate: 0.72,
@@ -121,8 +121,8 @@ export const DIFFICULTIES = [
     description:
       'Autosave only — the record stands as written. Enemy formations are heavier than your hull '
       + 'was designed for, and resupply is a luxury.',
-    enemyDamage: 1.28, enemyHull: 1.2, enemyCount: 1.9, enemyAccuracy: 1.12,
-    playerDamage: 0.96, shieldRegen: 0.72, repairRate: 0.62,
+    enemyDamage: 1.16, enemyHull: 1.12, enemyCount: 1.4, enemyAccuracy: 1.08,
+    playerDamage: 0.98, shieldRegen: 0.72, repairRate: 0.62,
     dcShift: 4, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.7,
     xpRate: 1.5, fuelUse: 1.5, resourceRate: 0.62,
@@ -135,8 +135,8 @@ export const DIFFICULTIES = [
     description:
       'One ship against numbers written for a task force. Any single opponent is still beatable; '
       + 'they simply stop arriving one at a time.',
-    enemyDamage: 1.36, enemyHull: 1.24, enemyCount: 2.2, enemyAccuracy: 1.15,
-    playerDamage: 0.95, shieldRegen: 0.65, repairRate: 0.55,
+    enemyDamage: 1.2, enemyHull: 1.15, enemyCount: 1.55, enemyAccuracy: 1.1,
+    playerDamage: 0.98, shieldRegen: 0.65, repairRate: 0.55,
     dcShift: 5, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 1.9,
     xpRate: 1.7, fuelUse: 1.65, resourceRate: 0.55,
@@ -149,8 +149,8 @@ export const DIFFICULTIES = [
     description:
       'Hostiles arrive in packs, coordinate, and do not break off. Repairs barely keep pace with the last '
       + 'engagement. Plan the war, not the battle.',
-    enemyDamage: 1.44, enemyHull: 1.28, enemyCount: 2.5, enemyAccuracy: 1.18,
-    playerDamage: 0.94, shieldRegen: 0.58, repairRate: 0.48,
+    enemyDamage: 1.24, enemyHull: 1.18, enemyCount: 1.7, enemyAccuracy: 1.12,
+    playerDamage: 0.97, shieldRegen: 0.58, repairRate: 0.48,
     dcShift: 6, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 2.1,
     xpRate: 1.9, fuelUse: 1.8, resourceRate: 0.48,
@@ -164,8 +164,8 @@ export const DIFFICULTIES = [
     description:
       'You are always outnumbered and usually outgunned. Every away mission can take someone. '
       + 'The record is what survives, not the ship.',
-    enemyDamage: 1.52, enemyHull: 1.32, enemyCount: 2.8, enemyAccuracy: 1.21,
-    playerDamage: 0.93, shieldRegen: 0.5, repairRate: 0.4,
+    enemyDamage: 1.28, enemyHull: 1.21, enemyCount: 1.85, enemyAccuracy: 1.14,
+    playerDamage: 0.97, shieldRegen: 0.5, repairRate: 0.4,
     dcShift: 7, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 2.4,
     xpRate: 2.2, fuelUse: 2.0, resourceRate: 0.4,
@@ -179,8 +179,8 @@ export const DIFFICULTIES = [
     description:
       'Ironman. If the ship is lost, the commission is over and the record closes where it closes. '
       + 'There is no reload, because there is nothing to reload to.',
-    enemyDamage: 1.6, enemyHull: 1.36, enemyCount: 3.2, enemyAccuracy: 1.25,
-    playerDamage: 0.92, shieldRegen: 0.45, repairRate: 0.35,
+    enemyDamage: 1.32, enemyHull: 1.24, enemyCount: 2.0, enemyAccuracy: 1.16,
+    playerDamage: 0.96, shieldRegen: 0.45, repairRate: 0.35,
     dcShift: 8, luck: 0, advantageOnFirstFail: false,
     permadeath: true, shipLoss: true, crewLossScale: 2.7,
     xpRate: 2.6, fuelUse: 2.2, resourceRate: 0.35,
@@ -246,9 +246,16 @@ export class DifficultySettings {
     };
   }
 
-  /** How many hostiles to field where the encounter asks for `n`. */
+  /**
+   * How many hostiles to field where the encounter asks for `n`.
+   *
+   * Floored rather than rounded, with a small bias: the intent is that
+   * *patrols* get bigger up the ladder, not that every lone raider arrives
+   * with a friend. A single contact stays single until the very top, while a
+   * three-ship patrol grows steadily.
+   */
   enemyCount(n) {
-    return Math.max(1, Math.round(n * this.scale('enemyCount')));
+    return Math.max(1, Math.floor(n * this.scale('enemyCount') + 0.35));
   }
 
   save() { return { id: this.id }; }

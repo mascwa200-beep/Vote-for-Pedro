@@ -390,6 +390,55 @@ try {
   check('a reputation project can be bought from the UI',
     afterBuy.completed >= 1, JSON.stringify(afterBuy));
 
+  // ------------------------------------------------ signature power
+  const signature = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const { Ship } = await import('./src/sim/ship.js');
+    app.game.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Sig' })]);
+    app.render();
+    const before = {
+      used: app.game.character.signatureUsed,
+      career: app.game.character.careerId,
+      label: app.game.character.career.signature,
+    };
+    const btn = [...document.querySelectorAll('.btn')]
+      .find((b) => b.textContent.trim().startsWith(before.label));
+    if (!btn) return { ...before, error: 'no signature button on the tactical screen' };
+    btn.click();
+    return {
+      ...before,
+      after: app.game.character.signatureUsed,
+      disabledNow: !![...document.querySelectorAll('.btn')]
+        .find((b) => b.textContent.trim().startsWith(before.label) && b.disabled),
+    };
+  });
+  check('the career signature power is usable from the tactical screen',
+    !signature.error && signature.before !== true && signature.after === true,
+    JSON.stringify(signature));
+  await page.screenshot({ path: join(SHOTS, '15-signature.png') });
+
+  // Difficulty must actually field more hulls, not just claim to.
+  const outnumbered = await page.evaluate(async () => {
+    const { Game } = await import('./src/core/state.js');
+    const { Ship } = await import('./src/sim/ship.js');
+    const count = (difficulty) => {
+      const g = new Game({ seed: 1n, crewMode: 'original', difficulty });
+      g.startCombat([new Ship('orion_raider', { faction: 'orion', name: 'R' })]);
+      return g.engagement.hostiles.length;
+    };
+    return { lieutenant: count('lieutenant'), fleet: count('fleet_admiral') };
+  });
+  check('higher difficulty actually fields more hostiles',
+    outnumbered.fleet > outnumbered.lieutenant, JSON.stringify(outnumbered));
+
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    if (g.engagement) { g.engagement.end('escaped'); }
+    globalThis.__app.render();
+  });
+  await page.waitForTimeout(600);
+  await dismissModals(page);
+
   // ------------------------------------------------ the dice
   const dice = await page.evaluate(async () => {
     const g = globalThis.__app.game;
