@@ -11,6 +11,9 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import { Game } from '../src/core/state.js';
 import { Ship, FACINGS } from '../src/sim/ship.js';
@@ -26,6 +29,8 @@ import { EPISODES } from '../src/missions/episodes/index.js';
 import { CaptainProgress, SKILL_LIST, combatXP } from '../src/sim/skills.js';
 import { Reputation, REP_TIERS, MAX_TIER, TRACK_LIST } from '../src/rules/reputation.js';
 import { Ledger } from '../src/core/ledger.js';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const gameWith = (opts = {}) => new Game({
   seed: 1n, crewMode: 'original', ...opts,
@@ -912,5 +917,67 @@ describe('fabrication accounting', () => {
           `tier ${tier}: reported ${n} ${m} but stores moved differently`);
       }
     }
+  });
+});
+
+// ============================================================== sound cues
+
+// Every cue in sfx.js is a synthesiser written by hand — there are no audio
+// files in this project, so an unplayed cue is not a stray asset, it is dead
+// code for a moment the player never gets to hear.
+//
+// Seven of the thirty-seven were never triggered from anywhere. Four had a real
+// event sitting right there unused, the loudest being `core_breach_warning`:
+// the ship is counting down to exploding, the warning tone exists, and nothing
+// played it. The other three are cues for mechanics that do not exist — the
+// boarding fight reads `ship.boarders` but nothing in the game ever sets it
+// above zero — so they are listed rather than wired to nothing.
+describe('every sound cue is reachable', () => {
+  const CUE_RE = /^ {2}([a-z_]+): \(ctx, bus/gm;
+  const SFX_SRC = readFileSync(join(HERE, '..', 'src', 'audio', 'sfx.js'), 'utf8');
+  const UI_SRC = [
+    'main.js', 'ui/screens.js', 'ui/charscreens.js', 'ui/chair.js',
+    'ui/lcars.js', 'ui/tactical.js', 'ui/tactical3d.js', 'ui/galaxymap.js',
+    'audio/engine.js',
+  ].map((f) => readFileSync(join(HERE, '..', 'src', f), 'utf8')).join('\n');
+
+  /**
+   * Cues kept for mechanics the game does not have yet.
+   *
+   * Each needs a reason, and the reason has to be a missing MECHANIC — not a
+   * missing hookup. If the event exists, wire the sound instead of listing it
+   * here.
+   */
+  const RESERVED = {
+    intruder_alert: 'boarding is not implemented — ship.boarders is only ever decremented, never set',
+    tractor_beam: 'there is no tractor beam mechanic',
+    door: 'no interior scene; the transporter cue covers away teams',
+  };
+
+  test('a cue is either played or explicitly reserved, with a reason', () => {
+    const cues = [...SFX_SRC.matchAll(CUE_RE)].map((m) => m[1]);
+    const unique = [...new Set(cues)];
+    assert.ok(unique.length > 30, `only found ${unique.length} cues — has the table changed shape?`);
+
+    const orphans = unique.filter(
+      (c) => !new RegExp(`['"\`]${c}['"\`]`).test(UI_SRC) && !(c in RESERVED),
+    );
+    assert.deepEqual(orphans, [],
+      'cues that are synthesised but never played, and not listed as reserved');
+  });
+
+  test('nothing is reserved that is actually reachable', () => {
+    // The list must not become a place to hide a missing hookup.
+    const stale = Object.keys(RESERVED).filter(
+      (c) => new RegExp(`['"\`]${c}['"\`]`).test(UI_SRC),
+    );
+    assert.deepEqual(stale, [], 'cues listed as reserved that the UI does play');
+  });
+
+  test('the warp core breach is audible', () => {
+    // The most dramatic thing that can happen to the ship: a countdown to
+    // losing her, with one way out. It was silent.
+    assert.ok(/['"`]core_breach_warning['"`]/.test(UI_SRC),
+      'the core breach warning is still never played');
   });
 });
