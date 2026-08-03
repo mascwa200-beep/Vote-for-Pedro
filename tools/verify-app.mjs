@@ -284,6 +284,47 @@ try {
   check('the tactical view actually draws pixels', tacticalDrawn > 50, `lit samples: ${tacticalDrawn}`);
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
 
+  // ---- Typed orders, through the real input box ----
+  //
+  // Everything below this point in the file drives the app object directly.
+  // This block does not: it types into the order line and presses the button,
+  // because the whole claim of the command layer is that what you type becomes
+  // what the ship does, and that claim is only tested end to end.
+  const typeOrder = async (text) => {
+    await dismissModals(page);
+    await page.fill('.orderbar input', text);
+    await page.click('.orderbar button');
+    await page.waitForTimeout(120);
+  };
+
+  await typeOrder('helm, take evasive action');
+  const evadingTyped = await page.evaluate(() => globalThis.__app.game.ship.evasive);
+  check('a typed order in plain English reaches the ship', evadingTyped === true);
+
+  // Not in the regex table, misspelled, and politely phrased — three things at
+  // once, which is the actual shape of what a person types under pressure.
+  await typeOrder('could you please aim for their nacels');
+  const targetedTyped = await page.evaluate(() => globalThis.__app.game.engagement?.targetedSubsystem);
+  check('a misspelled, politely phrased order is still understood',
+    targetedTyped === 'engines', String(targetedTyped));
+
+  // ---- The captain's chair ----
+  await typeOrder('jettison the ion pod');
+  const decoy = await page.evaluate(() => globalThis.__app.game.engagement?.decoyTimer ?? 0);
+  check('the chair’s ion pod deploys a real decoy', decoy > 0, String(decoy));
+
+  const chairIntercom = await page.evaluate(async () => {
+    const before = globalThis.__app.game.log.length;
+    const btn = [...document.querySelectorAll('.chair-stations .btn')]
+      .find((b) => b.textContent.includes('Engineering'));
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 60));
+    return { clicked: !!btn, grew: globalThis.__app.game.log.length > before };
+  });
+  check('the chair renders its intercom controls', chairIntercom.clicked);
+  check('an intercom control produces a real report', chairIntercom.grew);
+  await dismissModals(page);
+
   // Exercise real tactical controls.
   await page.evaluate(() => globalThis.__app.executeOrder(
     { action: 'target_subsystem', subsystem: 'engines' }, 'target their engines'));

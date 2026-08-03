@@ -591,3 +591,56 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 .rollcard .breakdown {
   font-size: 0.76em; color: var(--text-dim); margin-top: 4px; line-height: 1.4;
 }
+
+/* ---------------------------------------------------------------- chair
+   The command chair panel. Two armrests of controls, an intercom block, and
+   the log recorder. Laid out as wrapping rows so it reads as a cluster of
+   physical switches rather than a menu, and so it survives a narrow phone in
+   portrait without any of the buttons falling off the edge. */
+.panel.chair { border-left-color: var(--lcars-lilac, #b08cff); }
+
+.chair-arm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.chair-intercom { margin: 10px 0 6px; }
+.chair-intercom > .label {
+  font-size: 0.72em;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.chair-stations {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 5px;
+}
+.chair-stations .btn {
+  padding: 9px 6px;
+  font-size: 0.78em;
+  min-height: 44px;
+}
+
+.chair-recorder {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-top: 8px;
+}
+.chair-recorder .logline {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--panel, #12161f);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  padding: 10px 12px;
+  min-height: 44px;
+}
+.chair-recorder .btn { flex: 0 0 auto; width: auto; padding-left: 16px; padding-right: 16px; }

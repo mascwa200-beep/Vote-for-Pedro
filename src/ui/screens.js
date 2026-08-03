@@ -8,6 +8,7 @@ import {
 } from './lcars.js';
 import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
+import { chairPanel } from './chair.js';
 
 import { MODES } from '../core/state.js';
 import { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } from '../sim/power.js';
@@ -91,17 +92,25 @@ export function bridgeScreen(app) {
 
   if (g.ship.hullPct < 1 && !g.canDock()) {
     actions.push(button('Effect repairs', tap(() => {
-      const before = g.ship.hullPct;
-      g.ship.repair(g.ship.maxHull * 0.12);
-      g.clock.advanceStardate(0.8);
-      g.pushLog(`Repair teams restored hull integrity to ${Math.round(g.ship.hullPct * 100)}%.`, 'engineering');
+      const r = g.effectRepairs();
+      if (!r.ok) { app.showMessage('Repairs', [r.reason]); return; }
       app.showMessage('Repairs', [
-        `Hull integrity ${Math.round(before * 100)}% → ${Math.round(g.ship.hullPct * 100)}%.`,
-        'Nineteen hours. The chief says that is the best she can do without a starbase.',
+        `Hull integrity ${Math.round(r.before * 100)}% → ${Math.round(r.after * 100)}%.`,
+        r.blue
+          ? 'Fourteen hours, with the whole crew at maintenance stations.'
+          : 'Nineteen hours. The chief says that is the best she can do without a starbase.',
       ]);
-    }), { color: 'peach', sub: 'Costs time. Cannot fully repair without a starbase.' }));
+    }), {
+      color: 'peach',
+      sub: g.alert === 'blue'
+        ? 'Blue alert: maintenance stations manned, repairs go faster'
+        : 'Costs time. Cannot fully repair without a starbase.',
+    }));
   }
   root.append(panel('Bridge', actions));
+
+  // --- The chair ---
+  root.append(chairPanel(app));
 
   // --- Recent log ---
   root.append(panel('Ship’s Log', g.log.slice(-6).reverse().map(logLine)));
@@ -279,6 +288,11 @@ export function tacticalScreen(app) {
       button('Hail them', tap(() => app.openHail(factionId)), { color: 'lilac' }),
     ]));
   }
+
+  // The chair is where you are sitting, so it is on this screen too — with a
+  // different set of controls, because blue alert is not a combat condition
+  // and the ion pod only earns its keep when someone is shooting at you.
+  side.append(chairPanel(app));
 
   side.append(panel('Tactical Log', eng.log.slice(-8).reverse().map(logLine)));
   return root;

@@ -194,14 +194,123 @@ export class Game {
 
   setAlert(level) {
     if (this.alert === level) return;
+    // Blue is a maintenance condition, not a combat one. Asking for it while
+    // people are shooting at you is a mistake the ship declines to make.
+    if (level === 'blue' && this.engagement && !this.engagement.over) {
+      this.officerSays('tactical', 'Not while we are under fire, Captain.', 'object');
+      return;
+    }
     this.alert = level;
     emit('alert', level);
     this.pushLog(
       level === 'red' ? 'Red alert. All hands to battle stations.'
         : level === 'yellow' ? 'Yellow alert.'
+        : level === 'blue' ? 'Blue alert. Secure for docking and maintenance stations.'
         : 'Stand down from alert.',
       'captain',
     );
+  }
+
+  // ------------------------------------------------- the captain's chair
+  //
+  // Everything below is reachable from the chair panel and from a typed order,
+  // through the same code path. The chair is not a second implementation of the
+  // game; it is a set of shortcuts into this one.
+
+  /**
+   * Call a department on the intercom and get a real answer.
+   * Each report is assembled from live ship state — nothing here is flavour
+   * text with no number behind it.
+   */
+  intercom(dept) {
+    const s = this.ship;
+    const pct = (v) => `${Math.round(v * 100)} percent`;
+    const reports = {
+      engineering: () => {
+        const worst = Object.entries(s.subsystems)
+          .sort((a, b) => a[1] - b[1])[0];
+        return s.coreEjected
+          ? 'The core is gone, Captain. Impulse only until we reach a yard.'
+          : `Warp core at ${pct(s.subsystems.warpcore)}. Worst system is ${worst[0]} at ${pct(worst[1])}.`
+            + (s.fires > 0 ? ` ${s.fires} fire${s.fires > 1 ? 's' : ''} still burning.` : '');
+      },
+      medical: () => {
+        const lost = s.maxCrew - s.crew;
+        const hurt = this.crew.officers.filter((o) => o.injured).length;
+        return lost === 0 && hurt === 0
+          ? 'Sickbay is quiet, Captain. Nobody on my table.'
+          : `${lost} dead, ${hurt} of the senior staff injured. Life support at ${pct(s.subsystems.lifesupport)}.`;
+      },
+      tactical: () => `Phasers at ${pct(s.subsystems.weapons)}, ${s.torpedoes} torpedoes in the magazine. `
+        + `Shields ${s.shieldsUp ? 'up' : 'down'}.`,
+      science: () => `Sensors at ${pct(s.subsystems.sensors)}. `
+        + `${this.location.name}, ${this.location.type}${this.location.hazard ? `, ${this.location.hazard.replace(/_/g, ' ')}` : ''}.`,
+      helm: () => (this.transit
+        ? `Underway for ${this.transit.to.name}, warp ${this.transit.factor.toFixed(1)}.`
+        : `Station keeping at ${this.location.name}. Engines at ${pct(s.subsystems.engines)}.`),
+      comms: () => `Subspace is clear, Captain. ${this.reputation ? 'Nothing on the priority channels.' : ''}`.trim(),
+      security: () => `${s.crew} aboard, all decks reporting. Hull at ${pct(s.hullPct)}.`,
+    };
+    const text = (reports[dept] ?? reports.security)();
+    this.officerSays(dept, text, 'report');
+    return text;
+  }
+
+  /**
+   * Repair underway, without a starbase.
+   *
+   * Blue alert is the reason this is a method rather than three lines in the
+   * bridge screen. Canonically blue alert covers docking, separation and
+   * hazard conditions — the states where the crew is at maintenance stations
+   * rather than battle stations — so calling it before you start work is worth
+   * half as much again, and is refused in a fight for the obvious reason.
+   */
+  effectRepairs() {
+    const s = this.ship;
+    if (s.hullPct >= 1) return { ok: false, reason: 'The hull is sound, Captain.' };
+    const blue = this.alert === 'blue';
+    const before = s.hullPct;
+    s.repair(s.maxHull * (blue ? 0.18 : 0.12));
+    this.clock.advanceStardate(blue ? 0.6 : 0.8);
+    this.pushLog(
+      `Repair teams restored hull integrity to ${Math.round(s.hullPct * 100)}%.`
+        + (blue ? ' Maintenance stations made the difference.' : ''),
+      'engineering',
+    );
+    return { ok: true, before, after: s.hullPct, blue };
+  }
+
+  /**
+   * Record a captain's log entry. It goes into the ship's log like any other
+   * line and, unlike any other line, it is yours.
+   */
+  logEntry(text) {
+    const clean = String(text ?? '').trim();
+    if (!clean) return null;
+    this.pushLog(`Captain's log, supplemental: ${clean}`, 'captain');
+    this.ledger?.record?.('log_entry', { stardate: this.clock.format(), text: clean });
+    return clean;
+  }
+
+  /**
+   * Jettison the ion pod. Historically the chair's third labelled button, and
+   * the only one of the three that does something other than change a light.
+   *
+   * In a fight the pod is a sensor decoy: it burns hot, it looks like a ship,
+   * and for a while everything shooting at you is shooting slightly wide. Out
+   * of a fight there is nothing to gain and a pod to lose, so the answer is no.
+   */
+  jettisonPod() {
+    if (!this.engagement || this.engagement.over) {
+      return { ok: false, reason: 'No reason to lose the pod, Captain.' };
+    }
+    if (this.podJettisoned) {
+      return { ok: false, reason: 'The pod is already away. We only carry the one.' };
+    }
+    this.podJettisoned = true;
+    this.engagement.deployDecoy(14);
+    this.officerSays('engineering', 'Ion pod away. It will read like us for a minute or so.', 'report');
+    return { ok: true };
   }
 
   // ------------------------------------------------------------------ orders

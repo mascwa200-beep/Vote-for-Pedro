@@ -10,21 +10,97 @@ simulation. Nothing here is decoration.
 There are two ways to do anything, and they are equivalent. Tap the LCARS
 panels, or type an order into the bar at the bottom of the screen.
 
-The parser is forgiving. It strips forms of address, accepts number words or
-digits, and only needs the verb plus whatever that verb requires:
+The parser is forgiving on purpose, and forgiving in specific ways. It expands
+contractions and slang, folds British spelling and naval shorthand into one
+form, throws away politeness, works out which station you addressed, and then
+matches what is left three ways at once: by phrase, by keyword, and — for the
+words you got wrong — by how they sound and by how many letters away they are
+from the right one.
+
+All of these work, and none of them is a special case:
 
 ```
-Helm, set course for Vulcan, warp eight
-warp 8 vulcan
-Mister Sulu, all stop
-target their warp core
-divert power to shields
-red alert
+Helm, set course for Vulcan, warp eight     the textbook form
+warp 8 vulcan                               shorthand
+Mister Sulu, all stop                       addressed to an officer by name
+could you please aim for their nacels       polite, misspelled, still targeting
+hale them                                   spelled the way it sounds
+give them everything                        no keyword in common with "fire"
+ds9                                         a place name is an order to go there
+how bad is it                               a question is a damage report
 ```
+
+### When it is not sure
+
+Three outcomes, because pretending to be certain is worse than asking.
+
+**Confident** — the order executes and the officer acknowledges.
+
+**Fairly sure** — a prompt: *"You said X. I read that as: target their engines."*
+Execute it, pick one of the three nearest readings, or belay it. Nothing happens
+until you say so.
+
+**Lost** — the computer says so plainly and offers the closest orders it knows.
+It never guesses in a fight.
+
+There is also a fourth case that is not uncertainty: an order it understood but
+which is missing something it needs. `"set a course"` gets *"Which system,
+Captain?"* rather than a guess at a destination.
+
+### What this is, and what it is not
+
+It is not a language model. It cannot be — the game has to work with the radio
+off, forever, in a bundle small enough to precache onto a phone. It is a
+lexicon: 530 phrasings and 138 weighted keywords across 30 intents, plus every
+star system, faction, subsystem and shield facing in the game, indexed from the
+game's own data rather than restated.
+
+The honest measure of it is `tests/corpus/orders.txt` — 545 orders written the
+way people actually type, including the typos — which CI runs on every commit
+and fails below 95%. It currently passes all 545. That number will never be the
+whole of English, which is exactly why the confirm prompt exists.
 
 Officers acknowledge in their own register. A blunt officer will tell you an
 order is a mistake; a disciplined one will log a reservation and carry it out
 anyway. That is driven by their trait values, not a script.
+
+## The captain's chair
+
+You are sitting in it, so it is on the bridge screen and in an engagement.
+
+Of every button on the real prop, exactly three were ever assigned a function on
+screen: yellow alert, red alert, and jettison the ion pod. Those three are here
+and do what they say. The rest of the panel is filled from the documented shape
+of the chair — flip switches and viewscreen, shuttle and hailing controls on one
+arm, the intercom and the tape recorder on the other — with nothing added that
+the simulation cannot actually carry out.
+
+**Alert conditions.** Red, yellow, and stand down. Plus **blue**, which the game
+did not have before: the docking and maintenance condition. Call blue alert
+before you effect repairs and the crew is at maintenance stations rather than
+battle stations — half again as much hull recovered, in less time. It is refused
+while anyone is shooting at you, for the obvious reason.
+
+**Hailing frequencies** and the **viewscreen**, which switches between the
+bridge and the tactical picture.
+
+**The intercom**, to any of seven departments. Each answers with real numbers
+off the live ship: engineering names your worst subsystem and its exact
+percentage, sickbay counts your dead and which of the senior staff are hurt,
+tactical counts the torpedoes actually left in the magazine.
+
+**The log recorder.** Type a captain's log entry and it goes into the ship's log
+alongside everything the crew said, under your name.
+
+**The ion pod.** In a fight, jettisoning it puts a hot, ship-shaped object in
+the water: for about a minute everything shooting at you is measurably more
+likely to miss. Outside a fight there is nothing to gain and a pod to lose, so
+the answer is no. You carry one.
+
+Every one of these controls emits the same order object the parser produces from
+typed text — so `"engineering, report"` and tapping **Engineering** are the same
+code path, and anything that breaks, breaks in both places at once, where a test
+can see it.
 
 ### Navigation
 

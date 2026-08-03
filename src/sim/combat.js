@@ -50,6 +50,8 @@ export class Engagement {
     this.warpOutTimer = 0;
     // Consumed by the Tactical career's Called Shot.
     this.guaranteedCrits = 0;
+    // Seconds of ion-pod decoy still confusing hostile targeting.
+    this.decoyTimer = 0;
     this.canWarpOut = opts.canWarpOut !== false;
 
     this.placeCombatants();
@@ -117,6 +119,17 @@ export class Engagement {
   evasive(on) {
     this.player.evasive = on;
     this.pushLog(on ? 'Evasive manoeuvres.' : 'Resuming standard flight.', 'helm');
+  }
+
+  /**
+   * A hot, ship-shaped object in the water. For `seconds`, everything shooting
+   * at us has to decide which return is the real one, and gets it wrong often
+   * enough to matter.
+   */
+  deployDecoy(seconds) {
+    this.decoyTimer = Math.max(this.decoyTimer, seconds);
+    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, life: 0.8 });
+    this.pushLog('Decoy away — their targeting solutions just got harder.', 'tactical');
   }
 
   /** Attempt to break off. Takes time, and the enemy gets those seconds. */
@@ -192,7 +205,9 @@ export class Engagement {
 
     const accuracy = 0.92 * attacker.mod('accuracy')
       * (0.7 + 0.3 * attacker.subsystems.sensors);
-    const evade = target.defenseRating + (target.cloaked ? 0.5 : 0);
+    // A decoy in the water only troubles the people shooting at us.
+    const decoy = (target === this.player && this.decoyTimer > 0) ? 0.22 : 0;
+    const evade = target.defenseRating + (target.cloaked ? 0.5 : 0) + decoy;
     if (!this.rng.chance(Math.max(0.08, accuracy - evade))) {
       return { hit: false, reason: 'miss' };
     }
@@ -272,6 +287,8 @@ export class Engagement {
     if (this.autoFire && this.target && !this.target.destroyed && !this.player.destroyed) {
       for (const w of this.player.weapons) this.fireWeapon(this.player, w, this.target);
     }
+
+    if (this.decoyTimer > 0) this.decoyTimer = Math.max(0, this.decoyTimer - dt);
 
     this.updateProjectiles(dt);
     this.updateEffects(dt);
