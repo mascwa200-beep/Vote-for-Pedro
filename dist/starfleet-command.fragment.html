@@ -224,7 +224,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .shields {
   display: grid;
   grid-template-columns: 1fr 1.3fr 1fr;
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto auto auto auto;
   gap: 4px; align-items: center; justify-items: center;
   margin: 6px 0;
 }
@@ -238,15 +238,27 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .shields .sh.low b { color: var(--lcars-red); }
 .shields .sh.mid b { color: var(--lcars-amber); }
 .shields .hullbox {
-  grid-column: 2; grid-row: 2;
+  grid-column: 2; grid-row: 3;
   width: 100%; padding: 10px 4px; text-align: center;
   background: #14142a; border: 2px solid var(--lcars-blue); border-radius: 8px;
 }
 .shields .hullbox b { display: block; font-size: 1.5em; color: var(--lcars-amber); }
 .shields .fore { grid-column: 2; grid-row: 1; }
-.shields .aft { grid-column: 2; grid-row: 3; }
-.shields .port { grid-column: 1; grid-row: 2; }
-.shields .starboard { grid-column: 3; grid-row: 2; }
+.shields .aft { grid-column: 2; grid-row: 5; }
+.shields .port { grid-column: 1; grid-row: 3; }
+.shields .starboard { grid-column: 3; grid-row: 3; }
+
+/* Dorsal and ventral stack against the hull box: above it and below it, which
+   is the only arrangement that reads as "over us" and "under us" in a diagram
+   that is otherwise a plan view. */
+.shields .dorsal { grid-column: 2; grid-row: 2; }
+.shields .ventral { grid-column: 2; grid-row: 4; }
+.shields .dorsal, .shields .ventral {
+  padding: 5px 4px;
+  font-size: 0.64em;
+  opacity: 0.92;
+}
+.shields .dorsal b, .shields .ventral b { font-size: 1.15em; }
 
 /* Power sliders */
 .power-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
@@ -602,6 +614,29 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 .rollcard.crit { border-left-color: var(--lcars-green); }
 .rollcard.fumble { border-left-color: var(--lcars-red); }
 .rollcard .dieline { font-size: 1.05em; color: var(--lcars-ice); }
+/* Margin bar: zero is the middle, and the fill runs outward from it. Success
+   grows to the right, failure to the left, so the shape of the outcome is
+   legible before the number is read. */
+.marginbar {
+  position: relative;
+  height: 5px;
+  margin: 7px 0 6px;
+  background: #23233a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.marginbar::before {
+  content: '';
+  position: absolute; left: 50%; top: 0; bottom: 0;
+  width: 1px; background: rgba(255, 255, 255, 0.35);
+}
+.marginbar i {
+  position: absolute; top: 0; bottom: 0;
+  border-radius: 3px;
+}
+.marginbar i.good { background: var(--lcars-green); }
+.marginbar i.bad { background: var(--lcars-red); }
+
 .rollcard .breakdown {
   font-size: 0.76em; color: var(--text-dim); margin-top: 4px; line-height: 1.4;
 }
@@ -738,7 +773,15 @@ function readout(label, pct, valueText = null) {
   ]);
 }
 
-/** The four-facing shield diagram with hull in the middle. */
+/**
+ * The six-facing shield diagram, hull in the middle.
+ *
+ * Fore, aft, port and starboard keep the plan-view arrangement they have always
+ * had, because that is how a captain reads a shield display. Dorsal and ventral
+ * sit above and below the hull box in the centre column — the one place they
+ * can go that says "over the top of us" and "under us" without a second
+ * diagram.
+ */
 function shieldDiagram(ship) {
   const cell = (facing, label) => {
     const p = ship.shieldPctOf(facing);
@@ -751,12 +794,14 @@ function shieldDiagram(ship) {
   const hullPct = ship.hullPct;
   return el('div', { class: 'shields' }, [
     cell('fore', 'Fore'),
+    cell('dorsal', 'Dorsal'),
     cell('port', 'Port'),
     el('div', { class: 'hullbox' }, [
       'Hull',
       el('b', { text: `${Math.round(hullPct * 100)}%` }),
     ]),
     cell('starboard', 'Stbd'),
+    cell('ventral', 'Ventral'),
     cell('aft', 'Aft'),
   ]);
 }
@@ -2321,36 +2366,93 @@ __exports.FEDERATION_REGISTRIES = FEDERATION_REGISTRIES;
 __define("src/sim/ship.js", function (__exports, __require) {
 // A ship in the simulation — player or otherwise.
 //
-// Shields are four independent facings. Subsystems degrade independently and
+// Shields are six independent facings. Subsystems degrade independently and
 // affect what the ship can actually do. Crew is a resource that dies.
 
 const { PowerGrid } = __require("src/sim/power.js");
 const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
-const FACINGS = ['fore', 'aft', 'port', 'starboard'];
+
+// Six facings, not four.
+//
+// A ship is a solid in space and can be shot at from above and below, and once
+// the simulation has a third axis, pretending otherwise means an attacker who
+// climbs is hitting a shield that geometrically is not there. The dorsal and
+// ventral facings are the real cost of going 3D: they touch damage resolution,
+// the AI, the display, saves, and balance. They are worth paying for once.
+const FACINGS = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'];
 const FACING_LABEL = {
   fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
+  dorsal: 'Dorsal', ventral: 'Ventral',
 };
+
+/**
+ * Ship-local axes, in simulation coordinates: +x is the bow, +y is starboard,
+ * +z is dorsal. The renderer maps this to its own +y-up convention; nothing
+ * else in the simulation needs to care.
+ */
+const FACING_AXIS = {
+  fore: [1, 0, 0],
+  aft: [-1, 0, 0],
+  starboard: [0, 1, 0],
+  port: [0, -1, 0],
+  dorsal: [0, 0, 1],
+  ventral: [0, 0, -1],
+};
+
+const DEG = Math.PI / 180;
+
+/** A horizontal bearing in degrees, as a unit direction. */
+function bearingToDirection(bearing) {
+  const b = bearing * DEG;
+  return [Math.cos(b), Math.sin(b), 0];
+}
 
 /** Modifiers that add rather than multiply. */
 const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
 const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
-/** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
-function facingForBearing(bearing) {
-  let b = ((bearing % 360) + 360) % 360;
-  if (b > 180) b -= 360;              // normalise to -180..180
-  if (b >= -45 && b <= 45) return 'fore';
-  if (b > 45 && b < 135) return 'starboard';
-  if (b < -45 && b > -135) return 'port';
-  return 'aft';
+/**
+ * Which shield facing covers a direction, given in ship-local coordinates.
+ *
+ * The dominant axis wins. This is the six-sided generalisation of the old
+ * quadrant test and agrees with it exactly in the plane: a bearing of 45°
+ * still lands on the bow, 46° still lands to starboard.
+ */
+function facingForDirection(dir) {
+  const [x, y, z] = dir;
+  const ax = Math.abs(x);
+  const ay = Math.abs(y);
+  const az = Math.abs(z);
+  if (ax >= ay && ax >= az) return x >= 0 ? 'fore' : 'aft';
+  if (ay >= az) return y >= 0 ? 'starboard' : 'port';
+  return z >= 0 ? 'dorsal' : 'ventral';
 }
 
-/** Is `bearing` inside a weapon's firing arc? */
-function inArc(bearing, weapon) {
-  let rel = bearing - (weapon.facing ?? 0);
-  rel = ((rel % 360) + 360) % 360;
-  if (rel > 180) rel -= 360;
-  return Math.abs(rel) <= (weapon.degrees ?? 360) / 2;
+/** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
+function facingForBearing(bearing) {
+  return facingForDirection(bearingToDirection(bearing));
+}
+
+/**
+ * Is a direction inside a weapon's firing arc?
+ *
+ * A cone test rather than an angle comparison, so an arc restricts elevation as
+ * well as bearing — a forward phaser bank does not bear on something directly
+ * above the saucer just because it is ahead in plan view.
+ *
+ * Accepts a local direction vector or, for the two-dimensional callers that
+ * predate this, a plain bearing in degrees.
+ */
+function inArc(dirOrBearing, weapon) {
+  const dir = Array.isArray(dirOrBearing) ? dirOrBearing : bearingToDirection(dirOrBearing);
+  const half = (weapon.degrees ?? 360) / 2;
+  if (half >= 180) return true;
+
+  const axis = bearingToDirection(weapon.facing ?? 0);
+  const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+  const cos = (dir[0] * axis[0] + dir[1] * axis[1] + dir[2] * axis[2]) / len;
+  // Guard the floating-point edge so a shot exactly on the arc boundary is in.
+  return cos >= Math.cos(half * DEG) - 1e-9;
 }
 class Ship {
   /**
@@ -2372,9 +2474,12 @@ class Ship {
     // ---- durability ----
     this.maxHull = cls.hull;
     this.hull = cls.hull;
-    this.maxShield = cls.shields / 4;          // per facing
+    // Divided six ways rather than four. The total pool is unchanged; what
+    // changes is that each facing holds less of it and there are two more
+    // surfaces to be hit through.
+    this.maxShield = cls.shields / FACINGS.length;
     this.shields = Object.fromEntries(FACINGS.map((f) => [f, this.maxShield]));
-    this.shieldRegen = cls.shieldRegen / 4;    // per facing per second
+    this.shieldRegen = cls.shieldRegen / FACINGS.length;
     this.shieldsUp = true;
 
     // ---- crew ----
@@ -2383,11 +2488,17 @@ class Ship {
     this.injured = 0;
 
     // ---- movement ----
-    this.x = 0; this.y = 0;
+    // x/y is the plane, z is altitude. Heading is a compass bearing and pitch
+    // is nose-up in degrees; roll is carried for the renderer and for banking
+    // into a turn, and has no effect on where weapons bear.
+    this.x = 0; this.y = 0; this.z = 0;
     this.heading = 0;              // degrees, 0 = +x
+    this.pitch = 0;                // degrees, + = nose up
+    this.roll = 0;                 // degrees, + = starboard wing down
     this.throttle = 0;             // 0..1 of impulse
     this.desiredHeading = 0;
-    this.velocity = { x: 0, y: 0 };
+    this.desiredPitch = 0;
+    this.velocity = { x: 0, y: 0, z: 0 };
 
     // ---- systems ----
     this.power = new PowerGrid(cls.powerCap);
@@ -2441,7 +2552,7 @@ class Ship {
     const prevMaxHull = this.maxHull;
 
     this.maxHull = this.cls.hull * this.mods.hullMax;
-    this.maxShield = (this.cls.shields / 4) * this.mods.shieldMax;
+    this.maxShield = (this.cls.shields / FACINGS.length) * this.mods.shieldMax;
 
     if (prevMaxShield > 0) {
       const ratio = this.maxShield / prevMaxShield;
@@ -2480,7 +2591,7 @@ class Ship {
   get hullPct() { return this.maxHull > 0 ? this.hull / this.maxHull : 0; }
   get shieldPct() {
     const total = FACINGS.reduce((n, f) => n + this.shields[f], 0);
-    return this.maxShield > 0 ? total / (this.maxShield * 4) : 0;
+    return this.maxShield > 0 ? total / (this.maxShield * FACINGS.length) : 0;
   }
   shieldPctOf(facing) {
     return this.maxShield > 0 ? this.shields[facing] / this.maxShield : 0;
@@ -2521,7 +2632,46 @@ class Ship {
     return (speedFactor + (this.evasive ? 0.16 : 0)) * this.mod('defense');
   }
 
-  /** Bearing from this ship to a point, relative to current heading. */
+  /**
+   * A world-space offset expressed in this ship's own frame.
+   *
+   * Yaw first, then pitch — the inverse of how the orientation is applied — so
+   * the result is a unit vector in the ship-local axes that FACING_AXIS and
+   * inArc are defined against. Roll is deliberately not undone: rolling the
+   * ship spins the hull about its own nose and moves nothing relative to it.
+   */
+  localDirection(dx, dy, dz) {
+    const h = this.heading * DEG;
+    const ch = Math.cos(h);
+    const sh = Math.sin(h);
+    const x1 = dx * ch + dy * sh;
+    const y1 = -dx * sh + dy * ch;
+
+    const p = (this.pitch ?? 0) * DEG;
+    const cp = Math.cos(p);
+    const sp = Math.sin(p);
+    const x2 = x1 * cp + dz * sp;
+    const z2 = -x1 * sp + dz * cp;
+
+    const len = Math.hypot(x2, y1, z2) || 1;
+    return [x2 / len, y1 / len, z2 / len];
+  }
+
+  /** Direction to a target, in this ship's frame. */
+  directionTo(target) {
+    return this.localDirection(target.x - this.x, target.y - this.y, (target.z ?? 0) - (this.z ?? 0));
+  }
+
+  /** Direction an attacker lies in, in this ship's frame — which facing it hits. */
+  directionFrom(source) {
+    return this.localDirection(source.x - this.x, source.y - this.y, (source.z ?? 0) - (this.z ?? 0));
+  }
+
+  /**
+   * Horizontal bearing to a target, relative to current heading.
+   * Retained because plenty of the game reasons in the plane — the AI's
+   * steering, the log lines, the 2D display — and none of that needs elevation.
+   */
   bearingTo(target) {
     const abs = Math.atan2(target.y - this.y, target.x - this.x) * 180 / Math.PI;
     let rel = abs - this.heading;
@@ -2539,8 +2689,15 @@ class Ship {
     return rel;
   }
 
+  /** Elevation angle to a target in degrees, + = above us. */
+  elevationTo(target) {
+    const dz = (target.z ?? 0) - (this.z ?? 0);
+    const flat = Math.hypot(target.x - this.x, target.y - this.y);
+    return Math.atan2(dz, flat) * 180 / Math.PI;
+  }
+
   distanceTo(target) {
-    return Math.hypot(target.x - this.x, target.y - this.y);
+    return Math.hypot(target.x - this.x, target.y - this.y, (target.z ?? 0) - (this.z ?? 0));
   }
 
   // ---------------- per-step update ----------------
@@ -2557,20 +2714,38 @@ class Ship {
       this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
     }
 
-    // Movement.
+    // Movement — yaw, then pitch, then integrate along the nose.
     let diff = this.desiredHeading - this.heading;
     diff = ((diff % 360) + 360) % 360;
     if (diff > 180) diff -= 360;
     const maxTurn = this.turnRate * dt;
-    this.heading += Math.abs(diff) <= maxTurn ? diff : Math.sign(diff) * maxTurn;
-    this.heading = ((this.heading % 360) + 360) % 360;
+    const yawStep = Math.abs(diff) <= maxTurn ? diff : Math.sign(diff) * maxTurn;
+    this.heading = (((this.heading + yawStep) % 360) + 360) % 360;
+
+    // Pitching is slower than yawing on every hull here. Starships are built
+    // around a horizontal plane and a captain who climbs to escape is trading
+    // time for the manoeuvre, which is what makes elevation a real decision
+    // rather than a free extra direction to run in.
+    const wantPitch = Math.max(-70, Math.min(70, this.desiredPitch ?? 0));
+    const pitchDiff = wantPitch - this.pitch;
+    const maxPitch = this.turnRate * 0.55 * dt;
+    this.pitch += Math.abs(pitchDiff) <= maxPitch ? pitchDiff : Math.sign(pitchDiff) * maxPitch;
+
+    // Bank into the turn. Cosmetic, but it is what makes a hull read as flying
+    // rather than sliding, and it costs one lerp.
+    const wantRoll = Math.max(-38, Math.min(38, -yawStep / Math.max(dt, 1e-6) * 0.9));
+    this.roll += (wantRoll - this.roll) * Math.min(1, dt * 2.2);
 
     const speed = this.maxSpeed * this.throttle;
-    const rad = this.heading * Math.PI / 180;
-    this.velocity.x = Math.cos(rad) * speed;
-    this.velocity.y = Math.sin(rad) * speed;
+    const h = this.heading * DEG;
+    const p = this.pitch * DEG;
+    const flat = Math.cos(p) * speed;
+    this.velocity.x = Math.cos(h) * flat;
+    this.velocity.y = Math.sin(h) * flat;
+    this.velocity.z = Math.sin(p) * speed;
     this.x += this.velocity.x * dt;
     this.y += this.velocity.y * dt;
+    this.z = (this.z ?? 0) + this.velocity.z * dt;
 
     // Shield regeneration — suppressed while cloaked or shields down.
     if (this.shieldsUp && !this.cloaked && this.subsystems.shields > 0.05) {
@@ -2628,10 +2803,16 @@ class Ship {
    * Apply damage at a bearing.
    * @returns {object} { shieldDamage, hullDamage, facing, penetrated, crewKilled }
    */
-  takeDamage(amount, { bearing = 0, type = 'energy', shieldPiercing = 0, rng = null, subsystem = null } = {}) {
+  takeDamage(amount, {
+    bearing = 0, direction = null, type = 'energy',
+    shieldPiercing = 0, rng = null, subsystem = null,
+  } = {}) {
     if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
 
-    const facing = facingForBearing(bearing);
+    // A direction covers all six facings; a bare bearing is the planar case and
+    // is still accepted, because plenty of damage in this game — boarding,
+    // hazards, collisions — has no meaningful elevation.
+    const facing = direction ? facingForDirection(direction) : facingForBearing(bearing);
     let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist')));
 
     // Borg-style adaptation: repeated damage of one type stops working.
@@ -2823,7 +3004,19 @@ class Ship {
       torpedoes: data.torpedoes ?? s.torpedoes, antimatter: data.antimatter ?? 100,
       fires: data.fires ?? 0, coreEjected: data.coreEjected ?? false,
     });
+    // Shield migration, from four facings to six.
+    //
+    // A save written before the third axis existed has no dorsal or ventral
+    // entry, and its four values were recorded against a per-facing maximum a
+    // half larger than the current one. Spreading over the defaults supplies
+    // the two new facings at full charge, and the clamp keeps the old four from
+    // reading as over-full. An old commission therefore loads as a ship that
+    // has been to a starbase, which is the kindest reading available and the
+    // only one that cannot produce a shield above its own maximum.
     s.shields = { ...s.shields, ...(data.shields ?? {}) };
+    for (const f of FACINGS) {
+      s.shields[f] = Math.max(0, Math.min(s.maxShield, s.shields[f] ?? s.maxShield));
+    }
     s.subsystems = { ...s.subsystems, ...(data.subsystems ?? {}) };
     s.power = PowerGrid.load(data.power, s.cls.powerCap);
     return s;
@@ -2832,8 +3025,11 @@ class Ship {
 
 __exports.FACINGS = FACINGS;
 __exports.FACING_LABEL = FACING_LABEL;
+__exports.FACING_AXIS = FACING_AXIS;
+__exports.bearingToDirection = bearingToDirection;
 __exports.ADDITIVE_MODS = ADDITIVE_MODS;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
+__exports.facingForDirection = facingForDirection;
 __exports.facingForBearing = facingForBearing;
 __exports.inArc = inArc;
 __exports.Ship = Ship;
@@ -8230,18 +8426,48 @@ function preferredRange(ship) {
   return 800;
 }
 
-/** Steer toward an absolute bearing. */
-function steerTo(ship, x, y) {
+/** Steer toward a point, in both axes. */
+function steerTo(ship, x, y, z = null) {
   ship.desiredHeading = Math.atan2(y - ship.y, x - ship.x) * 180 / Math.PI;
+  if (z !== null) {
+    const flat = Math.hypot(x - ship.x, y - ship.y);
+    ship.desiredPitch = Math.atan2(z - (ship.z ?? 0), flat) * 180 / Math.PI;
+  }
 }
 
-/** Present the healthiest shield facing toward the threat. */
+/**
+ * Present the healthiest shield facing toward the threat.
+ *
+ * Only the four lateral facings are candidates. Dorsal and ventral exist and
+ * take fire, but rolling a starship onto its back to put its belly toward an
+ * attacker is not a manoeuvre any captain here would order, and an AI that did
+ * it would look broken rather than clever.
+ */
 function presentStrongestShield(ship, threat) {
   const strongest = ['fore', 'starboard', 'aft', 'port']
     .reduce((best, f) => (ship.shieldPctOf(f) > ship.shieldPctOf(best) ? f : best), 'fore');
   const toThreat = Math.atan2(threat.y - ship.y, threat.x - ship.x) * 180 / Math.PI;
   const offset = { fore: 0, starboard: -90, aft: 180, port: 90 }[strongest];
   ship.desiredHeading = toThreat + offset;
+  ship.desiredPitch = 0;
+}
+
+/**
+ * Climb or dive to come at the target from a facing it is not presenting.
+ *
+ * The whole point of a third axis is that it is a way to get at a weak shield
+ * without having to out-turn anybody. An aggressive captain uses it; a
+ * defensive one levels off, because a ship that is climbing is a ship that is
+ * not shooting straight.
+ */
+function chooseElevation(ship, target, doctrine, rng) {
+  const dorsalWeak = target.shieldPctOf('dorsal') < target.shieldPctOf('ventral');
+  const bias = dorsalWeak ? 1 : -1;
+  const commitment = doctrine === 'aggressive' ? 1 : doctrine === 'ambush' ? 0.8 : 0.45;
+  const spread = ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1);
+  // Aim to sit above or below the target rather than level with it.
+  const wantOffset = bias * commitment * 220 * (0.7 + 0.3 * spread);
+  return (target.z ?? 0) + wantOffset;
 }
 function chooseAction(ship, engagement, dt, opts = {}) {
   if (ship.destroyed) return;
@@ -8294,7 +8520,7 @@ function chooseAction(ship, engagement, dt, opts = {}) {
     steerTo(ship, target.x, target.y);
     ship.throttle = 1;
     if (distance < 40) {
-      target.takeDamage(ship.maxHull * 0.35, { bearing: target.bearingFrom(ship), type: 'kinetic', rng });
+      target.takeDamage(ship.maxHull * 0.35, { direction: target.directionFrom(ship), type: 'kinetic', rng });
       ship.destroy('deliberate collision');
       engagement.onDestroyed(ship, ship);
       engagement.pushLog(`${ship.name} rammed us.`, 'tactical');
@@ -8305,7 +8531,7 @@ function chooseAction(ship, engagement, dt, opts = {}) {
   // ---- Cloak-and-strike ----
   if (doctrine === 'ambush' && ship.cloakCapable) {
     if (ship.cloaked) {
-      steerTo(ship, target.x, target.y);
+      steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
       ship.throttle = 0.9;
       // Decloak inside knife range with everything charged.
       if (distance < want * 0.8) {
@@ -8326,15 +8552,18 @@ function chooseAction(ship, engagement, dt, opts = {}) {
   // ---- Manoeuvre ----
   if (decide) {
     if (distance > want * 1.15) {
-      steerTo(ship, target.x, target.y);
+      steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
       ship.throttle = doctrine === 'aggressive' ? 1 : 0.8;
     } else if (distance < want * 0.55) {
       // Too close for a cruiser's arcs — open the range.
       if (doctrine === 'attrition' || doctrine === 'territorial') {
-        steerTo(ship, ship.x - (target.x - ship.x), ship.y - (target.y - ship.y));
+        steerTo(ship,
+          ship.x - (target.x - ship.x),
+          ship.y - (target.y - ship.y),
+          (ship.z ?? 0) - ((target.z ?? 0) - (ship.z ?? 0)));
         ship.throttle = 0.7;
       } else {
-        steerTo(ship, target.x, target.y);
+        steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
         ship.throttle = 0.5;
       }
     } else {
@@ -8345,6 +8574,8 @@ function chooseAction(ship, engagement, dt, opts = {}) {
         const toTarget = Math.atan2(target.y - ship.y, target.x - ship.x) * 180 / Math.PI;
         const lead = doctrine === 'aggressive' ? 0 : 25;
         ship.desiredHeading = toTarget + (ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1)) * lead;
+        // Hold the elevation that keeps the target's weaker face toward us.
+        ship.desiredPitch = ship.elevationTo(target);
       }
       ship.throttle = 0.55;
     }
@@ -8385,12 +8616,17 @@ __exports.chooseAction = chooseAction;
 __define("src/sim/combat.js", function (__exports, __require) {
 // Combat resolution.
 //
-// A tactical engagement is a fixed-step 2D simulation. The player gives orders;
-// helm and tactical execute them over time. Nothing resolves instantly, which is
-// what makes power routing and facing decisions matter.
+// A tactical engagement is a fixed-step simulation in three dimensions. The
+// player gives orders; helm and tactical execute them over time. Nothing
+// resolves instantly, which is what makes power routing and facing decisions
+// matter.
+//
+// Nothing here rolls a die. Accuracy, damage and evasion are continuous
+// quantities built from the situation and the ship — the d20 belongs to the
+// character sheet, not to whether a phaser connects.
 
 const { emit } = __require("src/core/events.js");
-const { Ship, FACINGS, inArc, facingForBearing } = __require("src/sim/ship.js");
+const { Ship, FACINGS, inArc, facingForBearing, facingForDirection } = __require("src/sim/ship.js");
 const { chooseAction } = __require("src/sim/ai.js");
 const WEAPON_RANGE = {
   beam: 900,
@@ -8448,22 +8684,41 @@ class Engagement {
     return this.hostiles.filter((s) => !s.destroyed);
   }
 
+  /**
+   * Hostiles arrive spread across a shell rather than a fan.
+   *
+   * The elevations are deliberately modest — a few degrees, not a sphere's
+   * worth. A patrol that opens from directly overhead is disorienting rather
+   * than tactical, and the point of the third axis is that climbing is a
+   * decision made during the fight, not the state it starts in.
+   */
   placeCombatants() {
-    this.player.x = 0; this.player.y = 0;
+    this.player.x = 0; this.player.y = 0; this.player.z = 0;
     this.player.heading = 0; this.player.desiredHeading = 0;
+    this.player.pitch = 0; this.player.desiredPitch = 0;
+
     this.hostiles.forEach((s, i) => {
       const angle = (-50 + i * 40) * Math.PI / 180;
       const dist = 700 + i * 90;
-      s.x = Math.cos(angle) * dist;
-      s.y = Math.sin(angle) * dist;
+      // Alternate above and below, widening with each additional hull.
+      const elevation = (i % 2 === 0 ? 1 : -1) * Math.min(18, 6 + i * 4) * Math.PI / 180;
+      s.x = Math.cos(angle) * Math.cos(elevation) * dist;
+      s.y = Math.sin(angle) * Math.cos(elevation) * dist;
+      s.z = Math.sin(elevation) * dist;
       s.heading = (angle * 180 / Math.PI) + 180;
       s.desiredHeading = s.heading;
+      s.pitch = 0;
+      s.desiredPitch = 0;
       s.throttle = 0.5;
     });
+
     this.allies.forEach((s, i) => {
       s.x = -320 - i * 120;
       s.y = (i % 2 === 0 ? 1 : -1) * (140 + i * 60);
-      s.heading = 0; s.desiredHeading = 0; s.throttle = 0.4;
+      s.z = (i % 2 === 0 ? -1 : 1) * (40 + i * 20);
+      s.heading = 0; s.desiredHeading = 0;
+      s.pitch = 0; s.desiredPitch = 0;
+      s.throttle = 0.4;
     });
   }
 
@@ -8492,11 +8747,14 @@ class Engagement {
   setThrottle(v) { this.player.throttle = Math.max(0, Math.min(1, v)); }
   setHeading(deg) { this.player.desiredHeading = ((deg % 360) + 360) % 360; }
 
-  /** Steer to keep the target in the forward arc. */
+  setPitch(deg) { this.player.desiredPitch = Math.max(-70, Math.min(70, deg)); }
+
+  /** Steer to bring the target into the forward arc, in both axes. */
   comeAboutTo(ship) {
     if (!ship) return;
     const abs = Math.atan2(ship.y - this.player.y, ship.x - this.player.x) * 180 / Math.PI;
     this.setHeading(abs);
+    this.setPitch(this.player.elevationTo(ship));
   }
 
   evasive(on) {
@@ -8511,7 +8769,7 @@ class Engagement {
    */
   deployDecoy(seconds) {
     this.decoyTimer = Math.max(this.decoyTimer, seconds);
-    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, life: 0.8 });
+    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, z: this.player.z ?? 0, life: 0.8 });
     this.pushLog('Decoy away — their targeting solutions just got harder.', 'tactical');
   }
 
@@ -8549,8 +8807,10 @@ class Engagement {
     if (weapon.type === 'torpedo' && attacker.torpedoes <= 0) return false;
     if (attacker.subsystems.weapons <= 0.05) return false;
 
-    const bearing = attacker.bearingTo(target);
-    if (!inArc(bearing, weapon)) return false;
+    // A cone in the attacker's own frame, so an arc restricts elevation as
+    // well as bearing: a forward bank does not bear on something directly above
+    // the saucer merely because it is ahead in plan view.
+    if (!inArc(attacker.directionTo(target), weapon)) return false;
 
     const distance = attacker.distanceTo(target);
     if (distance > (WEAPON_RANGE[weapon.type] ?? 900)) return false;
@@ -8561,7 +8821,7 @@ class Engagement {
       attacker.torpedoes = Math.max(0, attacker.torpedoes - 1);
       this.projectiles.push({
         kind: 'torpedo', attacker, target, weapon,
-        x: attacker.x, y: attacker.y,
+        x: attacker.x, y: attacker.y, z: attacker.z ?? 0,
         speed: 420, life: 6,
         subsystem: attacker === this.player ? this.targetedSubsystem : null,
       });
@@ -8573,9 +8833,10 @@ class Engagement {
     const result = this.resolveHit(attacker, target, weapon, distance,
       attacker === this.player ? this.targetedSubsystem : null);
     this.effects.push({
-      kind: weapon.type, from: { x: attacker.x, y: attacker.y },
-      to: { x: target.x, y: target.y }, life: 0.35, hit: result.hit,
-      faction: attacker.faction,
+      kind: weapon.type,
+      from: { x: attacker.x, y: attacker.y, z: attacker.z ?? 0 },
+      to: { x: target.x, y: target.y, z: target.z ?? 0 },
+      life: 0.35, hit: result.hit, faction: attacker.faction,
     });
     emit('combat:fire', { attacker, weapon, type: weapon.type, result });
     return true;
@@ -8613,17 +8874,17 @@ class Engagement {
     }
     if (crit) damage *= 1 + attacker.mod('critSeverity');
 
-    const bearing = target.bearingFrom(attacker);
+    const direction = target.directionFrom(attacker);
     const dmgType = weapon.type === 'torpedo' ? 'kinetic' : 'energy';
     // Torpedoes largely ignore shields; that's their whole role.
     const piercing = weapon.type === 'torpedo' ? 0.25 : 0;
 
     const result = target.takeDamage(damage, {
-      bearing, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
+      direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
     });
 
     this.effects.push({
-      kind: 'impact', x: target.x, y: target.y, life: 0.4,
+      kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4,
       facing: result.facing, penetrated: result.penetrated, crit,
     });
 
@@ -8645,7 +8906,7 @@ class Engagement {
   }
 
   onDestroyed(ship, killer) {
-    this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, life: 1.6 });
+    this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, z: ship.z ?? 0, life: 1.6 });
     emit('combat:destroyed', { ship, killer, byPlayer: killer === this.player });
     this.pushLog(`${ship.name} destroyed.`, 'tactical');
   }
@@ -8694,16 +8955,18 @@ class Engagement {
       if (p.target.destroyed || p.life <= 0) { p.dead = true; continue; }
       const dx = p.target.x - p.x;
       const dy = p.target.y - p.y;
-      const dist = Math.hypot(dx, dy);
+      const dz = (p.target.z ?? 0) - (p.z ?? 0);
+      const dist = Math.hypot(dx, dy, dz);
       if (dist < 26) {
         const result = this.resolveHit(p.attacker, p.target, p.weapon,
           p.attacker.distanceTo(p.target), p.subsystem);
-        emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y });
+  emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y, z: p.z ?? 0 });
         p.dead = true;
         continue;
       }
       p.x += (dx / dist) * p.speed * dt;
       p.y += (dy / dist) * p.speed * dt;
+      p.z = (p.z ?? 0) + (dz / dist) * p.speed * dt;
     }
     this.projectiles = this.projectiles.filter((p) => !p.dead);
   }
@@ -8778,177 +9041,193 @@ __exports.buildHostiles = buildHostiles;
 
 });
 
-__define("src/rules/dice.js", function (__exports, __require) {
-// The d20 layer.
+__define("src/rules/resolve.js", function (__exports, __require) {
+// Continuous outcome resolution.
 //
-// Every uncertain action in the game — an away team forcing a door, a
-// negotiation, a science analysis, a saving throw against a plasma burst —
-// resolves through this module. It is deliberately conventional: ability
-// scores, a proficiency bonus, a target number, advantage, and criticals.
-// If you have played a tabletop RPG you already know how this works.
+// This is what replaced the d20 in gameplay.
 //
-// All randomness comes from the seeded 64-bit RNG, so a roll is reproducible
-// and the whole session can be replayed from its seed.
-
-/** Standard polyhedral roll. `n` dice of `sides`, plus a flat modifier. */
-function roll(rng, n, sides, modifier = 0) {
-  const dice = [];
-  for (let i = 0; i < n; i++) dice.push(rng.int(1, sides));
-  return { dice, total: dice.reduce((a, b) => a + b, 0) + modifier, modifier };
-}
-const d = (rng, sides) => rng.int(1, sides);
-
-/** 5e-style ability modifier: (score - 10) / 2, rounded down. */
-function abilityMod(score) {
-  return Math.floor((score - 10) / 2);
-}
-
-/** Proficiency scales with character level, 2 at level 1 up to 6 at 17+. */
-function proficiencyBonus(level) {
-  return 2 + Math.floor((Math.max(1, level) - 1) / 4);
-}
-const DC = {
-  trivial: 5,
-  easy: 10,
-  moderate: 12,
-  hard: 15,
-  very_hard: 18,
-  formidable: 20,
-  legendary: 25,
-  impossible: 30,
-};
-const DC_LABEL = {
-  5: 'Trivial', 10: 'Easy', 12: 'Moderate', 15: 'Hard',
-  18: 'Very Hard', 20: 'Formidable', 25: 'Legendary', 30: 'Near Impossible',
-};
-function describeDC(dc) {
-  const keys = Object.keys(DC_LABEL).map(Number).sort((a, b) => a - b);
-  let best = keys[0];
-  for (const k of keys) if (dc >= k) best = k;
-  return DC_LABEL[best];
-}
+// The character sheet is still a role-playing character sheet — ability scores,
+// proficiency, feats, levels, the whole apparatus in rules/character.js, and
+// rules/dice.js is still there to build it. What is gone is rolling a
+// twenty-sided die to decide whether an away team gets through a hull breach.
+//
+// The reason is not that dice are bad. It is that a d20 has a flat
+// distribution, which means a competent officer fails a routine task one time
+// in twenty no matter how good they are, and the size of the failure carries no
+// information. That reads as a board game. What this game wants is the opposite:
+// outcomes that come from the situation and the people, where being better makes
+// you reliably better, and where the *margin* — how comfortably, how badly —
+// is what drives what happens next.
+//
+// So: capability against difficulty, plus a bounded random swing, giving a
+// margin rather than a pass or a fail. Everything downstream reads the margin.
+//
+// The arithmetic is still fully itemised. Nothing about this is less auditable
+// than the die was; the breakdown the player sees is the same list of terms it
+// always was, and the only thing that changed is the shape of the uncertainty.
 
 /**
- * The core resolution.
+ * What an unmodified attempt is worth before capability is added.
+ *
+ * This number is not arbitrary and getting it wrong is the trap this file fell
+ * into first. Every difficulty number in the game — the hazard table, the
+ * mission specs, the difficulty ladder's adjustments — was written against a
+ * d20, where the die itself contributes 10.5 on average and the modifier is a
+ * comparatively small nudge on top. Replacing the die with a swing centred on
+ * zero silently removes that 10.5 from every single check in the game, and
+ * turns a routine survey into a near-certain disaster.
+ *
+ * So the baseline is supplied explicitly, the difficulty numbers keep their
+ * tuned values, and the change is confined to the *shape* of the uncertainty
+ * rather than its centre.
+ */
+const BASELINE = 10.5;
+
+/**
+ * How wide the random swing is.
+ *
+ * A d20 has a standard deviation of about 5.77 and, being flat, spends as much
+ * time at its extremes as at its middle. This is deliberately a little tighter
+ * and normally distributed, so the typical result sits near what the officer is
+ * actually capable of. Compared against the die: a competent officer on routine
+ * work succeeds a little more often, and — the point of the change — no longer
+ * fails catastrophically one time in twenty regardless of how good they are.
+ */
+const SWING = 5.2;
+
+/** Beyond this many points either way, the outcome is exceptional. */
+const EXCEPTIONAL = 7.5;
+
+/** Hard bound on the swing, so nothing is ever truly impossible or certain. */
+const MAX_SWING = 13;
+
+/**
+ * Resolve one contested outcome.
  *
  * @param {RNG} rng
  * @param {object} opts
- *   modifier      total bonus (ability mod + proficiency + situational)
- *   dc            target number
- *   advantage     roll twice, keep the higher
- *   disadvantage  roll twice, keep the lower (cancels advantage)
- *   luck          extra rerolls of a natural 1 (Story difficulty grants these)
- *   critRange     natural roll at or above this is a critical success (default 20)
- * @returns {object} full, inspectable result — the UI shows the arithmetic
+ *   capability  the actor's total relevant skill, already itemised by the caller
+ *   difficulty  what they are up against, on the same scale
+ *   advantage   true to take the better of two swings, false for the worse
+ *   steady      0..1; how much the actor's training damps the swing
+ *   luck        difficulty-granted nudge in the actor's favour
+ * @returns {object} margin, success, degree, and the flags the prose reads
  */
-function check(rng, {
-  modifier = 0, dc = 12, advantage = false, disadvantage = false,
-  luck = 0, critRange = 20, label = '',
+function resolve(rng, {
+  capability = 0, difficulty = 10, advantage = false, disadvantage = false,
+  steady = 0, luck = 0, label = '',
 } = {}) {
-  // Advantage and disadvantage cancel exactly, as in the tabletop rules.
-  const adv = advantage && !disadvantage;
-  const dis = disadvantage && !advantage;
+  const draw = () => {
+    // A normal draw rather than a uniform one: most attempts land near what the
+    // actor is actually capable of, and the extremes are rare rather than
+    // evenly likely. This is the whole difference from a d20.
+    const raw = rng.normal ? rng.normal(0, 1) : (rng.float() + rng.float() + rng.float() - 1.5) / 0.5;
+    return Math.max(-MAX_SWING, Math.min(MAX_SWING, raw * SWING * (1 - 0.35 * steady)));
+  };
 
-  const rolls = [d(rng, 20)];
-  if (adv || dis) rolls.push(d(rng, 20));
+  let swing = draw();
+  if (advantage && !disadvantage) swing = Math.max(swing, draw());
+  else if (disadvantage && !advantage) swing = Math.min(swing, draw());
 
-  let natural = adv ? Math.max(...rolls) : dis ? Math.min(...rolls) : rolls[0];
+  const margin = BASELINE + capability + swing + luck - difficulty;
+  const success = margin >= 0;
 
-  // Luck lets a fumble be re-rolled a limited number of times.
-  let lucked = 0;
-  while (natural === 1 && lucked < luck) {
-    natural = d(rng, 20);
-    rolls.push(natural);
-    lucked++;
-  }
-
-  const total = natural + modifier;
-  const criticalSuccess = natural >= critRange;
-  const criticalFailure = natural === 1;
-
-  // A natural 20 always succeeds; a natural 1 always fails. That is the
-  // whole point of having dice.
-  const success = criticalSuccess ? true : criticalFailure ? false : total >= dc;
+  // Degree, on the same scale the old check reported, so callers that branched
+  // on it keep working: 0 is a bare pass, 1 a comfortable one, 2 or more a rout.
+  const degree = Math.max(0, Math.floor(Math.abs(margin) / 5));
 
   return {
-    label, natural, rolls, modifier, total, dc,
-    success, criticalSuccess, criticalFailure,
-    margin: total - dc,
-    advantage: adv, disadvantage: dis, lucked,
-    // How comfortably it went, for prose and for partial successes.
-    degree: criticalFailure ? -2
-      : !success && total >= dc - 4 ? -1     // near miss
-      : !success ? -2
-      : criticalSuccess ? 2
-      : total >= dc + 5 ? 1
-      : 0,
+    label,
+    capability,
+    difficulty,
+    swing: Math.round(swing * 10) / 10,
+    margin: Math.round(margin * 10) / 10,
+    success,
+    degree,
+    exceptional: margin >= EXCEPTIONAL,
+    disaster: margin <= -EXCEPTIONAL,
+    // Named to match what the prose and the consequence table already read.
+    criticalSuccess: margin >= EXCEPTIONAL,
+    criticalFailure: margin <= -EXCEPTIONAL,
+    advantage: advantage && !disadvantage,
+    disadvantage: disadvantage && !advantage,
   };
 }
 
-/** Two parties roll against each other; ties go to the defender. */
-function contest(rng, attacker, defender) {
-  const a = check(rng, { ...attacker, dc: 0 });
-  const b = check(rng, { ...defender, dc: 0 });
-  return {
-    attacker: a, defender: b,
-    attackerWins: a.total > b.total,
-    margin: a.total - b.total,
-  };
+/** A one-line summary, for the log. */
+function formatResolution(r, label = r.label) {
+  const sign = r.margin >= 0 ? '+' : '';
+  const verdict = r.criticalSuccess ? 'decisive'
+    : r.criticalFailure ? 'disastrous'
+    : r.success ? 'success' : 'failure';
+  return `${label}: ${sign}${r.margin.toFixed(1)} — ${verdict}`;
 }
 
-/** A saving throw is a check against an externally-set DC. */
-function save(rng, opts) {
-  return check(rng, { ...opts, label: opts.label || 'saving throw' });
+/** Plain-language name for a difficulty number, unchanged from the old scale. */
+function describeDifficulty(n) {
+  if (n <= 8) return 'routine';
+  if (n <= 12) return 'straightforward';
+  if (n <= 16) return 'demanding';
+  if (n <= 20) return 'severe';
+  if (n <= 25) return 'forbidding';
+  return 'all but impossible';
 }
 
-/** Format a roll for the log, showing the arithmetic so it can be trusted. */
-function formatCheck(result, skillName = '') {
-  const sign = result.modifier >= 0 ? '+' : '−';
-  const mod = Math.abs(result.modifier);
-  const dice = result.rolls.length > 1 ? `[${result.rolls.join(', ')}]` : `${result.natural}`;
-  const advNote = result.advantage ? ' adv' : result.disadvantage ? ' dis' : '';
-  const head = skillName ? `${skillName}: ` : '';
-  const verdict = result.criticalSuccess ? 'CRITICAL SUCCESS'
-    : result.criticalFailure ? 'CRITICAL FAILURE'
-    : result.success ? 'success' : 'failure';
-  return `${head}d20 ${dice}${advNote} ${sign} ${mod} = ${result.total} vs DC ${result.dc} — ${verdict}`;
+/**
+ * Probability of success given a capability edge — used by the tests to assert
+ * the curve is the shape this file claims, rather than trusting the comment.
+ */
+function successChance(edge, { steady = 0 } = {}) {
+  // `edge` is capability minus difficulty; the baseline is added here so
+  // callers reason in the same units the difficulty table is written in.
+  const sd = SWING * (1 - 0.35 * steady);
+  edge += BASELINE;
+  // Normal CDF via an Abramowitz-and-Stegun style erf approximation.
+  const z = edge / (sd * Math.SQRT2);
+  const t = 1 / (1 + 0.3275911 * Math.abs(z));
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+    - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+  const erf = z >= 0 ? y : -y;
+  return 0.5 * (1 + erf);
 }
 
-/** Damage expression roller, e.g. "2d6+3". Used by away-team combat. */
-function rollDamage(rng, expression) {
-  const m = /^(\d+)d(\d+)\s*([+-]\s*\d+)?$/.exec(String(expression).replace(/\s/g, ''));
-  if (!m) return { total: 0, dice: [] };
-  const n = parseInt(m[1], 10);
-  const sides = parseInt(m[2], 10);
-  const mod = m[3] ? parseInt(m[3].replace(/\s/g, ''), 10) : 0;
-  return roll(rng, n, sides, mod);
-}
+/**
+ * Named difficulty numbers. The same scale the d20 checks used, kept
+ * deliberately: the numbers were tuned against real play and there is no reason
+ * to re-tune them merely because the distribution around them changed.
+ */
+const DIFFICULTY = {
+  trivial: 5,
+  easy: 10,
+  moderate: 13,
+  hard: 16,
+  formidable: 19,
+  heroic: 22,
+  impossible: 26,
+};
 
-__exports.roll = roll;
-__exports.d = d;
-__exports.abilityMod = abilityMod;
-__exports.proficiencyBonus = proficiencyBonus;
-__exports.DC = DC;
-__exports.DC_LABEL = DC_LABEL;
-__exports.describeDC = describeDC;
-__exports.check = check;
-__exports.contest = contest;
-__exports.save = save;
-__exports.formatCheck = formatCheck;
-__exports.rollDamage = rollDamage;
+__exports.SWING = SWING;
+__exports.EXCEPTIONAL = EXCEPTIONAL;
+__exports.BASELINE = BASELINE;
+
+__exports.resolve = resolve;
+__exports.formatResolution = formatResolution;
+__exports.describeDifficulty = describeDifficulty;
+__exports.successChance = successChance;
+__exports.DIFFICULTY = DIFFICULTY;
 
 });
 
 __define("src/sim/away.js", function (__exports, __require) {
-// Away teams, resolved on the d20.
+// Away teams.
 //
-// You pick who beams down. Checks roll against a DC, the captain's ability
+// You pick who beams down. Outcomes come from capability against difficulty
 // modifiers apply, officers contribute their own expertise, and the result is
 // shown as arithmetic the player can audit. People can be hurt, and people can
 // die, and the ones who die are the ones you sent.
 
 const { emit } = __require("src/core/events.js");
-const { check, formatCheck, describeDC, DC } = __require("src/rules/dice.js");
+const { resolve, formatResolution, describeDifficulty, DIFFICULTY: DC } = __require("src/rules/resolve.js");
 const HAZARD_LEVEL = {
   routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy },
   elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate },
@@ -9060,10 +9339,18 @@ class AwayTeam {
     if (this.difficulty) targetDC = this.difficulty.dc(targetDC);
 
     const advantage = this.character?.hasAdvantageOn(spec.ability) ?? false;
-    const roll = check(rng, {
-      modifier, dc: targetDC, advantage,
+    // Training damps the swing rather than only shifting it. A veteran is not
+    // merely better on average; they are more *consistent*, which is the thing
+    // a flat die could never express and the reason this is not a d20 any more.
+    const steady = this.character?.hasFeat('tactical_genius') ? 0.5
+      : Math.min(0.45, Math.max(0, (modifier - 2) * 0.06));
+
+    const roll = resolve(rng, {
+      capability: modifier,
+      difficulty: targetDC,
+      advantage,
+      steady,
       luck: this.difficulty?.luck ?? 0,
-      critRange: this.character?.hasFeat('tactical_genius') ? 19 : 20,
       label: label || spec.label,
     });
 
@@ -9073,8 +9360,8 @@ class AwayTeam {
     const result = {
       ...roll, checkType, spec, parts, officer,
       injured: null, killed: null, securityLost: 0,
-      formatted: formatCheck(roll, spec.label),
-      difficultyLabel: describeDC(targetDC),
+      formatted: formatResolution(roll, spec.label),
+      difficultyLabel: describeDifficulty(targetDC),
     };
 
     // Consequences scale with how badly it went, not merely whether it failed.
@@ -10229,6 +10516,167 @@ class MissionBook {
 
 __exports.Mission = Mission;
 __exports.MissionBook = MissionBook;
+
+});
+
+__define("src/rules/dice.js", function (__exports, __require) {
+// The d20 layer.
+//
+// Every uncertain action in the game — an away team forcing a door, a
+// negotiation, a science analysis, a saving throw against a plasma burst —
+// resolves through this module. It is deliberately conventional: ability
+// scores, a proficiency bonus, a target number, advantage, and criticals.
+// If you have played a tabletop RPG you already know how this works.
+//
+// All randomness comes from the seeded 64-bit RNG, so a roll is reproducible
+// and the whole session can be replayed from its seed.
+
+/** Standard polyhedral roll. `n` dice of `sides`, plus a flat modifier. */
+function roll(rng, n, sides, modifier = 0) {
+  const dice = [];
+  for (let i = 0; i < n; i++) dice.push(rng.int(1, sides));
+  return { dice, total: dice.reduce((a, b) => a + b, 0) + modifier, modifier };
+}
+const d = (rng, sides) => rng.int(1, sides);
+
+/** 5e-style ability modifier: (score - 10) / 2, rounded down. */
+function abilityMod(score) {
+  return Math.floor((score - 10) / 2);
+}
+
+/** Proficiency scales with character level, 2 at level 1 up to 6 at 17+. */
+function proficiencyBonus(level) {
+  return 2 + Math.floor((Math.max(1, level) - 1) / 4);
+}
+const DC = {
+  trivial: 5,
+  easy: 10,
+  moderate: 12,
+  hard: 15,
+  very_hard: 18,
+  formidable: 20,
+  legendary: 25,
+  impossible: 30,
+};
+const DC_LABEL = {
+  5: 'Trivial', 10: 'Easy', 12: 'Moderate', 15: 'Hard',
+  18: 'Very Hard', 20: 'Formidable', 25: 'Legendary', 30: 'Near Impossible',
+};
+function describeDC(dc) {
+  const keys = Object.keys(DC_LABEL).map(Number).sort((a, b) => a - b);
+  let best = keys[0];
+  for (const k of keys) if (dc >= k) best = k;
+  return DC_LABEL[best];
+}
+
+/**
+ * The core resolution.
+ *
+ * @param {RNG} rng
+ * @param {object} opts
+ *   modifier      total bonus (ability mod + proficiency + situational)
+ *   dc            target number
+ *   advantage     roll twice, keep the higher
+ *   disadvantage  roll twice, keep the lower (cancels advantage)
+ *   luck          extra rerolls of a natural 1 (Story difficulty grants these)
+ *   critRange     natural roll at or above this is a critical success (default 20)
+ * @returns {object} full, inspectable result — the UI shows the arithmetic
+ */
+function check(rng, {
+  modifier = 0, dc = 12, advantage = false, disadvantage = false,
+  luck = 0, critRange = 20, label = '',
+} = {}) {
+  // Advantage and disadvantage cancel exactly, as in the tabletop rules.
+  const adv = advantage && !disadvantage;
+  const dis = disadvantage && !advantage;
+
+  const rolls = [d(rng, 20)];
+  if (adv || dis) rolls.push(d(rng, 20));
+
+  let natural = adv ? Math.max(...rolls) : dis ? Math.min(...rolls) : rolls[0];
+
+  // Luck lets a fumble be re-rolled a limited number of times.
+  let lucked = 0;
+  while (natural === 1 && lucked < luck) {
+    natural = d(rng, 20);
+    rolls.push(natural);
+    lucked++;
+  }
+
+  const total = natural + modifier;
+  const criticalSuccess = natural >= critRange;
+  const criticalFailure = natural === 1;
+
+  // A natural 20 always succeeds; a natural 1 always fails. That is the
+  // whole point of having dice.
+  const success = criticalSuccess ? true : criticalFailure ? false : total >= dc;
+
+  return {
+    label, natural, rolls, modifier, total, dc,
+    success, criticalSuccess, criticalFailure,
+    margin: total - dc,
+    advantage: adv, disadvantage: dis, lucked,
+    // How comfortably it went, for prose and for partial successes.
+    degree: criticalFailure ? -2
+      : !success && total >= dc - 4 ? -1     // near miss
+      : !success ? -2
+      : criticalSuccess ? 2
+      : total >= dc + 5 ? 1
+      : 0,
+  };
+}
+
+/** Two parties roll against each other; ties go to the defender. */
+function contest(rng, attacker, defender) {
+  const a = check(rng, { ...attacker, dc: 0 });
+  const b = check(rng, { ...defender, dc: 0 });
+  return {
+    attacker: a, defender: b,
+    attackerWins: a.total > b.total,
+    margin: a.total - b.total,
+  };
+}
+
+/** A saving throw is a check against an externally-set DC. */
+function save(rng, opts) {
+  return check(rng, { ...opts, label: opts.label || 'saving throw' });
+}
+
+/** Format a roll for the log, showing the arithmetic so it can be trusted. */
+function formatCheck(result, skillName = '') {
+  const sign = result.modifier >= 0 ? '+' : '−';
+  const mod = Math.abs(result.modifier);
+  const dice = result.rolls.length > 1 ? `[${result.rolls.join(', ')}]` : `${result.natural}`;
+  const advNote = result.advantage ? ' adv' : result.disadvantage ? ' dis' : '';
+  const head = skillName ? `${skillName}: ` : '';
+  const verdict = result.criticalSuccess ? 'CRITICAL SUCCESS'
+    : result.criticalFailure ? 'CRITICAL FAILURE'
+    : result.success ? 'success' : 'failure';
+  return `${head}d20 ${dice}${advNote} ${sign} ${mod} = ${result.total} vs DC ${result.dc} — ${verdict}`;
+}
+
+/** Damage expression roller, e.g. "2d6+3". Used by away-team combat. */
+function rollDamage(rng, expression) {
+  const m = /^(\d+)d(\d+)\s*([+-]\s*\d+)?$/.exec(String(expression).replace(/\s/g, ''));
+  if (!m) return { total: 0, dice: [] };
+  const n = parseInt(m[1], 10);
+  const sides = parseInt(m[2], 10);
+  const mod = m[3] ? parseInt(m[3].replace(/\s/g, ''), 10) : 0;
+  return roll(rng, n, sides, mod);
+}
+
+__exports.roll = roll;
+__exports.d = d;
+__exports.abilityMod = abilityMod;
+__exports.proficiencyBonus = proficiencyBonus;
+__exports.DC = DC;
+__exports.DC_LABEL = DC_LABEL;
+__exports.describeDC = describeDC;
+__exports.check = check;
+__exports.contest = contest;
+__exports.save = save;
+__exports.formatCheck = formatCheck;
+__exports.rollDamage = rollDamage;
 
 });
 
@@ -16184,15 +16632,39 @@ const BACKGROUND_SKILL = {
 };
 
 
-/** Render a d20 result as an auditable card: the die, the breakdown, the verdict. */
+/**
+ * Render an outcome as an auditable card: the verdict, the arithmetic that
+ * produced it, and the prose.
+ *
+ * Gameplay no longer rolls a d20, so this shows a margin — how comfortably or
+ * how badly — rather than a die face. Everything else is unchanged: the terms
+ * are still itemised, and the player can still see exactly which ability, which
+ * officer and which circumstance contributed what.
+ */
 function rollCard(r) {
   const cls = r.criticalSuccess ? 'crit' : r.criticalFailure ? 'fumble' : '';
   const breakdown = (r.parts ?? [])
     .filter((p) => p.value !== 0)
     .map((p) => `${p.source} ${p.value >= 0 ? '+' : ''}${p.value}`)
     .join('  ·  ');
+
+  // The margin bar: centred on the pass mark, filling right for a comfortable
+  // success and left for a bad failure. It reads at a glance in a way a number
+  // does not, which matters when the same modal is telling you an officer died.
+  const margin = typeof r.margin === 'number' ? r.margin : null;
+  const bar = margin === null ? null : el('div', { class: 'marginbar' }, [
+    el('i', {
+      class: margin >= 0 ? 'good' : 'bad',
+      style: {
+        width: `${Math.min(50, Math.abs(margin) * 3.2)}%`,
+        [margin >= 0 ? 'left' : 'right']: '50%',
+      },
+    }),
+  ]);
+
   return el('div', { class: `rollcard ${cls}`.trim() }, [
     el('div', { class: 'dieline', text: r.formatted ?? '' }),
+    bar,
     breakdown ? el('div', { class: 'breakdown', text: breakdown }) : null,
     r.text ? el('div', { class: 'breakdown', text: r.text }) : null,
   ]);

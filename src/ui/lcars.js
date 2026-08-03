@@ -58,7 +58,15 @@ export function readout(label, pct, valueText = null) {
   ]);
 }
 
-/** The four-facing shield diagram with hull in the middle. */
+/**
+ * The six-facing shield diagram, hull in the middle.
+ *
+ * Fore, aft, port and starboard keep the plan-view arrangement they have always
+ * had, because that is how a captain reads a shield display. Dorsal and ventral
+ * sit above and below the hull box in the centre column — the one place they
+ * can go that says "over the top of us" and "under us" without a second
+ * diagram.
+ */
 export function shieldDiagram(ship) {
   const cell = (facing, label) => {
     const p = ship.shieldPctOf(facing);
@@ -71,12 +79,14 @@ export function shieldDiagram(ship) {
   const hullPct = ship.hullPct;
   return el('div', { class: 'shields' }, [
     cell('fore', 'Fore'),
+    cell('dorsal', 'Dorsal'),
     cell('port', 'Port'),
     el('div', { class: 'hullbox' }, [
       'Hull',
       el('b', { text: `${Math.round(hullPct * 100)}%` }),
     ]),
     cell('starboard', 'Stbd'),
+    cell('ventral', 'Ventral'),
     cell('aft', 'Aft'),
   ]);
 }

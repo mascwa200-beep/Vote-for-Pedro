@@ -222,7 +222,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .shields {
   display: grid;
   grid-template-columns: 1fr 1.3fr 1fr;
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto auto auto auto;
   gap: 4px; align-items: center; justify-items: center;
   margin: 6px 0;
 }
@@ -236,15 +236,27 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .shields .sh.low b { color: var(--lcars-red); }
 .shields .sh.mid b { color: var(--lcars-amber); }
 .shields .hullbox {
-  grid-column: 2; grid-row: 2;
+  grid-column: 2; grid-row: 3;
   width: 100%; padding: 10px 4px; text-align: center;
   background: #14142a; border: 2px solid var(--lcars-blue); border-radius: 8px;
 }
 .shields .hullbox b { display: block; font-size: 1.5em; color: var(--lcars-amber); }
 .shields .fore { grid-column: 2; grid-row: 1; }
-.shields .aft { grid-column: 2; grid-row: 3; }
-.shields .port { grid-column: 1; grid-row: 2; }
-.shields .starboard { grid-column: 3; grid-row: 2; }
+.shields .aft { grid-column: 2; grid-row: 5; }
+.shields .port { grid-column: 1; grid-row: 3; }
+.shields .starboard { grid-column: 3; grid-row: 3; }
+
+/* Dorsal and ventral stack against the hull box: above it and below it, which
+   is the only arrangement that reads as "over us" and "under us" in a diagram
+   that is otherwise a plan view. */
+.shields .dorsal { grid-column: 2; grid-row: 2; }
+.shields .ventral { grid-column: 2; grid-row: 4; }
+.shields .dorsal, .shields .ventral {
+  padding: 5px 4px;
+  font-size: 0.64em;
+  opacity: 0.92;
+}
+.shields .dorsal b, .shields .ventral b { font-size: 1.15em; }
 
 /* Power sliders */
 .power-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
@@ -600,6 +612,29 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 .rollcard.crit { border-left-color: var(--lcars-green); }
 .rollcard.fumble { border-left-color: var(--lcars-red); }
 .rollcard .dieline { font-size: 1.05em; color: var(--lcars-ice); }
+/* Margin bar: zero is the middle, and the fill runs outward from it. Success
+   grows to the right, failure to the left, so the shape of the outcome is
+   legible before the number is read. */
+.marginbar {
+  position: relative;
+  height: 5px;
+  margin: 7px 0 6px;
+  background: #23233a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.marginbar::before {
+  content: '';
+  position: absolute; left: 50%; top: 0; bottom: 0;
+  width: 1px; background: rgba(255, 255, 255, 0.35);
+}
+.marginbar i {
+  position: absolute; top: 0; bottom: 0;
+  border-radius: 3px;
+}
+.marginbar i.good { background: var(--lcars-green); }
+.marginbar i.bad { background: var(--lcars-red); }
+
 .rollcard .breakdown {
   font-size: 0.76em; color: var(--text-dim); margin-top: 4px; line-height: 1.4;
 }

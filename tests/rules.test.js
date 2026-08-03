@@ -1,7 +1,9 @@
 // Tests for the d20 layer, the character sheet, reputation, and difficulty.
 
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { resolve, successChance } from '../src/rules/resolve.js';
+import { readFileSync } from 'node:fs';
 
 import { RNG } from '../src/core/rng.js';
 import {
@@ -452,7 +454,7 @@ test('reputation and standing are genuinely independent', () => {
 
 // ================================================================ away teams
 
-test('away teams roll d20 checks with an itemised modifier', () => {
+test('away team outcomes are continuous, and still itemised', () => {
   const character = new Character({ careerId: 'science', speciesId: 'vulcan' });
   const officer = new Officer({ station: 'science', name: 'T’Pren', expertise: 90 });
   const team = new AwayTeam([officer], {
@@ -465,9 +467,13 @@ test('away teams roll d20 checks with an itemised modifier', () => {
   assert.ok(Number.isFinite(total));
 
   const r = team.check(new RNG(1n), 'science', { dc: 12 });
-  assert.ok(r.natural >= 1 && r.natural <= 20);
-  assert.ok(r.formatted.includes('DC'));
+  // No die: a margin, and the terms that produced it.
+  assert.equal(r.natural, undefined, 'away missions must not roll a d20 any more');
+  assert.equal(typeof r.margin, 'number');
   assert.equal(typeof r.success, 'boolean');
+  assert.equal(r.success, r.margin >= 0, 'success must follow from the margin');
+  assert.ok(r.formatted.length > 4);
+  assert.ok(Number.isFinite(r.capability) && Number.isFinite(r.difficulty));
 });
 
 test('every check type maps to a real ability', () => {
@@ -595,4 +601,106 @@ test('a version 1 save without a character still loads', () => {
   assert.ok(restored.character, 'a character sheet is synthesised');
   assert.ok(restored.reputation, 'reputation starts fresh');
   assert.equal(restored.difficulty.id, DEFAULT_DIFFICULTY);
+});
+
+// ================================================================ resolution
+
+describe('continuous outcome resolution', () => {
+  test('the baseline keeps the tuned difficulty numbers meaning what they meant', () => {
+    // This is the bug this suite exists to prevent. Every difficulty number in
+    // the game was written against a d20, which contributes 10.5 on average.
+    // A swing centred on zero silently subtracts that from every check —
+    // when it was missing, a capable science officer's routine survey went from
+    // succeeding four times in five to failing nineteen times in twenty.
+    const even = resolve(new RNG(7n), { capability: 10, difficulty: 10 });
+    assert.ok(even.margin > 0 || even.margin > -13,
+      'an evenly matched attempt should not be hopeless');
+    assert.ok(Math.abs(successChance(0) - 0.98) < 0.05,
+      `capability equal to difficulty should nearly always succeed, got ${successChance(0)}`);
+    assert.ok(successChance(-10.5) > 0.45 && successChance(-10.5) < 0.55,
+      'a ten-and-a-half point deficit is the coin flip the d20 called DC-equals-modifier');
+  });
+
+  test('capability dominates luck, which is the entire point', () => {
+    const rng = new RNG(99n);
+    const rate = (capability) => {
+      let wins = 0;
+      for (let i = 0; i < 2000; i++) {
+        if (resolve(rng, { capability, difficulty: 15 }).success) wins++;
+      }
+      return wins / 2000;
+    };
+    const poor = rate(0);
+    const good = rate(8);
+    assert.ok(good - poor > 0.4, `capability barely mattered: ${poor} vs ${good}`);
+  });
+
+  test('no outcome is ever certain in either direction', () => {
+    const rng = new RNG(3n);
+    let hopelessWins = 0;
+    let trivialLosses = 0;
+    for (let i = 0; i < 4000; i++) {
+      if (resolve(rng, { capability: 0, difficulty: 30 }).success) hopelessWins++;
+      if (!resolve(rng, { capability: 20, difficulty: 5 }).success) trivialLosses++;
+    }
+    // Rare, but the swing is bounded rather than zero — a hopeless attempt can
+    // still come off and a trivial one can still be fumbled.
+    assert.ok(hopelessWins < 200, `hopeless work succeeded ${hopelessWins} times in 4000`);
+    assert.ok(trivialLosses < 200, `trivial work failed ${trivialLosses} times in 4000`);
+  });
+
+  test('training makes an officer more consistent, not merely better', () => {
+    const rng = new RNG(11n);
+    const spread = (steady) => {
+      const margins = [];
+      for (let i = 0; i < 3000; i++) {
+        margins.push(resolve(rng, { capability: 5, difficulty: 12, steady }).margin);
+      }
+      const mean = margins.reduce((a, b) => a + b, 0) / margins.length;
+      return Math.sqrt(margins.reduce((a, b) => a + (b - mean) ** 2, 0) / margins.length);
+    };
+    // The thing a flat die could never express.
+    assert.ok(spread(0.45) < spread(0) * 0.9,
+      `steadiness did not narrow the spread: ${spread(0)} vs ${spread(0.45)}`);
+  });
+
+  test('advantage helps and disadvantage hurts', () => {
+    const rng = new RNG(5n);
+    const rate = (opts) => {
+      let wins = 0;
+      for (let i = 0; i < 1500; i++) if (resolve(rng, { capability: 3, difficulty: 15, ...opts }).success) wins++;
+      return wins / 1500;
+    };
+    const plain = rate({});
+    assert.ok(rate({ advantage: true }) > plain);
+    assert.ok(rate({ disadvantage: true }) < plain);
+  });
+
+  test('the margin drives the degree and the exceptional flags', () => {
+    const rout = resolve(new RNG(1n), { capability: 40, difficulty: 5 });
+    assert.equal(rout.success, true);
+    assert.equal(rout.criticalSuccess, true);
+    assert.ok(rout.degree >= 2);
+
+    const rout2 = resolve(new RNG(1n), { capability: 0, difficulty: 45 });
+    assert.equal(rout2.success, false);
+    assert.equal(rout2.criticalFailure, true);
+  });
+
+  test('resolution is deterministic from the seed, like everything else', () => {
+    const a = resolve(new RNG(42n), { capability: 4, difficulty: 13 });
+    const b = resolve(new RNG(42n), { capability: 4, difficulty: 13 });
+    assert.deepEqual(a, b);
+  });
+
+  test('the d20 survives for the character sheet and nowhere else', () => {
+    // Ability scores, feats and levels are still a role-playing character
+    // sheet. What changed is what resolves an away mission.
+    const src = readFileSync(new URL('../src/sim/away.js', import.meta.url), 'utf8');
+    assert.ok(!/rules\/dice\.js/.test(src), 'away missions still import the dice');
+    const diplo = readFileSync(new URL('../src/sim/diplomacy.js', import.meta.url), 'utf8');
+    assert.ok(!/rules\/dice\.js/.test(diplo), 'diplomacy still imports the dice');
+    const combat = readFileSync(new URL('../src/sim/combat.js', import.meta.url), 'utf8');
+    assert.ok(!/rules\/dice\.js/.test(combat), 'combat still imports the dice');
+  });
 });

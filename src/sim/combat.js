@@ -1,11 +1,16 @@
 // Combat resolution.
 //
-// A tactical engagement is a fixed-step 2D simulation. The player gives orders;
-// helm and tactical execute them over time. Nothing resolves instantly, which is
-// what makes power routing and facing decisions matter.
+// A tactical engagement is a fixed-step simulation in three dimensions. The
+// player gives orders; helm and tactical execute them over time. Nothing
+// resolves instantly, which is what makes power routing and facing decisions
+// matter.
+//
+// Nothing here rolls a die. Accuracy, damage and evasion are continuous
+// quantities built from the situation and the ship — the d20 belongs to the
+// character sheet, not to whether a phaser connects.
 
 import { emit } from '../core/events.js';
-import { Ship, FACINGS, inArc, facingForBearing } from './ship.js';
+import { Ship, FACINGS, inArc, facingForBearing, facingForDirection } from './ship.js';
 import { chooseAction } from './ai.js';
 
 export const WEAPON_RANGE = {
@@ -65,22 +70,41 @@ export class Engagement {
     return this.hostiles.filter((s) => !s.destroyed);
   }
 
+  /**
+   * Hostiles arrive spread across a shell rather than a fan.
+   *
+   * The elevations are deliberately modest — a few degrees, not a sphere's
+   * worth. A patrol that opens from directly overhead is disorienting rather
+   * than tactical, and the point of the third axis is that climbing is a
+   * decision made during the fight, not the state it starts in.
+   */
   placeCombatants() {
-    this.player.x = 0; this.player.y = 0;
+    this.player.x = 0; this.player.y = 0; this.player.z = 0;
     this.player.heading = 0; this.player.desiredHeading = 0;
+    this.player.pitch = 0; this.player.desiredPitch = 0;
+
     this.hostiles.forEach((s, i) => {
       const angle = (-50 + i * 40) * Math.PI / 180;
       const dist = 700 + i * 90;
-      s.x = Math.cos(angle) * dist;
-      s.y = Math.sin(angle) * dist;
+      // Alternate above and below, widening with each additional hull.
+      const elevation = (i % 2 === 0 ? 1 : -1) * Math.min(18, 6 + i * 4) * Math.PI / 180;
+      s.x = Math.cos(angle) * Math.cos(elevation) * dist;
+      s.y = Math.sin(angle) * Math.cos(elevation) * dist;
+      s.z = Math.sin(elevation) * dist;
       s.heading = (angle * 180 / Math.PI) + 180;
       s.desiredHeading = s.heading;
+      s.pitch = 0;
+      s.desiredPitch = 0;
       s.throttle = 0.5;
     });
+
     this.allies.forEach((s, i) => {
       s.x = -320 - i * 120;
       s.y = (i % 2 === 0 ? 1 : -1) * (140 + i * 60);
-      s.heading = 0; s.desiredHeading = 0; s.throttle = 0.4;
+      s.z = (i % 2 === 0 ? -1 : 1) * (40 + i * 20);
+      s.heading = 0; s.desiredHeading = 0;
+      s.pitch = 0; s.desiredPitch = 0;
+      s.throttle = 0.4;
     });
   }
 
@@ -109,11 +133,14 @@ export class Engagement {
   setThrottle(v) { this.player.throttle = Math.max(0, Math.min(1, v)); }
   setHeading(deg) { this.player.desiredHeading = ((deg % 360) + 360) % 360; }
 
-  /** Steer to keep the target in the forward arc. */
+  setPitch(deg) { this.player.desiredPitch = Math.max(-70, Math.min(70, deg)); }
+
+  /** Steer to bring the target into the forward arc, in both axes. */
   comeAboutTo(ship) {
     if (!ship) return;
     const abs = Math.atan2(ship.y - this.player.y, ship.x - this.player.x) * 180 / Math.PI;
     this.setHeading(abs);
+    this.setPitch(this.player.elevationTo(ship));
   }
 
   evasive(on) {
@@ -128,7 +155,7 @@ export class Engagement {
    */
   deployDecoy(seconds) {
     this.decoyTimer = Math.max(this.decoyTimer, seconds);
-    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, life: 0.8 });
+    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, z: this.player.z ?? 0, life: 0.8 });
     this.pushLog('Decoy away — their targeting solutions just got harder.', 'tactical');
   }
 
@@ -166,8 +193,10 @@ export class Engagement {
     if (weapon.type === 'torpedo' && attacker.torpedoes <= 0) return false;
     if (attacker.subsystems.weapons <= 0.05) return false;
 
-    const bearing = attacker.bearingTo(target);
-    if (!inArc(bearing, weapon)) return false;
+    // A cone in the attacker's own frame, so an arc restricts elevation as
+    // well as bearing: a forward bank does not bear on something directly above
+    // the saucer merely because it is ahead in plan view.
+    if (!inArc(attacker.directionTo(target), weapon)) return false;
 
     const distance = attacker.distanceTo(target);
     if (distance > (WEAPON_RANGE[weapon.type] ?? 900)) return false;
@@ -178,7 +207,7 @@ export class Engagement {
       attacker.torpedoes = Math.max(0, attacker.torpedoes - 1);
       this.projectiles.push({
         kind: 'torpedo', attacker, target, weapon,
-        x: attacker.x, y: attacker.y,
+        x: attacker.x, y: attacker.y, z: attacker.z ?? 0,
         speed: 420, life: 6,
         subsystem: attacker === this.player ? this.targetedSubsystem : null,
       });
@@ -190,9 +219,10 @@ export class Engagement {
     const result = this.resolveHit(attacker, target, weapon, distance,
       attacker === this.player ? this.targetedSubsystem : null);
     this.effects.push({
-      kind: weapon.type, from: { x: attacker.x, y: attacker.y },
-      to: { x: target.x, y: target.y }, life: 0.35, hit: result.hit,
-      faction: attacker.faction,
+      kind: weapon.type,
+      from: { x: attacker.x, y: attacker.y, z: attacker.z ?? 0 },
+      to: { x: target.x, y: target.y, z: target.z ?? 0 },
+      life: 0.35, hit: result.hit, faction: attacker.faction,
     });
     emit('combat:fire', { attacker, weapon, type: weapon.type, result });
     return true;
@@ -230,17 +260,17 @@ export class Engagement {
     }
     if (crit) damage *= 1 + attacker.mod('critSeverity');
 
-    const bearing = target.bearingFrom(attacker);
+    const direction = target.directionFrom(attacker);
     const dmgType = weapon.type === 'torpedo' ? 'kinetic' : 'energy';
     // Torpedoes largely ignore shields; that's their whole role.
     const piercing = weapon.type === 'torpedo' ? 0.25 : 0;
 
     const result = target.takeDamage(damage, {
-      bearing, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
+      direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
     });
 
     this.effects.push({
-      kind: 'impact', x: target.x, y: target.y, life: 0.4,
+      kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4,
       facing: result.facing, penetrated: result.penetrated, crit,
     });
 
@@ -262,7 +292,7 @@ export class Engagement {
   }
 
   onDestroyed(ship, killer) {
-    this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, life: 1.6 });
+    this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, z: ship.z ?? 0, life: 1.6 });
     emit('combat:destroyed', { ship, killer, byPlayer: killer === this.player });
     this.pushLog(`${ship.name} destroyed.`, 'tactical');
   }
@@ -311,16 +341,18 @@ export class Engagement {
       if (p.target.destroyed || p.life <= 0) { p.dead = true; continue; }
       const dx = p.target.x - p.x;
       const dy = p.target.y - p.y;
-      const dist = Math.hypot(dx, dy);
+      const dz = (p.target.z ?? 0) - (p.z ?? 0);
+      const dist = Math.hypot(dx, dy, dz);
       if (dist < 26) {
         const result = this.resolveHit(p.attacker, p.target, p.weapon,
           p.attacker.distanceTo(p.target), p.subsystem);
-        emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y });
+  emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y, z: p.z ?? 0 });
         p.dead = true;
         continue;
       }
       p.x += (dx / dist) * p.speed * dt;
       p.y += (dy / dist) * p.speed * dt;
+      p.z = (p.z ?? 0) + (dz / dist) * p.speed * dt;
     }
     this.projectiles = this.projectiles.filter((p) => !p.dead);
   }
