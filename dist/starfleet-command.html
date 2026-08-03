@@ -9150,7 +9150,15 @@ function resolve(rng, {
   if (advantage && !disadvantage) swing = Math.max(swing, draw());
   else if (disadvantage && !advantage) swing = Math.min(swing, draw());
 
-  const margin = BASELINE + capability + swing + luck - difficulty;
+  // Rounded first, and every verdict derived from the rounded value.
+  //
+  // This ordering is load-bearing. Reporting a margin of -0.02 as "0.0" while
+  // deriving failure from the raw number means the card shows the player a
+  // number that contradicts its own verdict — and because JavaScript evaluates
+  // `-0 >= 0` as true, it is not even visible as a sign. It happened about one
+  // attempt in a hundred and CI caught it before a player could.
+  const raw = BASELINE + capability + swing + luck - difficulty;
+  const margin = Math.round(raw * 10) / 10 || 0;   // `|| 0` normalises -0
   const success = margin >= 0;
 
   // Degree, on the same scale the old check reported, so callers that branched
@@ -9162,7 +9170,7 @@ function resolve(rng, {
     capability,
     difficulty,
     swing: Math.round(swing * 10) / 10,
-    margin: Math.round(margin * 10) / 10,
+    margin,
     success,
     degree,
     exceptional: margin >= EXCEPTIONAL,

@@ -687,6 +687,20 @@ describe('continuous outcome resolution', () => {
     assert.equal(rout2.criticalFailure, true);
   });
 
+  test('the reported margin never contradicts the reported verdict', () => {
+    // CI found this one. The margin is rounded for display and success was
+    // derived from the unrounded value, so a true margin of -0.02 was shown as
+    // "0.0" while reporting failure — and because JavaScript says `-0 >= 0`,
+    // the sign did not even give it away. Roughly one attempt in a hundred.
+    const rng = new RNG(2024n);
+    for (let i = 0; i < 8000; i++) {
+      const r = resolve(rng, { capability: 10, difficulty: 20.5 });
+      assert.equal(r.success, r.margin >= 0,
+        `margin ${r.margin} reported success=${r.success}`);
+      assert.ok(!Object.is(r.margin, -0), 'a negative zero reached the card');
+    }
+  });
+
   test('resolution is deterministic from the seed, like everything else', () => {
     const a = resolve(new RNG(42n), { capability: 4, difficulty: 13 });
     const b = resolve(new RNG(42n), { capability: 4, difficulty: 13 });
