@@ -286,7 +286,10 @@ class App {
 
     globalThis.addEventListener('beforeunload', () => { if (this.game) this.save(); });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden' && this.game) this.save();
+      if (!this.game) return;
+      if (document.visibilityState === 'hidden') { this.save(); return; }
+      // Back in the foreground. The ship has been working the whole time.
+      this.resumeCommission();
     });
   }
 
@@ -1060,7 +1063,7 @@ class App {
       if (!file) return;
       try {
         const data = importSave(await file.text());
-        this.game = Game.load(data);
+        this.game = Game.load(data, { compression: this.settings.compression });
         this.go('bridge');
         this.showMessage('Record Restored', [`Resumed command at stardate ${this.game.stardate}.`]);
       } catch (err) {
@@ -1150,6 +1153,21 @@ class App {
     this.save();
   }
 
+  /**
+   * Credit the time that passed while the app was closed, and show the captain
+   * what happened. Called on load and whenever the tab comes back.
+   *
+   * Silent when nothing meaningful elapsed — coming back after ninety seconds
+   * should not open a modal.
+   */
+  resumeCommission() {
+    const r = this.game?.syncCampaign();
+    if (!r || r.hours < 1) { this.needsRender = true; return; }
+    this.showMessage('While You Were Away', r.lines);
+    audio.play('computer_query');
+    this.needsRender = true;
+  }
+
   resumeOrStart() {
     if (hasSave('auto')) {
       const data = loadSave('auto');
@@ -1159,9 +1177,16 @@ class App {
         button('Resume', () => {
           this.closeModal();
           try {
-            this.game = Game.load(data);
+            this.game = Game.load(data, { compression: this.settings.compression });
             this.orderBar.style.display = '';
             this.go('bridge');
+            if (data.recoveredFromBackup) {
+              this.game.pushLog(
+                'Primary command record was unreadable; restored from backup.',
+                'computer',
+              );
+            }
+            this.resumeCommission();
           } catch {
             this.showNewGame();
           }

@@ -137,6 +137,33 @@ EPS grid that takes real seconds to rebalance. Firing arcs, range falloff,
 shield bleedthrough, torpedo piercing, cloaks, boarding parties, hull fires,
 and warp core breaches you survive only by ejecting the core.
 
+**A five-year mission, in real time.** A commission runs 1,826 days of
+wall-clock time. The ship repairs, fires burn out, injured officers recover and
+the stardate advances whether the app is open or not — you come back to a
+ship's log of what happened while you were away, not to a paused game.
+
+Three things it has to survive, and they are the whole design. **Setting the
+clock forward cannot buy progress** — a monotonic high-water mark, so the
+commission only ever moves in one direction. **Setting it backward cannot
+destroy one** — time zones, daylight saving, a dead battery; elapsed time
+clamps at zero and re-anchors rather than rolling your career backwards. And
+**a month away does not hand back a pristine ship**: a single absence credits
+at most 72 hours, and the log says so plainly rather than leaving you to work
+it out from a repair bill that does not add up.
+
+Real time is the default and the point. There is a compression factor in
+Options — ×24, ×168, or ×1000 for testing — and it is labelled honestly for
+what it costs: the bridge says *"this is not the five-year mission"* while it
+is on. Nothing is locked behind real time. It is just that a commission you
+finish in a fortnight is not the thing the game was built to be.
+
+**A save you can trust for five years.** Every write is checksummed, so a
+record truncated by a phone running out of space is *detected* rather than
+handed to the game as though it were sound. The last three autosaves are kept
+in a ring, and a load that fails falls back through them rather than presenting
+a blank bridge to somebody four years into a commission. The browser
+verification deliberately corrupts the autosave and proves the recovery works.
+
 **A galaxy.** Sol, Vulcan, Andoria, Bajor, Deep Space 9, Wolf 359, the
 Romulan Neutral Zone, the Badlands, Qo'noS, and uncharted grids past the
 relay network — as a real graph with real light-year distances. Warp travel
@@ -194,6 +221,7 @@ The sim advances in fixed 1/30s steps independent of frame rate, so an
 engagement resolves identically on a 60 Hz and a 120 Hz panel.
 
 ```
+src/campaign/ the commission clock: real time, offline progress, absences
 src/core/     rng, clock, event bus, consequence ledger, game state, saves
 src/gfx/      vector maths, WebGL, procedural meshes, hull blueprints, scene
 src/lang/     normalisation, phonetics, edit distance, gazetteer, intent lexicon
@@ -215,7 +243,7 @@ and 31 procedurally generated hulls averaging 230 triangles each.
 
 ```sh
 npm start      # serve at http://localhost:8099
-npm test       # 235 tests — RNG determinism, combat maths, dice, saves, balance
+npm test       # 255 tests — RNG determinism, combat maths, dice, saves, balance
 npm run build  # regenerate dist/starfleet-command.html
 
 ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh   # build the APK

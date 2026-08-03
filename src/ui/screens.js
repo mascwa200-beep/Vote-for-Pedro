@@ -9,6 +9,7 @@ import {
 import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
+import { listBackups, downloadSave } from '../core/save.js';
 
 import { MODES } from '../core/state.js';
 import { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } from '../sim/power.js';
@@ -52,6 +53,26 @@ export function bridgeScreen(app) {
   ], 'accent');
   locPanel.classList.add('sys-card');
   root.append(locPanel);
+
+  // --- The commission ---
+  // Five years of real time, and how far through them this captain is. It sits
+  // at the top of the bridge because it is the frame the whole game hangs on:
+  // reputation earned over a career only means something if you can see the
+  // career going past.
+  if (g.campaign) {
+    const pct = g.campaign.progress;
+    root.append(panel('Commission', [
+      el('p', {}, [
+        el('b', { text: g.campaign.format() }),
+        ' — ',
+        el('span', { class: 'muted', text: g.campaign.remainingText() }),
+      ]),
+      readout('Five-year mission', pct, `${Math.round(pct * 100)}%`),
+      g.campaign.compression > 1
+        ? el('p', { class: 'muted', text: `Time compression ×${g.campaign.compression}. This is not the five-year mission.` })
+        : null,
+    ].filter(Boolean)));
+  }
 
   // --- Ship status ---
   root.append(panel('Ship Status', [
@@ -688,6 +709,43 @@ export function optionsScreen(app) {
     });
     return el('div', { class: 'power-row' }, [el('div', { class: 'label', text: label }), input, val]);
   };
+
+  // ---- The commission ----
+  const COMPRESSIONS = [
+    { value: 1, label: 'Real time', sub: 'Five years means five years' },
+    { value: 24, label: '×24', sub: 'A day an hour — about eleven weeks' },
+    { value: 168, label: '×168', sub: 'A week an hour — about eleven days' },
+    { value: 1000, label: '×1000', sub: 'For testing. Not a commission.' },
+  ];
+  root.append(panel('Commission', [
+    el('p', { class: 'muted', text: 'The five-year mission runs on the clock on your wrist. The ship repairs, the crew recovers and the stardate advances whether this app is open or not.' }),
+    el('p', { class: 'muted', text: 'You can compress it. Nothing is locked behind real time and nothing is taken away — but a commission you finish in a fortnight is not the thing the game was built to be, and it will say so on the bridge.' }),
+    ...COMPRESSIONS.map((c) => button(c.label, tap(() => {
+      s.compression = c.value;
+      if (app.game?.campaign) app.game.campaign.compression = c.value;
+      app.saveSettings();
+      app.render();
+    }), {
+      color: (s.compression ?? 1) === c.value ? 'green' : 'ghost',
+      sub: c.sub,
+    })),
+    app.game?.campaign
+      ? el('p', { class: 'muted', text: `Currently: ${app.game.campaign.format()}. ${app.game.campaign.remainingText()}` })
+      : null,
+  ].filter(Boolean)));
+
+  // ---- Backups ----
+  const backups = listBackups();
+  root.append(panel('Command Record', [
+    el('p', { class: 'muted', text: 'Every save is checksummed, and the last three autosaves are kept. If the current record cannot be read, the game falls back through them rather than showing you an empty bridge.' }),
+    backups.length
+      ? el('div', {}, backups.map((b) => el('p', { class: 'muted', text: `Backup ${b.index}: ${b.label ?? 'unnamed'} — ${new Date(b.savedAt).toLocaleString()}` })))
+      : el('p', { class: 'muted', text: 'No backups yet. One is kept each time the game autosaves.' }),
+    el('p', { class: 'muted', text: 'A five-year commission is worth exporting somewhere that is not this phone.' }),
+    button('Export the record', tap(() => {
+      if (app.game) downloadSave(app.game);
+    }), { color: 'blue', sub: 'Downloads a file you can keep' }),
+  ]));
 
   root.append(panel('Audio', [
     vol('Master', 'master'), vol('Effects', 'sfx'), vol('Interface', 'ui'),

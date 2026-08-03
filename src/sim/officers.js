@@ -195,6 +195,19 @@ export class Officer {
   }
 
   /**
+   * Recovery over campaign time rather than simulation seconds.
+   *
+   * Sickbay works while the app is closed. A bad injury takes the better part
+   * of a week to clear, which is slow enough that losing an officer to the
+   * infirmary is a real cost and fast enough that it is not a death sentence.
+   */
+  recover(hours) {
+    if (!this.injured || !this.alive) return;
+    this.injurySeverity = Math.max(0, this.injurySeverity - hours / 120);
+    if (this.injurySeverity <= 0) this.injured = false;
+  }
+
+  /**
    * How this officer responds to an order they consider questionable.
    * @returns {'comply'|'object'|'refuse'}
    */

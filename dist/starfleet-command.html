@@ -7047,6 +7047,238 @@ __exports.chairPanel = chairPanel;
 
 });
 
+__define("src/core/save.js", function (__exports, __require) {
+// Persistence. localStorage for autosave and slots, plus export/import so a
+// captain's record can be moved off the phone.
+//
+// This file matters more than it used to. A commission now runs five years of
+// real time, and a save that survives a weekend is not the same thing as a save
+// that survives five years of browser updates, storage pressure, a phone
+// running out of space mid-write, and whatever else happens in that span.
+//
+// So: a checksum on every write, a rolling ring of the last few autosaves, and
+// a load path that falls back through the ring rather than presenting a blank
+// bridge. None of it is clever. All of it is the difference between losing an
+// afternoon and losing a year.
+
+const KEY_PREFIX = 'sfc:save:';
+const AUTOSAVE_KEY = `${KEY_PREFIX}auto`;
+const BACKUP_PREFIX = `${KEY_PREFIX}backup:`;
+const SETTINGS_KEY = 'sfc:settings';
+const SLOTS = 3;
+
+/** How many previous autosaves to keep. Small — this is a phone. */
+const BACKUP_DEPTH = 3;
+
+/**
+ * A cheap, stable checksum over the serialised record.
+ *
+ * FNV-1a: not cryptographic and not trying to be. Its job is to notice a
+ * truncated or half-written record — the thing that actually happens when
+ * storage fills up mid-write — before that record is handed to the game as if
+ * it were sound.
+ */
+function checksum(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function storage() {
+  try {
+    const s = globalThis.localStorage;
+    // Probe: private modes throw only on write.
+    s?.setItem('sfc:probe', '1');
+    s?.removeItem('sfc:probe');
+    return s;
+  } catch {
+    return null;
+  }
+}
+function saveGame(game, slot = 'auto') {
+  const store = storage();
+  if (!store) return false;
+  const key = slot === 'auto' ? AUTOSAVE_KEY : `${KEY_PREFIX}${slot}`;
+  try {
+    const payload = {
+      ...game.save(),
+      savedAt: new Date().toISOString(),
+      label: `${game.captain.name} — ${game.ship.name} — Stardate ${game.stardate}`,
+    };
+    const body = JSON.stringify(payload);
+    const record = JSON.stringify({ sum: checksum(body), body });
+
+    // Rotate the previous autosave into the backup ring before overwriting it.
+    // The write that destroys a five-year commission is the one that happens
+    // while the storage quota is exhausted, and by then the old record is
+    // already gone.
+    if (slot === 'auto') rotateBackups(store, store.getItem(key));
+
+    store.setItem(key, record);
+    return true;
+  } catch (err) {
+    console.warn('[save] failed', err);
+    return false;
+  }
+}
+
+/** Push the current autosave down the ring, dropping the oldest. */
+function rotateBackups(store, current) {
+  if (!current) return;
+  try {
+    for (let i = BACKUP_DEPTH - 1; i >= 1; i--) {
+      const older = store.getItem(`${BACKUP_PREFIX}${i}`);
+      if (older) store.setItem(`${BACKUP_PREFIX}${i + 1}`, older);
+    }
+    store.setItem(`${BACKUP_PREFIX}1`, current);
+  } catch {
+    // A full quota is exactly when this fails, and exactly when the new write
+    // matters more than the old backup. Losing a backup is survivable.
+  }
+}
+
+/**
+ * Read one stored record, verifying its checksum.
+ * @returns {object|null} null when absent, unparseable, or corrupt
+ */
+function readRecord(store, key) {
+  const raw = store.getItem(key);
+  if (!raw) return null;
+  try {
+    const outer = JSON.parse(raw);
+    // Records written before checksums existed are plain payloads, and are
+    // still perfectly good. Trust them; there is nothing to check against.
+    if (typeof outer?.body !== 'string') return outer;
+    if (checksum(outer.body) !== outer.sum) {
+      console.warn('[save] checksum mismatch — record is corrupt');
+      return null;
+    }
+    return JSON.parse(outer.body);
+  } catch {
+    return null;
+  }
+}
+function loadSave(slot = 'auto') {
+  const store = storage();
+  if (!store) return null;
+  const key = slot === 'auto' ? AUTOSAVE_KEY : `${KEY_PREFIX}${slot}`;
+  const primary = readRecord(store, key);
+  if (primary) return primary;
+
+  // The autosave is unreadable. Walk back through the ring rather than
+  // presenting a blank bridge to somebody four years into a commission.
+  if (slot !== 'auto') return null;
+  for (let i = 1; i <= BACKUP_DEPTH; i++) {
+    const backup = readRecord(store, `${BACKUP_PREFIX}${i}`);
+    if (backup) {
+      console.warn(`[save] recovered from backup ${i}`);
+      backup.recoveredFromBackup = i;
+      return backup;
+    }
+  }
+  return null;
+}
+
+/** What is in the backup ring, for the Options screen. */
+function listBackups() {
+  const store = storage();
+  if (!store) return [];
+  const out = [];
+  for (let i = 1; i <= BACKUP_DEPTH; i++) {
+    const b = readRecord(store, `${BACKUP_PREFIX}${i}`);
+    if (b) out.push({ index: i, label: b.label, savedAt: b.savedAt });
+  }
+  return out;
+}
+function hasSave(slot = 'auto') {
+  return loadSave(slot) !== null;
+}
+function deleteSave(slot = 'auto') {
+  const store = storage();
+  if (!store) return;
+  store.removeItem(slot === 'auto' ? AUTOSAVE_KEY : `${KEY_PREFIX}${slot}`);
+  if (slot === 'auto') {
+    for (let i = 1; i <= BACKUP_DEPTH; i++) store.removeItem(`${BACKUP_PREFIX}${i}`);
+  }
+}
+function listSaves() {
+  const out = [];
+  const auto = loadSave('auto');
+  if (auto) out.push({ slot: 'auto', label: auto.label, savedAt: auto.savedAt });
+  for (let i = 1; i <= SLOTS; i++) {
+    const s = loadSave(i);
+    if (s) out.push({ slot: i, label: s.label, savedAt: s.savedAt });
+  }
+  return out;
+}
+
+// ---------------- export / import ----------------
+function exportSave(game) {
+  return JSON.stringify(game.save(), null, 2);
+}
+function downloadSave(game) {
+  const blob = new Blob([exportSave(game)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `starfleet-${game.captain.name.toLowerCase()}-sd${game.stardate}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function importSave(text) {
+  const data = JSON.parse(text);
+  if (!data.version || !data.seed) throw new Error('Not a valid command record.');
+  return data;
+}
+
+// ---------------- settings ----------------
+
+const DEFAULT_SETTINGS = {
+  master: 0.8, sfx: 1.0, ui: 0.9, ambience: 0.7, alert: 0.9,
+  voice: true, haptics: true, autoFire: true, wakeLock: true,
+  textSize: 'normal', reduceMotion: false, orders: 'both',
+  // The commission runs in real time. This is the escape hatch, and it is
+  // labelled honestly in Options for what it forfeits.
+  compression: 1,
+};
+function loadSettings() {
+  const store = storage();
+  if (!store) return { ...DEFAULT_SETTINGS };
+  try {
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(store.getItem(SETTINGS_KEY) ?? '{}') };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+function saveSettings(settings) {
+  const store = storage();
+  if (!store) return;
+  try {
+    store.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch { /* full or blocked; settings are not worth failing over */ }
+}
+
+__exports.DEFAULT_SETTINGS = DEFAULT_SETTINGS;
+
+__exports.BACKUP_DEPTH = BACKUP_DEPTH;
+__exports.checksum = checksum;
+__exports.saveGame = saveGame;
+__exports.loadSave = loadSave;
+__exports.listBackups = listBackups;
+__exports.hasSave = hasSave;
+__exports.deleteSave = deleteSave;
+__exports.listSaves = listSaves;
+__exports.exportSave = exportSave;
+__exports.downloadSave = downloadSave;
+__exports.importSave = importSave;
+__exports.loadSettings = loadSettings;
+__exports.saveSettings = saveSettings;
+
+});
+
 __define("src/core/rng.js", function (__exports, __require) {
 // 64-bit deterministic pseudo-random number generation.
 //
@@ -7925,6 +8157,19 @@ class Officer {
       this.injurySeverity = Math.max(0, this.injurySeverity - dt * 0.02);
       if (this.injurySeverity <= 0) this.injured = false;
     }
+  }
+
+  /**
+   * Recovery over campaign time rather than simulation seconds.
+   *
+   * Sickbay works while the app is closed. A bad injury takes the better part
+   * of a week to clear, which is slow enough that losing an officer to the
+   * infirmary is a real cost and fast enough that it is not a death sentence.
+   */
+  recover(hours) {
+    if (!this.injured || !this.alive) return;
+    this.injurySeverity = Math.max(0, this.injurySeverity - hours / 120);
+    if (this.injurySeverity <= 0) this.injured = false;
   }
 
   /**
@@ -11912,6 +12157,215 @@ __exports.DifficultySettings = DifficultySettings;
 
 });
 
+__define("src/campaign/clock.js", function (__exports, __require) {
+// The five-year mission, in real time.
+//
+// A commission runs 1,826 days of wall-clock time — five years and a leap day.
+// The ship repairs, the crew recovers, research completes and long missions
+// advance whether the app is open or not, because a five-year mission that only
+// runs while you are looking at it is not a five-year mission, it is a very
+// long play session.
+//
+// Three things this has to survive, and they are the whole design:
+//
+//   THE CLOCK GOING FORWARD. Setting the phone's date ahead must not buy
+//   progress. A high-water mark is stored and time only ever accrues from it.
+//
+//   THE CLOCK GOING BACKWARD. Time zones, daylight saving, a factory reset, a
+//   dead battery. Elapsed time is clamped at zero rather than going negative,
+//   and the anchor is re-based so the save is not poisoned.
+//
+//   BEING PUT DOWN FOR A MONTH. A commission that is abandoned for eight weeks
+//   should not credit eight weeks of repair in one instant and hand back a
+//   pristine ship. There is a ceiling on what a single absence can deliver.
+//
+// And one honest concession. Real time is the point and the default, but a save
+// that can only be exercised in real time cannot be tested, demoed, or
+// recovered from a bug — so there is a compression factor, it is 1.0 unless you
+// change it, and the game says plainly what changing it costs.
+
+/** The commission, in days. Five years, with the leap day. */
+const COMMISSION_DAYS = 1826;
+
+const MS_PER_HOUR = 3600 * 1000;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+/**
+ * The most a single absence can credit, in hours.
+ *
+ * Long enough that going to bed, or away for a weekend, returns real progress.
+ * Short enough that leaving the game for a month does not hand back a fully
+ * repaired ship, a rested crew and every research project finished at once —
+ * which would make the passage of time a reward for not playing.
+ */
+const MAX_ABSENCE_HOURS = 72;
+
+/** Wall-clock source, injectable so five years can be simulated in a test. */
+const systemClock = () => Date.now();
+class CampaignClock {
+  /**
+   * @param {object} opts
+   *   startedAt    epoch ms the commission began
+   *   now          clock function, for tests
+   *   compression  1 = real time; higher runs the campaign faster
+   */
+  constructor(opts = {}) {
+    this.now = opts.now ?? systemClock;
+    this.startedAt = opts.startedAt ?? this.now();
+    // Monotonic: the furthest point the commission has ever reached.
+    this.highWater = opts.highWater ?? this.startedAt;
+    this.lastSeen = opts.lastSeen ?? this.startedAt;
+    this.compression = Math.max(1, opts.compression ?? 1);
+    // Time that accrued while the app was closed and has not been spent yet.
+    this.pendingHours = opts.pendingHours ?? 0;
+    // Total credited campaign time, in hours, after compression.
+    this.creditedHours = opts.creditedHours ?? 0;
+    // Absences that were larger than the ceiling, recorded rather than hidden.
+    this.forfeitedHours = opts.forfeitedHours ?? 0;
+  }
+
+  /**
+   * Bring the clock up to now, and report what happened while we were away.
+   *
+   * Called on load and on resume. Everything else in the campaign reads the
+   * result rather than the wall clock, so there is exactly one place where real
+   * time enters the simulation.
+   *
+   * @returns {{hours: number, forfeited: number, wentBackwards: boolean}}
+   */
+  sync() {
+    const wall = this.now();
+    let wentBackwards = false;
+
+    if (wall < this.lastSeen) {
+      // The clock moved back. Re-anchor rather than accrue a negative, and do
+      // not punish the player for a time-zone change by rolling the commission
+      // backwards — the high-water mark is what the campaign is measured
+      // against, and it never falls.
+      wentBackwards = true;
+      this.lastSeen = wall;
+      return { hours: 0, forfeited: 0, wentBackwards };
+    }
+
+    const rawHours = (wall - this.lastSeen) / MS_PER_HOUR;
+    this.lastSeen = wall;
+    if (wall > this.highWater) this.highWater = wall;
+
+    const capped = Math.min(rawHours, MAX_ABSENCE_HOURS);
+    const forfeited = rawHours - capped;
+    const credited = capped * this.compression;
+
+    this.pendingHours += credited;
+    this.creditedHours += credited;
+    this.forfeitedHours += forfeited;
+
+    return { hours: credited, forfeited, wentBackwards };
+  }
+
+  /** Take the accrued time, leaving the counter empty. */
+  drainPending() {
+    const hours = this.pendingHours;
+    this.pendingHours = 0;
+    return hours;
+  }
+
+  /** Days elapsed in the commission so far, against the high-water mark. */
+  get elapsedDays() {
+    return Math.max(0, (this.highWater - this.startedAt) / MS_PER_DAY) * this.compression;
+  }
+
+  /** 0..1 through the five years. */
+  get progress() {
+    return Math.min(1, this.elapsedDays / COMMISSION_DAYS);
+  }
+
+  get daysRemaining() {
+    return Math.max(0, COMMISSION_DAYS - this.elapsedDays);
+  }
+
+  get complete() {
+    return this.elapsedDays >= COMMISSION_DAYS;
+  }
+
+  /** "Year two, day 143" — how a commission is actually referred to. */
+  format() {
+    const days = Math.floor(this.elapsedDays);
+    const year = Math.floor(days / 365.25) + 1;
+    const dayOfYear = Math.floor(days - Math.floor((year - 1) * 365.25)) + 1;
+    return `Year ${year}, day ${dayOfYear}`;
+  }
+
+  /** A readable summary of how long is left, for the bridge. */
+  remainingText() {
+    const days = Math.ceil(this.daysRemaining);
+    if (days <= 0) return 'The five-year mission is complete.';
+    if (days < 60) return `${days} days remaining on this commission.`;
+    const months = Math.round(days / 30.44);
+    if (months < 24) return `${months} months remaining on this commission.`;
+    return `${(days / 365.25).toFixed(1)} years remaining on this commission.`;
+  }
+
+  save() {
+    return {
+      startedAt: this.startedAt,
+      highWater: this.highWater,
+      lastSeen: this.lastSeen,
+      compression: this.compression,
+      pendingHours: this.pendingHours,
+      creditedHours: this.creditedHours,
+      forfeitedHours: this.forfeitedHours,
+    };
+  }
+
+  static load(data, now = systemClock) {
+    if (!data) return new CampaignClock({ now });
+    return new CampaignClock({ ...data, now });
+  }
+}
+
+/**
+ * Turn an absence into a readable ship's log.
+ *
+ * The player has been away; the ship has not. This is what they come back to,
+ * and it is the difference between "time passed" as a number and time passing
+ * as something that happened to a crew.
+ */
+function absenceReport(hours, { ship = null, forfeited = 0 } = {}) {
+  const lines = [];
+  if (hours < 0.5) return lines;
+
+  const span = hours < 24
+    ? `${Math.round(hours)} hours`
+    : `${(hours / 24).toFixed(1)} days`;
+  lines.push(`${span} have passed since you last took the conn.`);
+
+  if (ship) {
+    if (ship.hullPct < 1) {
+      lines.push(`Damage control has been working the whole time. Hull integrity is at ${Math.round(ship.hullPct * 100)} percent.`);
+    }
+    if (ship.fires > 0) {
+      lines.push(`${ship.fires} fire${ship.fires > 1 ? 's are' : ' is'} still burning.`);
+    }
+  }
+
+  if (forfeited > 24) {
+    // Said out loud rather than quietly dropped. A player who leaves for a
+    // month should be told that a month did not all count, not left to work it
+    // out from a repair bill that does not add up.
+    lines.push(`Starfleet logged ${Math.round(forfeited / 24)} days of your absence as leave. Only the first three days counted toward the ship's work.`);
+  }
+
+  return lines;
+}
+
+__exports.COMMISSION_DAYS = COMMISSION_DAYS;
+__exports.MAX_ABSENCE_HOURS = MAX_ABSENCE_HOURS;
+__exports.systemClock = systemClock;
+__exports.CampaignClock = CampaignClock;
+__exports.absenceReport = absenceReport;
+
+});
+
 __define("src/core/state.js", function (__exports, __require) {
 // The Game object: everything the simulation owns, in one place.
 
@@ -11940,6 +12394,7 @@ const { EPISODES } = __require("src/missions/episodes/index.js");
 const { Character } = __require("src/rules/character.js");
 const { Reputation, REP_TRACKS } = __require("src/rules/reputation.js");
 const { DifficultySettings, DEFAULT_DIFFICULTY } = __require("src/rules/difficulty.js");
+const { CampaignClock, absenceReport, COMMISSION_DAYS } = __require("src/campaign/clock.js");
 
 /**
  * Ceiling on hostiles in one engagement. Beyond this the tactical display
@@ -12033,6 +12488,14 @@ class Game {
     this.pendingCombat = null;
     this.firstStrike = false;
     this.latinum = 500;
+
+    // ---- the commission ----
+    // Five years of wall-clock time. The ship works whether the app is open or
+    // not; this is the one place real time enters the simulation.
+    this.campaign = new CampaignClock({
+      now: options.now,
+      compression: options.compression ?? 1,
+    });
 
     this.pushLog(`Assumed command of the ${this.ship.name}, ${this.ship.registry}.`, 'captain');
   }
@@ -12736,10 +13199,81 @@ class Game {
       latinum: this.latinum,
       log: this.log.slice(-80),
       over: this.over ?? false,
+      campaign: this.campaign?.save() ?? null,
     };
   }
 
-  static load(data) {
+  // -------------------------------------------------- the five-year mission
+
+  /**
+   * Credit the time that passed while nobody was watching.
+   *
+   * Called on load and whenever the app comes back to the foreground. The ship
+   * repairs, fires burn out, injured officers recover, and the stardate
+   * advances — all in proportion to real hours, and all capped so a month away
+   * does not hand back a pristine ship in one instant.
+   *
+   * @returns {{hours: number, lines: string[]}}
+   */
+  syncCampaign() {
+    if (!this.campaign) return { hours: 0, lines: [] };
+    const { hours, forfeited, wentBackwards } = this.campaign.sync();
+    const pending = this.campaign.drainPending();
+    if (pending <= 0) {
+      // The clock going backwards is worth a line in the log: it is the kind of
+      // thing a player should be told happened rather than left to wonder about
+      // when their commission stops advancing.
+      if (wentBackwards) {
+        this.pushLog('Chronometer resynchronised against Starfleet time base.', 'science');
+      }
+      return { hours: 0, lines: [] };
+    }
+
+    const ship = this.ship;
+    const before = { hull: ship.hullPct, fires: ship.fires };
+
+    // Repair: a full hull from nothing would take about a fortnight underway,
+    // which is slower than a starbase and faster than nothing.
+    if (ship.hullPct < 1 && !ship.destroyed) {
+      const perHour = ship.maxHull / (14 * 24);
+      ship.repair(perHour * pending * ship.mod('repairRate'));
+    }
+
+    // Fires go out. Slowly, and one at a time.
+    if (ship.fires > 0) ship.fires = Math.max(0, ship.fires - Math.floor(pending / 6));
+
+    // Shields recharge to full given a quiet watch.
+    if (pending > 2 && ship.shieldsUp) {
+      for (const f of Object.keys(ship.shields)) ship.shields[f] = ship.maxShield;
+    }
+
+    // The crew heals, and the dead stay dead.
+    for (const officer of this.crew.officers) {
+      if (officer.alive && officer.injured) officer.recover?.(pending);
+    }
+
+    // One stardate unit is roughly a day.
+    this.clock.advanceStardate(pending / 24);
+
+    const lines = absenceReport(pending, { ship, forfeited });
+    if (before.fires > 0 && ship.fires === 0) {
+      lines.push('All fires are out. Damage control has secured the affected decks.');
+    }
+    if (ship.hullPct > before.hull + 0.02) {
+      lines.push(`Hull integrity is up from ${Math.round(before.hull * 100)} to ${Math.round(ship.hullPct * 100)} percent.`);
+    }
+    for (const line of lines) this.pushLog(line, 'engineering');
+
+    emit('campaign:resumed', { hours: pending, lines });
+    return { hours: pending, lines };
+  }
+
+  /** How far through the five-year mission this commission is. */
+  get commissionProgress() {
+    return this.campaign?.progress ?? 0;
+  }
+
+  static load(data, opts = {}) {
     const g = new Game({
       seed: BigInt(data.seed),
       captainName: data.captain?.name,
@@ -12749,6 +13283,7 @@ class Game {
       // defaults fill the gaps rather than failing the load.
       character: data.character ?? undefined,
       difficulty: data.difficulty?.id,
+      now: opts.now,
     });
     g.rng = RNG.load(data.rng);
     g.captain = { ...g.captain, ...data.captain };
@@ -12767,6 +13302,13 @@ class Game {
     g.log = data.log ?? [];
     g.over = data.over ?? false;
     g.mode = MODES.BRIDGE;
+
+    // A save from before the commission clock existed starts its five years
+    // now rather than pretending the time already passed. Nobody should lose a
+    // campaign they had not begun.
+    g.campaign = CampaignClock.load(data.campaign, opts.now ?? undefined);
+    if (opts.compression) g.campaign.compression = opts.compression;
+
     g.applyAllMods();
     return g;
   }
@@ -12788,6 +13330,7 @@ const { el, clear, panel, button, readout, shieldDiagram, powerSlider, pill, mod
 const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
+const { listBackups, downloadSave } = __require("src/core/save.js");
 
 const { MODES } = __require("src/core/state.js");
 const { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } = __require("src/sim/power.js");
@@ -12830,6 +13373,26 @@ function bridgeScreen(app) {
   ], 'accent');
   locPanel.classList.add('sys-card');
   root.append(locPanel);
+
+  // --- The commission ---
+  // Five years of real time, and how far through them this captain is. It sits
+  // at the top of the bridge because it is the frame the whole game hangs on:
+  // reputation earned over a career only means something if you can see the
+  // career going past.
+  if (g.campaign) {
+    const pct = g.campaign.progress;
+    root.append(panel('Commission', [
+      el('p', {}, [
+        el('b', { text: g.campaign.format() }),
+        ' — ',
+        el('span', { class: 'muted', text: g.campaign.remainingText() }),
+      ]),
+      readout('Five-year mission', pct, `${Math.round(pct * 100)}%`),
+      g.campaign.compression > 1
+        ? el('p', { class: 'muted', text: `Time compression ×${g.campaign.compression}. This is not the five-year mission.` })
+        : null,
+    ].filter(Boolean)));
+  }
 
   // --- Ship status ---
   root.append(panel('Ship Status', [
@@ -13456,6 +14019,43 @@ function optionsScreen(app) {
     });
     return el('div', { class: 'power-row' }, [el('div', { class: 'label', text: label }), input, val]);
   };
+
+  // ---- The commission ----
+  const COMPRESSIONS = [
+    { value: 1, label: 'Real time', sub: 'Five years means five years' },
+    { value: 24, label: '×24', sub: 'A day an hour — about eleven weeks' },
+    { value: 168, label: '×168', sub: 'A week an hour — about eleven days' },
+    { value: 1000, label: '×1000', sub: 'For testing. Not a commission.' },
+  ];
+  root.append(panel('Commission', [
+    el('p', { class: 'muted', text: 'The five-year mission runs on the clock on your wrist. The ship repairs, the crew recovers and the stardate advances whether this app is open or not.' }),
+    el('p', { class: 'muted', text: 'You can compress it. Nothing is locked behind real time and nothing is taken away — but a commission you finish in a fortnight is not the thing the game was built to be, and it will say so on the bridge.' }),
+    ...COMPRESSIONS.map((c) => button(c.label, tap(() => {
+      s.compression = c.value;
+      if (app.game?.campaign) app.game.campaign.compression = c.value;
+      app.saveSettings();
+      app.render();
+    }), {
+      color: (s.compression ?? 1) === c.value ? 'green' : 'ghost',
+      sub: c.sub,
+    })),
+    app.game?.campaign
+      ? el('p', { class: 'muted', text: `Currently: ${app.game.campaign.format()}. ${app.game.campaign.remainingText()}` })
+      : null,
+  ].filter(Boolean)));
+
+  // ---- Backups ----
+  const backups = listBackups();
+  root.append(panel('Command Record', [
+    el('p', { class: 'muted', text: 'Every save is checksummed, and the last three autosaves are kept. If the current record cannot be read, the game falls back through them rather than showing you an empty bridge.' }),
+    backups.length
+      ? el('div', {}, backups.map((b) => el('p', { class: 'muted', text: `Backup ${b.index}: ${b.label ?? 'unnamed'} — ${new Date(b.savedAt).toLocaleString()}` })))
+      : el('p', { class: 'muted', text: 'No backups yet. One is kept each time the game autosaves.' }),
+    el('p', { class: 'muted', text: 'A five-year commission is worth exporting somewhere that is not this phone.' }),
+    button('Export the record', tap(() => {
+      if (app.game) downloadSave(app.game);
+    }), { color: 'blue', sub: 'Downloads a file you can keep' }),
+  ]));
 
   root.append(panel('Audio', [
     vol('Master', 'master'), vol('Effects', 'sfx'), vol('Interface', 'ui'),
@@ -14303,129 +14903,6 @@ __exports.CharacterCreator = CharacterCreator;
 __exports.characterSheetScreen = characterSheetScreen;
 __exports.reputationScreen = reputationScreen;
 __exports.difficultyBadge = difficultyBadge;
-
-});
-
-__define("src/core/save.js", function (__exports, __require) {
-// Persistence. localStorage for autosave and slots, plus export/import so a
-// captain's record can be moved off the phone.
-
-const KEY_PREFIX = 'sfc:save:';
-const AUTOSAVE_KEY = `${KEY_PREFIX}auto`;
-const SETTINGS_KEY = 'sfc:settings';
-const SLOTS = 3;
-
-function storage() {
-  try {
-    const s = globalThis.localStorage;
-    // Probe: private modes throw only on write.
-    s?.setItem('sfc:probe', '1');
-    s?.removeItem('sfc:probe');
-    return s;
-  } catch {
-    return null;
-  }
-}
-function saveGame(game, slot = 'auto') {
-  const store = storage();
-  if (!store) return false;
-  try {
-    const payload = {
-      ...game.save(),
-      savedAt: new Date().toISOString(),
-      label: `${game.captain.name} — ${game.ship.name} — Stardate ${game.stardate}`,
-    };
-    store.setItem(slot === 'auto' ? AUTOSAVE_KEY : `${KEY_PREFIX}${slot}`, JSON.stringify(payload));
-    return true;
-  } catch (err) {
-    console.warn('[save] failed', err);
-    return false;
-  }
-}
-function loadSave(slot = 'auto') {
-  const store = storage();
-  if (!store) return null;
-  try {
-    const raw = store.getItem(slot === 'auto' ? AUTOSAVE_KEY : `${KEY_PREFIX}${slot}`);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-function hasSave(slot = 'auto') {
-  return loadSave(slot) !== null;
-}
-function deleteSave(slot = 'auto') {
-  const store = storage();
-  if (!store) return;
-  store.removeItem(slot === 'auto' ? AUTOSAVE_KEY : `${KEY_PREFIX}${slot}`);
-}
-function listSaves() {
-  const out = [];
-  const auto = loadSave('auto');
-  if (auto) out.push({ slot: 'auto', label: auto.label, savedAt: auto.savedAt });
-  for (let i = 1; i <= SLOTS; i++) {
-    const s = loadSave(i);
-    if (s) out.push({ slot: i, label: s.label, savedAt: s.savedAt });
-  }
-  return out;
-}
-
-// ---------------- export / import ----------------
-function exportSave(game) {
-  return JSON.stringify(game.save(), null, 2);
-}
-function downloadSave(game) {
-  const blob = new Blob([exportSave(game)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `starfleet-${game.captain.name.toLowerCase()}-sd${game.stardate}.json`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-function importSave(text) {
-  const data = JSON.parse(text);
-  if (!data.version || !data.seed) throw new Error('Not a valid command record.');
-  return data;
-}
-
-// ---------------- settings ----------------
-
-const DEFAULT_SETTINGS = {
-  master: 0.8, sfx: 1.0, ui: 0.9, ambience: 0.7, alert: 0.9,
-  voice: true, haptics: true, autoFire: true, wakeLock: true,
-  textSize: 'normal', reduceMotion: false, orders: 'both',
-};
-function loadSettings() {
-  const store = storage();
-  if (!store) return { ...DEFAULT_SETTINGS };
-  try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(store.getItem(SETTINGS_KEY) ?? '{}') };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
-}
-function saveSettings(settings) {
-  const store = storage();
-  if (!store) return;
-  try {
-    store.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  } catch { /* full or blocked; settings are not worth failing over */ }
-}
-
-__exports.DEFAULT_SETTINGS = DEFAULT_SETTINGS;
-
-__exports.saveGame = saveGame;
-__exports.loadSave = loadSave;
-__exports.hasSave = hasSave;
-__exports.deleteSave = deleteSave;
-__exports.listSaves = listSaves;
-__exports.exportSave = exportSave;
-__exports.downloadSave = downloadSave;
-__exports.importSave = importSave;
-__exports.loadSettings = loadSettings;
-__exports.saveSettings = saveSettings;
 
 });
 
@@ -16901,7 +17378,10 @@ class App {
 
     globalThis.addEventListener('beforeunload', () => { if (this.game) this.save(); });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden' && this.game) this.save();
+      if (!this.game) return;
+      if (document.visibilityState === 'hidden') { this.save(); return; }
+      // Back in the foreground. The ship has been working the whole time.
+      this.resumeCommission();
     });
   }
 
@@ -17675,7 +18155,7 @@ class App {
       if (!file) return;
       try {
         const data = importSave(await file.text());
-        this.game = Game.load(data);
+        this.game = Game.load(data, { compression: this.settings.compression });
         this.go('bridge');
         this.showMessage('Record Restored', [`Resumed command at stardate ${this.game.stardate}.`]);
       } catch (err) {
@@ -17765,6 +18245,21 @@ class App {
     this.save();
   }
 
+  /**
+   * Credit the time that passed while the app was closed, and show the captain
+   * what happened. Called on load and whenever the tab comes back.
+   *
+   * Silent when nothing meaningful elapsed — coming back after ninety seconds
+   * should not open a modal.
+   */
+  resumeCommission() {
+    const r = this.game?.syncCampaign();
+    if (!r || r.hours < 1) { this.needsRender = true; return; }
+    this.showMessage('While You Were Away', r.lines);
+    audio.play('computer_query');
+    this.needsRender = true;
+  }
+
   resumeOrStart() {
     if (hasSave('auto')) {
       const data = loadSave('auto');
@@ -17774,9 +18269,16 @@ class App {
         button('Resume', () => {
           this.closeModal();
           try {
-            this.game = Game.load(data);
+            this.game = Game.load(data, { compression: this.settings.compression });
             this.orderBar.style.display = '';
             this.go('bridge');
+            if (data.recoveredFromBackup) {
+              this.game.pushLog(
+                'Primary command record was unreadable; restored from backup.',
+                'computer',
+              );
+            }
+            this.resumeCommission();
           } catch {
             this.showNewGame();
           }

@@ -25,6 +25,7 @@ import { EPISODES } from '../missions/episodes/index.js';
 import { Character } from '../rules/character.js';
 import { Reputation, REP_TRACKS } from '../rules/reputation.js';
 import { DifficultySettings, DEFAULT_DIFFICULTY } from '../rules/difficulty.js';
+import { CampaignClock, absenceReport, COMMISSION_DAYS } from '../campaign/clock.js';
 
 /**
  * Ceiling on hostiles in one engagement. Beyond this the tactical display
@@ -120,6 +121,14 @@ export class Game {
     this.pendingCombat = null;
     this.firstStrike = false;
     this.latinum = 500;
+
+    // ---- the commission ----
+    // Five years of wall-clock time. The ship works whether the app is open or
+    // not; this is the one place real time enters the simulation.
+    this.campaign = new CampaignClock({
+      now: options.now,
+      compression: options.compression ?? 1,
+    });
 
     this.pushLog(`Assumed command of the ${this.ship.name}, ${this.ship.registry}.`, 'captain');
   }
@@ -823,10 +832,81 @@ export class Game {
       latinum: this.latinum,
       log: this.log.slice(-80),
       over: this.over ?? false,
+      campaign: this.campaign?.save() ?? null,
     };
   }
 
-  static load(data) {
+  // -------------------------------------------------- the five-year mission
+
+  /**
+   * Credit the time that passed while nobody was watching.
+   *
+   * Called on load and whenever the app comes back to the foreground. The ship
+   * repairs, fires burn out, injured officers recover, and the stardate
+   * advances — all in proportion to real hours, and all capped so a month away
+   * does not hand back a pristine ship in one instant.
+   *
+   * @returns {{hours: number, lines: string[]}}
+   */
+  syncCampaign() {
+    if (!this.campaign) return { hours: 0, lines: [] };
+    const { hours, forfeited, wentBackwards } = this.campaign.sync();
+    const pending = this.campaign.drainPending();
+    if (pending <= 0) {
+      // The clock going backwards is worth a line in the log: it is the kind of
+      // thing a player should be told happened rather than left to wonder about
+      // when their commission stops advancing.
+      if (wentBackwards) {
+        this.pushLog('Chronometer resynchronised against Starfleet time base.', 'science');
+      }
+      return { hours: 0, lines: [] };
+    }
+
+    const ship = this.ship;
+    const before = { hull: ship.hullPct, fires: ship.fires };
+
+    // Repair: a full hull from nothing would take about a fortnight underway,
+    // which is slower than a starbase and faster than nothing.
+    if (ship.hullPct < 1 && !ship.destroyed) {
+      const perHour = ship.maxHull / (14 * 24);
+      ship.repair(perHour * pending * ship.mod('repairRate'));
+    }
+
+    // Fires go out. Slowly, and one at a time.
+    if (ship.fires > 0) ship.fires = Math.max(0, ship.fires - Math.floor(pending / 6));
+
+    // Shields recharge to full given a quiet watch.
+    if (pending > 2 && ship.shieldsUp) {
+      for (const f of Object.keys(ship.shields)) ship.shields[f] = ship.maxShield;
+    }
+
+    // The crew heals, and the dead stay dead.
+    for (const officer of this.crew.officers) {
+      if (officer.alive && officer.injured) officer.recover?.(pending);
+    }
+
+    // One stardate unit is roughly a day.
+    this.clock.advanceStardate(pending / 24);
+
+    const lines = absenceReport(pending, { ship, forfeited });
+    if (before.fires > 0 && ship.fires === 0) {
+      lines.push('All fires are out. Damage control has secured the affected decks.');
+    }
+    if (ship.hullPct > before.hull + 0.02) {
+      lines.push(`Hull integrity is up from ${Math.round(before.hull * 100)} to ${Math.round(ship.hullPct * 100)} percent.`);
+    }
+    for (const line of lines) this.pushLog(line, 'engineering');
+
+    emit('campaign:resumed', { hours: pending, lines });
+    return { hours: pending, lines };
+  }
+
+  /** How far through the five-year mission this commission is. */
+  get commissionProgress() {
+    return this.campaign?.progress ?? 0;
+  }
+
+  static load(data, opts = {}) {
     const g = new Game({
       seed: BigInt(data.seed),
       captainName: data.captain?.name,
@@ -836,6 +916,7 @@ export class Game {
       // defaults fill the gaps rather than failing the load.
       character: data.character ?? undefined,
       difficulty: data.difficulty?.id,
+      now: opts.now,
     });
     g.rng = RNG.load(data.rng);
     g.captain = { ...g.captain, ...data.captain };
@@ -854,6 +935,13 @@ export class Game {
     g.log = data.log ?? [];
     g.over = data.over ?? false;
     g.mode = MODES.BRIDGE;
+
+    // A save from before the commission clock existed starts its five years
+    // now rather than pretending the time already passed. Nobody should lose a
+    // campaign they had not begun.
+    g.campaign = CampaignClock.load(data.campaign, opts.now ?? undefined);
+    if (opts.compression) g.campaign.compression = opts.compression;
+
     g.applyAllMods();
     return g;
   }
