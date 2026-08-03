@@ -348,6 +348,54 @@ try {
   }
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
 
+  // ---- The warp core breach is audible ----
+  //
+  // The most dramatic thing that can happen to the ship, and it happened in
+  // silence: `core_breach_warning` was synthesised in sfx.js and played from
+  // nowhere. Driven here rather than asserted, because the chain is
+  // beginBreach -> emit -> listener -> audio, and any link could be missing.
+  await dismissModals(page);
+  const breach = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const played = [];
+    // Record what the audio engine is asked for, without making noise.
+    const audioMod = globalThis.__audio;
+    const before = audioMod ? audioMod.play : null;
+    if (audioMod) audioMod.play = (name, opts) => { played.push(name); };
+
+    const ship = app.game.ship;
+    ship.breaching = false;
+    ship.coreEjected = false;
+    ship.beginBreach(20);
+    await new Promise((r) => setTimeout(r, 80));
+
+    const observed = {
+      breaching: ship.breaching,
+      timer: ship.breachTimer,
+      played,
+      logged: app.game.log.slice(-3).map((l) => l.text ?? ''),
+      audioReachable: !!audioMod,
+    };
+
+    // Put her back. A breach left running destroys the ship twenty seconds
+    // later and ends the commission, which would take every check after this
+    // one down with it.
+    if (audioMod && before) audioMod.play = before;
+    ship.breaching = false;
+    ship.breachTimer = 0;
+    return observed;
+  });
+  check('a warp core breach starts a real countdown',
+    breach.breaching === true && breach.timer > 0, JSON.stringify({ b: breach.breaching, t: breach.timer }));
+  check('the breach tells the crew what to do',
+    breach.logged.some((l) => /eject the core/i.test(l)), JSON.stringify(breach.logged));
+  if (breach.audioReachable) {
+    check('the breach sounds the warning tone',
+      breach.played.includes('core_breach_warning'), JSON.stringify(breach.played));
+  } else {
+    notes.push('  SKIP  audio module not exposed for the breach-cue check');
+  }
+
   // ---- The third axis ----
   //
   // The 3D rewrite's headline feature had no player control of any kind:

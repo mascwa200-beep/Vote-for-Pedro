@@ -195,17 +195,38 @@ class App {
 
     on('combat:fire', ({ attacker, weapon, type }) => {
       if (type === 'torpedo') audio.play('torpedo_launch', { throttle: 120 });
-      else if (attacker.faction === 'federation') audio.play('phaser', { throttle: 110 });
+      else if (attacker.faction === 'federation') {
+        // A capital ship's main battery is not a light phaser bank.
+        audio.play(weapon?.damage >= 250 ? 'phaser_heavy' : 'phaser', { throttle: 110 });
+      }
       else audio.play('disruptor', { throttle: 110 });
     });
 
     on('combat:torpedo-impact', () => audio.play('torpedo_impact', { throttle: 90 }));
+
+    // The countdown to losing the ship. There is one way out — eject the core —
+    // and the warning tone existed in sfx.js and was played from nowhere.
+    on('ship:breach', ({ ship, seconds }) => {
+      if (!ship.isPlayer) return;
+      audio.play('core_breach_warning');
+      haptic('alert');
+      this.game?.pushLog(
+        `Warp core breach in ${Math.round(seconds)} seconds. Eject the core or we lose her.`,
+        'engineering',
+      );
+      this.needsRender = true;
+    });
 
     on('combat:player-hit', ({ severity, penetrated }) => {
       if (penetrated) {
         audio.play('hull_impact', { severity, throttle: 110 });
         haptic(severity > 0.5 ? 'hit_heavy' : 'hit_light');
         if (severity > 0.7) audio.play('console_explode', { throttle: 900 });
+        // Structural stress, once the hull is genuinely in trouble. Sparingly
+        // throttled — it is a groan, not a soundtrack.
+        if (this.game && this.game.ship.hullPct < 0.4) {
+          audio.play('hull_groan', { throttle: 4000 });
+        }
       } else {
         audio.play('shield_impact', { severity, throttle: 110 });
         haptic('hit_light');
@@ -853,10 +874,14 @@ class App {
       case 'warp_factor':
         ack('helm', `Warp ${order.warp} standing by.`);
         break;
-      case 'throttle':
+      case 'throttle': {
+        // Engines answering an order is a sound the game had and never made.
+        const opening = order.value > g.ship.throttle + 0.15;
         g.ship.throttle = order.value;
+        if (opening) audio.play('impulse_burn', { throttle: 400 });
         ack('helm', order.value === 0 ? 'All stop.' : `Ahead ${Math.round(order.value * 100)} percent.`);
         break;
+      }
       case 'heading':
         eng?.setHeading(order.value);
         // "Bearing 210 mark 15" always parsed its mark, carried it in the order
@@ -1417,6 +1442,7 @@ function boot() {
   const root = document.getElementById('app');
   const app = new App(root);
   globalThis.__app = app;   // handy for the test harness
+  globalThis.__audio = audio;   // so the harness can observe which cues fire
   app.resumeOrStart();
   requestAnimationFrame((t) => app.frame(t));
 

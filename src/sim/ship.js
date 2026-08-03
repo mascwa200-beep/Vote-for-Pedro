@@ -6,6 +6,7 @@
 import { PowerGrid } from './power.js';
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
 import { clamp } from '../core/num.js';
+import { emit } from '../core/events.js';
 
 // Six facings, not four.
 //
@@ -539,6 +540,11 @@ export class Ship {
     }
     this.breaching = true;
     this.breachTimer = seconds;
+    // The most dramatic thing that happens to a starship, and it used to happen
+    // in silence: the warning tone was written in sfx.js and played from
+    // nowhere. There is one way out — eject the core — and the player needs to
+    // be told the clock has started.
+    emit('ship:breach', { ship: this, seconds });
   }
 
   /** The one way out of a breach. Costs you warp drive for the rest of the fight. */
