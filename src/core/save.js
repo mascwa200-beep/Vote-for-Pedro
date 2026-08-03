@@ -102,15 +102,40 @@ function readRecord(store, key) {
     const outer = JSON.parse(raw);
     // Records written before checksums existed are plain payloads, and are
     // still perfectly good. Trust them; there is nothing to check against.
-    if (typeof outer?.body !== 'string') return outer;
+    //
+    // But "is not shaped like a checksummed record" is not the same as "is a
+    // save", and treating it as such defeated the entire backup ring: an
+    // autosave corrupted into any valid JSON — `{"hello":"world"}`, `[]`, a
+    // bare number — sailed through here, so loadSave returned the junk instead
+    // of walking back through the backups. main.js catches the Game.load
+    // failure that follows and offers a new commission, with three good
+    // backups sitting unused. That is precisely the blank bridge this file
+    // exists to prevent.
+    if (typeof outer?.body !== 'string') {
+      return looksLikeSave(outer) ? outer : null;
+    }
     if (checksum(outer.body) !== outer.sum) {
       console.warn('[save] checksum mismatch — record is corrupt');
       return null;
     }
-    return JSON.parse(outer.body);
+    const payload = JSON.parse(outer.body);
+    return looksLikeSave(payload) ? payload : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Is this actually a command record?
+ *
+ * Deliberately the weakest test that is still worth anything: a seed, which is
+ * the very first thing Game.load reads and the one field no save of any version
+ * has ever been without. Anything stricter would reject old saves this file has
+ * always promised to keep loading.
+ */
+function looksLikeSave(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  return payload.seed !== undefined && payload.seed !== null;
 }
 
 export function loadSave(slot = 'auto') {

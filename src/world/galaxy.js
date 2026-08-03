@@ -5,21 +5,52 @@
 
 import { SYSTEMS, SYSTEM_BY_ID, distanceLy } from './systems.data.js';
 import { emit } from '../core/events.js';
+import { clamp } from '../core/num.js';
+
+// These three feed the stardate and the antimatter reserve, which are both
+// saved. A NaN in either is the same unrecoverable class as a NaN position: it
+// is written to disk, and every later arithmetic on it stays NaN.
+//
+// Nothing in normal play reaches the guards below — plotTransit derives its
+// distance from system coordinates and the parser clamps warp factors to
+// 1..9.9, and 4,680 plotted routes across all forty systems produced no bad
+// value. They are here for the same reason the helm orders have them: a
+// distance is never negative, a duration is never negative, and neither is
+// ever NaN, whatever a caller hands in.
+
+/** The slowest a warp factor can be treated as, so nothing divides by zero. */
+const MIN_WARP = 1;
+
+/**
+ * A ceiling on distance, well past the far side of the charted galaxy.
+ *
+ * A floor alone is not enough: 1e308 light years is finite, and multiplying it
+ * by the 8766 hours in a light-year-at-c overflows to Infinity before any
+ * division can bring it back.
+ */
+const MAX_DISTANCE_LY = 1e6;
 
 /** Warp factor -> multiples of c (the TOS cube law). */
 export function warpSpeed(factor) {
-  return Math.pow(Math.max(1, factor), 3);
+  return Math.pow(clamp(factor, MIN_WARP, 10), 3);
 }
 
 /** Hours of travel for a distance at a warp factor. */
 export function travelHours(lightYears, factor, efficiency = 1) {
   const c = warpSpeed(factor);
-  return (lightYears * 8766) / (c * efficiency); // 8766 hours in a light-year-at-c
+  // A ship cannot travel a negative distance, and a broken efficiency figure
+  // must not make the voyage free or endless.
+  const ly = clamp(lightYears, 0, MAX_DISTANCE_LY);
+  const eff = clamp(efficiency, 0.05, 20);
+  return (ly * 8766) / (c * eff); // 8766 hours in a light-year-at-c
 }
 
 /** Antimatter burned. Higher warp is superlinearly expensive. */
 export function fuelCost(lightYears, factor, efficiency = 1) {
-  return (lightYears * Math.pow(factor / 6, 2.4) * 0.55) / efficiency;
+  const ly = clamp(lightYears, 0, MAX_DISTANCE_LY);
+  const f = clamp(factor, MIN_WARP, 10);
+  const eff = clamp(efficiency, 0.05, 20);
+  return (ly * Math.pow(f / 6, 2.4) * 0.55) / eff;
 }
 
 export class Galaxy {
