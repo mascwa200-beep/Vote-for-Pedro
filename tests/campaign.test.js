@@ -261,3 +261,51 @@ describe('a five-year save has to be trustworthy', () => {
     assert.ok(took < 50, `checksum took ${took}ms`);
   });
 });
+
+// ============================================================ save round trip
+
+// Six runtime flags were set during play and never written to the save. The
+// player-facing one was `pendingFeats`: promotion tells you "a feat to choose
+// on the Captain screen", and a reload silently destroyed it. `podJettisoned`
+// was worse the other way — reloading restored the ion pod, giving unlimited
+// decoys.
+describe('save round trip', () => {
+  const roundTrip = (mutate) => {
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    mutate(g);
+    return Game.load(JSON.parse(JSON.stringify(g.save())));
+  };
+
+  test('a feat earned by promotion survives a reload', () => {
+    const g = roundTrip((game) => { game.pendingFeats = 2; });
+    assert.equal(g.pendingFeats, 2, 'the promotion feat was lost on reload');
+  });
+
+  test('a jettisoned ion pod stays jettisoned', () => {
+    const g = roundTrip((game) => { game.podJettisoned = true; });
+    assert.equal(g.podJettisoned, true, 'reloading restored a spent ion pod');
+  });
+
+  test('the Kobayashi Maru is still running after a reload', () => {
+    const g = roundTrip((game) => {
+      game.inKobayashi = true;
+      game.gambitOpen = true;
+      game.parleyForced = true;
+      game.firstStrike = true;
+    });
+    assert.equal(g.inKobayashi, true, 'the scenario flag was lost');
+    assert.equal(g.gambitOpen, true, 'the forced channel was lost');
+    assert.equal(g.parleyForced, true, 'the parley flag was lost');
+    assert.equal(g.firstStrike, true, 'who shot first was lost');
+  });
+
+  test('flags absent from an older save load as false, not undefined', () => {
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    const data = g.save();
+    delete data.podJettisoned;
+    delete data.pendingFeats;
+    const loaded = Game.load(JSON.parse(JSON.stringify(data)));
+    assert.equal(loaded.podJettisoned, false);
+    assert.equal(loaded.pendingFeats, 0);
+  });
+});

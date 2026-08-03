@@ -90,7 +90,7 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   const hullPct = ship.hullPct;
 
   // ---- Fleeing ----
-  if (!opts.allyOf && !ship.fleeing) {
+  if (!opts.allyOf && !ship.fleeing && !engagement.relentless) {
     const breakPoint = doctrine === 'fanatic' ? 0.0
       : doctrine === 'aggressive' ? 0.12
       : doctrine === 'opportunist' ? 0.45
@@ -180,6 +180,16 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   }
 
   // ---- Tholian web ----
+  // A web does not outlive the ship spinning it. Without this the engagement
+  // stays un-leaveable after the spinner is dead, which combined with a hostile
+  // that has run out of reach is a soft-lock with no way out at all.
+  if (engagement.webbed
+    && !engagement.liveHostiles.some((s) => s.cls.websAfter)) {
+    engagement.webbed = false;
+    engagement.canWarpOut = true;
+    engagement.pushLog('The web is collapsing. Warp drive is ours again.', 'science');
+  }
+
   if (ship.cls.websAfter) {
     ship.webProgress = (ship.webProgress ?? 0) + dt;
     if (ship.webProgress > ship.cls.websAfter && !engagement.webbed) {

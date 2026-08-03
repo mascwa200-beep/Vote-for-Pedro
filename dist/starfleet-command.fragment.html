@@ -2932,13 +2932,28 @@ class Ship {
     return true;
   }
 
-  /** Emergency shield reinforcement to one facing, taken from the others. */
+  /**
+   * Emergency shield reinforcement to one facing, taken from the others.
+   *
+   * The receiving facing is capped at 1.2x max, so it can only ever absorb a
+   * limited amount. Charge is conserved: we work out the headroom first and
+   * draw exactly that much, proportionally, rather than stripping a fixed
+   * fraction off five facings and letting the overflow evaporate.
+   */
   reinforceShield(facing, fraction = 0.35) {
     if (!FACINGS.includes(facing)) return false;
     const others = FACINGS.filter((f) => f !== facing);
+    const available = others.reduce((n, f) => n + this.shields[f] * fraction, 0);
+    const headroom = Math.max(0, this.maxShield * 1.2 - this.shields[facing]);
+    const wanted = Math.min(available, headroom);
+    if (wanted <= 0) return true;
+
+    // `available` is a fixed fraction of the pool, so scaling by wanted/available
+    // keeps each facing's contribution proportional to what it actually holds.
+    const scale = wanted / available;
     let pooled = 0;
     for (const f of others) {
-      const take = this.shields[f] * fraction;
+      const take = this.shields[f] * fraction * scale;
       this.shields[f] -= take;
       pooled += take;
     }
@@ -7927,6 +7942,11 @@ const SCENARIO = {
   ],
   // Deliberately overwhelming. This is not a fight to be tuned.
   hostiles: ['d7', 'd7', 'ktinga'],
+  // And nobody in it breaks off. Ordinary Klingon captains withdraw at 20%
+  // hull, which made the exercise winnable roughly one run in eight — you did
+  // not save the freighter, you outlasted the AI. The scenario is scripted; the
+  // ships in it fight to the end because the exercise is not about the fight.
+  relentless: true,
 };
 
 /**
@@ -8050,7 +8070,18 @@ const AXES = [
     label: 'Threatening them',
     // Costs rather than helps, and always. This is the one axis where the
     // right answer is not to use it.
-    match: /\b(?:destroy you|kill you|or else|i will fire|we will fire|surrender|force|make you)\b/,
+    //
+    // Every alternative has to be *directed at them*. A bare "force" scored
+    // "I would rather not use force" as a threat, and a bare "surrender" read
+    // the captain offering their own ship as a demand for the Klingons'.
+    match: new RegExp(
+      '\\b(?:'
+      + 'destroy you|kill you|or else|make you'
+      + '|(?:i|we) will fire|(?:i|we) (?:will|shall) force|force you'
+      + '|open fire on you|fire on your'
+      + '|you will surrender|surrender your|surrender or|(?:demand|order) your surrender'
+      + ')\\b',
+    ),
     weight: -3,
     evidence: () => true,
     confirm: () => '"There it is." Weapons come up. "I preferred the other approach."',
@@ -8108,6 +8139,26 @@ function forceChannel(game) {
 }
 
 /**
+ * Close the channel without an appeal being made.
+ *
+ * A forced channel reroutes the order line: while it is open, whatever the
+ * captain types is what they say to the Klingon commander rather than an order
+ * to their own crew. Only speaking used to close it, so forcing the channel and
+ * then not speaking left every order for the rest of the session being read as
+ * an appeal. The engagement ending closes it too — there is nobody left on the
+ * other end.
+ *
+ * @returns {boolean} whether anything was actually open
+ */
+function closeChannel(game) {
+  if (!game.gambitOpen && !game.parleyForced) return false;
+  game.gambitOpen = false;
+  game.parleyForced = false;
+  emit('gambit:channel-closed', {});
+  return true;
+}
+
+/**
  * Resolve the exchange.
  *
  * The outcome is built from the ledger and from what was said. There is no die
@@ -8155,6 +8206,7 @@ __exports.recordOf = recordOf;
 __exports.AXES = AXES;
 __exports.scoreAppeal = scoreAppeal;
 __exports.forceChannel = forceChannel;
+__exports.closeChannel = closeChannel;
 __exports.resolveGambit = resolveGambit;
 
 });
@@ -9608,7 +9660,7 @@ function chooseAction(ship, engagement, dt, opts = {}) {
   const hullPct = ship.hullPct;
 
   // ---- Fleeing ----
-  if (!opts.allyOf && !ship.fleeing) {
+  if (!opts.allyOf && !ship.fleeing && !engagement.relentless) {
     const breakPoint = doctrine === 'fanatic' ? 0.0
       : doctrine === 'aggressive' ? 0.12
       : doctrine === 'opportunist' ? 0.45
@@ -9698,6 +9750,16 @@ function chooseAction(ship, engagement, dt, opts = {}) {
   }
 
   // ---- Tholian web ----
+  // A web does not outlive the ship spinning it. Without this the engagement
+  // stays un-leaveable after the spinner is dead, which combined with a hostile
+  // that has run out of reach is a soft-lock with no way out at all.
+  if (engagement.webbed
+    && !engagement.liveHostiles.some((s) => s.cls.websAfter)) {
+    engagement.webbed = false;
+    engagement.canWarpOut = true;
+    engagement.pushLog('The web is collapsing. Warp drive is ours again.', 'science');
+  }
+
   if (ship.cls.websAfter) {
     ship.webProgress = (ship.webProgress ?? 0) + dt;
     if (ship.webProgress > ship.cls.websAfter && !engagement.webbed) {
@@ -9745,6 +9807,30 @@ const WEAPON_RANGE = {
   torpedo: 1200,
 };
 
+/** The longest reach any weapon in the game has. */
+const MAX_WEAPON_RANGE = Math.max(...Object.values(WEAPON_RANGE));
+
+/** How long a fleeing ship must stay out of weapons range before it is gone. */
+const WITHDRAW_SECONDS = 8;
+
+/**
+ * How far from the centre of the engagement anything may get.
+ *
+ * There was no such bound, and fuzzing found what that costs: a Jem'Hadar
+ * attack ship at 13% hull ran to 64,574 units — twenty-one times the tactical
+ * volume, fifty-four times the longest weapon range — and simply kept going. It
+ * was never flagged as fleeing, so no end condition fired; it could not be
+ * reached and could not reach us; the engagement would have run forever.
+ *
+ * That is merely tedious when you can disengage. It is a permanent soft-lock
+ * when you cannot, and two things take that away: the Tholian web, which is
+ * reachable in ordinary play, and the Kobayashi Maru, by design.
+ */
+const ARENA_RADIUS = 2600;
+
+/** Beyond this, nobody can do anything to anybody and the fight is decided. */
+const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
+
 /** Damage falls off with range; cannons fall off hardest. */
 function rangeFactor(type, distance) {
   const max = WEAPON_RANGE[type] ?? 900;
@@ -9780,9 +9866,15 @@ class Engagement {
     this.warpOutTimer = 0;
     // Consumed by the Tactical career's Called Shot.
     this.guaranteedCrits = 0;
+    // Seconds every live hostile has spent out of everyone's reach.
+    this.separationTimer = 0;
     // Seconds of ion-pod decoy still confusing hostile targeting.
     this.decoyTimer = 0;
     this.canWarpOut = opts.canWarpOut !== false;
+    // Nobody in this fight breaks off. Set only by the Kobayashi Maru, where a
+    // hostile that could be routed would make the no-win scenario winnable by
+    // flying — which is the one thing it must never be.
+    this.relentless = opts.relentless === true;
 
     this.placeCombatants();
   }
@@ -9791,8 +9883,18 @@ class Engagement {
     return [this.player, ...this.allies, ...this.hostiles];
   }
 
+  /**
+   * Hostiles still in the fight.
+   *
+   * A ship that has broken off and got clear is neither destroyed nor present.
+   * Before withdrawal existed a fleeing ship stayed on the board forever: at 3%
+   * hull, cloaked, faster than you, and permanently blocking every end
+   * condition that asks whether any hostile is left. Fuzzing caught a
+   * Bird-of-Prey doing exactly that — a stern chase at matched speed, frozen at
+   * 1,639 units for the sixteen simulated minutes before the harness gave up.
+   */
   get liveHostiles() {
-    return this.hostiles.filter((s) => !s.destroyed);
+    return this.hostiles.filter((s) => !s.destroyed && !s.withdrawn);
   }
 
   /**
@@ -10045,6 +10147,9 @@ class Engagement {
 
     if (this.decoyTimer > 0) this.decoyTimer = Math.max(0, this.decoyTimer - dt);
 
+    this.holdTheArena();
+    this.settleWithdrawals(dt);
+
     this.updateProjectiles(dt);
     this.updateEffects(dt);
 
@@ -10056,8 +10161,22 @@ class Engagement {
 
     // Resolution.
     if (this.player.destroyed) return this.end('destroyed');
-    if (!this.liveHostiles.length) return this.end('victory');
+    if (!this.liveHostiles.length) {
+      // An empty board is a win only if you emptied it. Anyone who withdrew
+      // under their own power was routed, not destroyed, and the ledger cares
+      // about the difference.
+      return this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
+    }
     if (this.liveHostiles.every((s) => s.fleeing)) return this.end('routed');
+
+    // A fight in which nobody can touch anybody is over, whatever the AI
+    // thinks it is doing. Held for a few seconds so a fast pass through the
+    // outer edge does not end an engagement that is still live.
+    const unreachable = this.liveHostiles.every(
+      (s) => this.player.distanceTo(s) > DISENGAGE_RANGE,
+    );
+    this.separationTimer = unreachable ? this.separationTimer + dt : 0;
+    if (this.separationTimer > 6) return this.end('routed');
   }
 
   updateProjectiles(dt) {
@@ -10099,6 +10218,60 @@ class Engagement {
     this.log.push(entry);
     if (this.log.length > 60) this.log.shift();
     emit('combat:log', entry);
+  }
+
+  /**
+   * Keep everyone inside the arena.
+   *
+   * A ship that reaches the boundary is turned back rather than teleported —
+   * the position is clamped to the sphere so nothing can escape, and the
+   * desired heading is pointed inward so the AI stops driving into the wall.
+   * Clamping alone would leave a ship grinding against the edge at full
+   * throttle forever, which looks broken and pins the auto-framing camera.
+   */
+  holdTheArena() {
+    for (const s of this.allShips) {
+      const d = Math.hypot(s.x, s.y, s.z ?? 0);
+      if (d <= ARENA_RADIUS) continue;
+
+      // Wrecks are clamped too. They stop steering but they do not stop
+      // existing, and the auto-framing camera frames on every hull it can see —
+      // a hulk left outside the volume drags the view out with it.
+      const k = ARENA_RADIUS / d;
+      s.x *= k; s.y *= k; s.z = (s.z ?? 0) * k;
+      if (s.destroyed) continue;
+
+      // Point back toward the middle of the engagement.
+      s.desiredHeading = Math.atan2(-s.y, -s.x) * 180 / Math.PI;
+      const flat = Math.hypot(s.x, s.y) || 1;
+      s.desiredPitch = Math.atan2(-(s.z ?? 0), flat) * 180 / Math.PI;
+    }
+  }
+
+  /**
+   * Let a ship that broke off and got clear actually go.
+   *
+   * Fleeing was a state with no exit: the ship ran, cloaked, outpaced you, and
+   * stayed on the board as a live hostile for as long as the engagement lasted.
+   * A captain who has stayed out of your reach for a solid few seconds has got
+   * away, which is what a rout means, and the fight can end.
+   *
+   * The delay matters. Ending the moment a fleeing ship crosses weapons range
+   * would let a fast attacker slip out and back in during a single pass.
+   */
+  settleWithdrawals(dt) {
+    for (const s of this.hostiles) {
+      if (s.destroyed || s.withdrawn) continue;
+      const clear = !this.relentless
+        && s.fleeing
+        && this.player.distanceTo(s) > MAX_WEAPON_RANGE;
+      s.withdrawTimer = clear ? (s.withdrawTimer ?? 0) + dt : 0;
+      if (s.withdrawTimer <= WITHDRAW_SECONDS) continue;
+
+      s.withdrawn = true;
+      this.pushLog(`${s.name} has broken contact and gone to warp.`, 'tactical');
+      if (this.target === s) this.target = this.liveHostiles[0] ?? null;
+    }
   }
 
   /** Status summary an officer would read aloud. */
@@ -10146,6 +10319,10 @@ __exports.FACINGS = FACINGS;
 __exports.facingForBearing = facingForBearing;
 
 __exports.WEAPON_RANGE = WEAPON_RANGE;
+__exports.MAX_WEAPON_RANGE = MAX_WEAPON_RANGE;
+__exports.WITHDRAW_SECONDS = WITHDRAW_SECONDS;
+__exports.ARENA_RADIUS = ARENA_RADIUS;
+__exports.DISENGAGE_RANGE = DISENGAGE_RANGE;
 __exports.rangeFactor = rangeFactor;
 __exports.Engagement = Engagement;
 __exports.buildHostiles = buildHostiles;
@@ -12809,8 +12986,21 @@ class CampaignClock {
     this.compression = Math.max(1, opts.compression ?? 1);
     // Time that accrued while the app was closed and has not been spent yet.
     this.pendingHours = opts.pendingHours ?? 0;
-    // Total credited campaign time, in hours, after compression.
+    // Work hours credited to the ship — capped per absence.
     this.creditedHours = opts.creditedHours ?? 0;
+    // Commission hours elapsed — uncapped, and banked at the compression that
+    // was in force when they passed.
+    //
+    // These two are genuinely different quantities and conflating them is a
+    // bug in either direction. A month away is a month of the five years gone,
+    // because the calendar does not wait for you; it is *not* a month of
+    // damage control, because a ship nobody is commanding does not repair
+    // itself at full rate for a month. Commission time is uncapped, work is
+    // capped, and this is where they part company.
+    this.commissionHours = opts.commissionHours
+      // Migrate a save written before the two were separated: everything it
+      // credited was, at that point, both.
+      ?? opts.creditedHours ?? 0;
     // Absences that were larger than the ceiling, recorded rather than hidden.
     this.forfeitedHours = opts.forfeitedHours ?? 0;
   }
@@ -12850,6 +13040,11 @@ class CampaignClock {
     this.creditedHours += credited;
     this.forfeitedHours += forfeited;
 
+    // The calendar does not wait for you, and it is banked at the compression
+    // in force right now rather than recomputed later from the current
+    // setting. That is what stops the Options switch rewriting history.
+    this.commissionHours += rawHours * this.compression;
+
     return { hours: credited, forfeited, wentBackwards };
   }
 
@@ -12860,9 +13055,19 @@ class CampaignClock {
     return hours;
   }
 
-  /** Days elapsed in the commission so far, against the high-water mark. */
+  /**
+   * Days elapsed in the commission so far.
+   *
+   * Accumulated as time passes rather than recomputed as wall-clock elapsed
+   * times the *current* compression. That distinction is the whole of a nasty
+   * bug: with the multiplication done here, selecting x1000 in Options
+   * instantly finished a five-year commission — 400 real days read as 400,000 —
+   * and selecting x1 again un-finished it. Banking each interval at the
+   * compression in force when it passed is both correct and stable under a
+   * setting the player is invited to change mid-commission.
+   */
   get elapsedDays() {
-    return Math.max(0, (this.highWater - this.startedAt) / MS_PER_DAY) * this.compression;
+    return Math.max(0, this.commissionHours / 24);
   }
 
   /** 0..1 through the five years. */
@@ -12904,6 +13109,7 @@ class CampaignClock {
       compression: this.compression,
       pendingHours: this.pendingHours,
       creditedHours: this.creditedHours,
+      commissionHours: this.commissionHours,
       forfeitedHours: this.forfeitedHours,
     };
   }
@@ -12943,7 +13149,12 @@ function absenceReport(hours, { ship = null, forfeited = 0 } = {}) {
     // Said out loud rather than quietly dropped. A player who leaves for a
     // month should be told that a month did not all count, not left to work it
     // out from a repair bill that does not add up.
-    lines.push(`Starfleet logged ${Math.round(forfeited / 24)} days of your absence as leave. Only the first three days counted toward the ship's work.`);
+    // Phrased from the constant rather than around it, so tuning the ceiling
+    // cannot leave this sentence quietly lying to the player.
+    const counted = MAX_ABSENCE_HOURS < 48
+      ? `${Math.round(MAX_ABSENCE_HOURS)} hours`
+      : `${Math.round(MAX_ABSENCE_HOURS / 24)} days`;
+    lines.push(`Starfleet logged ${Math.round(forfeited / 24)} days of your absence as leave. Only the first ${counted} counted toward the ship's work.`);
   }
 
   return lines;
@@ -12981,7 +13192,7 @@ const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.
 const { SYSTEM_BY_ID } = __require("src/world/systems.data.js");
 
 const { MissionBook } = __require("src/missions/engine.js");
-const { SCENARIO: KOBAYASHI, gambitStatus, forceChannel, resolveGambit, recordOf } = __require("src/missions/kobayashi.js");
+const { SCENARIO: KOBAYASHI, gambitStatus, forceChannel, resolveGambit, recordOf, closeChannel } = __require("src/missions/kobayashi.js");
 const { EPISODES } = __require("src/missions/episodes/index.js");
 
 const { Character } = __require("src/rules/character.js");
@@ -13080,6 +13291,10 @@ class Game {
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
+    // Explicitly false rather than undefined: `over` is read as a boolean all
+    // over the UI and the save, and an unset field reads as "not over" by luck.
+    this.over = false;
+    this.overReason = null;
     this.latinum = 500;
 
     // ---- stores and the machine shop ----
@@ -13113,7 +13328,14 @@ class Game {
     this.ship.applyMods(this.loadout.shipMods());
     // The captain's own abilities are part of the ship's performance.
     if (this.character) this.ship.applyMods(this.character.shipMods());
-    if (this.difficulty) this.ship.applyMods(this.difficulty.playerMods());
+    // Difficulty is a setting on the campaign, not on a training simulator.
+    // Inside a scripted scenario the player flies the ship as designed, because
+    // an exercise that got easier when you moved a slider would not be an
+    // exercise. Story mode's bonuses alone turned the no-win scenario into a
+    // 40-out-of-40 win at 66% hull.
+    if (this.difficulty && !this.scriptedScenario) {
+      this.ship.applyMods(this.difficulty.playerMods());
+    }
 
     // The biofunction monitor and a physician captain both reduce casualties
     // from hull hits, not merely on away missions.
@@ -13623,9 +13845,14 @@ class Game {
   startCombat(hostiles, opts = {}) {
     if (!hostiles.length) return null;
 
-    const fleet = this.scaleHostileFleet(hostiles);
-    const enemyMods = this.difficulty.enemyMods();
-    for (const s of fleet) s.applyMods(enemyMods);
+    // A scripted scenario fields exactly the ships it names, unmodified. Both
+    // levers otherwise apply: Fleet Admiral added a fourth Klingon to the
+    // Kobayashi Maru and Story took a third off every hull in it.
+    const fleet = opts.scripted ? hostiles : this.scaleHostileFleet(hostiles);
+    if (!opts.scripted) {
+      const enemyMods = this.difficulty.enemyMods();
+      for (const s of fleet) s.applyMods(enemyMods);
+    }
 
     // Signature powers are once per engagement, so a new one restores them.
     this.character?.refresh();
@@ -13686,11 +13913,20 @@ class Game {
 
     this.engagement = null;
     this.firstStrike = false;
+    // The scenario and any channel forced open inside it end with the fight.
+    // Left set, `gambitOpen` turns every later typed order into an appeal to a
+    // Klingon commander who is no longer there.
+    closeChannel(this);
+    this.inKobayashi = false;
+    if (this.scriptedScenario) {
+      this.scriptedScenario = false;
+      this.applyAllMods();   // hand the difficulty bonuses back
+    }
     this.mode = MODES.BRIDGE;
     this.setAlert(outcome === 'destroyed' ? 'red' : 'normal');
     emit('combat:resolved', { outcome, killed });
 
-    if (outcome === 'destroyed') this.gameOver('ship lost with all hands');
+    if (outcome === 'destroyed') this.loseTheShip();
   }
 
   // ------------------------------------------------------------------ missions
@@ -13822,6 +14058,39 @@ class Game {
     }
   }
 
+  /**
+   * The ship has been destroyed. Whether that ends the commission is a
+   * difficulty setting the game already advertises and never honoured.
+   *
+   * Story and Cadet both say, on the difficulty screen, that "the ship cannot
+   * be lost". Nothing read the flag, so losing your ship on Story ended the
+   * commission exactly as it does on Fleet Admiral. It is not free at the lower
+   * rungs either — you are towed in with a third of a hull and the log says so.
+   */
+  loseTheShip() {
+    if (this.difficulty?.def?.shipLoss !== false) {
+      return this.gameOver('ship lost with all hands');
+    }
+
+    this.ship.restore();
+    this.ship.hull = this.ship.maxHull * 0.3;
+    for (const f of Object.keys(this.ship.shields)) this.ship.shields[f] = 0;
+    this.ship.shieldsUp = false;
+    this.ship.torpedoes = Math.floor(this.ship.maxTorpedoes * 0.25);
+    this.ship.antimatter = Math.min(this.ship.antimatter, 35);
+
+    this.pushLog(
+      `${this.ship.name} was left adrift and under tow. Salvage crews have her at `
+      + '30% hull, no shields, and a quarter magazine. The record stands.',
+      'engineering',
+    );
+    this.ledger.record('ship_crippled', {
+      text: `${this.ship.name} lost and recovered at ${this.location?.name ?? 'unknown'}`,
+      system: this.locationId,
+    });
+    emit('ship:recovered', { ship: this.ship });
+  }
+
   gameOver(reason) {
     this.over = true;
     this.overReason = reason;
@@ -13858,6 +14127,16 @@ class Game {
       fabrication: this.fabrication,
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
+
+      // Runtime flags. These are cheap to write and expensive to lose: the
+      // promotion feat vanishes without `pendingFeats`, and the ion pod comes
+      // back from the dead without `podJettisoned`.
+      pendingFeats: this.pendingFeats ?? 0,
+      podJettisoned: this.podJettisoned === true,
+      firstStrike: this.firstStrike === true,
+      inKobayashi: this.inKobayashi === true,
+      gambitOpen: this.gambitOpen === true,
+      parleyForced: this.parleyForced === true,
     };
   }
 
@@ -13887,33 +14166,41 @@ class Game {
       return { hours: 0, lines: [] };
     }
 
+    // Time passes during a firefight; damage control does not get to rebuild
+    // your shields in the middle of one. Without this guard, backgrounding the
+    // app for three days mid-engagement returned hull 20% -> 43%, shields
+    // 0% -> 100% and fires 3 -> 0 while a Klingon was still shooting.
+    const fighting = !!this.engagement && !this.engagement.over;
+
     const ship = this.ship;
     const before = { hull: ship.hullPct, fires: ship.fires };
 
     // Repair: a full hull from nothing would take about a fortnight underway,
     // which is slower than a starbase and faster than nothing.
-    if (ship.hullPct < 1 && !ship.destroyed) {
+    if (!fighting && ship.hullPct < 1 && !ship.destroyed) {
       const perHour = ship.maxHull / (14 * 24);
       ship.repair(perHour * pending * ship.mod('repairRate'));
     }
 
     // Fires go out. Slowly, and one at a time.
-    if (ship.fires > 0) ship.fires = Math.max(0, ship.fires - Math.floor(pending / 6));
+    if (!fighting && ship.fires > 0) ship.fires = Math.max(0, ship.fires - Math.floor(pending / 6));
 
     // Shields recharge to full given a quiet watch.
-    if (pending > 2 && ship.shieldsUp) {
+    if (!fighting && pending > 2 && ship.shieldsUp) {
       for (const f of Object.keys(ship.shields)) ship.shields[f] = ship.maxShield;
     }
 
     // The crew heals, and the dead stay dead.
-    for (const officer of this.crew.officers) {
-      if (officer.alive && officer.injured) officer.recover?.(pending);
+    if (!fighting) {
+      for (const officer of this.crew.officers) {
+        if (officer.alive && officer.injured) officer.recover?.(pending);
+      }
     }
 
     // The machine shop works too. A two-day job is a two-day job whether you
     // are watching it or not — which is what makes committing to one a
     // decision rather than a button.
-    const finished = advanceFabrication(this, pending);
+    const finished = fighting ? null : advanceFabrication(this, pending);
     if (finished) {
       this.pushLog(`${finished.recipe.name} completed while you were away. ${finished.text}`, 'engineering');
     }
@@ -13921,7 +14208,9 @@ class Game {
     // One stardate unit is roughly a day.
     this.clock.advanceStardate(pending / 24);
 
-    const lines = absenceReport(pending, { ship, forfeited });
+    const lines = fighting
+      ? [`${pending < 24 ? `${Math.round(pending)} hours` : `${(pending / 24).toFixed(1)} days`} have passed, and we are still under fire. Nothing has been repaired.`]
+      : absenceReport(pending, { ship, forfeited });
     if (before.fires > 0 && ship.fires === 0) {
       lines.push('All fires are out. Damage control has secured the affected decks.');
     }
@@ -13951,7 +14240,15 @@ class Game {
       name: ['IKS Kh’Tevak', 'IKS Amar', 'IKS Klothos'][i] ?? `IKS Vessel ${i + 1}`,
     }));
     for (const line of KOBAYASHI.briefing) this.pushLog(line, 'computer');
-    this.startCombat(hostiles, { name: KOBAYASHI.title, canWarpOut: false });
+    // Fixed parameters for everyone, at every rung of the ladder.
+    this.scriptedScenario = true;
+    this.applyAllMods();
+    this.startCombat(hostiles, {
+      name: KOBAYASHI.title,
+      canWarpOut: false,
+      relentless: KOBAYASHI.relentless,
+      scripted: true,
+    });
   }
 
   /** Whether the technique is available, and if not, why not. */
@@ -14064,6 +14361,15 @@ class Game {
     g.fabrication = data.fabrication ?? null;
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
+
+    // Older saves predate these fields; they load as their off state rather
+    // than as undefined, so a `=== true` check downstream stays meaningful.
+    g.pendingFeats = data.pendingFeats ?? 0;
+    g.podJettisoned = data.podJettisoned === true;
+    g.firstStrike = data.firstStrike === true;
+    g.inKobayashi = data.inKobayashi === true;
+    g.gambitOpen = data.gambitOpen === true;
+    g.parleyForced = data.parleyForced === true;
 
     g.applyAllMods();
     return g;
@@ -18365,10 +18671,22 @@ class App {
 
   go(screen) {
     this.screen = screen;
-    this.tactical = null;
+    // The tactical view is deliberately NOT dropped here. Its canvas lives in a
+    // persistent host that survives the DOM swap, so the view stays valid — and
+    // nulling it leaked a WebGL context and inserted a second overlay canvas on
+    // every visit, with the stale overlays painting over the live one. The
+    // `tacticalViewCanvas` guard in render() rebuilds it if the host really is
+    // replaced, and disposes the old one first.
     this.map = null;
     this.buildNav();
     this.render();
+  }
+
+  /** Release the GL context and overlay canvas. For teardown, not navigation. */
+  disposeTacticalView() {
+    this.tactical?.dispose?.();
+    this.tactical = null;
+    this.tacticalViewCanvas = null;
   }
 
   render() {
@@ -18536,6 +18854,9 @@ class App {
       routed: ['They have broken off and gone to warp.'],
       escaped: ['We are clear and at warp.'],
       destroyed: ['The ship is lost.'],
+      // Talking your way out is the rarest ending in the game and used to
+      // report itself as "The engagement has ended."
+      parley: ['They are standing off. Nobody fired.', 'Rescue operations may proceed.'],
     }[outcome] ?? ['The engagement has ended.'];
     if (outcome !== 'destroyed') {
       const lost = g.ship.maxCrew - g.ship.crew;

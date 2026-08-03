@@ -59,8 +59,21 @@ export class CampaignClock {
     this.compression = Math.max(1, opts.compression ?? 1);
     // Time that accrued while the app was closed and has not been spent yet.
     this.pendingHours = opts.pendingHours ?? 0;
-    // Total credited campaign time, in hours, after compression.
+    // Work hours credited to the ship — capped per absence.
     this.creditedHours = opts.creditedHours ?? 0;
+    // Commission hours elapsed — uncapped, and banked at the compression that
+    // was in force when they passed.
+    //
+    // These two are genuinely different quantities and conflating them is a
+    // bug in either direction. A month away is a month of the five years gone,
+    // because the calendar does not wait for you; it is *not* a month of
+    // damage control, because a ship nobody is commanding does not repair
+    // itself at full rate for a month. Commission time is uncapped, work is
+    // capped, and this is where they part company.
+    this.commissionHours = opts.commissionHours
+      // Migrate a save written before the two were separated: everything it
+      // credited was, at that point, both.
+      ?? opts.creditedHours ?? 0;
     // Absences that were larger than the ceiling, recorded rather than hidden.
     this.forfeitedHours = opts.forfeitedHours ?? 0;
   }
@@ -100,6 +113,11 @@ export class CampaignClock {
     this.creditedHours += credited;
     this.forfeitedHours += forfeited;
 
+    // The calendar does not wait for you, and it is banked at the compression
+    // in force right now rather than recomputed later from the current
+    // setting. That is what stops the Options switch rewriting history.
+    this.commissionHours += rawHours * this.compression;
+
     return { hours: credited, forfeited, wentBackwards };
   }
 
@@ -110,9 +128,19 @@ export class CampaignClock {
     return hours;
   }
 
-  /** Days elapsed in the commission so far, against the high-water mark. */
+  /**
+   * Days elapsed in the commission so far.
+   *
+   * Accumulated as time passes rather than recomputed as wall-clock elapsed
+   * times the *current* compression. That distinction is the whole of a nasty
+   * bug: with the multiplication done here, selecting x1000 in Options
+   * instantly finished a five-year commission — 400 real days read as 400,000 —
+   * and selecting x1 again un-finished it. Banking each interval at the
+   * compression in force when it passed is both correct and stable under a
+   * setting the player is invited to change mid-commission.
+   */
   get elapsedDays() {
-    return Math.max(0, (this.highWater - this.startedAt) / MS_PER_DAY) * this.compression;
+    return Math.max(0, this.commissionHours / 24);
   }
 
   /** 0..1 through the five years. */
@@ -154,6 +182,7 @@ export class CampaignClock {
       compression: this.compression,
       pendingHours: this.pendingHours,
       creditedHours: this.creditedHours,
+      commissionHours: this.commissionHours,
       forfeitedHours: this.forfeitedHours,
     };
   }
@@ -193,7 +222,12 @@ export function absenceReport(hours, { ship = null, forfeited = 0 } = {}) {
     // Said out loud rather than quietly dropped. A player who leaves for a
     // month should be told that a month did not all count, not left to work it
     // out from a repair bill that does not add up.
-    lines.push(`Starfleet logged ${Math.round(forfeited / 24)} days of your absence as leave. Only the first three days counted toward the ship's work.`);
+    // Phrased from the constant rather than around it, so tuning the ceiling
+    // cannot leave this sentence quietly lying to the player.
+    const counted = MAX_ABSENCE_HOURS < 48
+      ? `${Math.round(MAX_ABSENCE_HOURS)} hours`
+      : `${Math.round(MAX_ABSENCE_HOURS / 24)} days`;
+    lines.push(`Starfleet logged ${Math.round(forfeited / 24)} days of your absence as leave. Only the first ${counted} counted toward the ship's work.`);
   }
 
   return lines;

@@ -19,6 +19,30 @@ export const WEAPON_RANGE = {
   torpedo: 1200,
 };
 
+/** The longest reach any weapon in the game has. */
+export const MAX_WEAPON_RANGE = Math.max(...Object.values(WEAPON_RANGE));
+
+/** How long a fleeing ship must stay out of weapons range before it is gone. */
+export const WITHDRAW_SECONDS = 8;
+
+/**
+ * How far from the centre of the engagement anything may get.
+ *
+ * There was no such bound, and fuzzing found what that costs: a Jem'Hadar
+ * attack ship at 13% hull ran to 64,574 units — twenty-one times the tactical
+ * volume, fifty-four times the longest weapon range — and simply kept going. It
+ * was never flagged as fleeing, so no end condition fired; it could not be
+ * reached and could not reach us; the engagement would have run forever.
+ *
+ * That is merely tedious when you can disengage. It is a permanent soft-lock
+ * when you cannot, and two things take that away: the Tholian web, which is
+ * reachable in ordinary play, and the Kobayashi Maru, by design.
+ */
+export const ARENA_RADIUS = 2600;
+
+/** Beyond this, nobody can do anything to anybody and the fight is decided. */
+export const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
+
 /** Damage falls off with range; cannons fall off hardest. */
 export function rangeFactor(type, distance) {
   const max = WEAPON_RANGE[type] ?? 900;
@@ -55,9 +79,15 @@ export class Engagement {
     this.warpOutTimer = 0;
     // Consumed by the Tactical career's Called Shot.
     this.guaranteedCrits = 0;
+    // Seconds every live hostile has spent out of everyone's reach.
+    this.separationTimer = 0;
     // Seconds of ion-pod decoy still confusing hostile targeting.
     this.decoyTimer = 0;
     this.canWarpOut = opts.canWarpOut !== false;
+    // Nobody in this fight breaks off. Set only by the Kobayashi Maru, where a
+    // hostile that could be routed would make the no-win scenario winnable by
+    // flying — which is the one thing it must never be.
+    this.relentless = opts.relentless === true;
 
     this.placeCombatants();
   }
@@ -66,8 +96,18 @@ export class Engagement {
     return [this.player, ...this.allies, ...this.hostiles];
   }
 
+  /**
+   * Hostiles still in the fight.
+   *
+   * A ship that has broken off and got clear is neither destroyed nor present.
+   * Before withdrawal existed a fleeing ship stayed on the board forever: at 3%
+   * hull, cloaked, faster than you, and permanently blocking every end
+   * condition that asks whether any hostile is left. Fuzzing caught a
+   * Bird-of-Prey doing exactly that — a stern chase at matched speed, frozen at
+   * 1,639 units for the sixteen simulated minutes before the harness gave up.
+   */
   get liveHostiles() {
-    return this.hostiles.filter((s) => !s.destroyed);
+    return this.hostiles.filter((s) => !s.destroyed && !s.withdrawn);
   }
 
   /**
@@ -320,6 +360,9 @@ export class Engagement {
 
     if (this.decoyTimer > 0) this.decoyTimer = Math.max(0, this.decoyTimer - dt);
 
+    this.holdTheArena();
+    this.settleWithdrawals(dt);
+
     this.updateProjectiles(dt);
     this.updateEffects(dt);
 
@@ -331,8 +374,22 @@ export class Engagement {
 
     // Resolution.
     if (this.player.destroyed) return this.end('destroyed');
-    if (!this.liveHostiles.length) return this.end('victory');
+    if (!this.liveHostiles.length) {
+      // An empty board is a win only if you emptied it. Anyone who withdrew
+      // under their own power was routed, not destroyed, and the ledger cares
+      // about the difference.
+      return this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
+    }
     if (this.liveHostiles.every((s) => s.fleeing)) return this.end('routed');
+
+    // A fight in which nobody can touch anybody is over, whatever the AI
+    // thinks it is doing. Held for a few seconds so a fast pass through the
+    // outer edge does not end an engagement that is still live.
+    const unreachable = this.liveHostiles.every(
+      (s) => this.player.distanceTo(s) > DISENGAGE_RANGE,
+    );
+    this.separationTimer = unreachable ? this.separationTimer + dt : 0;
+    if (this.separationTimer > 6) return this.end('routed');
   }
 
   updateProjectiles(dt) {
@@ -374,6 +431,60 @@ export class Engagement {
     this.log.push(entry);
     if (this.log.length > 60) this.log.shift();
     emit('combat:log', entry);
+  }
+
+  /**
+   * Keep everyone inside the arena.
+   *
+   * A ship that reaches the boundary is turned back rather than teleported —
+   * the position is clamped to the sphere so nothing can escape, and the
+   * desired heading is pointed inward so the AI stops driving into the wall.
+   * Clamping alone would leave a ship grinding against the edge at full
+   * throttle forever, which looks broken and pins the auto-framing camera.
+   */
+  holdTheArena() {
+    for (const s of this.allShips) {
+      const d = Math.hypot(s.x, s.y, s.z ?? 0);
+      if (d <= ARENA_RADIUS) continue;
+
+      // Wrecks are clamped too. They stop steering but they do not stop
+      // existing, and the auto-framing camera frames on every hull it can see —
+      // a hulk left outside the volume drags the view out with it.
+      const k = ARENA_RADIUS / d;
+      s.x *= k; s.y *= k; s.z = (s.z ?? 0) * k;
+      if (s.destroyed) continue;
+
+      // Point back toward the middle of the engagement.
+      s.desiredHeading = Math.atan2(-s.y, -s.x) * 180 / Math.PI;
+      const flat = Math.hypot(s.x, s.y) || 1;
+      s.desiredPitch = Math.atan2(-(s.z ?? 0), flat) * 180 / Math.PI;
+    }
+  }
+
+  /**
+   * Let a ship that broke off and got clear actually go.
+   *
+   * Fleeing was a state with no exit: the ship ran, cloaked, outpaced you, and
+   * stayed on the board as a live hostile for as long as the engagement lasted.
+   * A captain who has stayed out of your reach for a solid few seconds has got
+   * away, which is what a rout means, and the fight can end.
+   *
+   * The delay matters. Ending the moment a fleeing ship crosses weapons range
+   * would let a fast attacker slip out and back in during a single pass.
+   */
+  settleWithdrawals(dt) {
+    for (const s of this.hostiles) {
+      if (s.destroyed || s.withdrawn) continue;
+      const clear = !this.relentless
+        && s.fleeing
+        && this.player.distanceTo(s) > MAX_WEAPON_RANGE;
+      s.withdrawTimer = clear ? (s.withdrawTimer ?? 0) + dt : 0;
+      if (s.withdrawTimer <= WITHDRAW_SECONDS) continue;
+
+      s.withdrawn = true;
+      this.pushLog(`${s.name} has broken contact and gone to warp.`, 'tactical');
+      if (this.target === s) this.target = this.liveHostiles[0] ?? null;
+    }
   }
 
   /** Status summary an officer would read aloud. */

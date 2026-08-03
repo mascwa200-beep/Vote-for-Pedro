@@ -569,13 +569,28 @@ export class Ship {
     return true;
   }
 
-  /** Emergency shield reinforcement to one facing, taken from the others. */
+  /**
+   * Emergency shield reinforcement to one facing, taken from the others.
+   *
+   * The receiving facing is capped at 1.2x max, so it can only ever absorb a
+   * limited amount. Charge is conserved: we work out the headroom first and
+   * draw exactly that much, proportionally, rather than stripping a fixed
+   * fraction off five facings and letting the overflow evaporate.
+   */
   reinforceShield(facing, fraction = 0.35) {
     if (!FACINGS.includes(facing)) return false;
     const others = FACINGS.filter((f) => f !== facing);
+    const available = others.reduce((n, f) => n + this.shields[f] * fraction, 0);
+    const headroom = Math.max(0, this.maxShield * 1.2 - this.shields[facing]);
+    const wanted = Math.min(available, headroom);
+    if (wanted <= 0) return true;
+
+    // `available` is a fixed fraction of the pool, so scaling by wanted/available
+    // keeps each facing's contribution proportional to what it actually holds.
+    const scale = wanted / available;
     let pooled = 0;
     for (const f of others) {
-      const take = this.shields[f] * fraction;
+      const take = this.shields[f] * fraction * scale;
       this.shields[f] -= take;
       pooled += take;
     }

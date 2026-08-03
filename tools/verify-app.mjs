@@ -315,6 +315,36 @@ try {
     check('the renderer stays inside the draw-call budget', gl && gl.drawCalls <= 60, String(gl?.drawCalls));
     check('the renderer stays inside the triangle budget', gl && gl.triangles <= 8000, String(gl?.triangles));
     check('the WebGL context is healthy', gl && gl.lost === false, String(gl?.lost));
+
+    // Navigating away from Tactical used to null the view without disposing it.
+    // The canvas lives in a persistent host, so returning built a second GL
+    // program on the same canvas and inserted another overlay canvas — stale
+    // overlays painting over the live one, their listeners pointed at a dead
+    // view, and a leaked context every trip. Browsers cap live contexts, so
+    // enough round trips eventually blacked the display out entirely.
+    const roundTrip = await page.evaluate(async () => {
+      const app = globalThis.__app;
+      const before = app.tactical;
+      for (const screen of ['bridge', 'tactical', 'crew', 'tactical', 'ship', 'tactical']) {
+        app.go(screen);
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      return {
+        overlays: document.querySelectorAll('canvas.tactical-labels').length,
+        glCanvases: document.querySelectorAll('#tactical').length,
+        same: app.tactical === before,
+        lost: app.tactical?.renderer?.lost ?? null,
+        drawCalls: app.tactical?.stats?.drawCalls ?? 0,
+      };
+    });
+    check('returning to Tactical does not stack overlay canvases',
+      roundTrip.overlays === 1, `${roundTrip.overlays} overlay canvas(es)`);
+    check('returning to Tactical does not duplicate the GL canvas',
+      roundTrip.glCanvases === 1, `${roundTrip.glCanvases}`);
+    check('the tactical view is reused rather than rebuilt', roundTrip.same === true);
+    check('the WebGL context survives six screen changes',
+      roundTrip.lost === false, String(roundTrip.lost));
+    check('the reused view is still drawing', roundTrip.drawCalls > 3, String(roundTrip.drawCalls));
   }
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
 

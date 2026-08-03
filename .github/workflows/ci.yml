@@ -107,6 +107,20 @@ jobs:
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-35" "build-tools;35.0.0" > /dev/null
 
+      # The dist/ freshness check in `test` runs the single-file build and diffs
+      # the result. It cannot see the APK: nothing rebuilds it there, so the
+      # committed binary can drift from the source it is supposed to contain
+      # without anything failing. Compare the payload before overwriting it.
+      - name: Assert the committed APK carries the current build
+        run: |
+          node tools/build-single.mjs > /dev/null
+          unzip -p dist/starfleet-command.apk assets/game.html > /tmp/apk-game.html
+          if ! cmp -s /tmp/apk-game.html dist/starfleet-command.html; then
+            echo "::error::the committed APK carries a stale build — rebuild it with tools/build-apk.sh and commit"
+            exit 1
+          fi
+          echo "the committed APK matches the current source"
+
       - name: Build the APK
         run: ANDROID_HOME="$ANDROID_SDK_ROOT" ./tools/build-apk.sh
 
