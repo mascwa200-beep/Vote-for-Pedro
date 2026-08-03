@@ -9,7 +9,7 @@
 // The rule these tests enforce: if the game tells the player something happens,
 // something has to observably happen.
 
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Game } from '../src/core/state.js';
@@ -20,6 +20,7 @@ import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { CONSOLES } from '../src/sim/loadout.js';
 import { RECIPES, advanceFabrication } from '../src/sim/fabrication.js';
 import { TRAPS } from '../src/world/encounters.js';
+import { EPISODES } from '../src/missions/episodes/index.js';
 
 const gameWith = (opts = {}) => new Game({
   seed: 1n, crewMode: 'original', ...opts,
@@ -643,4 +644,85 @@ test('the difficulties that promise the ship cannot be lost keep the promise', (
       `${def.id}: nothing in the log says what happened to the ship`,
     );
   }
+});
+
+// ============================================================ episode graphs
+
+// Episodes are a hand-authored graph, and the failure modes are the ones every
+// hand-authored graph has: a choice that points at a stage nobody wrote, a
+// stage nothing points at, a dead end that strands the player mid-episode.
+// None of those throw — the engine finishes the episode when it cannot resolve
+// the next stage — so they are invisible without walking the graph.
+//
+// All sixteen episodes are clean today. This is here so the seventeenth is too.
+describe('every episode graph is sound', () => {
+  test('every stage a choice names exists', () => {
+    const missing = [];
+    for (const ep of EPISODES) {
+      const ids = new Set(Object.keys(ep.stages ?? {}));
+      assert.ok(ids.has(ep.start), `${ep.id}: start stage "${ep.start}" does not exist`);
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          for (const n of [
+            typeof c.next === 'string' ? c.next : null,
+            c.branch?.success, c.branch?.failure,
+          ].filter(Boolean)) {
+            if (!ids.has(n)) missing.push(`${ep.id}/${sid} -> "${n}"`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(missing, [], 'choices pointing at stages nobody wrote');
+  });
+
+  test('no stage is stranded where the player cannot go on', () => {
+    const stranded = [];
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        // A stage with a `label` is an ending card and is allowed to have no
+        // choices; anything else must offer the player something to do.
+        if (!stage.choices?.length && !stage.label) stranded.push(`${ep.id}/${sid}`);
+      }
+    }
+    assert.deepEqual(stranded, [], 'stages with no choices that do not end the episode');
+  });
+
+  test('every choice is something the player can read and pick', () => {
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          assert.ok(c.label || c.text, `${ep.id}/${sid}: a choice has no label`);
+          assert.ok(c.id, `${ep.id}/${sid}: a choice has no id`);
+        }
+      }
+    }
+  });
+
+  test('every episode can be played to an end, by any route', () => {
+    // Random legal choices, thirty runs each. The engine has no loop guard, so
+    // a cycle in the graph would hang the player rather than fail loudly.
+    const failures = [];
+    for (const ep of EPISODES) {
+      for (let trial = 0; trial < 30; trial++) {
+        const g = gameWith({ seed: BigInt(90000 + trial) });
+        g.progress.addXP(200000, { ledger: g.ledger });
+        const m = g.missions.start(ep.id, g);
+        assert.ok(m, `${ep.id}: would not start`);
+
+        const path = [];
+        let steps = 0;
+        for (; steps < 120 && !m.complete; steps++) {
+          const open = m.choices().filter((c) => !c.locked);
+          if (!open.length) break;
+          const pick = open[(trial * 7 + steps * 13) % open.length];
+          path.push(`${m.stageId}:${pick.id}`);
+          m.choose(pick.id);
+        }
+        if (!m.complete) {
+          failures.push(`${ep.id} @ trial ${trial} after ${steps} steps: ${path.slice(-6).join(' -> ')}`);
+        }
+      }
+    }
+    assert.deepEqual(failures, [], 'episodes that stranded the player');
+  });
 });
