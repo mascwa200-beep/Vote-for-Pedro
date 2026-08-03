@@ -13,12 +13,14 @@ forever once installed.
 
 ## Install
 
-Open the page once in your browser and tap **Add to Home screen**. That is the
-whole installation — it works offline from then on.
+Three ways, all fully offline once installed:
 
-`dist/starfleet-command.html` is the same game as a single self-contained
-file, if you would rather just drop one file on the phone and open it from
-Files.
+- **`dist/starfleet-command.apk`** — a real Android package. One permission,
+  `VIBRATE`. **No `INTERNET` permission at all**, so it physically cannot
+  reach the network. ~164 KB, minSdk 26.
+- **PWA** — open the page once and tap **Add to Home screen**.
+- **`dist/starfleet-command.html`** — the whole game as one self-contained
+  file. Drop it on the phone and open it from Files. No server, no install.
 
 Full instructions, including the HTTPS caveat that decides whether offline
 support actually engages: **[docs/INSTALL.md](docs/INSTALL.md)**
@@ -35,6 +37,33 @@ consequences actually do: **[docs/MANUAL.md](docs/MANUAL.md)**
 A tactical and narrative command simulator with the systems depth of *Star
 Trek Online*'s Starfleet career, presented as an LCARS bridge console rather
 than a 3D MMO.
+
+**Your captain is a character sheet.** Six ability scores on a 27-point buy,
+twelve playable species with real mechanical traits, seven origins, seven
+career tracks each with a signature power, and personal traits that are
+genuine trades rather than bonuses — *Reckless* gives advantage on every
+attack and disadvantage on every saving throw. Feats are chosen on promotion.
+
+**Everything uncertain resolves on a d20.** Ability modifiers, proficiency,
+advantage and disadvantage, natural 20s and natural 1s, degrees of success.
+The arithmetic is always shown and always itemised — which ability, which
+officer, which circumstance. Away missions, negotiations, and analyses all run
+through it.
+
+**Twelve difficulties, named up the command ladder** — Story, Cadet, Ensign,
+Lieutenant, Lieutenant Commander, Commander, Captain, Commodore, Rear Admiral,
+Vice Admiral, Admiral, Fleet Admiral. They change what the game is willing to
+do to you: whether officers die permanently, whether the ship can be lost,
+how hard the target numbers are, and — the main lever at the top — how many
+hostiles arrive at once. Fleet Admiral is ironman.
+
+**Two-axis reputation.** *Standing* is how a faction feels this week and
+decides who fires on sight. *Reputation* is what you have earned over a
+career: it only rises, advances through six tiers, and accrues a currency you
+spend on projects that grant consoles, resupply, passage rights, allied
+escorts, a loaned Romulan cloaking device, and titles. You can be honoured by
+the Klingon Defence Force and shot at by them in the same week — fighting well
+while losing earns their respect even as it costs you their goodwill.
 
 **Command.** Orders work as taps and as typed natural language —
 `"Helm, set course for Vulcan, warp eight"`, `"target their warp nacelles"`,
@@ -105,26 +134,44 @@ The sim advances in fixed 1/30s steps independent of frame rate, so an
 engagement resolves identically on a 60 Hz and a 120 Hz panel.
 
 ```
-src/core/    rng, clock, event bus, consequence ledger, game state, saves
-src/sim/     ship, power, combat, AI, officers, skills, loadout, away teams, diplomacy
-src/world/   galaxy graph, encounters, and the systems/ships/crews/factions data
+src/core/     rng, clock, event bus, consequence ledger, game state, saves
+src/rules/    d20 dice, character sheet, reputation tracks, difficulty ladder
+src/sim/      ship, power, combat, AI, officers, skills, loadout, away teams, diplomacy
+src/world/    galaxy graph, encounters, and the systems/ships/crews/factions data
 src/missions/ mission state machine and the episode definitions
-src/audio/   synthesis primitives, named cues, mixer
-src/ui/      LCARS kit, screens, tactical and map renderers, order parser
+src/audio/    synthesis primitives, named cues, mixer
+src/ui/       LCARS kit, screens, tactical and map renderers, order parser
+android/      WebView shell, manifest, resources for the APK
 ```
+
+**Content:** 40 star systems, 31 ship classes, 16 authored episodes, 12
+species, 12 difficulties, 6 reputation tracks, 37 synthesized sound cues.
 
 ## Development
 
 ```sh
 npm start      # serve at http://localhost:8099
-npm test       # 69 unit tests — RNG determinism, combat maths, saves, parser
+npm test       # 126 tests — RNG determinism, combat maths, dice, saves, balance
 npm run build  # regenerate dist/starfleet-command.html
+
+ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh   # build the APK
 ```
+
+The APK build uses the SDK tools directly — aapt2, javac, d8, zipalign,
+apksigner — with no Gradle and no network at build time.
+
+The test suite includes **balance regression tests** that simulate hundreds of
+engagements. They exist because a plausible-looking set of difficulty
+multipliers once made a Constitution lose 20 out of 20 to a single light
+raider, and the paper numbers hid it — they double-counted fore and aft
+batteries that a ship facing its target can never fire together.
 
 Browser verification drives the real UI at Pixel viewport — captain creation
 through warp, combat, the ledger, save/restore — and **proves the offline
 claim** by cutting the network after the service worker registers and
-reloading. Playwright is deliberately not a project dependency:
+reloading. It also extracts `assets/game.html` from the signed APK and runs
+that, which is exactly what the phone's WebView does. Playwright is
+deliberately not a project dependency:
 
 ```sh
 npm i playwright --prefix /tmp/pw

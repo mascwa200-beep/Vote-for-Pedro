@@ -10,15 +10,15 @@ import { Ship } from '../sim/ship.js';
 
 /** Which hostile hulls each faction fields. */
 const FLEETS = {
-  klingon: ['bird_of_prey', 'bird_of_prey', 'd7'],
-  romulan: ['scoutship', 'warbird'],
-  cardassian: ['galor'],
+  klingon: ['bird_of_prey', 'bird_of_prey', 'd7', 'ktinga', 'vorcha', 'neghvar'],
+  romulan: ['scoutship', 'scoutship', 'warbird'],
+  cardassian: ['galor', 'galor', 'keldon'],
   ferengi: ['marauder'],
   orion: ['orion_raider', 'orion_raider'],
   tholian: ['tholian_web_spinner'],
-  dominion: ['jem_hadar_attack'],
-  borg: ['borg_cube'],
-  independent: ['freighter'],
+  dominion: ['jem_hadar_attack', 'jem_hadar_attack', 'jem_hadar_battleship'],
+  borg: ['borg_cube', 'bioship'],
+  independent: ['freighter', 'transport'],
 };
 
 /** Which factions patrol which sectors, and how heavily. */
@@ -38,6 +38,10 @@ const SECTOR_PRESENCE = {
   tholia: { tholian: 8 },
   frontier: { independent: 2, klingon: 2, romulan: 2 },
   deepspace: { independent: 1, borg: 1 },
+  risa: { federation: 6, independent: 3, orion: 1 },
+  betazed: { federation: 7, independent: 2 },
+  ferenginar: { ferengi: 8, orion: 2 },
+  gamma: { dominion: 9, independent: 1 },
 };
 
 export const ENCOUNTER_KINDS = [
@@ -244,6 +248,19 @@ export function environmentalHazard(system, ship, rng, dt) {
       return null;
     case 'tholian_web':
       if (rng.chance(0.1 * dt)) return 'Energy filaments are forming off the port bow.';
+      return null;
+    case 'nebula':
+      // Static discharge blinds the sensor grid rather than damaging the hull.
+      if (rng.chance(0.3 * dt)) {
+        ship.damageSubsystem('sensors', 0.05);
+        return 'Static discharge across the sensor array. We are half blind in here.';
+      }
+      return null;
+    case 'metreon':
+      if (rng.chance(0.2 * dt)) {
+        ship.damageSubsystem('warpcore', 0.02);
+        return 'Metreon particles are collecting in the nacelles. Warp drive is unreliable here.';
+      }
       return null;
     default:
       return null;

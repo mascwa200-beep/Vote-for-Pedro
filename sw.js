@@ -4,7 +4,7 @@
 // fetch. Precaching it is a few tens of kilobytes, so the install is instant
 // and every later launch is served from disk without touching the network.
 
-const VERSION = 'sfc-v1';
+const VERSION = 'sfc-v2';
 const PRECACHE = [
   './',
   './index.html',
@@ -50,6 +50,11 @@ const PRECACHE = [
   './src/ui/galaxymap.js',
   './src/ui/screens.js',
   './src/ui/orders.js',
+  './src/ui/charscreens.js',
+  './src/rules/dice.js',
+  './src/rules/character.js',
+  './src/rules/reputation.js',
+  './src/rules/difficulty.js',
 ];
 
 self.addEventListener('install', (event) => {
