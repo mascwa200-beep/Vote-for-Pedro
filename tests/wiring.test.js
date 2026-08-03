@@ -18,7 +18,9 @@ import { RNG } from '../src/core/rng.js';
 import { Character, CAREERS } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { CONSOLES } from '../src/sim/loadout.js';
-import { RECIPES, advanceFabrication } from '../src/sim/fabrication.js';
+import {
+  RECIPES, MATERIAL_LIST, beginFabrication, advanceFabrication, salvageWreck,
+} from '../src/sim/fabrication.js';
 import { TRAPS } from '../src/world/encounters.js';
 import { EPISODES } from '../src/missions/episodes/index.js';
 import { CaptainProgress, SKILL_LIST, combatXP } from '../src/sim/skills.js';
@@ -804,6 +806,111 @@ describe('progression survives numbers it should never see', () => {
       if (!t) continue;
       assert.ok(t.tier <= MAX_TIER, `${track.id} reached tier ${t.tier}, past ${MAX_TIER}`);
       assert.ok(REP_TIERS[t.tier], `${track.id} is at a tier with no definition`);
+    }
+  });
+});
+
+// ========================================================== the machine shop
+
+// Fabrication is the one place the player converts one resource into another,
+// so it is the one place an accounting error becomes an exploit. None of these
+// properties had a test: 4,500 fuzzed jobs found no fault, and this is here so
+// the ninth recipe cannot quietly introduce one.
+describe('fabrication accounting', () => {
+  const MATS = MATERIAL_LIST.map((m) => m.id);
+  /**
+   * Full stores, and a ship in the state every recipe's precondition wants.
+   *
+   * Five of the eight recipes are gated on the ship actually needing them —
+   * `requires: (g) => g.ship.hullPct < 0.95` and friends — which is a good
+   * guard ("Nothing aboard needs it, Captain") and a trap for a test that
+   * builds a pristine ship and wonders why nothing starts.
+   */
+  const stocked = () => {
+    const g = gameWith();
+    g.stores = Object.fromEntries(MATS.map((m) => [m, 500]));
+    g.ship.hull = g.ship.maxHull * 0.5;
+    g.ship.torpedoes = 0;
+    g.ship.subsystems.sensors = 0.4;
+    g.ship.fires = 2;
+    g.podJettisoned = true;
+    return g;
+  };
+
+  test('a job charges exactly what the recipe lists, and nothing else', () => {
+    for (const recipe of RECIPES) {
+      const g = stocked();
+      const before = { ...g.stores };
+      assert.ok(beginFabrication(g, recipe.id)?.ok, `${recipe.id} would not start with full stores`);
+      for (const m of MATS) {
+        const paid = before[m] - g.stores[m];
+        const listed = recipe.needs?.[m] ?? 0;
+        assert.equal(paid, listed, `${recipe.id} took ${paid} ${m}, lists ${listed}`);
+      }
+    }
+  });
+
+  test('a second job is refused and costs nothing', () => {
+    for (const recipe of RECIPES) {
+      const g = stocked();
+      beginFabrication(g, recipe.id);
+      const mid = { ...g.stores };
+      const second = beginFabrication(g, recipe.id);
+      assert.ok(!second?.ok, `${recipe.id}: two jobs ran at once`);
+      for (const m of MATS) {
+        assert.equal(g.stores[m], mid[m], `a refused ${recipe.id} still charged ${m}`);
+      }
+    }
+  });
+
+  test('a job you cannot afford charges nothing', () => {
+    for (const recipe of RECIPES) {
+      const g = stocked();
+      g.stores = Object.fromEntries(MATS.map((m) => [m, 0]));
+      const r = beginFabrication(g, recipe.id);
+      assert.ok(!r?.ok, `${recipe.id} started with empty stores`);
+      for (const m of MATS) assert.equal(g.stores[m], 0, `a refused ${recipe.id} took ${m} from nothing`);
+    }
+  });
+
+  test('every job finishes, and stores never go negative', () => {
+    for (const recipe of RECIPES) {
+      const g = stocked();
+      beginFabrication(g, recipe.id);
+      advanceFabrication(g, 1e6);
+      assert.equal(g.fabrication, null, `${recipe.id} never finished`);
+      for (const m of MATS) {
+        assert.ok(g.stores[m] >= 0, `${m} went to ${g.stores[m]} after ${recipe.id}`);
+        assert.ok(Number.isFinite(g.stores[m]), `${m} = ${g.stores[m]} after ${recipe.id}`);
+      }
+    }
+  });
+
+  test('a bad number of hours does not break a job', () => {
+    for (const hours of [0, -1, -1e9, NaN, Infinity, 1e308]) {
+      const g = stocked();
+      beginFabrication(g, RECIPES[0].id);
+      advanceFabrication(g, hours);
+      if (g.fabrication) {
+        assert.ok(Number.isFinite(g.fabrication.hours ?? 0),
+          `advanceFabrication(${hours}) left a non-finite timer`);
+      }
+    }
+  });
+
+  test('salvage never yields a negative or non-finite haul', () => {
+    // Tier comes from real ship data at both call sites, so this is defence in
+    // depth — but salvage writes straight into stores, and stores are saved.
+    for (const tier of [1, 3, 5, 0, -1, -1e9, 99, NaN, Infinity]) {
+      const g = gameWith();
+      const before = { ...g.stores };
+      const haul = salvageWreck(g, new RNG(3n), { tier });
+      for (const [m, n] of Object.entries(haul)) {
+        assert.ok(Number.isFinite(n), `tier ${tier} yielded ${n} ${m}`);
+        assert.ok(n >= 0, `tier ${tier} yielded ${n} ${m}`);
+        assert.equal(g.stores[m] - (before[m] ?? 0), n,
+          `tier ${tier}: reported ${n} ${m} but stores moved differently`);
+      }
     }
   });
 });
