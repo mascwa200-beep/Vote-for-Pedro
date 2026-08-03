@@ -305,6 +305,18 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .screen.tactical-screen .tactical-side { flex: 1 1 auto; min-height: 0; }
 canvas#tactical { display: block; width: 100%; height: 100%; touch-action: none; }
 
+/* The 3D view draws LCARS text on a second canvas stacked over the GL one.
+   Text in a 3D scene needs a glyph atlas, which is an asset, and this project
+   ships none. The overlay takes the pointer events for both. */
+canvas.tactical-labels {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
 .tactical-overlay {
   position: absolute; inset: 0; pointer-events: none;
   display: flex; flex-direction: column; justify-content: space-between;

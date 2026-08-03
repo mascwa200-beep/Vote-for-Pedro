@@ -7,6 +7,7 @@ import { el, clear, button, modal } from './ui/lcars.js';
 import { haptic, configureTouch, requestWakeLock, releaseWakeLock, trackViewportInsets } from './ui/touch.js';
 import { audio } from './audio/engine.js';
 import { TacticalView } from './ui/tactical.js';
+import { TacticalView3D } from './ui/tactical3d.js';
 import { GalaxyMap } from './ui/galaxymap.js';
 import * as screens from './ui/screens.js';
 import { CharacterCreator, characterSheetScreen, reputationScreen } from './ui/charscreens.js';
@@ -317,12 +318,22 @@ class App {
 
     // Canvas-backed screens need their renderers rebuilt after a DOM swap.
     if (screen === 'tactical' && this.tacticalCanvas) {
-      this.tactical = new TacticalView(this.tacticalCanvas);
-      this.tactical.onSelect = (ship) => {
-        g.engagement?.setTarget(ship);
-        audio.play('ui_select');
-        this.render();
-      };
+      // Three dimensions when the device can, two when it cannot. The 2D view
+      // is not a stub — it is the display this game shipped with, and it stays
+      // complete, because "no WebGL" must mean a different picture and not a
+      // broken game.
+      if (!this.tactical || this.tacticalViewCanvas !== this.tacticalCanvas) {
+        this.tactical?.dispose?.();
+        this.tactical = (this.settings.render3d === false ? null : TacticalView3D.create(this.tacticalCanvas))
+          ?? new TacticalView(this.tacticalCanvas);
+        this.tacticalViewCanvas = this.tacticalCanvas;
+        this.renderMode = this.tactical instanceof TacticalView3D ? '3d' : '2d';
+        this.tactical.onSelect = (ship) => {
+          g.engagement?.setTarget(ship);
+          audio.play('ui_select');
+          this.render();
+        };
+      }
     }
     if (screen === 'galaxy' && this.galaxyCanvas) {
       this.map = new GalaxyMap(this.galaxyCanvas);

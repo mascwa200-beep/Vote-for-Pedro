@@ -273,15 +273,49 @@ try {
     await page.evaluate(() => globalThis.__app.game.mode === 'combat'));
   check('tactical canvas is present', await page.locator('#tactical').isVisible());
 
-  const tacticalDrawn = await page.evaluate(() => {
+  // The tactical canvas is WebGL when the device can manage it and 2D when it
+  // cannot, so "did it draw anything" has to be asked in a way that works for
+  // both. Reading back GL pixels needs preserveDrawingBuffer, which costs
+  // performance on every frame of a real session — so the GL path is sampled by
+  // screenshotting the element instead, which is what a player actually sees.
+  const renderMode = await page.evaluate(() => globalThis.__app.renderMode ?? '2d');
+  check('a render mode is reported', renderMode === '3d' || renderMode === '2d', renderMode);
+
+  const tacticalDrawn = await page.evaluate((mode) => {
     const c = document.getElementById('tactical');
+    if (mode === '3d') return null;
     const ctx = c.getContext('2d');
     const data = ctx.getImageData(0, 0, c.width, c.height).data;
     let lit = 0;
     for (let i = 3; i < data.length; i += 4 * 97) if (data[i] > 8) lit++;
     return lit;
-  });
-  check('the tactical view actually draws pixels', tacticalDrawn > 50, `lit samples: ${tacticalDrawn}`);
+  }, renderMode);
+
+  if (renderMode === '2d') {
+    check('the tactical view actually draws pixels', tacticalDrawn > 50, `lit samples: ${tacticalDrawn}`);
+  } else {
+    // Clip by geometry rather than by element handle: the screen node is
+    // rebuilt on every render, so a handle taken a moment ago is already
+    // detached by the time the screenshot is taken.
+    const boxRect = await page.evaluate(() => {
+      const r = document.getElementById('tactical').getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    });
+    const shot = await page.screenshot({ clip: boxRect });
+    // A cleared-but-empty GL canvas compresses to almost nothing; a scene with
+    // a starfield, a grid and two hulls in it does not.
+    check('the 3D tactical view actually draws a scene', shot.length > 3000,
+      `${shot.length} bytes of PNG`);
+
+    const gl = await page.evaluate(() => {
+      const v = globalThis.__app.tactical;
+      return v?.stats ? { ...v.stats, lost: v.renderer?.lost ?? null } : null;
+    });
+    check('the renderer reports real draw calls', gl && gl.drawCalls > 3, JSON.stringify(gl));
+    check('the renderer stays inside the draw-call budget', gl && gl.drawCalls <= 60, String(gl?.drawCalls));
+    check('the renderer stays inside the triangle budget', gl && gl.triangles <= 8000, String(gl?.triangles));
+    check('the WebGL context is healthy', gl && gl.lost === false, String(gl?.lost));
+  }
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
 
   // ---- Typed orders, through the real input box ----
