@@ -309,3 +309,107 @@ describe('save round trip', () => {
     assert.equal(loaded.pendingFeats, 0);
   });
 });
+
+// ========================================================== the backup ring
+
+// The ring exists for one stated reason, in save.js's own words: not
+// "presenting a blank bridge to somebody four years into a commission".
+//
+// It was defeated by its own legacy escape hatch. readRecord trusts any stored
+// value that is valid JSON but not shaped like a checksummed record, on the
+// grounds that saves written before checksums existed are plain payloads. That
+// is true, and the test for it was too weak: `{"hello":"world"}` and `[]` are
+// also valid JSON that is not shaped like a checksummed record.
+//
+// Corrupt an autosave into anything that still parses and loadSave returned the
+// junk instead of walking the ring. main.js catches the resulting Game.load
+// failure and offers a NEW GAME — with three good backups sitting unused.
+describe('the backup ring', () => {
+  const makeStore = () => {
+    const map = new Map();
+    return {
+      map,
+      getItem: (k) => (map.has(k) ? map.get(k) : null),
+      setItem: (k, v) => map.set(k, v),
+      removeItem: (k) => map.delete(k),
+      key: (i) => [...map.keys()][i] ?? null,
+      get length() { return map.size; },
+    };
+  };
+
+  const autosaveKey = (store) => [...store.map.keys()].find((k) => !k.includes('backup'));
+
+  /** Save `n` generations, then replace the live autosave with `junk`. */
+  const withCorruptAutosave = async (junk, generations = 3) => {
+    globalThis.localStorage = makeStore();
+    const save = await import('../src/core/save.js');
+    let last;
+    for (let gen = 1; gen <= generations; gen++) {
+      const g = new Game({ seed: BigInt(gen), crewMode: 'original' });
+      g.latinum = 1000 + gen;
+      last = g.latinum;
+      save.saveGame(g);
+    }
+    globalThis.localStorage.map.set(autosaveKey(globalThis.localStorage), junk);
+    return { loaded: save.loadSave(), newest: last };
+  };
+
+  test('a clean save round-trips without claiming a recovery', async () => {
+    globalThis.localStorage = makeStore();
+    const save = await import('../src/core/save.js');
+    const g = new Game({ seed: 11n, crewMode: 'original' });
+    g.latinum = 4242;
+    assert.equal(save.saveGame(g), true);
+
+    const loaded = save.loadSave();
+    assert.ok(loaded, 'a save written to a clean store did not come back');
+    assert.equal(loaded.latinum, 4242);
+    assert.ok(!loaded.recoveredFromBackup, 'a clean save claimed it came from a backup');
+  });
+
+  test('junk that happens to be valid JSON does not defeat the ring', async () => {
+    for (const junk of ['{"hello":"world"}', '[]', '{"body":123}', '{"sum":1}', '"a string"', '42']) {
+      const { loaded, newest } = await withCorruptAutosave(junk);
+      assert.ok(loaded, `${junk}: the commission was lost outright`);
+      assert.ok(loaded.recoveredFromBackup,
+        `${junk}: returned the junk instead of walking the ring`);
+      assert.ok(loaded.seed, `${junk}: recovered something with no seed`);
+      assert.ok(loaded.latinum <= newest, `${junk}: recovered a save from the future`);
+    }
+  });
+
+  test('the older corruptions still recover', async () => {
+    for (const junk of ['', 'not json at all {{{', '{"sum":"x","body":"truncated']) {
+      const { loaded } = await withCorruptAutosave(junk);
+      assert.ok(loaded?.recoveredFromBackup, `${junk}: did not recover`);
+    }
+  });
+
+  test('a genuine pre-checksum save still loads', async () => {
+    // This is what the escape hatch is for, and it has to keep working.
+    globalThis.localStorage = makeStore();
+    const save = await import('../src/core/save.js');
+    const g = new Game({ seed: 12n, crewMode: 'original' });
+    g.latinum = 777;
+    save.saveGame(g);
+    // Rewrite it in the old format: the bare payload, no checksum wrapper.
+    const store = globalThis.localStorage;
+    const wrapped = JSON.parse(store.map.get(autosaveKey(store)));
+    store.map.set(autosaveKey(store), wrapped.body);
+
+    const loaded = save.loadSave();
+    assert.ok(loaded, 'a legacy save was rejected');
+    assert.equal(loaded.latinum, 777);
+    assert.ok(!loaded.recoveredFromBackup, 'a valid legacy save was treated as corrupt');
+  });
+
+  test('when everything is corrupt it fails honestly rather than throwing', async () => {
+    globalThis.localStorage = makeStore();
+    const save = await import('../src/core/save.js');
+    save.saveGame(new Game({ seed: 13n, crewMode: 'original' }));
+    for (const k of [...globalThis.localStorage.map.keys()]) {
+      globalThis.localStorage.map.set(k, '{"not":"a save"}');
+    }
+    assert.equal(save.loadSave(), null, 'returned data when every record was junk');
+  });
+});

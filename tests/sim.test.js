@@ -1029,3 +1029,54 @@ test('a decoy cannot be poisoned by a bad number', () => {
     shipIsSane(g.ship, `deployDecoy(${v})`);
   }
 });
+
+// ============================================================ travel numbers
+
+// travelHours and fuelCost feed the stardate and the antimatter reserve. A NaN
+// in either is the same unrecoverable class as a NaN position: it is written to
+// the save, and every later arithmetic on it stays NaN.
+//
+// Nothing in normal play reaches these — plotTransit derives distance from
+// system coordinates and the parser clamps warp factors to 1..9.9, and 4,680
+// plotted routes across all 40 systems produced no bad value. This is the same
+// defence in depth as the helm orders: a distance is never negative, a duration
+// is never negative, and neither is ever NaN.
+test('travel arithmetic survives numbers it should never see', () => {
+  const HOSTILE = [0, -1, -1e9, 1e308, Infinity, -Infinity, NaN, 1e-320];
+  for (const factor of HOSTILE) {
+    const speed = warpSpeed(factor);
+    assert.ok(Number.isFinite(speed) && speed >= 1,
+      `warpSpeed(${factor}) = ${speed}`);
+
+    for (const ly of HOSTILE) {
+      const hours = travelHours(ly, factor);
+      assert.ok(Number.isFinite(hours), `travelHours(${ly}, ${factor}) = ${hours}`);
+      assert.ok(hours >= 0, `travelHours(${ly}, ${factor}) = ${hours}, negative`);
+
+      const fuel = fuelCost(ly, factor);
+      assert.ok(Number.isFinite(fuel), `fuelCost(${ly}, ${factor}) = ${fuel}`);
+      assert.ok(fuel >= 0, `fuelCost(${ly}, ${factor}) = ${fuel}, negative`);
+    }
+  }
+});
+
+test('a zero or negative efficiency does not make travel free or infinite', () => {
+  for (const eff of [0, -1, NaN, Infinity]) {
+    const hours = travelHours(10, 6, eff);
+    const fuel = fuelCost(10, 6, eff);
+    assert.ok(Number.isFinite(hours) && hours > 0, `travelHours(10, 6, ${eff}) = ${hours}`);
+    assert.ok(Number.isFinite(fuel) && fuel > 0, `fuelCost(10, 6, ${eff}) = ${fuel}`);
+  }
+});
+
+test('faster warp never takes longer', () => {
+  for (let ly = 1; ly <= 60; ly += 7) {
+    let previous = Infinity;
+    for (const factor of [1, 2, 3, 4, 5, 6, 7, 8, 9, 9.9]) {
+      const hours = travelHours(ly, factor);
+      assert.ok(hours <= previous + 1e-9,
+        `warp ${factor} takes ${hours.toFixed(2)}h over ${ly} ly, longer than the slower factor's ${previous.toFixed(2)}h`);
+      previous = hours;
+    }
+  }
+});
