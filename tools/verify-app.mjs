@@ -477,6 +477,42 @@ try {
     JSON.stringify(trapped));
   await dismissModals(page);
 
+  // ------------------------------------------------ the Kobayashi Maru
+  await nav(page, 'Record');
+  const km = await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    const locked = g.gambit;
+    // A green captain must be refused, and told both reasons.
+    const refused = g.forceChannel();
+
+    // Now give them the career the technique actually costs.
+    g.reputation.tracks.klingon.tier = 5;
+    for (let i = 0; i < 4; i++) g.ledger.record('ship_destroyed_hostile');
+    for (let i = 0; i < 3; i++) g.ledger.record('ship_spared');
+    const allowed = g.forceChannel();
+
+    // With the channel open, the order line is not an order line.
+    const outcome = g.makeAppeal(
+      'This is Captain Okafor. You know my record. I spared three of your '
+      + 'crews. There are civilians aboard. Withdraw and we take them off together.');
+
+    return {
+      startsLocked: locked.unlocked === false,
+      reasonsGiven: locked.reasons.length,
+      refused: refused.ok === false,
+      allowed: allowed.ok === true,
+      won: outcome.success,
+      recorded: (g.ledger.counters.kobayashi_maru_solved ?? 0) === 1,
+    };
+  });
+  check('the Kobayashi Maru technique starts locked', km.startsLocked);
+  check('and says both of the reasons why', km.reasonsGiven === 2, String(km.reasonsGiven));
+  check('a green captain cannot force the channel', km.refused);
+  check('an earned reputation can', km.allowed);
+  check('what you type is judged against your record', km.won && km.recorded,
+    JSON.stringify(km));
+  await dismissModals(page);
+
   // ------------------------------------------------ character & reputation UI
   await nav(page, 'Captain');
   const sheetAbilities = await page.locator('.abilityrow').count();

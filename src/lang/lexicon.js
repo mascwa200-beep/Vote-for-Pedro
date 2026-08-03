@@ -587,6 +587,22 @@ export const INTENTS = [
     keywords: { salvage: 3, scavenge: 3, wreck: 2, hulk: 2 },
     build: () => ({ action: 'salvage' }),
   },
+  // ------------------------------------------------------------------
+  // The gambit. Making someone answer who has no intention of answering.
+  // ------------------------------------------------------------------
+  {
+    id: 'force_channel',
+    help: 'All hailing frequencies — force the channel open',
+    phrases: [
+      'force the channel', 'force a channel', 'force them to answer',
+      'make them answer', 'every frequency',
+      'override their comms', 'they will answer', 'i do not care if they answer',
+      'open the channel anyway', 'keep hailing', 'do not stop hailing',
+      'broadcast on all frequencies', 'jam them into listening',
+    ],
+    keywords: { force: 2 },
+    build: () => ({ action: 'force_channel' }),
+  },
   {
     id: 'brace',
     help: 'All hands brace for impact',

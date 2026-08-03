@@ -21,6 +21,7 @@ import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
 import { SYSTEM_BY_ID } from '../world/systems.data.js';
 
 import { MissionBook } from '../missions/engine.js';
+import { SCENARIO as KOBAYASHI, gambitStatus, forceChannel, resolveGambit, recordOf } from '../missions/kobayashi.js';
 import { EPISODES } from '../missions/episodes/index.js';
 
 import { Character } from '../rules/character.js';
@@ -898,6 +899,7 @@ export class Game {
       stores: this.stores,
       fabrication: this.fabrication,
       devices: this.devices,
+      kobayashiRuns: this.kobayashiRuns ?? 0,
     };
   }
 
@@ -972,6 +974,59 @@ export class Game {
 
     emit('campaign:resumed', { hours: pending, lines });
     return { hours: pending, lines };
+  }
+
+  // ------------------------------------------------- the Kobayashi Maru
+
+  /**
+   * Run the scenario. Available from the first day, and unwinnable.
+   *
+   * It is not tuned and it is not meant to be survived. What the simulator
+   * measures is what you do when there is nothing to be done, and the log
+   * records that whether you lived or not.
+   */
+  runKobayashiMaru() {
+    this.kobayashiRuns = (this.kobayashiRuns ?? 0) + 1;
+    this.inKobayashi = true;
+    const hostiles = KOBAYASHI.hostiles.map((id, i) => new Ship(id, {
+      faction: 'klingon',
+      name: ['IKS Kh’Tevak', 'IKS Amar', 'IKS Klothos'][i] ?? `IKS Vessel ${i + 1}`,
+    }));
+    for (const line of KOBAYASHI.briefing) this.pushLog(line, 'computer');
+    this.startCombat(hostiles, { name: KOBAYASHI.title, canWarpOut: false });
+  }
+
+  /** Whether the technique is available, and if not, why not. */
+  get gambit() {
+    return gambitStatus(this);
+  }
+
+  /** Make them answer a hail they have no intention of answering. */
+  forceChannel() {
+    const r = forceChannel(this);
+    if (r.ok) {
+      this.pushLog('All hailing frequencies — forced open. They are receiving whether they like it or not.', 'comms');
+    }
+    return r;
+  }
+
+  /** Say your piece. What you typed is the input; the ledger is the judge. */
+  makeAppeal(text) {
+    const outcome = resolveGambit(this, text);
+    this.pushLog(`Captain, to the Klingon commander: "${outcome.text}"`, 'captain');
+    this.pushLog(outcome.reply, 'comms');
+
+    if (outcome.success) {
+      // The freighter comes off. The engagement simply stops.
+      if (this.engagement && !this.engagement.over) this.engagement.end('parley');
+      this.inKobayashi = false;
+    }
+    return outcome;
+  }
+
+  /** The record the appeal will be judged against, for the UI to show first. */
+  get serviceRecord() {
+    return recordOf(this);
   }
 
   /** Start a job in the machine shop. */
@@ -1050,6 +1105,7 @@ export class Game {
     g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };
     g.fabrication = data.fabrication ?? null;
     g.devices = data.devices ?? {};
+    g.kobayashiRuns = data.kobayashiRuns ?? 0;
 
     g.applyAllMods();
     return g;

@@ -310,6 +310,42 @@ That is the whole design: the interesting decision is the one you made an hour
 earlier, when there was no emergency and building something seemed like a waste
 of six hours.
 
+## The Kobayashi Maru
+
+It is in your record screen from the first day, and **it cannot be won by
+fighting.** Three cruisers, no escape course, three hundred and eighty-one
+people on a freighter you should not be near. That is not a difficulty value
+to be tuned around — it is what the exercise is for.
+
+There is a way out. You do not have it yet.
+
+**What it costs.** Tier 5 standing with the Klingon Empire, and a ledger that
+shows they have actually met you — six encounters, of any kind. Sparing a crew
+and destroying one both count; only indifference does not. That is most of a
+five-year commission.
+
+**How it works.** Force a channel open with a commander who has no intention of
+answering. Then the order line stops parsing orders, and **whatever you type is
+what you say.** No menu. No options list.
+
+What you say is scored against your record:
+
+| Saying | Worth | Only if |
+|---|---|---|
+| Naming yourself | +3 | Your standing is tier 5 |
+| Invoking your record | +2 | You have four encounters on file |
+| The crews you spared | +2.5 | You have spared at least two |
+| The people aboard | +1.5 | Always — they are really there |
+| Offering terms | +2 | You have kept a treaty, or stand at tier 3 |
+| Threatening them | **−3** | Always. Do not. |
+
+A claim the record cannot back is not merely worth nothing — it costs, and the
+commander says why. *"The commander checks. There is no file. You have done
+nothing to us, and nothing for us."*
+
+You need four points. There is more than one way to get them, and none of them
+is available to a captain who has not earned it.
+
 ## Consequences
 
 The consequence ledger is the spine of the game. It is never rolled back.

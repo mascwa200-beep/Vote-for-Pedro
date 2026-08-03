@@ -747,8 +747,50 @@ class App {
     const text = this.orderInput.value.trim();
     if (!text) return;
     this.orderInput.value = '';
+
+    // With the channel forced open, the order line stops being an order line.
+    // Whatever you type is what you say, verbatim, and it is judged against
+    // your record rather than parsed into a command. This is the one place in
+    // the game where the literal words are the input.
+    if (this.game?.gambitOpen) {
+      const outcome = this.game.makeAppeal(text);
+      this.showAppealOutcome(outcome);
+      return;
+    }
+
     const order = parseOrder(text);
     this.executeOrder(order, text);
+  }
+
+  /**
+   * What the commander made of it, and — win or lose — which of the things you
+   * said the record could actually back up.
+   */
+  showAppealOutcome(outcome) {
+    const body = [
+      el('p', { class: 'muted', text: `You said: “${outcome.text}”` }),
+      ...outcome.lines.map((l) => el('p', { text: l })),
+      el('p', {}, [el('b', { text: outcome.reply })]),
+    ];
+
+    if (outcome.hits.length) {
+      body.push(el('p', { class: 'muted', text: 'What the record could confirm:' }));
+      for (const h of outcome.hits) {
+        body.push(el('p', {
+          class: 'muted',
+          text: `${h.supported ? '✓' : '✗'} ${h.label} — ${h.value >= 0 ? '+' : ''}${h.value}`,
+        }));
+      }
+    }
+
+    audio.play(outcome.success ? 'computer_ack' : 'ui_deny');
+    haptic(outcome.success ? 'confirm' : 'deny');
+    this.modalHandle = modal(
+      outcome.success ? 'They Are Standing Down' : 'The Channel Closes',
+      body,
+      [button('Acknowledged', () => this.closeModal(), { color: outcome.success ? 'green' : 'red' })],
+    );
+    this.needsRender = true;
   }
 
   executeOrder(order, raw) {
@@ -967,6 +1009,22 @@ class App {
         const summary = Object.entries(haul).filter(([, n]) => n > 0)
           .map(([m, n]) => `${n} ${m}`).join(', ');
         ack('engineering', `Recovered ${summary}.`);
+        break;
+      }
+
+      case 'force_channel': {
+        const r = g.forceChannel();
+        if (r.ok) {
+          audio.play('hail');
+          haptic('confirm');
+          this.showMessage('Channel Forced', [
+            'They are receiving. Whatever you say next, they will hear.',
+            'Type it into the order line. All of it. It is not a menu.',
+          ]);
+        } else {
+          audio.play('ui_deny');
+          this.showMessage('They Are Not Listening', r.reasons);
+        }
         break;
       }
 
