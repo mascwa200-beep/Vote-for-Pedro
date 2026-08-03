@@ -11,7 +11,7 @@
 // because a hand-maintained list of forty-odd paths will otherwise drift, and
 // drifted silently the first time a directory was added.
 
-const VERSION = 'sfc-v8';
+const VERSION = 'sfc-v9';
 const PRECACHE = [
   './',
   './index.html',
@@ -23,6 +23,7 @@ const PRECACHE = [
   './assets/icons/icon-maskable-512.png',
   './src/main.js',
   './src/styles/lcars.css',
+  './src/core/num.js',
   './src/core/rng.js',
   './src/core/events.js',
   './src/core/time.js',
