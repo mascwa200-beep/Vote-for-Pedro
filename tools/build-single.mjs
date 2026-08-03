@@ -158,6 +158,24 @@ const css = await readFile(join(ROOT, 'src', 'styles', 'lcars.css'), 'utf8');
 const icon = await readFile(join(ROOT, 'assets', 'icons', 'icon.svg'), 'utf8');
 const iconData = `data:image/svg+xml;base64,${Buffer.from(icon).toString('base64')}`;
 
+// `--fragment` emits the same bundle without the document wrapper, for hosts
+// that supply their own <head> and <body> (the Artifact publisher does).
+const FRAGMENT = process.argv.includes('--fragment');
+
+const fragment = `<title>Starfleet Command</title>
+<style>
+${css}
+</style>
+<div id="app"></div>
+<script>
+${RUNTIME}
+${bundled}
+
+  __require(${JSON.stringify(moduleId(ENTRY))});
+})();
+</script>
+`;
+
 const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -195,8 +213,11 @@ ${bundled}
 </html>
 `;
 
-await mkdir(OUT_DIR, { recursive: true });
-await writeFile(OUT, html);
+const target = FRAGMENT ? join(OUT_DIR, 'starfleet-command.fragment.html') : OUT;
+const payload = FRAGMENT ? fragment : html;
 
-const kb = (html.length / 1024).toFixed(1);
-console.log(`Bundled ${order.length} modules -> ${relative(ROOT, OUT)} (${kb} KB, no external requests)`);
+await mkdir(OUT_DIR, { recursive: true });
+await writeFile(target, payload);
+
+const kb = (payload.length / 1024).toFixed(1);
+console.log(`Bundled ${order.length} modules -> ${relative(ROOT, target)} (${kb} KB, no external requests)`);
