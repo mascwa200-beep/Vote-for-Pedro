@@ -166,3 +166,35 @@ jobs:
           name: screenshots
           path: screenshots/
           if-no-files-found: warn
+
+  # Development on this project is autonomous by request of the repository
+  # owner, so a pull request that satisfies every check above merges itself
+  # rather than waiting for a hand on the button.
+  #
+  # This lives as a job inside CI rather than a separate `workflow_run`
+  # workflow on purpose: `needs` gives an exact "all four went green" gate with
+  # no cross-workflow triggering, and no dependence on which branch happens to
+  # be the repository default.
+  #
+  # A merge commit is used rather than a squash so the head branch stays an
+  # ancestor of the base and can always be fast-forwarded afterwards.
+  automerge:
+    name: Merge when green
+    needs: [test, build, android, browser]
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'claude/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Take the pull request out of draft and merge it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Drafts cannot be merged; this is a no-op on an already-ready PR.
+          gh pr ready "$PR" --repo "$REPO" || true
+          gh pr merge "$PR" --repo "$REPO" --merge
+          echo "merged #$PR"

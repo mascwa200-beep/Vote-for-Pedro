@@ -30,6 +30,11 @@ support actually engages: **[docs/INSTALL.md](docs/INSTALL.md)**
 The captain's manual — every order, how combat works, and what the
 consequences actually do: **[docs/MANUAL.md](docs/MANUAL.md)**
 
+The reference dossier the design is built on — hull dimensions, bridge station
+layout, the documented captain's-chair controls, alert conditions, and what
+Kirk actually did to the Kobayashi Maru — with sources:
+**[docs/RESEARCH.md](docs/RESEARCH.md)**
+
 ---
 
 ## What it is
