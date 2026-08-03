@@ -319,3 +319,113 @@ describe('the scene', () => {
     assert.ok(close(maxExtent, VOLUME / 2, VOLUME * 0.005), `grid reaches ${maxExtent}`);
   });
 });
+
+// ============================================================ normal matrix
+
+// The shader does `normalize(uNormalMatrix * aNormal)`, and gl.js uploads the
+// matrix with `uniformMatrix3fv(loc, false, data)` — so GLSL reads it as
+// COLUMN-major. That fixes what normalMatrix has to return, and it was
+// returning the transpose of it.
+//
+// normalMatrix computed inverse(M3) and stored it without transposing. For a
+// rotation the correct answer is the rotation itself (a rotation's
+// inverse-transpose is itself), and it returned R-transpose instead — so every
+// hull was lit by a normal rotated the wrong way by its own orientation.
+//
+// Nothing caught it. An unrotated ship is unaffected (the identity is its own
+// transpose), the harness checks that pixels are drawn and draw calls happen,
+// and nothing anywhere checked that the light lands on the right side.
+describe('the normal matrix', () => {
+  /** Apply a column-major 3x3 to a vector, exactly as GLSL does. */
+  const applyMat3 = (m3, v) => [0, 1, 2].map(
+    (r) => m3[r] * v[0] + m3[3 + r] * v[1] + m3[6 + r] * v[2],
+  );
+
+  const dir = (v) => { const l = Math.hypot(...v); return v.map((x) => x / l); };
+  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+  test('rotates a normal the same way the model matrix rotates the hull', () => {
+    for (let i = 0; i < 200; i++) {
+      const axis = normalize(vec3(Math.sin(i), Math.cos(i * 1.7), Math.sin(i * 0.3) + 0.5));
+      const q = quatAxisAngle(axis, i * 0.11);
+      const model = compose(vec3(i, -i, i * 2), q, 1);
+      const n = normalize(vec3(0.3, -0.5, 0.8));
+
+      const lit = applyMat3(normalMatrix(model), n);
+      const expected = transformQuat(n, q);
+      assert.ok(
+        dot3(dir(lit), expected) > 1 - 1e-9,
+        `the lit normal points ${dot3(dir(lit), expected).toFixed(4)} of the way toward the hull's own normal`,
+      );
+    }
+  });
+
+  test('at unit scale it is exactly the model rotation', () => {
+    const q = quatAxisAngle(normalize(vec3(1, 2, 3)), 0.7);
+    const model = compose(vec3(5, 6, 7), q, 1);
+    const nm = normalMatrix(model);
+    // The upper-left 3x3 of the model matrix, in the same column-major order.
+    const upper = [model[0], model[1], model[2], model[4], model[5], model[6],
+      model[8], model[9], model[10]];
+    for (let i = 0; i < 9; i++) {
+      assert.ok(Math.abs(nm[i] - upper[i]) < 1e-9,
+        `element ${i}: normal matrix ${nm[i]} vs model rotation ${upper[i]}`);
+    }
+  });
+
+  test('a uniform scale shortens normals by 1/s, and does not turn them', () => {
+    // Textbook inverse-transpose behaviour: the shader normalises afterwards,
+    // so the length is free, but the direction is not.
+    const q = quatAxisAngle(normalize(vec3(-1, 3, 2)), 1.2);
+    const n = normalize(vec3(0.1, 0.9, -0.4));
+    const expected = transformQuat(n, q);
+    for (const s of [0.25, 0.5, 1, 2, 8]) {
+      const lit = applyMat3(normalMatrix(compose(vec3(0, 0, 0), q, s)), n);
+      assert.ok(Math.abs(Math.hypot(...lit) - 1 / s) < 1e-9,
+        `scale ${s} gave a normal of length ${Math.hypot(...lit)}`);
+      assert.ok(dot3(dir(lit), expected) > 1 - 1e-9,
+        `scale ${s} turned the normal`);
+    }
+  });
+
+  test('a degenerate model matrix falls back to the identity', () => {
+    const nm = normalMatrix(compose(vec3(1, 2, 3), quat(), 0));
+    assert.ok([...nm].every(Number.isFinite), 'a zero-scale model gave a non-finite normal matrix');
+    const n = [0.6, 0.8, 0];
+    const lit = applyMat3(nm, n);
+    assert.ok(Math.abs(Math.hypot(...lit) - 1) < 1e-9, 'the fallback is not the identity');
+  });
+});
+
+// A NaN projection matrix is a black viewport with nothing logged. The callers
+// guard (tactical3d.js falls back to 320px, gl.js divides by max(1, h)), so
+// this is not reachable today — but a canvas measured before layout is a very
+// ordinary way to get a zero.
+test('a degenerate camera still produces a usable projection', () => {
+  const CASES = [
+    ['zero aspect', () => perspective(60 * Math.PI / 180, 0, 0.1, 100)],
+    ['negative aspect', () => perspective(60 * Math.PI / 180, -2, 0.1, 100)],
+    ['zero fov', () => perspective(0, 1, 0.1, 100)],
+    ['straight-angle fov', () => perspective(Math.PI, 1, 0.1, 100)],
+    ['near equals far', () => perspective(60 * Math.PI / 180, 1, 5, 5)],
+    ['far behind near', () => perspective(60 * Math.PI / 180, 1, 100, 1)],
+    ['zero near', () => perspective(60 * Math.PI / 180, 1, 0, 100)],
+    ['NaN aspect', () => perspective(60 * Math.PI / 180, NaN, 0.1, 100)],
+  ];
+  for (const [name, build] of CASES) {
+    const m = build();
+    assert.ok([...m].every(Number.isFinite), `${name} produced a non-finite projection`);
+    assert.ok(Math.abs(m[0]) > 0, `${name} collapsed the horizontal field of view to nothing`);
+    assert.ok(Math.abs(m[5]) > 0, `${name} collapsed the vertical field of view to nothing`);
+  }
+});
+
+test('a normal camera is untouched by those guards', () => {
+  // The guards must not perturb the projection the game actually uses.
+  const m = perspective(52 * Math.PI / 180, 16 / 9, 5, 40000);
+  const f = 1 / Math.tan((52 * Math.PI / 180) / 2);
+  assert.ok(Math.abs(m[0] - f / (16 / 9)) < 1e-12);
+  assert.ok(Math.abs(m[5] - f) < 1e-12);
+  assert.ok(Math.abs(m[10] - (40000 + 5) / (5 - 40000)) < 1e-12);
+  assert.ok(Math.abs(m[14] - (2 * 40000 * 5) / (5 - 40000)) < 1e-9);
+});
