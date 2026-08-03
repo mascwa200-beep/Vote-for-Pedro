@@ -191,6 +191,28 @@ Voyager era, or with an original crew generated from your world seed. Either
 way they have traits that drive both their abilities and their opinions, and
 either way they can die.
 
+**The Kobayashi Maru.** The scenario is available from your first day and it
+is unwinnable — not hard, unwinnable, and the game does not quietly relent if
+you fly well. A test flies it eight times on the easiest difficulty in the game
+and asserts you lose every one.
+
+What is earned is the *technique*, and it is modelled on what Kirk actually did
+rather than on the idea of it. He did not make the Klingons weaker; he made the
+commander hold him in high regard, said his name, and they offered to help. So
+the lever here is reputation and the trigger is saying who you are — with three
+gates, each of which has to be true:
+
+- **You have to have a reputation.** Tier 5 with the Empire. Most of a
+  commission's worth of standing.
+- **They have to have met you.** The ledger has to show real encounters —
+  ships you destroyed, ships you spared, treaties you kept. A captain nobody
+  has heard of cannot trade on being heard of.
+- **You have to say something worth hearing.** With the channel forced open,
+  the order line stops being an order line: whatever you type is what you say,
+  verbatim, and it is scored against what the ledger can actually corroborate.
+  Claim a record you do not have and the commander checks, finds nothing, and
+  says so. Threaten them and it costs you.
+
 **Consequences.** A persistent ledger that is never rolled back. Officers who
 die stay dead. Ships you destroy stay destroyed and their faction remembers.
 Colonies saved or lost rewrite which missions exist. Three Prime Directive
@@ -260,7 +282,7 @@ and 31 procedurally generated hulls averaging 230 triangles each.
 
 ```sh
 npm start      # serve at http://localhost:8099
-npm test       # 262 tests — RNG determinism, combat maths, dice, saves, balance
+npm test       # 281 tests — RNG determinism, combat maths, dice, saves, balance
 npm run build  # regenerate dist/starfleet-command.html
 
 ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh   # build the APK

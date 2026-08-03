@@ -7560,6 +7560,605 @@ __exports.salvageWreck = salvageWreck;
 
 });
 
+__define("src/rules/reputation.js", function (__exports, __require) {
+// Reputation.
+//
+// Two separate axes, deliberately not merged:
+//
+//   Standing   — how a faction feels about you right now. Moves both ways,
+//                fast, and decides who shoots on sight. Lives in the ledger.
+//   Reputation — what you have *earned* with them over a career. Only ever
+//                goes up, gated behind tiers, and spends like currency on
+//                projects that grant real equipment and privileges.
+//
+// A captain can be deeply trusted by the Klingon Defence Force (high
+// reputation) and still be shot at this week for a border violation (low
+// standing). That distinction is the point.
+const REP_TIERS = [
+  { tier: 0, name: 'Unknown', xp: 0, marksToAdvance: 0 },
+  { tier: 1, name: 'Recognised', xp: 500, marksToAdvance: 40 },
+  { tier: 2, name: 'Acknowledged', xp: 1500, marksToAdvance: 80 },
+  { tier: 3, name: 'Trusted', xp: 3500, marksToAdvance: 140 },
+  { tier: 4, name: 'Honoured', xp: 7000, marksToAdvance: 220 },
+  { tier: 5, name: 'Exemplar', xp: 12000, marksToAdvance: 320 },
+];
+const MAX_TIER = REP_TIERS.length - 1;
+
+/** Each faction's reputation track, its currency, and what it sells. */
+const REP_TRACKS = {
+  federation: {
+    id: 'federation', name: 'Starfleet Command', currency: 'Commendations',
+    color: '#9cf',
+    description: 'Your own service record, as the admiralty reads it.',
+    projects: [
+      { id: 'fed_t1_console', tier: 1, cost: 30, name: 'Requisition: Field Emitter Array',
+        grant: { console: 'shield_emitters' }, text: 'A shield emitter set from fleet stores.' },
+      { id: 'fed_t1_torpedoes', tier: 1, cost: 25, name: 'Priority Torpedo Resupply',
+        grant: { torpedoes: 40 }, text: 'Forty photon torpedoes, no requisition forms.' },
+      { id: 'fed_t2_armor', tier: 2, cost: 60, name: 'Requisition: Ablative Armour',
+        grant: { console: 'ablative_armor' }, text: 'Experimental plating from the Corps of Engineers.' },
+      { id: 'fed_t2_medical', tier: 2, cost: 55, name: 'Fleet Medical Detachment',
+        grant: { perk: 'casualty_reduction' }, text: 'Permanent 15% reduction in crew casualties.' },
+      { id: 'fed_t3_refit', tier: 3, cost: 110, name: 'Priority Yard Access',
+        grant: { perk: 'free_refit' }, text: 'Refits and repairs at any starbase cost no time.' },
+      { id: 'fed_t3_console', tier: 3, cost: 100, name: 'Requisition: Multispectral Sensors',
+        grant: { console: 'sensor_array' }, text: 'The good sensor package, finally.' },
+      { id: 'fed_t4_escort', tier: 4, cost: 180, name: 'Standing Escort Authorisation',
+        grant: { perk: 'ally_escort' }, text: 'A Federation escort joins you in any engagement in Federation space.' },
+      { id: 'fed_t5_command', tier: 5, cost: 300, name: 'Flag Officer Authority',
+        grant: { perk: 'flag_authority', title: 'Fleet Captain' },
+        text: 'You may requisition any hull in the fleet, and Starfleet stops second-guessing you.' },
+    ],
+  },
+  klingon: {
+    id: 'klingon', name: 'Klingon Defence Force', currency: 'Marks of Honour',
+    color: '#e5533d',
+    description: 'Earned by fighting well, and by not running when running was sensible.',
+    description2: 'The Empire does not care whether you like them. It cares how you fight.',
+    projects: [
+      { id: 'kdf_t1_disruptor', tier: 1, cost: 30, name: 'Disruptor Calibration',
+        grant: { console: 'prefire_chamber' }, text: 'Their gunners show yours a thing or two.' },
+      { id: 'kdf_t2_boarding', tier: 2, cost: 60, name: 'Boarding Party Training',
+        grant: { perk: 'boarding_master' }, text: 'Your boarding parties are twice as effective.' },
+      { id: 'kdf_t3_bloodwine', tier: 3, cost: 100, name: 'Warrior\'s Standing',
+        grant: { perk: 'klingon_passage' }, text: 'Free passage through Klingon space, and a seat at the table.' },
+      { id: 'kdf_t4_cloak_detect', tier: 4, cost: 170, name: 'Battle Doctrine Exchange',
+        grant: { perk: 'first_strike' }, text: 'You always fire first in an engagement.' },
+      { id: 'kdf_t5_ally', tier: 5, cost: 290, name: 'Sworn Ally of the Empire',
+        grant: { perk: 'kdf_ally', title: 'Friend of the Empire' },
+        text: 'A Klingon battlecruiser answers your call once per voyage.' },
+    ],
+  },
+  romulan: {
+    id: 'romulan', name: 'Romulan Star Empire', currency: 'Tokens of Regard',
+    color: '#7ed957',
+    description: 'Earned slowly, by being predictable in the ways that matter and opaque in the rest.',
+    projects: [
+      { id: 'rom_t1_sensors', tier: 1, cost: 35, name: 'Tal Shiar Sensor Data',
+        grant: { console: 'sensor_array' }, text: 'Nobody says where the data came from.' },
+      { id: 'rom_t2_stealth', tier: 2, cost: 70, name: 'Signal Dampening',
+        grant: { perk: 'reduced_detection' }, text: 'Encounters trigger less often in hostile space.' },
+      { id: 'rom_t3_cloak', tier: 3, cost: 130, name: 'Cloaking Device (Loaned)',
+        grant: { perk: 'cloak' }, text: 'A functioning cloak, on terms nobody has written down.' },
+      { id: 'rom_t4_intel', tier: 4, cost: 200, name: 'Intelligence Sharing',
+        grant: { perk: 'see_all_encounters' }, text: 'You know what is waiting before you arrive.' },
+      { id: 'rom_t5_accord', tier: 5, cost: 320, name: 'Private Accord',
+        grant: { perk: 'romulan_accord', title: 'Trusted Outsider' },
+        text: 'The Neutral Zone opens to you. Officially, this never happened.' },
+    ],
+  },
+  cardassian: {
+    id: 'cardassian', name: 'Cardassian Union', currency: 'Writs of Accord',
+    color: '#d9a441',
+    description: 'Earned through precisely honoured agreements, and lost through a single missed clause.',
+    projects: [
+      { id: 'card_t1_console', tier: 1, cost: 30, name: 'Spiral-Wave Schematics',
+        grant: { console: 'phaser_relay' }, text: 'Their beam theory, adapted to your emitters.' },
+      { id: 'card_t2_repair', tier: 2, cost: 65, name: 'Union Shipyard Access',
+        grant: { perk: 'cardassian_dock' }, text: 'Repair rights at Cardassian facilities.' },
+      { id: 'card_t3_intel', tier: 3, cost: 120, name: 'Obsidian Order Courtesy',
+        grant: { perk: 'border_warning' }, text: 'You are warned before you cross a line that matters.' },
+      { id: 'card_t4_treaty', tier: 4, cost: 190, name: 'Standing Treaty Rider',
+        grant: { perk: 'dmz_passage' }, text: 'Free movement through the demilitarised zone.' },
+      { id: 'card_t5_alliance', tier: 5, cost: 310, name: 'Formal Alliance',
+        grant: { perk: 'cardassian_ally', title: 'Signatory' },
+        text: 'A Galor escorts you through Cardassian space, watching very carefully.' },
+    ],
+  },
+  ferengi: {
+    id: 'ferengi', name: 'Ferengi Alliance', currency: 'Bars of Latinum',
+    color: '#e9913c',
+    description: 'Earned exactly as you would expect.',
+    projects: [
+      { id: 'fer_t1_trade', tier: 1, cost: 25, name: 'Trade Licence',
+        grant: { perk: 'better_prices' }, text: 'Prices improve by a quarter, everywhere.' },
+      { id: 'fer_t2_salvage', tier: 2, cost: 55, name: 'Salvage Contacts',
+        grant: { perk: 'salvage_bonus' }, text: 'Derelicts yield an additional console.' },
+      { id: 'fer_t3_bribe', tier: 3, cost: 95, name: 'Line of Credit',
+        grant: { perk: 'always_bribe' }, text: 'Any bribeable captain will always hear an offer.' },
+      { id: 'fer_t4_ship', tier: 4, cost: 175, name: 'Marauder Contract',
+        grant: { perk: 'mercenary_escort' }, text: 'A hired Marauder joins one engagement per voyage.' },
+      { id: 'fer_t5_partner', tier: 5, cost: 280, name: 'Silent Partnership',
+        grant: { perk: 'ferengi_partner', title: 'Business Associate' },
+        text: 'Every mission reward is increased by half. They take their cut invisibly.' },
+    ],
+  },
+  independent: {
+    id: 'independent', name: 'Unaligned Worlds', currency: 'Letters of Thanks',
+    color: '#cccccc',
+    description: 'Earned by answering distress calls that nobody was required to answer.',
+    projects: [
+      { id: 'ind_t1_supply', tier: 1, cost: 20, name: 'Colonial Resupply',
+        grant: { antimatter: 100 }, text: 'Any colony will refuel you, gratis.' },
+      { id: 'ind_t2_crew', tier: 2, cost: 50, name: 'Volunteer Crew',
+        grant: { perk: 'crew_replacement' }, text: 'Crew losses replenish at any inhabited world.' },
+      { id: 'ind_t3_intel', tier: 3, cost: 90, name: 'Trader Network',
+        grant: { perk: 'route_intel' }, text: 'Hostile encounters in charted space are halved.' },
+      { id: 'ind_t4_haven', tier: 4, cost: 160, name: 'Safe Harbour',
+        grant: { perk: 'universal_dock' }, text: 'Every inhabited system will dock and repair you.' },
+      { id: 'ind_t5_legend', tier: 5, cost: 260, name: 'A Name They Know',
+        grant: { perk: 'folk_hero', title: 'The One Who Came' },
+        text: 'Distress calls reach you sooner, and civilians will risk themselves for you.' },
+    ],
+  },
+};
+const TRACK_LIST = Object.values(REP_TRACKS);
+
+/** How reputation is earned. Deliberately weighted toward what each side values. */
+const REP_AWARDS = {
+  // event -> { faction: [xp, marks] }
+  combat_victory: { klingon: [40, 4] },
+  fought_while_losing: { klingon: [120, 12] },
+  accepted_surrender: { federation: [60, 6], independent: [40, 4] },
+  refused_surrender: { klingon: [30, 3] },
+  distress_answered: { federation: [80, 8], independent: [140, 14] },
+  colony_saved: { federation: [250, 25], independent: [400, 40] },
+  first_contact: { federation: [400, 40] },
+  treaty_signed: { federation: [350, 35], cardassian: [200, 20] },
+  anomaly_catalogued: { federation: [60, 6] },
+  mission_complete: { federation: [150, 15] },
+  escort_completed: { ferengi: [90, 9], independent: [110, 11] },
+  trade_completed: { ferengi: [140, 14] },
+  bribe_paid: { ferengi: [60, 6] },
+  honourable_release: { romulan: [220, 22], klingon: [90, 9] },
+  agreement_honoured: { cardassian: [200, 20] },
+  border_respected: { romulan: [120, 12], cardassian: [80, 8] },
+  prisoner_returned: { klingon: [110, 11], romulan: [90, 9], cardassian: [90, 9] },
+};
+class ReputationTrack {
+  constructor(id) {
+    this.id = id;
+    this.xp = 0;
+    this.marks = 0;
+    this.tier = 0;
+    this.completed = [];       // project ids
+    this.titles = [];
+  }
+
+  get def() { return REP_TRACKS[this.id]; }
+  get tierName() { return REP_TIERS[this.tier]?.name ?? 'Unknown'; }
+  get nextTier() { return REP_TIERS[this.tier + 1] ?? null; }
+
+  /** Progress toward the next tier, 0..1. */
+  get progress() {
+    const next = this.nextTier;
+    if (!next) return 1;
+    const floor = REP_TIERS[this.tier].xp;
+    return Math.max(0, Math.min(1, (this.xp - floor) / (next.xp - floor)));
+  }
+
+  /**
+   * Award reputation. Tiers advance on experience alone; marks are the
+   * currency spent on projects.
+   * @returns {object|null} tier-up info
+   */
+  award(xp, marks, multiplier = 1) {
+    this.xp += Math.round(xp * multiplier);
+    this.marks += Math.round(marks * multiplier);
+    const next = this.nextTier;
+    if (next && this.xp >= next.xp) {
+      this.tier++;
+      return { track: this.id, tier: this.tier, name: this.tierName };
+    }
+    return null;
+  }
+
+  availableProjects() {
+    return (this.def?.projects ?? []).filter(
+      (p) => p.tier <= this.tier && !this.completed.includes(p.id),
+    );
+  }
+
+  lockedProjects() {
+    return (this.def?.projects ?? []).filter(
+      (p) => p.tier > this.tier && !this.completed.includes(p.id),
+    );
+  }
+
+  canAfford(project) {
+    return this.marks >= project.cost;
+  }
+
+  complete(projectId) {
+    const project = (this.def?.projects ?? []).find((p) => p.id === projectId);
+    if (!project) return null;
+    if (this.completed.includes(projectId)) return null;
+    if (!this.canAfford(project)) return null;
+    if (project.tier > this.tier) return null;
+    this.marks -= project.cost;
+    this.completed.push(projectId);
+    if (project.grant?.title) this.titles.push(project.grant.title);
+    return project;
+  }
+
+  save() {
+    return { id: this.id, xp: this.xp, marks: this.marks, tier: this.tier,
+      completed: this.completed, titles: this.titles };
+  }
+}
+
+/** All tracks together, plus the perk set they have unlocked. */
+class Reputation {
+  constructor() {
+    this.tracks = Object.fromEntries(
+      Object.keys(REP_TRACKS).map((id) => [id, new ReputationTrack(id)]),
+    );
+    this.perks = new Set();
+  }
+
+  track(id) { return this.tracks[id]; }
+
+  /**
+   * Apply a named world event to every track that cares about it.
+   * @returns {object[]} tier-ups that occurred
+   */
+  recordEvent(event, multiplier = 1) {
+    const table = REP_AWARDS[event];
+    if (!table) return [];
+    const tierUps = [];
+    for (const [factionId, [xp, marks]] of Object.entries(table)) {
+      const t = this.tracks[factionId];
+      if (!t) continue;
+      const up = t.award(xp, marks, multiplier);
+      if (up) tierUps.push(up);
+    }
+    return tierUps;
+  }
+
+  /** Spend marks on a project and record the perk it grants. */
+  buy(factionId, projectId) {
+    const track = this.tracks[factionId];
+    if (!track) return null;
+    const project = track.complete(projectId);
+    if (project?.grant?.perk) this.perks.add(project.grant.perk);
+    return project;
+  }
+
+  has(perk) { return this.perks.has(perk); }
+
+  get allTitles() {
+    return Object.values(this.tracks).flatMap((t) => t.titles);
+  }
+
+  /** Highest tier reached anywhere — used for the ending summary. */
+  get peakTier() {
+    return Math.max(0, ...Object.values(this.tracks).map((t) => t.tier));
+  }
+
+  save() {
+    return {
+      tracks: Object.fromEntries(
+        Object.entries(this.tracks).map(([id, t]) => [id, t.save()]),
+      ),
+      perks: [...this.perks],
+    };
+  }
+
+  static load(data) {
+    const r = new Reputation();
+    if (!data) return r;
+    for (const [id, t] of Object.entries(data.tracks ?? {})) {
+      if (!r.tracks[id]) continue;
+      Object.assign(r.tracks[id], {
+        xp: t.xp ?? 0, marks: t.marks ?? 0, tier: t.tier ?? 0,
+        completed: t.completed ?? [], titles: t.titles ?? [],
+      });
+    }
+    r.perks = new Set(data.perks ?? []);
+    return r;
+  }
+}
+
+__exports.REP_TIERS = REP_TIERS;
+__exports.MAX_TIER = MAX_TIER;
+__exports.REP_TRACKS = REP_TRACKS;
+__exports.TRACK_LIST = TRACK_LIST;
+__exports.REP_AWARDS = REP_AWARDS;
+__exports.ReputationTrack = ReputationTrack;
+__exports.Reputation = Reputation;
+
+});
+
+__define("src/missions/kobayashi.js", function (__exports, __require) {
+// The Kobayashi Maru, and the way around it.
+//
+// The scenario is available from the first day of the commission and is
+// unwinnable. That is not a difficulty setting; it is the entire point of the
+// exercise, and the game does not quietly relent if you play well.
+//
+// What is earned is the *technique*, and the design of it comes straight out of
+// what Kirk actually did, which is recorded with sources in docs/RESEARCH.md.
+// He did not make the Klingons weaker. He reprogrammed the simulation so that
+// on hearing his name the opposing commander held him in high regard — and
+// they offered to help. The lever was reputation, and the trigger was saying
+// who he was.
+//
+// So three things had to be true here, and each one is a gate:
+//
+//   YOU HAVE TO HAVE A REPUTATION. Not a level. Tier 5 on the Klingon track,
+//   which is most of a five-year commission's worth of standing.
+//
+//   THEY HAVE TO HAVE MET YOU. The ledger has to show real encounters with the
+//   Klingon Empire — ships you spared, ships you destroyed, colonies you saved.
+//   A captain nobody has heard of cannot trade on being heard of.
+//
+//   YOU HAVE TO SAY SOMETHING WORTH HEARING. The exchange is free text, scored
+//   against what the ledger actually records. Claiming a record you do not have
+//   fails, and the reply says why.
+
+const { emit } = __require("src/core/events.js");
+const { REP_TIERS } = __require("src/rules/reputation.js");
+
+/** The tier at which a captain's name means something to the Empire. */
+const GAMBIT_TIER = 5;
+
+/** Encounters with the Empire that count as having been met. */
+const GAMBIT_ENCOUNTERS = 6;
+const SCENARIO = {
+  id: 'kobayashi_maru',
+  title: 'The Kobayashi Maru',
+  briefing: [
+    'A neutronic fuel carrier, nineteen decks, crew of eighty-one and three '
+      + 'hundred passengers, has struck a gravitic mine and is adrift inside the '
+      + 'Neutral Zone.',
+    'Entering the Zone violates the treaty. Not entering it abandons three '
+      + 'hundred and eighty-one people.',
+    'Command is yours, Captain. The simulator is running.',
+  ],
+  // Deliberately overwhelming. This is not a fight to be tuned.
+  hostiles: ['d7', 'd7', 'ktinga'],
+};
+
+/**
+ * Can this captain attempt the gambit?
+ *
+ * Returns the reasons as well as the verdict, because the interesting part for
+ * a player is which of the two conditions they have not met yet.
+ */
+function gambitStatus(game) {
+  const track = game.reputation?.tracks?.klingon;
+  const tier = track?.tier ?? 0;
+  const ledger = game.ledger;
+
+  // Every kind of contact counts. Sparing a ship and destroying one both mean
+  // the Empire knows your name; only indifference does not.
+  const c = ledger?.counters ?? {};
+  const met = (c.ship_destroyed_hostile ?? 0)
+    + (c.ship_destroyed_civilian ?? 0)
+    + (c.ship_spared ?? 0)
+    + (c.honourable_release ?? 0)
+    + (c.treaty_signed ?? 0)
+    + (c.colony_saved ?? 0);
+
+  const reasons = [];
+  if (tier < GAMBIT_TIER) {
+    reasons.push(
+      `Your standing with the Empire is ${REP_TIERS[tier]?.name ?? 'Unknown'}. `
+      + `They do not defer to captains they have merely heard of.`,
+    );
+  }
+  if (met < GAMBIT_ENCOUNTERS) {
+    reasons.push(
+      `You have crossed the Empire's path ${met} time${met === 1 ? '' : 's'}. `
+      + 'A name means nothing until there is something behind it.',
+    );
+  }
+
+  return { unlocked: reasons.length === 0, tier, met, reasons };
+}
+
+/**
+ * What the ledger can actually corroborate about this captain.
+ *
+ * This is the evidence base the rhetorical exchange is scored against, and it
+ * is assembled from the permanent record rather than from anything the player
+ * typed. You cannot claim your way into a reputation.
+ */
+function recordOf(game) {
+  const c = game.ledger?.counters ?? {};
+  return {
+    destroyed: (c.ship_destroyed_hostile ?? 0) + (c.ship_destroyed_civilian ?? 0),
+    spared: (c.ship_spared ?? 0) + (c.honourable_release ?? 0),
+    coloniesSaved: c.colony_saved ?? 0,
+    treaties: c.treaty_signed ?? 0,
+    firstContacts: c.first_contact ?? 0,
+    officersLost: game.ledger?.lostOfficers?.length ?? 0,
+    violations: c.prime_directive_violation ?? 0,
+    tier: game.reputation?.tracks?.klingon?.tier ?? 0,
+    name: `${game.character?.firstName ?? ''} ${game.character?.lastName ?? game.captain?.name ?? ''}`.trim(),
+    ship: game.ship?.name ?? 'this vessel',
+  };
+}
+
+/**
+ * The axes a Klingon commander actually weighs.
+ *
+ * Each is a thing the captain can say, a thing the ledger can confirm, and a
+ * reply for when it cannot. The last field is what makes this honest: a claim
+ * the record does not support is not merely worth zero, it costs.
+ */
+const AXES = [
+  {
+    id: 'name',
+    label: 'Naming yourself',
+    // Kirk's actual move. It is worth the most, and only if there is a record.
+    match: /\b(?:i am|this is|my name is|you are speaking to|do you know who)\b/,
+    weight: 3,
+    evidence: (r) => r.tier >= GAMBIT_TIER,
+    confirm: (r) => `"${r.name}." The channel is quiet for a moment.`,
+    deny: () => 'A name. The commander waits, and nothing follows it.',
+  },
+  {
+    id: 'record',
+    label: 'Invoking your record',
+    match: /\b(?:i have|we have|my record|you know what|at wolf|i destroyed|we destroyed|i fought|we fought|engaged)\b/,
+    weight: 2,
+    evidence: (r) => r.destroyed + r.spared >= 4,
+    confirm: (r) => `"${r.destroyed} of our ships. ${r.spared} you let live." The commander has the file open.`,
+    deny: () => 'The commander checks. There is no file. "You have done nothing to us, and nothing for us."',
+  },
+  {
+    id: 'mercy',
+    label: 'The ships you spared',
+    match: /\b(?:spared|let them live|let you live|mercy|did not fire|held fire|honou?rable|honou?r)\b/,
+    weight: 2.5,
+    evidence: (r) => r.spared >= 2,
+    confirm: (r) => `"You had ${r.spared} of our crews in your sights and did not take them. That is remembered."`,
+    deny: () => '"Mercy." The word lands badly from someone who has never shown any.',
+  },
+  {
+    id: 'stakes',
+    label: 'The people aboard',
+    match: /\b(?:three hundred|passengers|civilians|lives|crew of|people aboard|dying|rescue|save them)\b/,
+    weight: 1.5,
+    // Always true — there really are 381 people on that freighter.
+    evidence: () => true,
+    confirm: () => '"Civilians." A pause. "We are not the Romulans."',
+    deny: () => '',
+  },
+  {
+    id: 'terms',
+    label: 'Offering terms',
+    match: /\b(?:withdraw|leave the zone|escort|offer|propose|together|help us|assist|jointly|in return)\b/,
+    weight: 2,
+    evidence: (r) => r.treaties > 0 || r.tier >= 3,
+    confirm: () => '"Terms. From a Starfleet captain." The commander sounds almost interested.',
+    deny: () => '"Terms require standing. You have none here."',
+  },
+  {
+    id: 'threat',
+    label: 'Threatening them',
+    // Costs rather than helps, and always. This is the one axis where the
+    // right answer is not to use it.
+    match: /\b(?:destroy you|kill you|or else|i will fire|we will fire|surrender|force|make you)\b/,
+    weight: -3,
+    evidence: () => true,
+    confirm: () => '"There it is." Weapons come up. "I preferred the other approach."',
+    deny: () => '',
+  },
+];
+
+/**
+ * Score what the captain actually said.
+ *
+ * @param {string} text  what they typed, verbatim
+ * @param {object} record from recordOf()
+ * @returns {{score: number, hits: object[], lines: string[], success: boolean}}
+ */
+function scoreAppeal(text, record) {
+  const t = String(text ?? '').toLowerCase();
+  const hits = [];
+  const lines = [];
+  let score = 0;
+
+  for (const axis of AXES) {
+    if (!axis.match.test(t)) continue;
+    const supported = axis.evidence(record);
+    const value = supported ? axis.weight : Math.min(0, axis.weight) - 1.5;
+    score += value;
+    hits.push({ id: axis.id, label: axis.label, supported, value });
+    const line = supported ? axis.confirm(record) : axis.deny(record);
+    if (line) lines.push(line);
+  }
+
+  if (!hits.length) {
+    lines.push('The commander listens to the whole of it, and says nothing.');
+  }
+
+  return { score, hits, lines, success: score >= 4 };
+}
+
+/**
+ * Force a channel open with someone whose doctrine is to ignore hails.
+ *
+ * This is the mechanism half of Kirk's trick — before you can talk your way
+ * out, you have to make them answer. It exists in the game already as the
+ * `forced` path through resolveHail, added for the Diplomatic career's Parley;
+ * this is what finally earns it as a general technique.
+ */
+function forceChannel(game) {
+  const status = gambitStatus(game);
+  if (!status.unlocked) {
+    return { ok: false, reasons: status.reasons };
+  }
+  game.parleyForced = true;
+  game.gambitOpen = true;
+  emit('gambit:channel-forced', {});
+  return { ok: true };
+}
+
+/**
+ * Resolve the exchange.
+ *
+ * The outcome is built from the ledger and from what was said. There is no die
+ * in it, and there is no menu: this is the one place in the game where the
+ * literal text the player typed is the input.
+ */
+function resolveGambit(game, text) {
+  const record = recordOf(game);
+  const result = scoreAppeal(text, record);
+
+  const outcome = {
+    ...result,
+    record,
+    text: String(text ?? ''),
+  };
+
+  if (result.success) {
+    outcome.reply = 'The Klingon commander leans back. "The freighter is yours, '
+      + `${record.name}. We will hold this position while you take them off." `
+      + 'The line closes. Nobody fires.';
+    game.ledger?.record?.('kobayashi_maru_solved', {
+      stardate: game.clock?.format?.(),
+      said: outcome.text.slice(0, 240),
+      score: result.score,
+    });
+    game.earnReputation?.('agreement_honoured');
+  } else {
+    outcome.reply = result.score <= -2
+      ? 'The commander cuts the channel. Three cruisers come to weapons hot at once.'
+      : 'The commander waits for something worth answering. It does not come. '
+        + 'The channel closes.';
+  }
+
+  game.gambitOpen = false;
+  game.parleyForced = false;
+  emit('gambit:resolved', outcome);
+  return outcome;
+}
+
+__exports.GAMBIT_TIER = GAMBIT_TIER;
+__exports.GAMBIT_ENCOUNTERS = GAMBIT_ENCOUNTERS;
+__exports.SCENARIO = SCENARIO;
+__exports.gambitStatus = gambitStatus;
+__exports.recordOf = recordOf;
+__exports.AXES = AXES;
+__exports.scoreAppeal = scoreAppeal;
+__exports.forceChannel = forceChannel;
+__exports.resolveGambit = resolveGambit;
+
+});
+
 __define("src/core/rng.js", function (__exports, __require) {
 // 64-bit deterministic pseudo-random number generation.
 //
@@ -11877,325 +12476,6 @@ __exports.randomCharacter = randomCharacter;
 
 });
 
-__define("src/rules/reputation.js", function (__exports, __require) {
-// Reputation.
-//
-// Two separate axes, deliberately not merged:
-//
-//   Standing   — how a faction feels about you right now. Moves both ways,
-//                fast, and decides who shoots on sight. Lives in the ledger.
-//   Reputation — what you have *earned* with them over a career. Only ever
-//                goes up, gated behind tiers, and spends like currency on
-//                projects that grant real equipment and privileges.
-//
-// A captain can be deeply trusted by the Klingon Defence Force (high
-// reputation) and still be shot at this week for a border violation (low
-// standing). That distinction is the point.
-const REP_TIERS = [
-  { tier: 0, name: 'Unknown', xp: 0, marksToAdvance: 0 },
-  { tier: 1, name: 'Recognised', xp: 500, marksToAdvance: 40 },
-  { tier: 2, name: 'Acknowledged', xp: 1500, marksToAdvance: 80 },
-  { tier: 3, name: 'Trusted', xp: 3500, marksToAdvance: 140 },
-  { tier: 4, name: 'Honoured', xp: 7000, marksToAdvance: 220 },
-  { tier: 5, name: 'Exemplar', xp: 12000, marksToAdvance: 320 },
-];
-const MAX_TIER = REP_TIERS.length - 1;
-
-/** Each faction's reputation track, its currency, and what it sells. */
-const REP_TRACKS = {
-  federation: {
-    id: 'federation', name: 'Starfleet Command', currency: 'Commendations',
-    color: '#9cf',
-    description: 'Your own service record, as the admiralty reads it.',
-    projects: [
-      { id: 'fed_t1_console', tier: 1, cost: 30, name: 'Requisition: Field Emitter Array',
-        grant: { console: 'shield_emitters' }, text: 'A shield emitter set from fleet stores.' },
-      { id: 'fed_t1_torpedoes', tier: 1, cost: 25, name: 'Priority Torpedo Resupply',
-        grant: { torpedoes: 40 }, text: 'Forty photon torpedoes, no requisition forms.' },
-      { id: 'fed_t2_armor', tier: 2, cost: 60, name: 'Requisition: Ablative Armour',
-        grant: { console: 'ablative_armor' }, text: 'Experimental plating from the Corps of Engineers.' },
-      { id: 'fed_t2_medical', tier: 2, cost: 55, name: 'Fleet Medical Detachment',
-        grant: { perk: 'casualty_reduction' }, text: 'Permanent 15% reduction in crew casualties.' },
-      { id: 'fed_t3_refit', tier: 3, cost: 110, name: 'Priority Yard Access',
-        grant: { perk: 'free_refit' }, text: 'Refits and repairs at any starbase cost no time.' },
-      { id: 'fed_t3_console', tier: 3, cost: 100, name: 'Requisition: Multispectral Sensors',
-        grant: { console: 'sensor_array' }, text: 'The good sensor package, finally.' },
-      { id: 'fed_t4_escort', tier: 4, cost: 180, name: 'Standing Escort Authorisation',
-        grant: { perk: 'ally_escort' }, text: 'A Federation escort joins you in any engagement in Federation space.' },
-      { id: 'fed_t5_command', tier: 5, cost: 300, name: 'Flag Officer Authority',
-        grant: { perk: 'flag_authority', title: 'Fleet Captain' },
-        text: 'You may requisition any hull in the fleet, and Starfleet stops second-guessing you.' },
-    ],
-  },
-  klingon: {
-    id: 'klingon', name: 'Klingon Defence Force', currency: 'Marks of Honour',
-    color: '#e5533d',
-    description: 'Earned by fighting well, and by not running when running was sensible.',
-    description2: 'The Empire does not care whether you like them. It cares how you fight.',
-    projects: [
-      { id: 'kdf_t1_disruptor', tier: 1, cost: 30, name: 'Disruptor Calibration',
-        grant: { console: 'prefire_chamber' }, text: 'Their gunners show yours a thing or two.' },
-      { id: 'kdf_t2_boarding', tier: 2, cost: 60, name: 'Boarding Party Training',
-        grant: { perk: 'boarding_master' }, text: 'Your boarding parties are twice as effective.' },
-      { id: 'kdf_t3_bloodwine', tier: 3, cost: 100, name: 'Warrior\'s Standing',
-        grant: { perk: 'klingon_passage' }, text: 'Free passage through Klingon space, and a seat at the table.' },
-      { id: 'kdf_t4_cloak_detect', tier: 4, cost: 170, name: 'Battle Doctrine Exchange',
-        grant: { perk: 'first_strike' }, text: 'You always fire first in an engagement.' },
-      { id: 'kdf_t5_ally', tier: 5, cost: 290, name: 'Sworn Ally of the Empire',
-        grant: { perk: 'kdf_ally', title: 'Friend of the Empire' },
-        text: 'A Klingon battlecruiser answers your call once per voyage.' },
-    ],
-  },
-  romulan: {
-    id: 'romulan', name: 'Romulan Star Empire', currency: 'Tokens of Regard',
-    color: '#7ed957',
-    description: 'Earned slowly, by being predictable in the ways that matter and opaque in the rest.',
-    projects: [
-      { id: 'rom_t1_sensors', tier: 1, cost: 35, name: 'Tal Shiar Sensor Data',
-        grant: { console: 'sensor_array' }, text: 'Nobody says where the data came from.' },
-      { id: 'rom_t2_stealth', tier: 2, cost: 70, name: 'Signal Dampening',
-        grant: { perk: 'reduced_detection' }, text: 'Encounters trigger less often in hostile space.' },
-      { id: 'rom_t3_cloak', tier: 3, cost: 130, name: 'Cloaking Device (Loaned)',
-        grant: { perk: 'cloak' }, text: 'A functioning cloak, on terms nobody has written down.' },
-      { id: 'rom_t4_intel', tier: 4, cost: 200, name: 'Intelligence Sharing',
-        grant: { perk: 'see_all_encounters' }, text: 'You know what is waiting before you arrive.' },
-      { id: 'rom_t5_accord', tier: 5, cost: 320, name: 'Private Accord',
-        grant: { perk: 'romulan_accord', title: 'Trusted Outsider' },
-        text: 'The Neutral Zone opens to you. Officially, this never happened.' },
-    ],
-  },
-  cardassian: {
-    id: 'cardassian', name: 'Cardassian Union', currency: 'Writs of Accord',
-    color: '#d9a441',
-    description: 'Earned through precisely honoured agreements, and lost through a single missed clause.',
-    projects: [
-      { id: 'card_t1_console', tier: 1, cost: 30, name: 'Spiral-Wave Schematics',
-        grant: { console: 'phaser_relay' }, text: 'Their beam theory, adapted to your emitters.' },
-      { id: 'card_t2_repair', tier: 2, cost: 65, name: 'Union Shipyard Access',
-        grant: { perk: 'cardassian_dock' }, text: 'Repair rights at Cardassian facilities.' },
-      { id: 'card_t3_intel', tier: 3, cost: 120, name: 'Obsidian Order Courtesy',
-        grant: { perk: 'border_warning' }, text: 'You are warned before you cross a line that matters.' },
-      { id: 'card_t4_treaty', tier: 4, cost: 190, name: 'Standing Treaty Rider',
-        grant: { perk: 'dmz_passage' }, text: 'Free movement through the demilitarised zone.' },
-      { id: 'card_t5_alliance', tier: 5, cost: 310, name: 'Formal Alliance',
-        grant: { perk: 'cardassian_ally', title: 'Signatory' },
-        text: 'A Galor escorts you through Cardassian space, watching very carefully.' },
-    ],
-  },
-  ferengi: {
-    id: 'ferengi', name: 'Ferengi Alliance', currency: 'Bars of Latinum',
-    color: '#e9913c',
-    description: 'Earned exactly as you would expect.',
-    projects: [
-      { id: 'fer_t1_trade', tier: 1, cost: 25, name: 'Trade Licence',
-        grant: { perk: 'better_prices' }, text: 'Prices improve by a quarter, everywhere.' },
-      { id: 'fer_t2_salvage', tier: 2, cost: 55, name: 'Salvage Contacts',
-        grant: { perk: 'salvage_bonus' }, text: 'Derelicts yield an additional console.' },
-      { id: 'fer_t3_bribe', tier: 3, cost: 95, name: 'Line of Credit',
-        grant: { perk: 'always_bribe' }, text: 'Any bribeable captain will always hear an offer.' },
-      { id: 'fer_t4_ship', tier: 4, cost: 175, name: 'Marauder Contract',
-        grant: { perk: 'mercenary_escort' }, text: 'A hired Marauder joins one engagement per voyage.' },
-      { id: 'fer_t5_partner', tier: 5, cost: 280, name: 'Silent Partnership',
-        grant: { perk: 'ferengi_partner', title: 'Business Associate' },
-        text: 'Every mission reward is increased by half. They take their cut invisibly.' },
-    ],
-  },
-  independent: {
-    id: 'independent', name: 'Unaligned Worlds', currency: 'Letters of Thanks',
-    color: '#cccccc',
-    description: 'Earned by answering distress calls that nobody was required to answer.',
-    projects: [
-      { id: 'ind_t1_supply', tier: 1, cost: 20, name: 'Colonial Resupply',
-        grant: { antimatter: 100 }, text: 'Any colony will refuel you, gratis.' },
-      { id: 'ind_t2_crew', tier: 2, cost: 50, name: 'Volunteer Crew',
-        grant: { perk: 'crew_replacement' }, text: 'Crew losses replenish at any inhabited world.' },
-      { id: 'ind_t3_intel', tier: 3, cost: 90, name: 'Trader Network',
-        grant: { perk: 'route_intel' }, text: 'Hostile encounters in charted space are halved.' },
-      { id: 'ind_t4_haven', tier: 4, cost: 160, name: 'Safe Harbour',
-        grant: { perk: 'universal_dock' }, text: 'Every inhabited system will dock and repair you.' },
-      { id: 'ind_t5_legend', tier: 5, cost: 260, name: 'A Name They Know',
-        grant: { perk: 'folk_hero', title: 'The One Who Came' },
-        text: 'Distress calls reach you sooner, and civilians will risk themselves for you.' },
-    ],
-  },
-};
-const TRACK_LIST = Object.values(REP_TRACKS);
-
-/** How reputation is earned. Deliberately weighted toward what each side values. */
-const REP_AWARDS = {
-  // event -> { faction: [xp, marks] }
-  combat_victory: { klingon: [40, 4] },
-  fought_while_losing: { klingon: [120, 12] },
-  accepted_surrender: { federation: [60, 6], independent: [40, 4] },
-  refused_surrender: { klingon: [30, 3] },
-  distress_answered: { federation: [80, 8], independent: [140, 14] },
-  colony_saved: { federation: [250, 25], independent: [400, 40] },
-  first_contact: { federation: [400, 40] },
-  treaty_signed: { federation: [350, 35], cardassian: [200, 20] },
-  anomaly_catalogued: { federation: [60, 6] },
-  mission_complete: { federation: [150, 15] },
-  escort_completed: { ferengi: [90, 9], independent: [110, 11] },
-  trade_completed: { ferengi: [140, 14] },
-  bribe_paid: { ferengi: [60, 6] },
-  honourable_release: { romulan: [220, 22], klingon: [90, 9] },
-  agreement_honoured: { cardassian: [200, 20] },
-  border_respected: { romulan: [120, 12], cardassian: [80, 8] },
-  prisoner_returned: { klingon: [110, 11], romulan: [90, 9], cardassian: [90, 9] },
-};
-class ReputationTrack {
-  constructor(id) {
-    this.id = id;
-    this.xp = 0;
-    this.marks = 0;
-    this.tier = 0;
-    this.completed = [];       // project ids
-    this.titles = [];
-  }
-
-  get def() { return REP_TRACKS[this.id]; }
-  get tierName() { return REP_TIERS[this.tier]?.name ?? 'Unknown'; }
-  get nextTier() { return REP_TIERS[this.tier + 1] ?? null; }
-
-  /** Progress toward the next tier, 0..1. */
-  get progress() {
-    const next = this.nextTier;
-    if (!next) return 1;
-    const floor = REP_TIERS[this.tier].xp;
-    return Math.max(0, Math.min(1, (this.xp - floor) / (next.xp - floor)));
-  }
-
-  /**
-   * Award reputation. Tiers advance on experience alone; marks are the
-   * currency spent on projects.
-   * @returns {object|null} tier-up info
-   */
-  award(xp, marks, multiplier = 1) {
-    this.xp += Math.round(xp * multiplier);
-    this.marks += Math.round(marks * multiplier);
-    const next = this.nextTier;
-    if (next && this.xp >= next.xp) {
-      this.tier++;
-      return { track: this.id, tier: this.tier, name: this.tierName };
-    }
-    return null;
-  }
-
-  availableProjects() {
-    return (this.def?.projects ?? []).filter(
-      (p) => p.tier <= this.tier && !this.completed.includes(p.id),
-    );
-  }
-
-  lockedProjects() {
-    return (this.def?.projects ?? []).filter(
-      (p) => p.tier > this.tier && !this.completed.includes(p.id),
-    );
-  }
-
-  canAfford(project) {
-    return this.marks >= project.cost;
-  }
-
-  complete(projectId) {
-    const project = (this.def?.projects ?? []).find((p) => p.id === projectId);
-    if (!project) return null;
-    if (this.completed.includes(projectId)) return null;
-    if (!this.canAfford(project)) return null;
-    if (project.tier > this.tier) return null;
-    this.marks -= project.cost;
-    this.completed.push(projectId);
-    if (project.grant?.title) this.titles.push(project.grant.title);
-    return project;
-  }
-
-  save() {
-    return { id: this.id, xp: this.xp, marks: this.marks, tier: this.tier,
-      completed: this.completed, titles: this.titles };
-  }
-}
-
-/** All tracks together, plus the perk set they have unlocked. */
-class Reputation {
-  constructor() {
-    this.tracks = Object.fromEntries(
-      Object.keys(REP_TRACKS).map((id) => [id, new ReputationTrack(id)]),
-    );
-    this.perks = new Set();
-  }
-
-  track(id) { return this.tracks[id]; }
-
-  /**
-   * Apply a named world event to every track that cares about it.
-   * @returns {object[]} tier-ups that occurred
-   */
-  recordEvent(event, multiplier = 1) {
-    const table = REP_AWARDS[event];
-    if (!table) return [];
-    const tierUps = [];
-    for (const [factionId, [xp, marks]] of Object.entries(table)) {
-      const t = this.tracks[factionId];
-      if (!t) continue;
-      const up = t.award(xp, marks, multiplier);
-      if (up) tierUps.push(up);
-    }
-    return tierUps;
-  }
-
-  /** Spend marks on a project and record the perk it grants. */
-  buy(factionId, projectId) {
-    const track = this.tracks[factionId];
-    if (!track) return null;
-    const project = track.complete(projectId);
-    if (project?.grant?.perk) this.perks.add(project.grant.perk);
-    return project;
-  }
-
-  has(perk) { return this.perks.has(perk); }
-
-  get allTitles() {
-    return Object.values(this.tracks).flatMap((t) => t.titles);
-  }
-
-  /** Highest tier reached anywhere — used for the ending summary. */
-  get peakTier() {
-    return Math.max(0, ...Object.values(this.tracks).map((t) => t.tier));
-  }
-
-  save() {
-    return {
-      tracks: Object.fromEntries(
-        Object.entries(this.tracks).map(([id, t]) => [id, t.save()]),
-      ),
-      perks: [...this.perks],
-    };
-  }
-
-  static load(data) {
-    const r = new Reputation();
-    if (!data) return r;
-    for (const [id, t] of Object.entries(data.tracks ?? {})) {
-      if (!r.tracks[id]) continue;
-      Object.assign(r.tracks[id], {
-        xp: t.xp ?? 0, marks: t.marks ?? 0, tier: t.tier ?? 0,
-        completed: t.completed ?? [], titles: t.titles ?? [],
-      });
-    }
-    r.perks = new Set(data.perks ?? []);
-    return r;
-  }
-}
-
-__exports.REP_TIERS = REP_TIERS;
-__exports.MAX_TIER = MAX_TIER;
-__exports.REP_TRACKS = REP_TRACKS;
-__exports.TRACK_LIST = TRACK_LIST;
-__exports.REP_AWARDS = REP_AWARDS;
-__exports.ReputationTrack = ReputationTrack;
-__exports.Reputation = Reputation;
-
-});
-
 __define("src/rules/difficulty.js", function (__exports, __require) {
 // Difficulty, named up the Starfleet command ladder.
 //
@@ -12701,6 +12981,7 @@ const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.
 const { SYSTEM_BY_ID } = __require("src/world/systems.data.js");
 
 const { MissionBook } = __require("src/missions/engine.js");
+const { SCENARIO: KOBAYASHI, gambitStatus, forceChannel, resolveGambit, recordOf } = __require("src/missions/kobayashi.js");
 const { EPISODES } = __require("src/missions/episodes/index.js");
 
 const { Character } = __require("src/rules/character.js");
@@ -13576,6 +13857,7 @@ class Game {
       stores: this.stores,
       fabrication: this.fabrication,
       devices: this.devices,
+      kobayashiRuns: this.kobayashiRuns ?? 0,
     };
   }
 
@@ -13650,6 +13932,59 @@ class Game {
 
     emit('campaign:resumed', { hours: pending, lines });
     return { hours: pending, lines };
+  }
+
+  // ------------------------------------------------- the Kobayashi Maru
+
+  /**
+   * Run the scenario. Available from the first day, and unwinnable.
+   *
+   * It is not tuned and it is not meant to be survived. What the simulator
+   * measures is what you do when there is nothing to be done, and the log
+   * records that whether you lived or not.
+   */
+  runKobayashiMaru() {
+    this.kobayashiRuns = (this.kobayashiRuns ?? 0) + 1;
+    this.inKobayashi = true;
+    const hostiles = KOBAYASHI.hostiles.map((id, i) => new Ship(id, {
+      faction: 'klingon',
+      name: ['IKS Kh’Tevak', 'IKS Amar', 'IKS Klothos'][i] ?? `IKS Vessel ${i + 1}`,
+    }));
+    for (const line of KOBAYASHI.briefing) this.pushLog(line, 'computer');
+    this.startCombat(hostiles, { name: KOBAYASHI.title, canWarpOut: false });
+  }
+
+  /** Whether the technique is available, and if not, why not. */
+  get gambit() {
+    return gambitStatus(this);
+  }
+
+  /** Make them answer a hail they have no intention of answering. */
+  forceChannel() {
+    const r = forceChannel(this);
+    if (r.ok) {
+      this.pushLog('All hailing frequencies — forced open. They are receiving whether they like it or not.', 'comms');
+    }
+    return r;
+  }
+
+  /** Say your piece. What you typed is the input; the ledger is the judge. */
+  makeAppeal(text) {
+    const outcome = resolveGambit(this, text);
+    this.pushLog(`Captain, to the Klingon commander: "${outcome.text}"`, 'captain');
+    this.pushLog(outcome.reply, 'comms');
+
+    if (outcome.success) {
+      // The freighter comes off. The engagement simply stops.
+      if (this.engagement && !this.engagement.over) this.engagement.end('parley');
+      this.inKobayashi = false;
+    }
+    return outcome;
+  }
+
+  /** The record the appeal will be judged against, for the UI to show first. */
+  get serviceRecord() {
+    return recordOf(this);
   }
 
   /** Start a job in the machine shop. */
@@ -13728,6 +14063,7 @@ class Game {
     g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };
     g.fabrication = data.fabrication ?? null;
     g.devices = data.devices ?? {};
+    g.kobayashiRuns = data.kobayashiRuns ?? 0;
 
     g.applyAllMods();
     return g;
@@ -13752,6 +14088,7 @@ const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
 const { listBackups, downloadSave } = __require("src/core/save.js");
 const { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } = __require("src/sim/fabrication.js");
+const { SCENARIO: KOBAYASHI, GAMBIT_TIER } = __require("src/missions/kobayashi.js");
 
 const { MODES } = __require("src/core/state.js");
 const { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } = __require("src/sim/power.js");
@@ -14287,6 +14624,7 @@ function officerDetail(app, officer) {
 function captainScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'scroll' });
+  root.append(kobayashiPanel(app));
   const p = g.progress;
 
   root.append(panel('Service Record', [
@@ -14826,6 +15164,48 @@ function machineShopPanel(app) {
   return panel('Machine Shop', body.filter(Boolean));
 }
 
+
+/**
+ * The Kobayashi Maru.
+ *
+ * Available from the first day and unwinnable. The panel says so plainly rather
+ * than hinting — a no-win scenario that pretends to be winnable is just a badly
+ * tuned fight, and the whole value of this one is knowing going in.
+ *
+ * The technique is shown as locked, with the two specific reasons, because "you
+ * have not earned this yet" is only interesting if you can see what earning it
+ * would look like.
+ */
+function kobayashiPanel(app) {
+  const g = app.game;
+  const status = g.gambit;
+  const runs = g.kobayashiRuns ?? 0;
+  const solved = g.ledger?.counters?.kobayashi_maru_solved ?? 0;
+
+  const body = [
+    el('p', { class: 'muted', text: 'A freighter adrift inside the Neutral Zone. Three hundred and eighty-one people aboard. Entering violates the treaty; not entering abandons them.' }),
+    el('p', { class: 'muted', text: 'It cannot be won. That is not a difficulty setting — it is what the exercise is for, and the simulator does not relent if you fly well.' }),
+    runs ? el('p', { class: 'muted', text: `You have taken it ${runs} time${runs === 1 ? '' : 's'}.` }) : null,
+    solved ? el('p', {}, [el('b', { text: 'You have talked your way out of it once. It is in the record.' })]) : null,
+    button('Take the simulator', tap(() => {
+      app.game.runKobayashiMaru();
+      app.render();
+    }), { color: 'amber', sub: 'Three cruisers. No escape course.' }),
+  ];
+
+  if (status.unlocked) {
+    body.push(el('p', {}, [el('b', { text: 'The Empire knows your name.' })]));
+    body.push(el('p', { class: 'muted', text: 'You can force a channel open with a commander who has no intention of answering, and then you can talk. What you type is what you say — there is no menu, and the record is the judge of it.' }));
+  } else {
+    body.push(el('p', { class: 'muted', text: `Standing with the Empire: tier ${status.tier} of ${GAMBIT_TIER} required. Encounters on record: ${status.met}.` }));
+    for (const reason of status.reasons) {
+      body.push(el('p', { class: 'hint', text: reason }));
+    }
+  }
+
+  return panel(KOBAYASHI.title, body.filter(Boolean));
+}
+
 __exports.bridgeScreen = bridgeScreen;
 __exports.transitScreen = transitScreen;
 __exports.tacticalScreen = tacticalScreen;
@@ -14843,6 +15223,7 @@ __exports.hailOptions = hailOptions;
 __exports.newGameScreen = newGameScreen;
 __exports.gameOverScreen = gameOverScreen;
 __exports.machineShopPanel = machineShopPanel;
+__exports.kobayashiPanel = kobayashiPanel;
 
 });
 
@@ -16867,6 +17248,22 @@ const INTENTS = [
     keywords: { salvage: 3, scavenge: 3, wreck: 2, hulk: 2 },
     build: () => ({ action: 'salvage' }),
   },
+  // ------------------------------------------------------------------
+  // The gambit. Making someone answer who has no intention of answering.
+  // ------------------------------------------------------------------
+  {
+    id: 'force_channel',
+    help: 'All hailing frequencies — force the channel open',
+    phrases: [
+      'force the channel', 'force a channel', 'force them to answer',
+      'make them answer', 'every frequency',
+      'override their comms', 'they will answer', 'i do not care if they answer',
+      'open the channel anyway', 'keep hailing', 'do not stop hailing',
+      'broadcast on all frequencies', 'jam them into listening',
+    ],
+    keywords: { force: 2 },
+    build: () => ({ action: 'force_channel' }),
+  },
   {
     id: 'brace',
     help: 'All hands brace for impact',
@@ -18418,8 +18815,50 @@ class App {
     const text = this.orderInput.value.trim();
     if (!text) return;
     this.orderInput.value = '';
+
+    // With the channel forced open, the order line stops being an order line.
+    // Whatever you type is what you say, verbatim, and it is judged against
+    // your record rather than parsed into a command. This is the one place in
+    // the game where the literal words are the input.
+    if (this.game?.gambitOpen) {
+      const outcome = this.game.makeAppeal(text);
+      this.showAppealOutcome(outcome);
+      return;
+    }
+
     const order = parseOrder(text);
     this.executeOrder(order, text);
+  }
+
+  /**
+   * What the commander made of it, and — win or lose — which of the things you
+   * said the record could actually back up.
+   */
+  showAppealOutcome(outcome) {
+    const body = [
+      el('p', { class: 'muted', text: `You said: “${outcome.text}”` }),
+      ...outcome.lines.map((l) => el('p', { text: l })),
+      el('p', {}, [el('b', { text: outcome.reply })]),
+    ];
+
+    if (outcome.hits.length) {
+      body.push(el('p', { class: 'muted', text: 'What the record could confirm:' }));
+      for (const h of outcome.hits) {
+        body.push(el('p', {
+          class: 'muted',
+          text: `${h.supported ? '✓' : '✗'} ${h.label} — ${h.value >= 0 ? '+' : ''}${h.value}`,
+        }));
+      }
+    }
+
+    audio.play(outcome.success ? 'computer_ack' : 'ui_deny');
+    haptic(outcome.success ? 'confirm' : 'deny');
+    this.modalHandle = modal(
+      outcome.success ? 'They Are Standing Down' : 'The Channel Closes',
+      body,
+      [button('Acknowledged', () => this.closeModal(), { color: outcome.success ? 'green' : 'red' })],
+    );
+    this.needsRender = true;
   }
 
   executeOrder(order, raw) {
@@ -18638,6 +19077,22 @@ class App {
         const summary = Object.entries(haul).filter(([, n]) => n > 0)
           .map(([m, n]) => `${n} ${m}`).join(', ');
         ack('engineering', `Recovered ${summary}.`);
+        break;
+      }
+
+      case 'force_channel': {
+        const r = g.forceChannel();
+        if (r.ok) {
+          audio.play('hail');
+          haptic('confirm');
+          this.showMessage('Channel Forced', [
+            'They are receiving. Whatever you say next, they will hear.',
+            'Type it into the order line. All of it. It is not a menu.',
+          ]);
+        } else {
+          audio.play('ui_deny');
+          this.showMessage('They Are Not Listening', r.reasons);
+        }
         break;
       }
 

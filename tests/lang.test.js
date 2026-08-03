@@ -41,6 +41,8 @@ const EXECUTABLE = new Set([
   'intercom', 'log_entry', 'jettison_pod', 'viewscreen',
   // The machine shop.
   'fabricate', 'work_shop', 'salvage',
+  // The gambit.
+  'force_channel',
 ]);
 
 describe('normalisation', () => {

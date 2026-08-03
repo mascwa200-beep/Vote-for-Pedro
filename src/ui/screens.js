@@ -11,6 +11,7 @@ import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { listBackups, downloadSave } from '../core/save.js';
 import { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } from '../sim/fabrication.js';
+import { SCENARIO as KOBAYASHI, GAMBIT_TIER } from '../missions/kobayashi.js';
 
 import { MODES } from '../core/state.js';
 import { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } from '../sim/power.js';
@@ -554,6 +555,7 @@ export function officerDetail(app, officer) {
 export function captainScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'scroll' });
+  root.append(kobayashiPanel(app));
   const p = g.progress;
 
   root.append(panel('Service Record', [
@@ -1096,4 +1098,46 @@ export function machineShopPanel(app) {
   }
 
   return panel('Machine Shop', body.filter(Boolean));
+}
+
+
+/**
+ * The Kobayashi Maru.
+ *
+ * Available from the first day and unwinnable. The panel says so plainly rather
+ * than hinting — a no-win scenario that pretends to be winnable is just a badly
+ * tuned fight, and the whole value of this one is knowing going in.
+ *
+ * The technique is shown as locked, with the two specific reasons, because "you
+ * have not earned this yet" is only interesting if you can see what earning it
+ * would look like.
+ */
+export function kobayashiPanel(app) {
+  const g = app.game;
+  const status = g.gambit;
+  const runs = g.kobayashiRuns ?? 0;
+  const solved = g.ledger?.counters?.kobayashi_maru_solved ?? 0;
+
+  const body = [
+    el('p', { class: 'muted', text: 'A freighter adrift inside the Neutral Zone. Three hundred and eighty-one people aboard. Entering violates the treaty; not entering abandons them.' }),
+    el('p', { class: 'muted', text: 'It cannot be won. That is not a difficulty setting — it is what the exercise is for, and the simulator does not relent if you fly well.' }),
+    runs ? el('p', { class: 'muted', text: `You have taken it ${runs} time${runs === 1 ? '' : 's'}.` }) : null,
+    solved ? el('p', {}, [el('b', { text: 'You have talked your way out of it once. It is in the record.' })]) : null,
+    button('Take the simulator', tap(() => {
+      app.game.runKobayashiMaru();
+      app.render();
+    }), { color: 'amber', sub: 'Three cruisers. No escape course.' }),
+  ];
+
+  if (status.unlocked) {
+    body.push(el('p', {}, [el('b', { text: 'The Empire knows your name.' })]));
+    body.push(el('p', { class: 'muted', text: 'You can force a channel open with a commander who has no intention of answering, and then you can talk. What you type is what you say — there is no menu, and the record is the judge of it.' }));
+  } else {
+    body.push(el('p', { class: 'muted', text: `Standing with the Empire: tier ${status.tier} of ${GAMBIT_TIER} required. Encounters on record: ${status.met}.` }));
+    for (const reason of status.reasons) {
+      body.push(el('p', { class: 'hint', text: reason }));
+    }
+  }
+
+  return panel(KOBAYASHI.title, body.filter(Boolean));
 }
