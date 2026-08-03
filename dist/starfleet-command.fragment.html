@@ -594,6 +594,59 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   font-size: 0.76em; color: var(--text-dim); margin-top: 4px; line-height: 1.4;
 }
 
+/* ---------------------------------------------------------------- chair
+   The command chair panel. Two armrests of controls, an intercom block, and
+   the log recorder. Laid out as wrapping rows so it reads as a cluster of
+   physical switches rather than a menu, and so it survives a narrow phone in
+   portrait without any of the buttons falling off the edge. */
+.panel.chair { border-left-color: var(--lcars-lilac, #b08cff); }
+
+.chair-arm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.chair-intercom { margin: 10px 0 6px; }
+.chair-intercom > .label {
+  font-size: 0.72em;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.chair-stations {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 5px;
+}
+.chair-stations .btn {
+  padding: 9px 6px;
+  font-size: 0.78em;
+  min-height: 44px;
+}
+
+.chair-recorder {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-top: 8px;
+}
+.chair-recorder .logline {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--panel, #12161f);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  padding: 10px 12px;
+  min-height: 44px;
+}
+.chair-recorder .btn { flex: 0 0 auto; width: auto; padding-left: 16px; padding-right: 16px; }
+
 </style>
 <div id="app"></div>
 <script>
@@ -4812,6 +4865,137 @@ __exports.GalaxyMap = GalaxyMap;
 
 });
 
+__define("src/ui/chair.js", function (__exports, __require) {
+// The captain's chair.
+//
+// Built from what the chair actually had, which is documented in
+// docs/RESEARCH.md and is shorter than you would expect: of all the buttons on
+// the prop, exactly three were ever assigned a function on screen — yellow
+// alert, red alert, and jettison the ion pod. The rest of the layout is
+// recorded as a shape rather than a spec: a row of flip switches and shuttle,
+// viewscreen and hailing controls on the left arm; alerts, the pod, a
+// micro-tape player and the intercom on the right.
+//
+// So this panel reproduces the three documented controls exactly, fills the
+// rest from the documented shape, and adds nothing that the simulation cannot
+// actually do. Every control here emits the same order object the parser
+// produces from typed text, which means there is one execution path and not
+// two — a control that works from the chair works from the keyboard, and a
+// control that breaks, breaks in both places at once where a test can see it.
+//
+// The research also notes that the arrangement changed episode to episode as
+// the script required. That is licence, taken here: what the chair offers
+// depends on the alert condition and on whether anyone is shooting at you.
+
+const { el, button, panel } = __require("src/ui/lcars.js");
+const { audio } = __require("src/audio/engine.js");
+const { haptic } = __require("src/ui/touch.js");
+
+/** Departments reachable on the intercom, in the order the stations ring the bridge. */
+const INTERCOM_STATIONS = [
+  { id: 'engineering', label: 'Engineering' },
+  { id: 'tactical', label: 'Tactical' },
+  { id: 'science', label: 'Science' },
+  { id: 'medical', label: 'Sickbay' },
+  { id: 'helm', label: 'Helm' },
+  { id: 'comms', label: 'Comms' },
+  { id: 'security', label: 'Security' },
+];
+
+const ALERTS = [
+  { level: 'red', label: 'Red alert', color: 'red', sub: 'Battle stations' },
+  { level: 'yellow', label: 'Yellow alert', color: 'amber', sub: 'Increased readiness' },
+  { level: 'blue', label: 'Blue alert', color: 'blue', sub: 'Docking and maintenance stations' },
+  { level: 'normal', label: 'Stand down', color: 'ghost', sub: 'Condition green' },
+];
+
+function press(app, order, cue = 'ui_confirm', feel = 'tap') {
+  return () => {
+    audio.play(cue);
+    haptic(feel);
+    app.executeOrder(order, order.chairLabel ?? 'chair control');
+    app.render();
+  };
+}
+
+/**
+ * The chair panel. Rendered on the bridge and in an engagement, because that is
+ * where you are sitting in it.
+ */
+function chairPanel(app) {
+  const g = app.game;
+  const inCombat = !!g.engagement && !g.engagement.over;
+
+  // ---- Right arm: the three labelled controls, plus the intercom ----
+  const alerts = ALERTS
+    .filter((a) => !(a.level === 'blue' && inCombat))
+    .map((a) => button(a.label, press(app, { action: 'alert', level: a.level, chairLabel: a.label }), {
+      color: g.alert === a.level ? 'green' : a.color,
+      sub: g.alert === a.level ? 'Current condition' : a.sub,
+    }));
+
+  const pod = button('Jettison ion pod', press(app, { action: 'jettison_pod', chairLabel: 'jettison the pod' }, 'ui_deny', 'deny'), {
+    color: 'peach',
+    sub: inCombat ? 'Decoy — reads like us for about a minute' : 'Nothing to gain outside a fight',
+    disabled: !inCombat || g.podJettisoned,
+  });
+
+  // ---- Left arm: viewscreen, hailing frequencies, shuttle bay ----
+  const left = [
+    button('Viewscreen', press(app, { action: 'viewscreen', chairLabel: 'on screen' }, 'ui_tap'), {
+      color: 'ice',
+      sub: app.screen === 'tactical' ? 'Return to the bridge' : 'Tactical display',
+    }),
+    button('Hailing frequencies', press(app, { action: 'hail', chairLabel: 'hailing frequencies open' }), {
+      color: 'blue',
+      sub: 'Open a channel',
+    }),
+  ];
+
+  // ---- The recorder ----
+  // Deliberately not `.orderline`: that class belongs to the order input in
+  // the shell, and two elements sharing it makes "type an order" ambiguous for
+  // anything selecting by class — including the browser harness.
+  const logInput = el('input', {
+    class: 'logline',
+    type: 'text',
+    placeholder: 'Captain’s log, supplemental…',
+    'aria-label': 'Captain’s log entry',
+  });
+  const record = () => {
+    const text = logInput.value.trim();
+    if (!text) return;
+    logInput.value = '';
+    audio.play('computer_ack');
+    haptic('confirm');
+    app.executeOrder({ action: 'log_entry', text }, text);
+    app.render();
+  };
+  logInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') record(); });
+
+  return panel('Command Chair', [
+    el('div', { class: 'chair-arm' }, alerts),
+    el('div', { class: 'chair-arm' }, left),
+    pod,
+    el('div', { class: 'chair-intercom' }, [
+      el('div', { class: 'label', text: 'Intercom' }),
+      el('div', { class: 'chair-stations' }, INTERCOM_STATIONS.map((s) =>
+        button(s.label, press(app, { action: 'intercom', dept: s.id, chairLabel: `${s.label}, report` }, 'computer_query'), {
+          color: 'ghost',
+        }))),
+    ]),
+    el('div', { class: 'chair-recorder' }, [
+      logInput,
+      button('Record', record, { color: 'amber' }),
+    ]),
+  ], 'chair');
+}
+
+__exports.INTERCOM_STATIONS = INTERCOM_STATIONS;
+__exports.chairPanel = chairPanel;
+
+});
+
 __define("src/core/rng.js", function (__exports, __require) {
 // 64-bit deterministic pseudo-random number generation.
 //
@@ -6415,6 +6599,8 @@ class Engagement {
     this.warpOutTimer = 0;
     // Consumed by the Tactical career's Called Shot.
     this.guaranteedCrits = 0;
+    // Seconds of ion-pod decoy still confusing hostile targeting.
+    this.decoyTimer = 0;
     this.canWarpOut = opts.canWarpOut !== false;
 
     this.placeCombatants();
@@ -6482,6 +6668,17 @@ class Engagement {
   evasive(on) {
     this.player.evasive = on;
     this.pushLog(on ? 'Evasive manoeuvres.' : 'Resuming standard flight.', 'helm');
+  }
+
+  /**
+   * A hot, ship-shaped object in the water. For `seconds`, everything shooting
+   * at us has to decide which return is the real one, and gets it wrong often
+   * enough to matter.
+   */
+  deployDecoy(seconds) {
+    this.decoyTimer = Math.max(this.decoyTimer, seconds);
+    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, life: 0.8 });
+    this.pushLog('Decoy away — their targeting solutions just got harder.', 'tactical');
   }
 
   /** Attempt to break off. Takes time, and the enemy gets those seconds. */
@@ -6557,7 +6754,9 @@ class Engagement {
 
     const accuracy = 0.92 * attacker.mod('accuracy')
       * (0.7 + 0.3 * attacker.subsystems.sensors);
-    const evade = target.defenseRating + (target.cloaked ? 0.5 : 0);
+    // A decoy in the water only troubles the people shooting at us.
+    const decoy = (target === this.player && this.decoyTimer > 0) ? 0.22 : 0;
+    const evade = target.defenseRating + (target.cloaked ? 0.5 : 0) + decoy;
     if (!this.rng.chance(Math.max(0.08, accuracy - evade))) {
       return { hit: false, reason: 'miss' };
     }
@@ -6637,6 +6836,8 @@ class Engagement {
     if (this.autoFire && this.target && !this.target.destroyed && !this.player.destroyed) {
       for (const w of this.player.weapons) this.fireWeapon(this.player, w, this.target);
     }
+
+    if (this.decoyTimer > 0) this.decoyTimer = Math.max(0, this.decoyTimer - dt);
 
     this.updateProjectiles(dt);
     this.updateEffects(dt);
@@ -9595,14 +9796,123 @@ class Game {
 
   setAlert(level) {
     if (this.alert === level) return;
+    // Blue is a maintenance condition, not a combat one. Asking for it while
+    // people are shooting at you is a mistake the ship declines to make.
+    if (level === 'blue' && this.engagement && !this.engagement.over) {
+      this.officerSays('tactical', 'Not while we are under fire, Captain.', 'object');
+      return;
+    }
     this.alert = level;
     emit('alert', level);
     this.pushLog(
       level === 'red' ? 'Red alert. All hands to battle stations.'
         : level === 'yellow' ? 'Yellow alert.'
+        : level === 'blue' ? 'Blue alert. Secure for docking and maintenance stations.'
         : 'Stand down from alert.',
       'captain',
     );
+  }
+
+  // ------------------------------------------------- the captain's chair
+  //
+  // Everything below is reachable from the chair panel and from a typed order,
+  // through the same code path. The chair is not a second implementation of the
+  // game; it is a set of shortcuts into this one.
+
+  /**
+   * Call a department on the intercom and get a real answer.
+   * Each report is assembled from live ship state — nothing here is flavour
+   * text with no number behind it.
+   */
+  intercom(dept) {
+    const s = this.ship;
+    const pct = (v) => `${Math.round(v * 100)} percent`;
+    const reports = {
+      engineering: () => {
+        const worst = Object.entries(s.subsystems)
+          .sort((a, b) => a[1] - b[1])[0];
+        return s.coreEjected
+          ? 'The core is gone, Captain. Impulse only until we reach a yard.'
+          : `Warp core at ${pct(s.subsystems.warpcore)}. Worst system is ${worst[0]} at ${pct(worst[1])}.`
+            + (s.fires > 0 ? ` ${s.fires} fire${s.fires > 1 ? 's' : ''} still burning.` : '');
+      },
+      medical: () => {
+        const lost = s.maxCrew - s.crew;
+        const hurt = this.crew.officers.filter((o) => o.injured).length;
+        return lost === 0 && hurt === 0
+          ? 'Sickbay is quiet, Captain. Nobody on my table.'
+          : `${lost} dead, ${hurt} of the senior staff injured. Life support at ${pct(s.subsystems.lifesupport)}.`;
+      },
+      tactical: () => `Phasers at ${pct(s.subsystems.weapons)}, ${s.torpedoes} torpedoes in the magazine. `
+        + `Shields ${s.shieldsUp ? 'up' : 'down'}.`,
+      science: () => `Sensors at ${pct(s.subsystems.sensors)}. `
+        + `${this.location.name}, ${this.location.type}${this.location.hazard ? `, ${this.location.hazard.replace(/_/g, ' ')}` : ''}.`,
+      helm: () => (this.transit
+        ? `Underway for ${this.transit.to.name}, warp ${this.transit.factor.toFixed(1)}.`
+        : `Station keeping at ${this.location.name}. Engines at ${pct(s.subsystems.engines)}.`),
+      comms: () => `Subspace is clear, Captain. ${this.reputation ? 'Nothing on the priority channels.' : ''}`.trim(),
+      security: () => `${s.crew} aboard, all decks reporting. Hull at ${pct(s.hullPct)}.`,
+    };
+    const text = (reports[dept] ?? reports.security)();
+    this.officerSays(dept, text, 'report');
+    return text;
+  }
+
+  /**
+   * Repair underway, without a starbase.
+   *
+   * Blue alert is the reason this is a method rather than three lines in the
+   * bridge screen. Canonically blue alert covers docking, separation and
+   * hazard conditions — the states where the crew is at maintenance stations
+   * rather than battle stations — so calling it before you start work is worth
+   * half as much again, and is refused in a fight for the obvious reason.
+   */
+  effectRepairs() {
+    const s = this.ship;
+    if (s.hullPct >= 1) return { ok: false, reason: 'The hull is sound, Captain.' };
+    const blue = this.alert === 'blue';
+    const before = s.hullPct;
+    s.repair(s.maxHull * (blue ? 0.18 : 0.12));
+    this.clock.advanceStardate(blue ? 0.6 : 0.8);
+    this.pushLog(
+      `Repair teams restored hull integrity to ${Math.round(s.hullPct * 100)}%.`
+        + (blue ? ' Maintenance stations made the difference.' : ''),
+      'engineering',
+    );
+    return { ok: true, before, after: s.hullPct, blue };
+  }
+
+  /**
+   * Record a captain's log entry. It goes into the ship's log like any other
+   * line and, unlike any other line, it is yours.
+   */
+  logEntry(text) {
+    const clean = String(text ?? '').trim();
+    if (!clean) return null;
+    this.pushLog(`Captain's log, supplemental: ${clean}`, 'captain');
+    this.ledger?.record?.('log_entry', { stardate: this.clock.format(), text: clean });
+    return clean;
+  }
+
+  /**
+   * Jettison the ion pod. Historically the chair's third labelled button, and
+   * the only one of the three that does something other than change a light.
+   *
+   * In a fight the pod is a sensor decoy: it burns hot, it looks like a ship,
+   * and for a while everything shooting at you is shooting slightly wide. Out
+   * of a fight there is nothing to gain and a pod to lose, so the answer is no.
+   */
+  jettisonPod() {
+    if (!this.engagement || this.engagement.over) {
+      return { ok: false, reason: 'No reason to lose the pod, Captain.' };
+    }
+    if (this.podJettisoned) {
+      return { ok: false, reason: 'The pod is already away. We only carry the one.' };
+    }
+    this.podJettisoned = true;
+    this.engagement.deployDecoy(14);
+    this.officerSays('engineering', 'Ion pod away. It will read like us for a minute or so.', 'report');
+    return { ok: true };
   }
 
   // ------------------------------------------------------------------ orders
@@ -10166,6 +10476,7 @@ __define("src/ui/screens.js", function (__exports, __require) {
 const { el, clear, panel, button, readout, shieldDiagram, powerSlider, pill, modal, field, textInput, select, officerRow, logLine } = __require("src/ui/lcars.js");
 const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
+const { chairPanel } = __require("src/ui/chair.js");
 
 const { MODES } = __require("src/core/state.js");
 const { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } = __require("src/sim/power.js");
@@ -10248,17 +10559,25 @@ function bridgeScreen(app) {
 
   if (g.ship.hullPct < 1 && !g.canDock()) {
     actions.push(button('Effect repairs', tap(() => {
-      const before = g.ship.hullPct;
-      g.ship.repair(g.ship.maxHull * 0.12);
-      g.clock.advanceStardate(0.8);
-      g.pushLog(`Repair teams restored hull integrity to ${Math.round(g.ship.hullPct * 100)}%.`, 'engineering');
+      const r = g.effectRepairs();
+      if (!r.ok) { app.showMessage('Repairs', [r.reason]); return; }
       app.showMessage('Repairs', [
-        `Hull integrity ${Math.round(before * 100)}% → ${Math.round(g.ship.hullPct * 100)}%.`,
-        'Nineteen hours. The chief says that is the best she can do without a starbase.',
+        `Hull integrity ${Math.round(r.before * 100)}% → ${Math.round(r.after * 100)}%.`,
+        r.blue
+          ? 'Fourteen hours, with the whole crew at maintenance stations.'
+          : 'Nineteen hours. The chief says that is the best she can do without a starbase.',
       ]);
-    }), { color: 'peach', sub: 'Costs time. Cannot fully repair without a starbase.' }));
+    }), {
+      color: 'peach',
+      sub: g.alert === 'blue'
+        ? 'Blue alert: maintenance stations manned, repairs go faster'
+        : 'Costs time. Cannot fully repair without a starbase.',
+    }));
   }
   root.append(panel('Bridge', actions));
+
+  // --- The chair ---
+  root.append(chairPanel(app));
 
   // --- Recent log ---
   root.append(panel('Ship’s Log', g.log.slice(-6).reverse().map(logLine)));
@@ -10434,6 +10753,11 @@ function tacticalScreen(app) {
       button('Hail them', tap(() => app.openHail(factionId)), { color: 'lilac' }),
     ]));
   }
+
+  // The chair is where you are sitting, so it is on this screen too — with a
+  // different set of controls, because blue alert is not a combat condition
+  // and the ion pod only earns its keep when someone is shooting at you.
+  side.append(chairPanel(app));
 
   side.append(panel('Tactical Log', eng.log.slice(-8).reverse().map(logLine)));
   return root;
@@ -11787,6 +12111,1790 @@ __exports.saveSettings = saveSettings;
 
 });
 
+__define("src/lang/normalize.js", function (__exports, __require) {
+// Text normalisation for the command layer.
+//
+// Everything the captain types arrives here first. The job is to reduce the
+// enormous variety of ways a person phrases an order down to a form the intent
+// matcher can score, without throwing away the words that carry meaning.
+//
+// The design constraint that shapes this whole directory: it must work with the
+// radio off, forever, in a bundle small enough to precache. That rules out a
+// language model and rules in tables. Tables get you a long way if you build
+// them from how people actually talk rather than from how a grammar says they
+// should.
+
+/** Contractions, including the sloppy ones people actually type. */
+const CONTRACTIONS = [
+  [/\bcan'?t\b/g, 'can not'],
+  [/\bwon'?t\b/g, 'will not'],
+  [/\bshan'?t\b/g, 'shall not'],
+  [/\bain'?t\b/g, 'is not'],
+  [/\bdon'?t\b/g, 'do not'],
+  [/\bdoesn'?t\b/g, 'does not'],
+  [/\bdidn'?t\b/g, 'did not'],
+  [/\bisn'?t\b/g, 'is not'],
+  [/\baren'?t\b/g, 'are not'],
+  [/\bwasn'?t\b/g, 'was not'],
+  [/\bweren'?t\b/g, 'were not'],
+  [/\bhasn'?t\b/g, 'has not'],
+  [/\bhaven'?t\b/g, 'have not'],
+  [/\bhadn'?t\b/g, 'had not'],
+  [/\bcouldn'?t\b/g, 'could not'],
+  [/\bshouldn'?t\b/g, 'should not'],
+  [/\bwouldn'?t\b/g, 'would not'],
+  [/\blet'?s\b/g, 'let us'],
+  [/\bit'?s\b/g, 'it is'],
+  [/\bthat'?s\b/g, 'that is'],
+  [/\bwhat'?s\b/g, 'what is'],
+  [/\bwhere'?s\b/g, 'where is'],
+  [/\bwho'?s\b/g, 'who is'],
+  [/\bhere'?s\b/g, 'here is'],
+  [/\bthere'?s\b/g, 'there is'],
+  [/\bwe'?re\b/g, 'we are'],
+  [/\bthey'?re\b/g, 'they are'],
+  [/\byou'?re\b/g, 'you are'],
+  [/\bi'?m\b/g, 'i am'],
+  [/\bwe'?ll\b/g, 'we will'],
+  [/\bi'?ll\b/g, 'i will'],
+  [/\byou'?ll\b/g, 'you will'],
+  [/\bthey'?ll\b/g, 'they will'],
+  [/\bwe'?ve\b/g, 'we have'],
+  [/\bi'?ve\b/g, 'i have'],
+  [/\byou'?ve\b/g, 'you have'],
+  [/\bi'?d\b/g, 'i would'],
+  [/\bwe'?d\b/g, 'we would'],
+];
+
+/**
+ * Casual speech and typing shortcuts. Ordered longest-first within the table
+ * so that "gonna" is handled before "on".
+ */
+const SLANG = [
+  [/\bgonna\b/g, 'going to'],
+  [/\bwanna\b/g, 'want to'],
+  [/\bgotta\b/g, 'have to'],
+  [/\bgimme\b/g, 'give me'],
+  [/\blemme\b/g, 'let me'],
+  [/\bc'?mon\b/g, 'come on'],
+  [/\bkinda\b/g, 'kind of'],
+  [/\bsorta\b/g, 'sort of'],
+  [/\bout+a\b/g, 'out of'],
+  [/\b'?em\b/g, 'them'],
+  [/\b'?bout\b/g, 'about'],
+  [/\bya\b/g, 'you'],
+  [/\bu\b/g, 'you'],
+  [/\bpls\b/g, 'please'],
+  [/\bplz\b/g, 'please'],
+  [/\basap\b/g, 'immediately'],
+  [/\bthru\b/g, 'through'],
+  [/\btho\b/g, 'though'],
+  [/\bcuz\b/g, 'because'],
+  [/\bcos\b/g, 'because'],
+  [/\bok\b/g, 'okay'],
+];
+
+/**
+ * Naval, Starfleet and British/American spelling equivalences.
+ * These are folded to one canonical spelling so the lexicon only lists one.
+ */
+const EQUIVALENCES = [
+  [/\bbrake\b/g, 'break'],
+  [/\bwrap\b/g, 'warp'],
+  [/\bfacter\b/g, 'factor'],
+  [/\bmanoeuvres?\b/g, 'maneuver'],
+  [/\bmaneuvers\b/g, 'maneuver'],
+  [/\bmanouvers?\b/g, 'maneuver'],
+  [/\bmanuevers?\b/g, 'maneuver'],
+  [/\bdefen[cs]e\b/g, 'defense'],
+  [/\bdefensive\b/g, 'defense'],
+  [/\bcolour\b/g, 'color'],
+  [/\banaly[sz]e\b/g, 'analyze'],
+  [/\banaly[sz]is\b/g, 'analyze'],
+  [/\bmetres?\b/g, 'meter'],
+  [/\bstarboard side\b/g, 'starboard'],
+  [/\bport side\b/g, 'port'],
+  [/\bstbd\b/g, 'starboard'],
+  [/\bmr\b/g, 'mister'],
+  [/\bms\b/g, 'miss'],
+  [/\bdr\b/g, 'doctor'],
+  [/\bcmdr\b/g, 'commander'],
+  [/\blt\b/g, 'lieutenant'],
+  [/\bcapt\b/g, 'captain'],
+  [/\badm\b/g, 'admiral'],
+  [/\bens\b/g, 'ensign'],
+  [/\bcpo\b/g, 'chief'],
+  [/\bconn\b/g, 'helm'],
+  [/\bnav\b/g, 'navigation'],
+  [/\btac\b/g, 'tactical'],
+  [/\bops\b/g, 'operations'],
+  [/\bengi?n?e?e?ring\b/g, 'engineering'],
+  [/\bbelay\b/g, 'cancel'],
+  [/\bavast\b/g, 'cancel'],
+  [/\bphotons?\b/g, 'torpedo'],
+  [/\btorps?\b/g, 'torpedo'],
+  [/\btorpedoe?s\b/g, 'torpedo'],
+  [/\bphasers\b/g, 'phaser'],
+  [/\bdisruptors?\b/g, 'phaser'],
+  [/\bshields\b/g, 'shield'],
+  [/\bengines\b/g, 'engine'],
+  [/\bnacelles?\b/g, 'engine'],
+  [/\bsensors\b/g, 'sensor'],
+  [/\bweapons\b/g, 'weapon'],
+  [/\bdeflectors?\b/g, 'shield'],
+  [/\bviewscreen\b/g, 'viewscreen'],
+  [/\bview screen\b/g, 'viewscreen'],
+  [/\bmain viewer\b/g, 'viewscreen'],
+  [/\bon-?screen\b/g, 'onscreen'],
+];
+
+/**
+ * Politeness and framing that carries no operational meaning. Stripped before
+ * scoring so "could you please have the helm bring us about" scores the same as
+ * "come about".
+ */
+const FILLER = [
+  /\b(?:i (?:want|need) (?:you )?to|i would like (?:you )?to|i'd like (?:you )?to)\b/g,
+  /\b(?:could|would|can|will) you (?:please )?\b/g,
+  /\b(?:please|kindly|if you would|if you please|for me)\b/g,
+  /\b(?:let us|let me)\b/g,
+  /\b(?:go ahead and|make sure (?:you|to)|be sure to|try to|attempt to)\b/g,
+  /\b(?:right (?:now|away)|at once|immediately|on the double|smartly|quickly|now)\b/g,
+  /\b(?:aye|acknowledged|understood|roger|copy that|affirmative)\b/g,
+  /\b(?:okay|alright|well|so|um|uh|er|hmm)\b/g,
+  /\b(?:i say again|say again|repeat)\b/g,
+];
+
+/** Who is being addressed. Recognised, then removed — but reported. */
+const STATIONS = {
+  helm: 'helm',
+  navigation: 'helm',
+  navigator: 'helm',
+  helmsman: 'helm',
+  pilot: 'helm',
+  tactical: 'tactical',
+  weapons: 'tactical',
+  security: 'security',
+  engineering: 'engineering',
+  engineer: 'engineering',
+  science: 'science',
+  sciences: 'science',
+  communications: 'comms',
+  comms: 'comms',
+  comm: 'comms',
+  operations: 'ops',
+  sickbay: 'medical',
+  medical: 'medical',
+  doctor: 'medical',
+  medbay: 'medical',
+  transporter: 'transporter',
+  'transporter room': 'transporter',
+  'shuttle bay': 'shuttlebay',
+  hangar: 'shuttlebay',
+  computer: 'computer',
+  'damage control': 'damagecontrol',
+  environmental: 'environmental',
+};
+
+const RANKS = ['mister', 'miss', 'missus', 'commander', 'lieutenant', 'ensign',
+  'doctor', 'chief', 'captain', 'admiral', 'crewman', 'yeoman', 'number one'];
+
+const NUMBER_WORDS = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20,
+  thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80,
+  ninety: 90, hundred: 100,
+};
+
+/** Words that do not help identify an intent and only add noise to scoring. */
+const STOPWORDS = new Set([
+  'a', 'an', 'the', 'to', 'of', 'and', 'or', 'is', 'are', 'be', 'we', 'us',
+  'our', 'i', 'you', 'your', 'it', 'that', 'this', 'do', 'does', 'did', 'not',
+  'have', 'has', 'had', 'am', 'was', 'were', 'will', 'would', 'shall', 'should',
+  'can', 'could', 'may', 'might', 'must', 'at', 'in', 'on', 'for', 'with',
+  'from', 'by', 'as', 'if', 'then', 'than', 'so', 'but', 'just', 'very',
+]);
+
+/**
+ * Character-level canonicalisation only: case, punctuation, contractions,
+ * slang, and spelling equivalences. No filler stripping and no addressee
+ * extraction, because those are things you do to a sentence and not to a
+ * dictionary entry.
+ *
+ * Exported because the lexicon runs its own phrases through this at load time.
+ * If it did not, the lexicon would have to be written in the folded dialect by
+ * hand — "fire all weapon" — and the first person to write the plural would
+ * silently break that intent.
+ */
+function fold(raw) {
+  let t = String(raw ?? '')
+    .toLowerCase()
+    .replace(/[‘’ʼ`]/g, "'")
+    .replace(/[“”]/g, '"');
+
+  // Punctuation goes, but hyphens inside words and decimal points survive
+  // because "one-third" and "warp 8.5" both matter.
+  t = t.replace(/[^\w\s'.\-/]/g, ' ');
+
+  for (const [re, sub] of CONTRACTIONS) t = t.replace(re, sub);
+  for (const [re, sub] of SLANG) t = t.replace(re, sub);
+
+  // Apostrophes have done their work; drop them so "captains" and "captain's"
+  // are the same token.
+  t = t.replace(/'/g, '');
+
+  for (const [re, sub] of EQUIVALENCES) t = t.replace(re, sub);
+
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Fold a raw line into canonical form, and report what the shape of the
+ * sentence tells us beyond its words.
+ * @returns {{text: string, tokens: string[], station: string|null, urgent: boolean, negated: boolean}}
+ */
+function normalize(raw) {
+  const urgent = /\b(?:now|immediately|at once|right away|on the double|asap|hurry|fast|quick)\b/i
+    .test(String(raw ?? ''));
+
+  let t = fold(raw);
+
+  // A negation anywhere flips several intents ("do not fire", "belay that").
+  const negated = /\b(?:not|never|cancel|abort|disregard|stand down|hold off)\b/.test(t);
+
+  for (const re of FILLER) t = t.replace(re, ' ');
+
+  t = t.replace(/\s+/g, ' ').trim();
+
+  const { station, rest } = extractStation(t);
+
+  return {
+    text: rest,
+    tokens: rest.split(' ').filter(Boolean),
+    station,
+    urgent,
+    negated,
+  };
+}
+
+/**
+ * Pull the addressee off the front — "helm," "mister sulu," "tactical" — and
+ * report it, because who you addressed is meaningful even when the rest of the
+ * order is unambiguous. Addresses can also appear at the end ("fire, tactical").
+ */
+function extractStation(text) {
+  let rest = text;
+  let station = null;
+
+  const stationNames = Object.keys(STATIONS).sort((a, b) => b.length - a.length);
+
+  for (let pass = 0; pass < 2; pass++) {
+    // A rank followed by a name: "mister sulu", "doctor mccoy", "number one".
+    const rankRe = new RegExp(`^(?:${RANKS.join('|')})\\s+(?:[a-z]+\\s*)?[,]?\\s*`);
+    const before = rest;
+    rest = rest.replace(rankRe, '');
+    if (rest !== before) continue;
+
+    let matched = false;
+    for (const name of stationNames) {
+      const head = new RegExp(`^${name}\\b[,]?\\s*`);
+      const tail = new RegExp(`[,]?\\s*\\b${name}$`);
+      if (head.test(rest)) {
+        station ??= STATIONS[name];
+        rest = rest.replace(head, '');
+        matched = true;
+        break;
+      }
+      if (tail.test(rest) && rest.split(' ').length > 1) {
+        station ??= STATIONS[name];
+        rest = rest.replace(tail, '');
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) break;
+  }
+
+  // A station can also be named in the middle of a sentence — "what does
+  // engineering say". That is still an address, so it is reported; but it is
+  // left in the text, because unlike a leading "Engineering," it is carrying
+  // grammatical weight and removing it mangles the sentence.
+  if (!station) {
+    for (const name of stationNames) {
+      if (new RegExp(`\\b${name}\\b`).test(rest)) { station = STATIONS[name]; break; }
+    }
+  }
+
+  return { station, rest: rest.trim() || text };
+}
+
+/**
+ * Read a number out of text, spelled or numeric.
+ * "warp factor eight" -> 8, "seventy five percent" -> 75, "one third" -> 0.333
+ */
+function readNumber(text, fallback = null) {
+  const t = String(text);
+
+  if (/\bone third\b|\b1\/3\b/.test(t)) return 1 / 3;
+  if (/\btwo thirds?\b|\b2\/3\b/.test(t)) return 2 / 3;
+  if (/\bthree quarters\b|\b3\/4\b/.test(t)) return 0.75;
+  if (/\b(?:one )?quarter\b|\b1\/4\b/.test(t)) return 0.25;
+  if (/\b(?:one )?half\b|\b1\/2\b/.test(t)) return 0.5;
+
+  const digits = t.match(/\b(\d+(?:\.\d+)?)\b/);
+  if (digits) return parseFloat(digits[1]);
+
+  // "twenty five" reads as 25; a bare "twenty" as 20.
+  const words = t.split(/\s+/);
+  for (let i = 0; i < words.length; i++) {
+    const a = NUMBER_WORDS[words[i]];
+    if (a === undefined) continue;
+    const b = NUMBER_WORDS[words[i + 1]];
+    if (a >= 20 && a < 100 && b !== undefined && b < 10) return a + b;
+    return a;
+  }
+  return fallback;
+}
+
+__exports.STATIONS = STATIONS;
+__exports.NUMBER_WORDS = NUMBER_WORDS;
+
+__exports.STOPWORDS = STOPWORDS;
+__exports.fold = fold;
+__exports.normalize = normalize;
+__exports.readNumber = readNumber;
+
+});
+
+__define("src/lang/fuzzy.js", function (__exports, __require) {
+// Edit distance, for orders that are typed badly rather than spoken.
+//
+// Optimised Damerau-Levenshtein with a bounded band: we only ever ask "is this
+// within k edits", never "how far apart are these exactly", so the algorithm can
+// abandon a row the moment every cell in it exceeds k. On the vocabulary sizes
+// here that turns an O(mn) comparison into something closer to O(k·n).
+
+/**
+ * Damerau-Levenshtein distance, giving up once it exceeds `max`.
+ * @returns {number} the distance, or max + 1 if it is further than max
+ */
+function distance(a, b, max = 3) {
+  if (a === b) return 0;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > max) return max + 1;
+  if (!la) return lb;
+  if (!lb) return la;
+
+  // Two rolling rows plus the one before them, for transpositions.
+  //
+  // Rows are pre-filled with an over-budget sentinel rather than left sparse.
+  // They must be: the band only computes cells near the diagonal, and the next
+  // row reads its neighbours — so an untouched cell has to be a number that
+  // loses every comparison. Leaving them undefined poisons the row with NaN,
+  // which silently reports every long pair as "too far apart" instead of
+  // erroring, and cost this parser every typo in a word of seven letters or
+  // more before it was caught.
+  const OVER = max + 1;
+  let prev2 = null;
+  let prev = new Array(lb + 1);
+  let curr = new Array(lb + 1).fill(OVER);
+  for (let j = 0; j <= lb; j++) prev[j] = j;
+
+  for (let i = 1; i <= la; i++) {
+    curr[0] = i;
+    const lo = Math.max(1, i - max);
+    const hi = Math.min(lb, i + max);
+
+    let best = OVER;
+    for (let j = lo; j <= hi; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(
+        curr[j - 1] + 1,        // insertion
+        prev[j] + 1,            // deletion
+        prev[j - 1] + cost,     // substitution
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2[j - 2] + 1);   // transposition
+      }
+      curr[j] = v;
+      if (v < best) best = v;
+    }
+
+    if (best > max) return OVER;
+
+    prev2 = prev;
+    prev = curr;
+    curr = new Array(lb + 1).fill(OVER);
+    curr[0] = i + 1;
+  }
+
+  return prev[lb] > max ? OVER : prev[lb];
+}
+
+/**
+ * Similarity on 0..1, tolerant in proportion to word length.
+ * Short words get almost no budget — turning "aft" into "all" is a different
+ * order, not a typo — while long ones get up to three edits.
+ */
+function similarity(a, b) {
+  if (a === b) return 1;
+  const len = Math.max(a.length, b.length);
+  if (len < 4) return 0;
+  const budget = len <= 5 ? 1 : len <= 8 ? 2 : 3;
+  const d = distance(a, b, budget);
+  if (d > budget) return 0;
+  return 1 - d / (len + 1);
+}
+
+/**
+ * Best match for `word` among `candidates`.
+ * @returns {{word: string, score: number}|null}
+ */
+function bestMatch(word, candidates, threshold = 0.62) {
+  let best = null;
+  for (const c of candidates) {
+    const s = similarity(word, c);
+    if (s >= threshold && (!best || s > best.score)) best = { word: c, score: s };
+  }
+  return best;
+}
+
+__exports.distance = distance;
+__exports.similarity = similarity;
+__exports.bestMatch = bestMatch;
+
+});
+
+__define("src/lang/phonetic.js", function (__exports, __require) {
+// Phonetic keys, for orders that are typed the way they sound.
+//
+// "hale them", "fier phasers", "shealds up", "evasiv manuvers" — none of these
+// are in any table and all of them are obviously an order. Two cheap keys catch
+// most of it:
+//
+//   soundex(word)   groups words by consonant sound class
+//   skeleton(word)  drops vowels and collapses doubles
+//
+// Neither is clever. Both are deterministic, allocation-light, and run in a few
+// microseconds, which matters because every candidate keyword in the lexicon is
+// compared against every token of the order.
+
+const SOUNDEX_CODES = {
+  b: '1', f: '1', p: '1', v: '1',
+  c: '2', g: '2', j: '2', k: '2', q: '2', s: '2', x: '2', z: '2',
+  d: '3', t: '3',
+  l: '4',
+  m: '5', n: '5',
+  r: '6',
+};
+
+/**
+ * Standard Soundex: first letter, then three digits for the following
+ * consonant sounds, with adjacent duplicates collapsed.
+ * @returns {string} e.g. "hail" and "hale" both give "H400"
+ */
+function soundex(word) {
+  const w = String(word).toLowerCase().replace(/[^a-z]/g, '');
+  if (!w) return '';
+
+  const first = w[0];
+  let out = first.toUpperCase();
+  let prev = SOUNDEX_CODES[first] ?? '';
+
+  for (let i = 1; i < w.length && out.length < 4; i++) {
+    const ch = w[i];
+    const code = SOUNDEX_CODES[ch] ?? '';
+
+    // h and w are transparent: they do not break a run of the same sound.
+    if (ch === 'h' || ch === 'w') continue;
+
+    if (code && code !== prev) out += code;
+
+    // Vowels do break a run, so "pepper" keeps both p sounds.
+    prev = code || (('aeiouy'.includes(ch)) ? '' : prev);
+  }
+
+  return out.padEnd(4, '0');
+}
+
+/**
+ * Consonant skeleton: the leading letter plus every consonant after it, with
+ * doubles collapsed. Coarser than Soundex in some ways and finer in others,
+ * which is the point — the two disagree on different mistakes.
+ * @returns {string} "shealds" and "shields" both give "SHLDS"
+ */
+function skeleton(word) {
+  const w = String(word).toLowerCase().replace(/[^a-z]/g, '');
+  if (!w) return '';
+
+  let out = w[0];
+  for (let i = 1; i < w.length; i++) {
+    const ch = w[i];
+    if ('aeiou'.includes(ch)) continue;
+    // Collapse a genuine double letter — "pepper" has one — but not two of the
+    // same consonant that were separated by a vowel we have just dropped.
+    if (ch === w[i - 1]) continue;
+    out += ch;
+  }
+  return out.toUpperCase();
+}
+
+/** First vowel in a word, or '' if it has none. */
+function firstVowel(w) {
+  for (const ch of w) if ('aeiouy'.includes(ch)) return ch;
+  return '';
+}
+
+/**
+ * Do two words plausibly sound the same?
+ *
+ * Both keys have to agree, and for short words the first vowel has to match as
+ * well. That last condition is load-bearing: both keys throw vowels away, so
+ * without it "fire" and "far" are identical, and so are "port" and "part" —
+ * different orders, not typos. Short words are dense enough that almost any
+ * three or four letters spell something else, while a seven-letter word that
+ * survives both keys really is a misspelling of the same word.
+ */
+function soundsLike(a, b) {
+  if (a === b) return true;
+  const wa = String(a).toLowerCase();
+  const wb = String(b).toLowerCase();
+  if (wa.length < 3 || wb.length < 3) return false;
+  if (soundex(wa) !== soundex(wb) || skeleton(wa) !== skeleton(wb)) return false;
+  if (Math.max(wa.length, wb.length) >= 6) return true;
+  return firstVowel(wa) === firstVowel(wb);
+}
+
+/** Precompute both keys once per vocabulary word. */
+function phoneticKey(word) {
+  return `${soundex(word)}|${skeleton(word)}`;
+}
+
+__exports.soundex = soundex;
+__exports.skeleton = skeleton;
+__exports.soundsLike = soundsLike;
+__exports.phoneticKey = phoneticKey;
+
+});
+
+__define("src/lang/gazetteer.js", function (__exports, __require) {
+// Entity extraction: the nouns an order can be about.
+//
+// Everything here is derived from the game's own data at load time rather than
+// restated. If a system is added to systems.data.js it becomes addressable by
+// name in the same breath, with fuzzy and phonetic matching for free — which is
+// the whole reason this file reads the data instead of listing it.
+
+const { SYSTEMS } = __require("src/world/systems.data.js");
+const { FACTION_LIST } = __require("src/world/factions.data.js");
+const { SUBSYSTEMS } = __require("src/sim/power.js");
+const { FACINGS } = __require("src/sim/ship.js");
+const { similarity } = __require("src/lang/fuzzy.js");
+const { soundsLike } = __require("src/lang/phonetic.js");
+
+/** Words that are never a destination even though they look like nouns. */
+const NOT_A_PLACE = new Set([
+  'course', 'warp', 'speed', 'power', 'shield', 'weapon', 'engine', 'target',
+  'sensor', 'hull', 'crew', 'captain', 'ship', 'vessel', 'them', 'him', 'her',
+  'space', 'system', 'sector', 'here', 'there', 'home', 'base',
+]);
+
+/** Aliases the data files do not carry but people certainly type. */
+const PLACE_ALIASES = {
+  earth: 'sol', terra: 'sol', 'sector 001': 'sol', home: 'sol',
+  headquarters: 'sol', hq: 'sol', 'starfleet command': 'sol',
+  ds9: 'terok_nor', 'deep space nine': 'terok_nor', 'deep space 9': 'terok_nor',
+  'deep space': 'terok_nor', terok: 'terok_nor',
+  kronos: 'qonos', "qo'nos": 'qonos', 'the homeworld': 'qonos',
+  'the zone': 'neutral_zone_1', 'neutral zone': 'neutral_zone_1', rnz: 'neutral_zone_1',
+  badlands: 'badlands_1', 'the badlands': 'badlands_1',
+  'utopia planitia': 'utopia', 'the yards': 'utopia',
+};
+
+const FACING_WORDS = {
+  fore: 'fore', forward: 'fore', front: 'fore', bow: 'fore', ahead: 'fore',
+  aft: 'aft', rear: 'aft', stern: 'aft', behind: 'aft', back: 'aft',
+  port: 'port', larboard: 'port', left: 'port',
+  starboard: 'starboard', right: 'starboard',
+  dorsal: 'dorsal', top: 'dorsal', upper: 'dorsal', above: 'dorsal',
+  ventral: 'ventral', bottom: 'ventral', lower: 'ventral', below: 'ventral',
+  underside: 'ventral', belly: 'ventral',
+};
+
+/** Our own power grid channels — where power can be sent. */
+const POWER_WORDS = {
+  weapon: 'weapons', phaser: 'weapons', gun: 'weapons', armament: 'weapons',
+  shield: 'shields', deflector: 'shields', screen: 'shields',
+  engine: 'engines', impulse: 'engines', propulsion: 'engines', drive: 'engines',
+  thruster: 'engines', warp: 'engines',
+  auxiliary: 'auxiliary', aux: 'auxiliary', sensor: 'auxiliary',
+  science: 'auxiliary', computer: 'auxiliary', transporter: 'auxiliary',
+};
+
+/** Their systems — what a targeting order can single out. */
+const TARGET_WORDS = {
+  weapon: 'weapons', phaser: 'weapons', gun: 'weapons', torpedo: 'weapons',
+  'weapon array': 'weapons', battery: 'weapons',
+  shield: 'shields', deflector: 'shields', screen: 'shields',
+  'shield generator': 'shields', 'shield emitter': 'shields',
+  engine: 'engines', impulse: 'engines', nacelle: 'engines', thruster: 'engines',
+  'impulse engine': 'engines', 'warp nacelle': 'engines', propulsion: 'engines',
+  core: 'warpcore', reactor: 'warpcore', 'warp core': 'warpcore',
+  'antimatter': 'warpcore', 'power plant': 'warpcore', 'warp drive': 'warpcore',
+  sensor: 'sensors', 'sensor array': 'sensors', scanner: 'sensors', eyes: 'sensors',
+  'life support': 'lifesupport', lifesupport: 'lifesupport',
+  environmental: 'lifesupport', 'air supply': 'lifesupport',
+  bridge: 'bridge', 'command deck': 'bridge',
+};
+
+/** Build a compact search index once, at module load. */
+function buildPlaces() {
+  const entries = [];
+  for (const s of SYSTEMS) {
+    const names = new Set([
+      s.name.toLowerCase(),
+      s.id.replace(/_/g, ' '),
+    ]);
+    // "the Enterprise incident" style prefixes people drop.
+    const bare = s.name.toLowerCase().replace(/^(?:the|uss|iks|irw|starbase)\s+/, '');
+    if (bare.length > 3) names.add(bare);
+    // First word, when it is distinctive enough to stand alone.
+    const first = bare.split(/[\s-]/)[0];
+    if (first.length > 4) names.add(first);
+
+    for (const n of names) {
+      if (!n || NOT_A_PLACE.has(n)) continue;
+      entries.push({ id: s.id, name: n, words: n.split(' ') });
+    }
+  }
+  for (const [alias, id] of Object.entries(PLACE_ALIASES)) {
+    if (SYSTEMS.some((s) => s.id === id)) {
+      entries.push({ id, name: alias, words: alias.split(' ') });
+    }
+  }
+  // Longest names first so "deep space 9" beats "deep space".
+  entries.sort((a, b) => b.name.length - a.name.length);
+  return entries;
+}
+
+const PLACES = buildPlaces();
+
+const FACTION_NAMES = FACTION_LIST.flatMap((f) => {
+  const out = [{ id: f.id, name: f.id }];
+  if (f.name) out.push({ id: f.id, name: f.name.toLowerCase() });
+  if (f.adjective) out.push({ id: f.id, name: f.adjective.toLowerCase() });
+  return out;
+});
+
+/**
+ * Find a destination in the order text.
+ * Exact substring first, then per-token fuzzy and phonetic, so "set course for
+ * vulkan" and "take us to andoria" both land.
+ * @returns {{id: string, name: string, exact: boolean}|null}
+ */
+function findPlace(text, tokens) {
+  for (const p of PLACES) {
+    if (text.includes(p.name)) return { id: p.id, name: p.name, exact: true };
+  }
+
+  let best = null;
+  for (const p of PLACES) {
+    if (p.words.length > 1) continue;      // single-word fuzzing only
+    for (const tok of tokens) {
+      if (tok.length < 4 || NOT_A_PLACE.has(tok)) continue;
+      const s = similarity(tok, p.name);
+      // Deliberately strict. A destination is the one slot where guessing
+      // wrong sends the ship somewhere the captain never asked for, and short
+      // words are one edit from each other constantly: "come" scores 0.8
+      // against "home".
+      if (s > 0.8 && (!best || s > best.score)) {
+        best = { id: p.id, name: p.name, exact: false, score: s };
+      } else if (!best && soundsLike(tok, p.name)) {
+        best = { id: p.id, name: p.name, exact: false, score: 0.7 };
+      }
+    }
+  }
+  return best;
+}
+
+/** Which shield facing or side of the ship is meant. */
+function findFacing(text, tokens) {
+  for (const tok of tokens) {
+    const f = FACING_WORDS[tok];
+    if (f) return f;
+  }
+  for (const tok of tokens) {
+    if (tok.length < 4) continue;
+    for (const word of Object.keys(FACING_WORDS)) {
+      if (similarity(tok, word) > 0.75 || soundsLike(tok, word)) {
+        return FACING_WORDS[word];
+      }
+    }
+  }
+  return null;
+}
+
+/** Which of our own power channels is meant. */
+function findPowerChannel(text, tokens) {
+  for (const tok of tokens) {
+    const s = POWER_WORDS[tok];
+    if (s && SUBSYSTEMS.includes(s)) return s;
+  }
+  for (const tok of tokens) {
+    if (tok.length < 4) continue;
+    for (const [word, sub] of Object.entries(POWER_WORDS)) {
+      if (similarity(tok, word) > 0.78) return sub;
+    }
+  }
+  return null;
+}
+
+/** Which of *their* systems a targeting order singles out. */
+function findTargetSystem(text, tokens) {
+  const phrases = Object.keys(TARGET_WORDS)
+    .filter((k) => k.includes(' '))
+    .sort((a, b) => b.length - a.length);
+  for (const p of phrases) {
+    if (text.includes(p)) return TARGET_WORDS[p];
+  }
+  for (const tok of tokens) {
+    const s = TARGET_WORDS[tok];
+    if (s) return s;
+  }
+  for (const tok of tokens) {
+    if (tok.length < 5) continue;
+    const stem = tok.replace(/s$/, '');
+    for (const [word, sub] of Object.entries(TARGET_WORDS)) {
+      if (word.includes(' ')) continue;
+      // Looser than the other extractors on purpose: these are long technical
+      // nouns typed under pressure, and "nacels" is not another subsystem.
+      if (similarity(tok, word) > 0.72 || similarity(stem, word) > 0.72) return sub;
+    }
+  }
+  return null;
+}
+
+/** Which faction is being talked about. */
+function findFaction(text, tokens) {
+  for (const f of FACTION_NAMES) {
+    if (text.includes(f.name)) return f.id;
+  }
+  for (const tok of tokens) {
+    if (tok.length < 5) continue;
+    for (const f of FACTION_NAMES) {
+      if (similarity(tok, f.name) > 0.8) return f.id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Warp factor, specifically. "warp 8", "warp factor eight", "maximum warp",
+ * "best speed" — but not the 8 in "target their number 8 emitter".
+ */
+function findWarpFactor(text) {
+  if (/\b(?:maximum|max|best|emergency|top|full)\s+(?:possible\s+)?(?:warp|speed)\b/.test(text)) {
+    return 9.9;
+  }
+  const m = text.match(/\bwarp\s*(?:factor\s*)?(\d+(?:\.\d+)?)\b/);
+  if (m) return Math.max(1, Math.min(9.9, parseFloat(m[1])));
+
+  const words = 'one|two|three|four|five|six|seven|eight|nine';
+  const w = text.match(new RegExp(`\\bwarp\\s*(?:factor\\s*)?(${words})\\b`));
+  if (w) {
+    const idx = words.split('|').indexOf(w[1]);
+    return idx + 1;
+  }
+  return null;
+}
+
+/** A percentage, if one was given. */
+function findPercent(text) {
+  const m = text.match(/\b(\d+(?:\.\d+)?)\s*(?:percent|%)/);
+  return m ? parseFloat(m[1]) : null;
+}
+
+/** A compass bearing, with optional elevation — "bearing 210 mark 15". */
+function findBearing(text) {
+  const m = text.match(/\b(?:bearing|heading|course)\s*(?:to\s*)?(\d{1,3})(?:\s*(?:mark|by|\/)\s*(-?\d{1,3}))?/);
+  if (!m) return null;
+  return {
+    bearing: parseInt(m[1], 10) % 360,
+    mark: m[2] !== undefined ? parseInt(m[2], 10) : 0,
+  };
+}
+
+/** Everything the parser can name, for the help sheet and for tests. */
+function gazetteerSummary() {
+  return {
+    places: PLACES.length,
+    facings: new Set(Object.values(FACING_WORDS)).size,
+    powerChannels: SUBSYSTEMS.length,
+    targetSystems: new Set(Object.values(TARGET_WORDS)).size,
+    factions: new Set(FACTION_NAMES.map((f) => f.id)).size,
+  };
+}
+
+__exports.FACINGS = FACINGS;
+__exports.SUBSYSTEMS = SUBSYSTEMS;
+__exports.FACING_WORDS = FACING_WORDS;
+__exports.TARGET_WORDS = TARGET_WORDS;
+__exports.POWER_WORDS = POWER_WORDS;
+
+__exports.findPlace = findPlace;
+__exports.findFacing = findFacing;
+__exports.findPowerChannel = findPowerChannel;
+__exports.findTargetSystem = findTargetSystem;
+__exports.findFaction = findFaction;
+__exports.findWarpFactor = findWarpFactor;
+__exports.findPercent = findPercent;
+__exports.findBearing = findBearing;
+__exports.gazetteerSummary = gazetteerSummary;
+
+});
+
+__define("src/lang/lexicon.js", function (__exports, __require) {
+// The intent lexicon.
+//
+// One entry per thing a captain can order. Each entry carries the phrasings
+// that identify it, the individual words that hint at it, the words that rule it
+// out, and a builder that turns the extracted entities into the command object
+// the game executes.
+//
+// This is data, and it is deliberately verbose. The parser is only as good as
+// the number of ways it has seen an order phrased, and every phrase in here is
+// one the fallback prompt no longer has to handle.
+//
+// THE RULE THIS FILE LIVES UNDER: every intent must produce an action that the
+// game observably executes. `tests/lang.test.js` walks this table and fails if
+// any intent produces an action with no handler. Three features once shipped
+// documented and inert in this repository; a lexicon is the easiest possible
+// place for that to happen again, so it is checked mechanically.
+
+const { fold } = __require("src/lang/normalize.js");
+
+/** Departments an order can be aimed at, used to break ties. */
+const STATION_AFFINITY = {
+  helm: ['set_course', 'warp_factor', 'throttle', 'come_about', 'heading',
+    'evasive', 'warp_out', 'dock', 'all_stop'],
+  tactical: ['fire', 'cease_fire', 'target_nearest', 'cycle_target',
+    'target_subsystem', 'shields', 'reinforce', 'alert'],
+  engineering: ['power', 'preset', 'eject_core', 'reinforce'],
+  science: ['scan'],
+  comms: ['hail', 'demand_surrender'],
+  medical: [],
+  transporter: ['transport', 'away_team'],
+  security: [],
+  ops: [],
+  shuttlebay: [],
+  damagecontrol: [],
+  environmental: [],
+  computer: [],
+};
+
+// Calling a station on the intercom is the one intent that is *about* being
+// addressed to a station, so every station favours it.
+for (const list of Object.values(STATION_AFFINITY)) list.push('intercom');
+
+/**
+ * @typedef {object} Intent
+ * @property {string} id
+ * @property {string} help          one-line form shown in the manual
+ * @property {string[]} phrases     multi-word forms; the strongest signal
+ * @property {object} keywords      token -> weight
+ * @property {string[]} [veto]      tokens that rule this intent out entirely
+ * @property {string[]} [requires]  entity slots that must be filled
+ * @property {Function} build       (ctx) -> command object
+ */
+
+/** @type {Intent[]} */
+const INTENTS = [
+  // ------------------------------------------------------------------
+  // Navigation
+  // ------------------------------------------------------------------
+  {
+    id: 'set_course',
+    help: 'Helm, set course for <system>, warp <n>',
+    phrases: [
+      'set course', 'set a course', 'lay in a course', 'lay in course',
+      'plot a course', 'plot course', 'chart a course', 'course for',
+      'course to', 'take us to', 'take us out to', 'get us to', 'head for',
+      'head to', 'head over to', 'make for', 'proceed to', 'travel to',
+      'fly to', 'go to', 'move to', 'warp to', 'set sail for', 'bring us to',
+      'navigate to', 'destination', 'next stop', 'point us at', 'aim for',
+      'i want to go to', 'lets go to', 'take me to', 'off to',
+      'take us home', 'head home', 'go home', 'return to', 'back to',
+      'set course home', 'bring us home', 'return us to', 'divert to',
+    ],
+    keywords: { course: 2, destination: 2, navigate: 1.5, plot: 1, lay: 0.8, travel: 1 },
+    veto: ['bearing'],
+    requires: ['place'],
+    build: (c) => ({
+      action: 'course',
+      system: c.place.id,
+      warp: c.warp ?? 6,
+    }),
+  },
+  {
+    id: 'warp_factor',
+    help: 'Warp <n> / maximum warp',
+    phrases: [
+      'warp factor', 'go to warp', 'engage warp', 'jump to warp', 'maximum warp',
+      'best speed', 'full warp', 'punch it', 'engage', 'warp speed',
+      'increase speed to warp', 'take her to warp', 'light speed',
+      'top speed', 'flank speed', 'all the speed she has', 'emergency warp',
+      'warp drive engage', 'hit it', 'lets move',
+    ],
+    keywords: { warp: 2 },
+    veto: ['course', 'destination', 'core', 'eject', 'jettison'],
+    vetoSlots: ['place'],
+    // Soft rather than required: "go to warp" needs no interrogation about
+    // which factor. It means go fast, and the helm picks a sensible number.
+    soft: ['warp'],
+    build: (c) => ({
+      action: 'warp_factor',
+      warp: c.warp ?? (/\b(?:maximum|max|best|top|flank|full|emergency|punch|hit it)\b/.test(c.text) ? 9.9 : 6),
+    }),
+  },
+  {
+    id: 'all_stop',
+    help: 'All stop / hold position',
+    phrases: [
+      'all stop', 'full stop', 'come to a stop', 'bring us to a stop',
+      'hold position', 'holding position', 'station keeping', 'keep station',
+      'hold here', 'stay put', 'stop the ship', 'halt', 'stop us',
+      'cut the engines', 'kill the engines', 'stop moving', 'dead stop',
+      'maintain position', 'hold us here', 'stand still',
+    ],
+    keywords: { stop: 2, halt: 2, hold: 1 },
+    veto: ['fire', 'firing'],
+    build: () => ({ action: 'throttle', value: 0 }),
+  },
+  {
+    id: 'throttle',
+    help: 'Ahead full / ahead one third / slow to half',
+    phrases: [
+      'ahead full', 'ahead one third', 'ahead two thirds', 'ahead half',
+      'ahead slow', 'ahead standard', 'full impulse', 'half impulse',
+      'quarter impulse', 'one quarter impulse', 'dead slow', 'slow down',
+      'speed up', 'increase speed', 'reduce speed', 'throttle up',
+      'throttle down', 'more speed', 'less speed', 'take it slow',
+      'step on it', 'faster', 'slower', 'give her more', 'open her up',
+      'impulse power', 'impulse speed', 'engine power',
+    ],
+    keywords: { impulse: 2, throttle: 2, ahead: 1.5, speed: 1, thruster: 1 },
+    veto: ['warp', 'course'],
+    build: (c) => {
+      const t = c.text;
+      let v = 1;
+      if (/\b(?:one third|1\/3)\b/.test(t)) v = 1 / 3;
+      else if (/\btwo thirds?\b|\b2\/3\b/.test(t)) v = 2 / 3;
+      else if (/\b(?:half|1\/2)\b/.test(t)) v = 0.5;
+      else if (/\b(?:quarter|1\/4)\b/.test(t)) v = 0.25;
+      else if (/\b(?:dead slow|crawl)\b/.test(t)) v = 0.15;
+      else if (/\b(?:slow|reduce|decrease|down|less|slower)\b/.test(t)) v = 0.35;
+      else if (c.percent !== null) v = Math.min(1, c.percent / 100);
+      return { action: 'throttle', value: v };
+    },
+  },
+  {
+    id: 'come_about',
+    help: 'Come about / bring us around / bearing <n> mark <n>',
+    phrases: [
+      'come about', 'bring us around', 'bring us about', 'turn around',
+      'turn us around', 'come around', 'face them', 'face him', 'turn into them',
+      'turn to face', 'point us at them', 'bring the bow around',
+      'get our nose on them', 'swing around', 'wheel about', 'about face',
+      'present our bow', 'line up on them', 'come to bearing', 'steer to',
+      'change heading', 'new heading', 'alter course to bearing',
+    ],
+    keywords: { bearing: 2, heading: 2, about: 1.2, turn: 1, face: 1, steer: 1.2 },
+    build: (c) => (c.bearing
+      ? { action: 'heading', value: c.bearing.bearing, mark: c.bearing.mark }
+      : { action: 'come_about' }),
+  },
+  {
+    id: 'evasive',
+    help: 'Evasive maneuvers',
+    phrases: [
+      'evasive maneuver', 'evasive action', 'evasive pattern', 'take evasive',
+      'start evading', 'stop evading', 'dodge', 'juke', 'shake them',
+      'shake them off', 'lose them', 'jink', 'zigzag', 'serpentine',
+      'do not fly straight', 'random course', 'unpredictable course',
+    ],
+    keywords: { evasive: 3, evade: 2, dodge: 2, jink: 2, maneuver: 1 },
+    build: (c) => ({ action: 'evasive', value: !c.negated }),
+  },
+  {
+    id: 'warp_out',
+    help: 'Get us out of here / break off',
+    phrases: [
+      'get us out of here', 'get us out', 'get out of here', 'break off',
+      'break off the attack', 'break off the engagement', 'disengage',
+      'retreat', 'withdraw', 'pull back', 'pull out', 'fall back', 'run for it',
+      'run away', 'flee', 'escape', 'we are leaving', 'time to go',
+      'abandon the fight', 'we cannot win this', 'jump out', 'warp out',
+      'get us clear', 'clear the area', 'leave now', 'bug out', 'get us gone',
+      'i want out', 'lets get out of here', 'no more of this',
+    ],
+    keywords: { retreat: 3, withdraw: 3, flee: 3, escape: 2.5, disengage: 3, run: 1.5 },
+    build: () => ({ action: 'warp_out' }),
+  },
+  {
+    id: 'dock',
+    help: 'Request docking / put in for repairs',
+    phrases: [
+      'request docking', 'docking clearance', 'permission to dock', 'dock with',
+      'put in for repairs', 'put in for resupply', 'take on supplies',
+      'resupply', 'refit', 'repair the ship', 'go to spacedock', 'dock us',
+      'bring us alongside', 'moor', 'shore leave', 'restock', 'rearm',
+      'take on torpedoes', 'reload torpedoes', 'refuel',
+    ],
+    keywords: { dock: 3, docking: 3, resupply: 3, repair: 1.5, refit: 3, spacedock: 3, rearm: 2 },
+    build: () => ({ action: 'dock' }),
+  },
+
+  // ------------------------------------------------------------------
+  // Alert and shields
+  // ------------------------------------------------------------------
+  {
+    id: 'alert',
+    help: 'Red alert / yellow alert / stand down',
+    phrases: [
+      'red alert', 'yellow alert', 'condition red', 'condition yellow',
+      'condition green', 'battle stations', 'general quarters', 'go to red',
+      'go to yellow', 'stand down', 'secure from alert', 'sound the alarm',
+      'all hands to battle stations', 'action stations', 'stand down from alert',
+      'cancel the alert', 'back to normal', 'alert status',
+      // Blue alert: the maintenance and docking condition. Documented in
+      // docs/RESEARCH.md and the one of the three the game did not have.
+      'blue alert', 'condition blue', 'secure for docking',
+      'secure for separation', 'maintenance stations', 'rig for docking',
+    ],
+    keywords: { alert: 3, condition: 1.5, quarters: 2, klaxon: 2, alarm: 2, battle: 1.5, station: 0.8 },
+    veto: ['weapon', 'phaser', 'torpedo'],
+    build: (c) => {
+      const t = c.text;
+      let level = 'yellow';
+      if (/\b(?:blue|docking|maintenance|separation)\b/.test(t)) level = 'blue';
+      else if (/\b(?:red|battle station|action station|general quarters|combat)/.test(t)) level = 'red';
+      else if (/\b(?:green|stand down|secure|normal|cancel)\b/.test(t)) level = 'normal';
+      else if (/\byellow\b/.test(t)) level = 'yellow';
+      else if (c.negated) level = 'normal';
+      return { action: 'alert', level };
+    },
+  },
+  {
+    id: 'shields',
+    help: 'Shields up / shields down',
+    phrases: [
+      'shield up', 'shield down', 'raise shield', 'lower shield', 'drop shield',
+      'put up the shield', 'take down the shield', 'bring up the shield',
+      'shield to maximum', 'deflector up', 'screens up', 'screens down',
+      'get the shield up', 'we need shield', 'kill the shield',
+      'shield off', 'shield on', 'defenses up', 'defenses down',
+    ],
+    keywords: { shield: 2.5, deflector: 2, screen: 1.5, raise: 1.2, lower: 1.2 },
+    veto: ['reinforce', 'bolster', 'strengthen', 'shore', 'thicken', 'harden',
+      'double', 'brace', 'power', 'divert', 'target'],
+    build: (c) => ({
+      action: 'shields',
+      up: !/\b(?:down|lower|drop|off|kill|take down)\b/.test(c.text),
+    }),
+  },
+  {
+    id: 'reinforce',
+    help: 'Reinforce the forward shields',
+    phrases: [
+      'reinforce the shield', 'strengthen the shield', 'bolster the shield',
+      'shore up the shield', 'transfer power to the shield', 'more power to the shield',
+      'double up the shield', 'thicken the shield', 'brace the shield',
+      'all power to the forward shield', 'reinforce forward', 'reinforce aft',
+      'harden the shield', 'boost the shield', 'shore up', 'double up',
+      'thicken', 'more shield on the', 'extra shield',
+    ],
+    keywords: {
+      reinforce: 3, strengthen: 3, bolster: 3, harden: 2.5, boost: 1.5,
+      shore: 2.5, thicken: 2.5, double: 2, brace: 2,
+    },
+    requires: ['facing'],
+    build: (c) => ({ action: 'reinforce', facing: c.facing }),
+  },
+
+  // ------------------------------------------------------------------
+  // Power
+  // ------------------------------------------------------------------
+  {
+    id: 'power',
+    help: 'Divert power to shields / weapons / engines',
+    phrases: [
+      'divert power', 'reroute power', 'transfer power', 'shift power',
+      'shunt power', 'route power', 'redirect power', 'send power',
+      'give me more power', 'more power to', 'all power to', 'power to',
+      'emergency power to', 'take power from', 'reallocate power',
+      'i need power in', 'juice up', 'feed the', 'channel power',
+    ],
+    keywords: { power: 2.5, divert: 3, reroute: 3, energy: 1.5, eps: 2 },
+    veto: ['preset', 'posture', 'configuration'],
+    requires: ['powerChannel'],
+    build: (c) => ({
+      action: 'power',
+      subsystem: c.powerChannel,
+      amount: /\b(?:all|maximum|everything|emergency|full)\b/.test(c.text) ? 100
+        : (c.percent ?? 25),
+    }),
+  },
+  {
+    id: 'preset',
+    help: 'Attack posture / defensive posture / balanced power',
+    phrases: [
+      'attack posture', 'attack pattern power', 'attack configuration',
+      'defense posture', 'defense configuration', 'defensive stance',
+      'speed configuration', 'science configuration', 'balanced power',
+      'standard distribution', 'standard power', 'combat power', 'rig for battle',
+      'rig for speed', 'rig for silent running', 'set condition for attack',
+    ],
+    keywords: { posture: 3, configuration: 2.5, preset: 3, distribution: 2, stance: 2.5 },
+    build: (c) => {
+      const t = c.text;
+      const preset = /\battack\b|\bcombat\b|\boffensive\b/.test(t) ? 'attack'
+        : /\bdefense\b|\bdefensive\b/.test(t) ? 'defense'
+        : /\bspeed\b|\bfast\b|\brun\b/.test(t) ? 'speed'
+        : /\bscience\b|\bscan\b|\bsensor\b/.test(t) ? 'science'
+        : 'balanced';
+      return { action: 'preset', preset };
+    },
+  },
+
+  // ------------------------------------------------------------------
+  // Weapons
+  // ------------------------------------------------------------------
+  {
+    id: 'target_subsystem',
+    help: 'Target their engines / weapons / warp core',
+    phrases: [
+      'target their', 'aim for their', 'go for their', 'hit their',
+      'focus fire on their', 'concentrate fire on their', 'take out their',
+      'knock out their', 'disable their', 'cripple their', 'shoot their',
+      'lock onto their', 'put a torpedo into their', 'aim at their',
+      'i want their', 'take down their',
+    ],
+    keywords: { target: 2, aim: 2, disable: 2.5, cripple: 2.5, 'knock': 1.5 },
+    requires: ['targetSystem'],
+    build: (c) => ({ action: 'target_subsystem', subsystem: c.targetSystem }),
+  },
+  {
+    id: 'cycle_target',
+    help: 'Next target / switch targets',
+    phrases: [
+      'next target', 'switch target', 'change target', 'cycle target',
+      'new target', 'another target', 'different target', 'other ship',
+      'switch to the other one', 'pick a new target', 'retarget',
+    ],
+    keywords: { next: 2, switch: 2, cycle: 2.5, retarget: 3 },
+    build: () => ({ action: 'cycle_target' }),
+  },
+  {
+    id: 'target_nearest',
+    help: 'Target the lead ship',
+    phrases: [
+      'target the nearest', 'target the closest', 'target the lead',
+      'lock weapons on', 'lock onto', 'lock on', 'acquire a target',
+      'get a lock', 'target that ship', 'target them', 'target the biggest',
+      'paint the target', 'designate target', 'that one',
+    ],
+    keywords: { target: 2, lock: 2.5, acquire: 2, designate: 2 },
+    veto: ['engine', 'weapon', 'shield', 'core', 'sensor', 'nacelle'],
+    build: () => ({ action: 'target_nearest' }),
+  },
+  {
+    id: 'fire',
+    help: 'Fire / fire phasers / fire torpedoes',
+    phrases: [
+      'open fire', 'fire at will', 'fire everything', 'fire all weapons',
+      'weapons free', 'let them have it', 'give them everything',
+      'shoot them', 'take the shot', 'fire when ready', 'fire phaser',
+      'fire torpedo', 'fire a full spread', 'full spread', 'launch torpedo',
+      'unload on them', 'hit them', 'attack', 'engage them', 'return fire',
+      'blow them out of the sky', 'put them down', 'kill them', 'destroy them',
+      'light them up', 'all batteries', 'commence firing', 'shoot',
+    ],
+    keywords: { fire: 3, shoot: 3, attack: 1.5, launch: 1.5, torpedo: 1.5, phaser: 1.5 },
+    veto: ['cease', 'hold', 'stop', 'cancel', 'check', 'safe'],
+    build: (c) => ({
+      action: 'fire',
+      weaponType: /\b(?:torpedo|photon|spread|launch)\b/.test(c.text) ? 'torpedo'
+        : /\b(?:phaser|beam|laser|battery|batteries)\b/.test(c.text) ? 'beam'
+        : 'all',
+    }),
+  },
+  {
+    id: 'cease_fire',
+    help: 'Cease fire / hold fire',
+    phrases: [
+      'cease fire', 'hold fire', 'stop firing', 'weapons hold', 'check fire',
+      'do not fire', 'stop shooting', 'stand down weapons', 'guns cold',
+      'no more shooting', 'stop the attack', 'hold your fire', 'weapons safe',
+      'guns cold', 'belay that order to fire',
+    ],
+    keywords: { cease: 3.5, hold: 1.5, check: 1.5 },
+    build: () => ({ action: 'cease_fire' }),
+  },
+
+  // ------------------------------------------------------------------
+  // Communications
+  // ------------------------------------------------------------------
+  {
+    id: 'hail',
+    help: 'Open a channel / hail them',
+    phrases: [
+      'open a channel', 'open channel', 'hailing frequencies', 'hail them',
+      'hail the ship', 'hail that vessel', 'contact them', 'call them',
+      'get them on the line', 'put them on screen', 'on screen', 'onscreen',
+      'let me talk to them', 'i want to speak to them', 'talk to them',
+      'signal them', 'send a message', 'raise them', 'try to communicate',
+      'establish contact', 'greetings', 'say hello', 'answer the hail',
+      'speak to them', 'speak to', 'talk to', 'get them on',
+      'respond to the hail', 'put them through',
+    ],
+    keywords: { hail: 3.5, channel: 2.5, contact: 2, communicate: 2.5, frequencies: 3 },
+    build: () => ({ action: 'hail' }),
+  },
+  {
+    id: 'demand_surrender',
+    help: 'Demand their surrender',
+    phrases: [
+      'demand their surrender', 'demand surrender', 'tell them to surrender',
+      'order them to surrender', 'tell them to stand down',
+      'tell them to drop their shield', 'call on them to surrender',
+      'give them a chance to surrender', 'surrender or be destroyed',
+      'lay down your arms', 'yield',
+    ],
+    keywords: { surrender: 3.5, yield: 2.5, capitulate: 3 },
+    build: () => ({ action: 'hail_option', option: 'demand_surrender' }),
+  },
+
+  // ------------------------------------------------------------------
+  // Ship's systems
+  // ------------------------------------------------------------------
+  {
+    id: 'scan',
+    help: 'Scan them / full sensor sweep',
+    phrases: [
+      'scan them', 'scan the ship', 'scan the area', 'full scan',
+      'sensor sweep', 'full sensor sweep', 'run a scan', 'analyze them',
+      'what are we looking at', 'what is out there', 'read them',
+      'give me readings', 'sensor readings', 'what do the sensors say',
+      'look them over', 'probe them', 'survey', 'examine', 'study them',
+      'what can you tell me about', 'identify them', 'who are they',
+    ],
+    keywords: { scan: 3, sensor: 2, sweep: 2, analyze: 2.5, readings: 2.5, probe: 2 },
+    build: () => ({ action: 'scan' }),
+  },
+  {
+    id: 'status',
+    help: 'Damage report / status report',
+    phrases: [
+      'damage report', 'status report', 'report', 'sitrep', 'situation report',
+      'how are we', 'how are we doing', 'how bad is it', 'what is our status',
+      'give me a status', 'condition of the ship', 'how is the ship',
+      'casualty report', 'what is our condition', 'talk to me', 'update me',
+      'where do we stand', 'how much damage', 'are we still in one piece',
+    ],
+    keywords: { report: 2.5, status: 3, sitrep: 3, damage: 1.5, condition: 1.5, casualty: 2 },
+    build: () => ({ action: 'status' }),
+  },
+  {
+    id: 'eject_core',
+    help: 'Eject the warp core',
+    phrases: [
+      'eject the warp core', 'eject the core', 'jettison the core',
+      'dump the core', 'blow the core', 'get rid of the core',
+      'eject warp core', 'punch out the core',
+    ],
+    keywords: { eject: 3, jettison: 3 },
+    requires: [],
+    veto: ['pod', 'cargo'],
+    build: () => ({ action: 'eject_core' }),
+  },
+  // ------------------------------------------------------------------
+  // The captain's chair. These are the controls the chair carries, and they
+  // are here so that every one of them is equally an order you can say.
+  // ------------------------------------------------------------------
+  {
+    id: 'intercom',
+    help: 'Engineering, report / bridge to sickbay',
+    phrases: [
+      'bridge to', 'get me engineering', 'get me sickbay', 'get me the bridge',
+      'call engineering', 'call sickbay', 'open the intercom', 'intercom',
+      'engineering report', 'sickbay report', 'tactical report',
+      'science report', 'helm report', 'security report',
+      'what does engineering say', 'ask engineering', 'ask the doctor',
+      'put me through to', 'raise engineering', 'get me', 'bridge to',
+    ],
+    keywords: {
+      intercom: 3, report: 3, call: 1.5, ask: 1.5, raise: 1.2, get: 0.8,
+      say: 1, through: 1,
+    },
+    // No department, no intercom call — "damage report" with nobody addressed
+    // is the ordinary status readout and belongs to that intent instead.
+    mustHave: ['station'],
+    // ...unless the captain said the word outright, in which case the ship
+    // knows perfectly well what is being asked for.
+    mustHaveUnless: /\bintercom\b/,
+    build: (c) => ({
+      action: 'intercom',
+      dept: /\b(?:engineering|engineer)\b/.test(c.text) ? 'engineering'
+        : /\b(?:sickbay|medical|doctor|medbay)\b/.test(c.text) ? 'medical'
+        : /\b(?:tactical|weapon)\b/.test(c.text) ? 'tactical'
+        : /\b(?:science|sensor)\b/.test(c.text) ? 'science'
+        : /\b(?:helm|navigation)\b/.test(c.text) ? 'helm'
+        : /\b(?:comms|communications)\b/.test(c.text) ? 'comms'
+        : c.station ?? 'security',
+    }),
+  },
+  {
+    id: 'log_entry',
+    help: 'Captain’s log, supplemental: <text>',
+    phrases: [
+      'captains log', 'ships log', 'log entry', 'supplemental',
+      'record a log entry', 'make a log entry', 'note in the log',
+      'begin recording', 'for the record', 'log this',
+    ],
+    keywords: { log: 2, record: 1.5, supplemental: 3 },
+    veto: ['damage', 'status'],
+    build: (c) => ({
+      action: 'log_entry',
+      // Everything after the preamble is the entry itself.
+      text: c.text.replace(/^.*?(?:supplemental|log entry|captains log|ships log|log this|for the record)\s*/, '').trim()
+        || c.text,
+    }),
+  },
+  {
+    id: 'jettison_pod',
+    help: 'Jettison the ion pod',
+    phrases: [
+      'jettison the pod', 'jettison the ion pod', 'eject the pod',
+      'drop the pod', 'dump the pod', 'launch the decoy', 'deploy a decoy',
+      'give them something else to shoot at', 'pod away',
+    ],
+    keywords: { pod: 3, decoy: 3 },
+    veto: ['core', 'reactor'],
+    build: () => ({ action: 'jettison_pod' }),
+  },
+  {
+    id: 'viewscreen',
+    help: 'On screen / main viewer',
+    phrases: [
+      'main viewer', 'tactical display', 'show me the tactical',
+      'put it on the viewscreen', 'switch the viewscreen', 'viewscreen',
+      'show me what is out there', 'let me see',
+    ],
+    keywords: { viewscreen: 3, display: 2, viewer: 2.5, see: 1.5 },
+    veto: ['hail', 'channel', 'them'],
+    build: () => ({ action: 'viewscreen' }),
+  },
+  {
+    id: 'brace',
+    help: 'All hands brace for impact',
+    phrases: [
+      'brace for impact', 'all hands brace', 'brace yourselves', 'hang on',
+      'hold on to something', 'incoming', 'take cover', 'secure for impact',
+      'prepare for impact', 'this is going to hurt',
+    ],
+    keywords: { brace: 3.5 },
+    veto: ['shield', 'facing'],
+    build: () => ({ action: 'ability', ability: 'brace_for_impact' }),
+  },
+  {
+    id: 'away_team',
+    help: 'Assemble an away team',
+    phrases: [
+      'away team', 'landing party', 'beam down', 'send a team down',
+      'assemble an away team', 'put together a team', 'go down there',
+      'send someone down', 'i am going down', 'i will lead the team',
+      'transport down', 'take a team', 'shore party', 'boarding party',
+    ],
+    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5 },
+    build: (c) => ({
+      action: 'away_team',
+      captainLeads: /\b(?:i will lead|i am going|with me|i will go|myself|personally)\b/.test(c.text),
+    }),
+  },
+  {
+    id: 'transport',
+    help: 'Energize',
+    phrases: [
+      'energize', 'beam them up', 'beam them aboard', 'beam him up',
+      'beam her up', 'beam it up', 'bring them up', 'bring them aboard',
+      'get them out of there', 'transport them', 'lock on and beam',
+      'one to beam up', 'beam us back', 'get us back aboard', 'transporter room energize',
+    ],
+    keywords: { energize: 3.5, beam: 2.5, transport: 2 },
+    veto: ['down', 'away'],
+    build: () => ({ action: 'transport' }),
+  },
+];
+
+// The phrases above are written the way a person writes them — plural nouns,
+// British spelling, contractions. Normalisation folds all of that away before
+// the parser ever sees an order, so the lexicon is folded once at load to meet
+// it in the same dialect. Doing this by hand in the table instead would mean
+// writing "fire all weapon", and the first person to type the plural would
+// silently break the intent.
+for (const intent of INTENTS) {
+  intent.keywords = Object.fromEntries(
+    Object.entries(intent.keywords).map(([w, weight]) => [fold(w), weight]),
+  );
+  intent.phrases = [...new Set(intent.phrases.map(fold))]
+    // A single word that is already a keyword would otherwise be counted
+    // twice, which is how "shoot their sensor array" came out as open fire
+    // instead of a targeting order.
+    .filter((p) => p.includes(' ') || !(p in intent.keywords))
+    .sort((a, b) => b.length - a.length);
+  if (intent.veto) intent.veto = intent.veto.map(fold);
+}
+
+/** Fast lookup by id. */
+const INTENT_BY_ID = Object.fromEntries(INTENTS.map((i) => [i.id, i]));
+
+/** Every action id the lexicon can emit — checked against the executor. */
+function lexiconActions() {
+  const ctx = {
+    text: '', tokens: [], negated: false, percent: null, urgent: false,
+    place: { id: 'sol' }, facing: 'fore', powerChannel: 'shields',
+    targetSystem: 'engines', warp: 6, bearing: null, faction: null,
+  };
+  return [...new Set(INTENTS.map((i) => i.build(ctx).action))];
+}
+
+/** Everything the parser understands, for the manual and the help sheet. */
+function intentHelp() {
+  return INTENTS.map((i) => ({ id: i.id, help: i.help, phrases: i.phrases.length }));
+}
+
+/** Total number of distinct phrasings carried, for the size budget in CI. */
+function phraseCount() {
+  return INTENTS.reduce((n, i) => n + i.phrases.length + Object.keys(i.keywords).length, 0);
+}
+
+__exports.STATION_AFFINITY = STATION_AFFINITY;
+__exports.INTENTS = INTENTS;
+__exports.INTENT_BY_ID = INTENT_BY_ID;
+__exports.lexiconActions = lexiconActions;
+__exports.intentHelp = intentHelp;
+__exports.phraseCount = phraseCount;
+
+});
+
+__define("src/lang/parse.js", function (__exports, __require) {
+// The parsing pipeline.
+//
+//   raw text
+//     -> normalise (contractions, slang, spelling, filler, addressee)
+//     -> extract entities (place, facing, power channel, target system, numbers)
+//     -> score every intent (phrases, keywords, phonetics, fuzzy, station)
+//     -> fill slots and emit a command, with a confidence
+//
+// Three outcomes, because pretending to be certain is worse than asking:
+//
+//   confident      the order executes
+//   plausible      "I read that as X — confirm?"
+//   lost           the officer asks, and offers the nearest readings
+//
+// What this is not: it is not a language model, and it does not understand
+// English. It recognises orders. The measure of it is tests/lang.test.js, which
+// runs a corpus of hand-written paraphrases and reports the hit rate rather than
+// asserting the parser is good.
+
+const { normalize } = __require("src/lang/normalize.js");
+const { similarity } = __require("src/lang/fuzzy.js");
+const { soundsLike } = __require("src/lang/phonetic.js");
+const { findPlace, findFacing, findPowerChannel, findTargetSystem, findFaction, findWarpFactor, findPercent, findBearing } = __require("src/lang/gazetteer.js");
+const { INTENTS, STATION_AFFINITY } = __require("src/lang/lexicon.js");
+
+/** Above this, act. Below the lower bound, admit you did not understand. */
+const CONFIDENT = 0.58;
+const PLAUSIBLE = 0.26;
+
+/** What a phonetic or near-miss keyword hit is worth against an exact one. */
+const FUZZY_CREDIT = 0.65;
+
+/** Prompts for an intent that was recognised but is missing something. */
+const SLOT_PROMPTS = {
+  place: 'Which system, Captain?',
+  facing: 'Which facing, Captain?',
+  powerChannel: 'Power to which system, Captain?',
+  targetSystem: 'Target which system, Captain?',
+  warp: 'What warp factor, Captain?',
+};
+
+/**
+ * Pull every entity the lexicon can reference out of a normalised line.
+ * Done once per order rather than once per intent, because entity extraction is
+ * the expensive half and the answer does not change between intents.
+ */
+function extract(norm) {
+  const { text, tokens } = norm;
+  return {
+    text,
+    tokens,
+    station: norm.station,
+    urgent: norm.urgent,
+    negated: norm.negated,
+    place: findPlace(text, tokens),
+    facing: findFacing(text, tokens),
+    powerChannel: findPowerChannel(text, tokens),
+    targetSystem: findTargetSystem(text, tokens),
+    faction: findFaction(text, tokens),
+    warp: findWarpFactor(text),
+    percent: findPercent(text),
+    bearing: findBearing(text),
+  };
+}
+
+/** Whole-word containment: `needle` must sit on word boundaries in `haystack`. */
+function hasWord(haystack, needle) {
+  const i = haystack.indexOf(needle);
+  if (i < 0) return false;
+  const before = i === 0 ? ' ' : haystack[i - 1];
+  const after = haystack[i + needle.length] ?? ' ';
+  return !/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after);
+}
+
+/**
+ * Score one intent against the extracted order.
+ * Returns a raw score; the caller turns the field of scores into a confidence.
+ */
+function scoreIntent(intent, ctx) {
+  // A veto word is a hard no. "hold fire" must never read as "hold position",
+  // and no amount of keyword overlap should be able to outvote that.
+  //
+  // Vetoes are matched phonetically as well as exactly, because a misspelling
+  // has to be able to rule an intent out for the same reason it can rule one
+  // in: "ceese fire" is not an order to open fire.
+  if (intent.veto) {
+    for (const v of intent.veto) {
+      if (ctx.tokens.includes(v) || hasWord(ctx.text, v)) return 0;
+      for (const tok of ctx.tokens) {
+        if (tok.length >= 4 && soundsLike(tok, v)) return 0;
+      }
+    }
+  }
+
+  // Some intents are ruled out by an entity rather than a word. "Warp 8 to
+  // Vulcan" names a destination, so it is a course order and not a speed order,
+  // however much it looks like one.
+  for (const slot of intent.vetoSlots ?? []) {
+    if (ctx[slot] !== null && ctx[slot] !== undefined) return 0;
+  }
+
+  // And some intents cannot exist without one. Calling a department on the
+  // intercom requires a department; without one the same words are an ordinary
+  // status request. This is a precondition rather than a prompt, because there
+  // is nothing sensible to ask.
+  const excused = intent.mustHaveUnless?.test(ctx.text) ?? false;
+  if (!excused) {
+    for (const slot of intent.mustHave ?? []) {
+      if (ctx[slot] === null || ctx[slot] === undefined) return 0;
+    }
+  }
+
+  let score = 0;
+  let matchedPhrase = null;
+
+  // Phrases are the strongest signal, and longer phrases are stronger still —
+  // "break off the engagement" is far more diagnostic than "break".
+  //
+  // Matching is on word boundaries, not substrings. Without that, warp_out's
+  // "flee" fires on "starfleet command", which is not a request to run away.
+  for (const phrase of intent.phrases) {
+    if (!hasWord(ctx.text, phrase)) continue;
+    const words = phrase.split(' ').length;
+    // A one-word "phrase" is really just a keyword and is scored like one, so
+    // it cannot outrank a genuine multi-word match.
+    const value = words === 1 ? 1.8 : 2.4 + words * 0.55;
+    if (value > score) { score = value; matchedPhrase = phrase; }
+  }
+
+  // Keywords accumulate. Exact hits pay full weight; a word that merely sounds
+  // right or is one typo away pays a discount, which is enough to rescue an
+  // order without being enough to invent one. The thresholds below are strict,
+  // so the discount is modest — 0.5 was low enough that "ceese fire" scored
+  // under the confidence floor and fell through to the table, which opened
+  // fire.
+  for (const [word, weight] of Object.entries(intent.keywords)) {
+    if (ctx.tokens.includes(word)) {
+      score += weight;
+      continue;
+    }
+    for (const tok of ctx.tokens) {
+      if (tok.length < 4) continue;
+      // A misspelling keeps its plural even though normalisation has
+      // singularised the correctly spelled word: "shealds" never became
+      // "sheald". Comparing the stem as well is what closes that gap.
+      const stem = tok.replace(/s$/, '');
+      // 0.8 rather than 0.75, because at 0.75 a four-letter word matches
+      // anything one edit away — "half" scores 0.8 against "halt", which is
+      // the difference between half speed and a full stop.
+      if (soundsLike(tok, word) || similarity(tok, word) > 0.8
+        || (stem !== tok && (stem === word || soundsLike(stem, word) || similarity(stem, word) > 0.8))) {
+        score += weight * FUZZY_CREDIT;
+        break;
+      }
+    }
+  }
+
+  if (score <= 0) return 0;
+
+  // Who you addressed breaks ties. "Helm, take us in" is navigation;
+  // "Tactical, take us in" is not.
+  if (ctx.station && STATION_AFFINITY[ctx.station]?.includes(intent.id)) {
+    score += 1.3;
+  }
+
+  // Having the entity the intent needs is corroboration that we read it right.
+  // Missing it is not fatal — that is what the slot prompt is for — but it does
+  // make this intent a weaker explanation of the sentence.
+  for (const slot of intent.requires ?? []) {
+    if (ctx[slot] !== null && ctx[slot] !== undefined) score += 0.9;
+    else score *= 0.5;
+  }
+
+  // Soft slots corroborate when present and are never asked about, because the
+  // intent has a sensible default. "Go to warp" does not need interrogating
+  // about which warp factor; it means go fast.
+  for (const slot of intent.soft ?? []) {
+    if (ctx[slot] !== null && ctx[slot] !== undefined) score += 0.9;
+  }
+
+  return { score, matchedPhrase };
+}
+
+/**
+ * Parse a line into a command.
+ *
+ * @param {string} raw
+ * @returns {object} one of:
+ *   {action, ..., intent, confidence}                    execute it
+ *   {confirm: true, order, reading, alternatives}         ask first
+ *   {error}                                               understood, incomplete
+ *   {unknown: true, suggestions}                          not understood
+ */
+function parseText(raw) {
+  if (!raw || !String(raw).trim()) return { unknown: true, raw, suggestions: [] };
+
+  const norm = normalize(raw);
+  const ctx = extract(norm);
+
+  const ranked = [];
+  for (const intent of INTENTS) {
+    const r = scoreIntent(intent, ctx);
+    if (!r || r.score <= 0) continue;
+    ranked.push({ intent, score: r.score, phrase: r.matchedPhrase });
+  }
+  ranked.sort((a, b) => b.score - a.score);
+
+  // A bare place name is an order. "Vulcan." "DS9." "Take us home." There is
+  // no verb to score, and there does not need to be — naming somewhere you are
+  // not is unambiguously a request to go there.
+  if (ctx.place && (!ranked.length || ranked[0].score < 2.5)) {
+    const brief = ctx.tokens.length <= 4 && ctx.place.exact;
+    const order = {
+      action: 'course',
+      system: ctx.place.id,
+      warp: ctx.warp ?? 6,
+      intent: 'set_course',
+      raw,
+      confidence: brief ? 0.8 : 0.45,
+    };
+    if (brief) return order;
+    return {
+      confirm: true,
+      order,
+      reading: 'Helm, set course for <system>, warp <n>',
+      confidence: order.confidence,
+      alternatives: ranked.slice(0, 3).map((r) => ({ id: r.intent.id, help: r.intent.help })),
+      raw,
+    };
+  }
+
+  if (!ranked.length) {
+    return { unknown: true, raw, suggestions: suggestFor(ctx) };
+  }
+
+  const top = ranked[0];
+  const second = ranked[1]?.score ?? 0;
+  const confidence = confidenceOf(top.score, second);
+
+  // Recognised, but we are missing something it cannot run without.
+  const missing = (top.intent.requires ?? []).find(
+    (slot) => ctx[slot] === null || ctx[slot] === undefined,
+  );
+  if (missing && confidence >= PLAUSIBLE) {
+    return {
+      error: SLOT_PROMPTS[missing] ?? 'Say again, Captain?',
+      intent: top.intent.id,
+      missing,
+      raw,
+    };
+  }
+
+  const order = { ...top.intent.build(ctx), intent: top.intent.id, raw, confidence };
+
+  if (confidence >= CONFIDENT) return order;
+
+  if (confidence >= PLAUSIBLE) {
+    return {
+      confirm: true,
+      order,
+      reading: top.intent.help,
+      confidence,
+      alternatives: ranked.slice(1, 4).map((r) => ({ id: r.intent.id, help: r.intent.help })),
+      raw,
+    };
+  }
+
+  return { unknown: true, raw, suggestions: ranked.slice(0, 3).map((r) => r.intent.help) };
+}
+
+/**
+ * Turn the top two scores into a 0..1 confidence.
+ *
+ * Two things have to be true before we act without asking: the best reading has
+ * to be strong on its own, and it has to be clearly better than the next one. A
+ * sentence that scores 8 on two different intents is not understood, however
+ * high those numbers look.
+ */
+function confidenceOf(top, second) {
+  const strength = top / (top + 1.6);
+  const margin = top > 0 ? (top - second) / top : 1;
+  return strength * (0.6 + 0.4 * Math.min(1, margin * 1.8));
+}
+
+/**
+ * When nothing matched at all, the entities still tell us something. Someone who
+ * typed a star system name probably wants to go there.
+ */
+function suggestFor(ctx) {
+  const out = [];
+  if (ctx.place) out.push('Helm, set course for <system>, warp <n>');
+  if (ctx.targetSystem) out.push('Target their engines / weapons / warp core');
+  if (ctx.facing) out.push('Reinforce the forward shields');
+  if (!out.length) out.push('Damage report', 'Open a channel', 'Red alert');
+  return out.slice(0, 3);
+}
+
+__exports.normalize = normalize;
+__exports.extract = extract;
+
+__exports.CONFIDENT = CONFIDENT;
+__exports.PLAUSIBLE = PLAUSIBLE;
+__exports.parseText = parseText;
+
+});
+
 __define("src/ui/orders.js", function (__exports, __require) {
 // Natural-language order parsing.
 //
@@ -11798,6 +13906,8 @@ const { SYSTEMS } = __require("src/world/systems.data.js");
 const { SUBSYSTEMS } = __require("src/sim/power.js");
 const { FACINGS } = __require("src/sim/ship.js");
 const { ABILITIES } = __require("src/sim/officers.js");
+const { parseText, CONFIDENT } = __require("src/lang/parse.js");
+const { intentHelp, phraseCount } = __require("src/lang/lexicon.js");
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
@@ -12023,6 +14133,14 @@ const ORDERS = [
       ? { action: 'cycle_target' }
       : { action: 'target_nearest' },
   },
+  // Ahead of `fire` on purpose: these tests run in order, and /\bfire\b/
+  // matches "cease fire" perfectly well.
+  {
+    id: 'cease_fire',
+    help: 'Cease fire / hold fire',
+    test: (t) => /\bcease fire\b|\bhold fire\b|\bstop firing\b|\bweapons hold\b/.test(t),
+    build: () => ({ action: 'cease_fire' }),
+  },
   {
     id: 'fire',
     help: 'Fire / fire phasers / fire torpedoes',
@@ -12032,12 +14150,6 @@ const ORDERS = [
       weaponType: /torpedo|photon/.test(t) ? 'torpedo'
         : /phaser|beam|disruptor/.test(t) ? 'beam' : 'all',
     }),
-  },
-  {
-    id: 'cease_fire',
-    help: 'Cease fire / hold fire',
-    test: (t) => /\bcease fire\b|\bhold fire\b|\bstop firing\b|\bweapons hold\b/.test(t),
-    build: () => ({ action: 'cease_fire' }),
   },
 
   // ---- Comms ----
@@ -12096,17 +14208,41 @@ const ORDERS = [
 /** Abilities are addressable by their order phrase, e.g. "attack pattern alpha". */
 function matchAbility(t) {
   for (const a of Object.values(ABILITIES)) {
-    const phrase = normalize(a.order);
-    if (t.includes(phrase)) return a.id;
-    // Also match the ability's short name.
-    if (t.includes(normalize(a.name))) return a.id;
+    if (t.includes(normalize(a.order))) return a.id;
+    // The ability's own name also addresses it — but only when the name is
+    // distinctive. A one-word name like "Brace" swallows every sentence it
+    // appears in, so "brace the port shields" became a bridge-officer power
+    // instead of an order to reinforce a shield facing.
+    const name = normalize(a.name);
+    if (name.includes(' ') && t.includes(name)) return a.id;
   }
   return null;
 }
 
 /**
  * Parse a typed order.
- * @returns {object} { action, ... } | { error } | { unknown: true }
+ *
+ * Order of precedence, and the reasoning for it:
+ *
+ *  1. Bridge officer abilities. "Evasive manoeuvres" is a trained power before
+ *     it is a helm instruction, so it wins — but it carries the ordinary
+ *     reading as a fallback for when nobody aboard can execute it.
+ *  2. The scoring pipeline, when it is confident. It weighs the whole sentence,
+ *     which the table cannot: the table tests regexes in file order, so
+ *     `/\bfire\b/` sitting above `cease fire` meant "cease fire" opened fire,
+ *     and `/\bimpulse\b/` above the targeting rule meant "target their impulse
+ *     engines" was read as a throttle change. Those were real bugs, and this
+ *     ordering is what fixes them.
+ *  3. The table, for anything the pipeline was unsure about. It is exact and
+ *     cheap, and it is the safety net for phrasings the lexicon has not learned.
+ *  4. The pipeline again, at lower confidence, so an uncertain reading still
+ *     reaches the captain as a question rather than as silence.
+ *
+ * @returns {object} one of
+ *   { action, ... }                     execute it
+ *   { confirm, order, alternatives }    understood, but ask first
+ *   { error }                           understood, missing something
+ *   { unknown: true, suggestions }      not understood
  */
 function parseOrder(raw) {
   if (!raw || !raw.trim()) return { unknown: true };
@@ -12114,15 +14250,20 @@ function parseOrder(raw) {
   const t = stripAddress(full);
 
   const plain = matchPlainOrder(t, raw);
+  const natural = parseText(raw);
 
-  // Abilities are the more specific reading — "evasive manoeuvres" is a bridge
-  // officer power, not just a helm instruction. But several ability phrases are
-  // also ordinary orders, so carry the plain reading as a fallback for when
-  // nobody aboard can execute the ability.
   const ability = matchAbility(t);
-  if (ability) return { action: 'ability', ability, raw, fallback: plain?.unknown ? null : plain };
+  if (ability) {
+    const fallback = plain && !plain.unknown && !plain.error ? plain
+      : (natural && !natural.unknown && !natural.confirm ? natural : null);
+    return { action: 'ability', ability, raw, fallback };
+  }
 
-  return plain ?? { unknown: true, raw };
+  if (natural?.action && natural.confidence >= CONFIDENT) return natural;
+  if (plain && !plain.unknown && !plain.error) return plain;
+  if (natural && !natural.unknown) return natural;
+
+  return plain?.error ? plain : natural;
 }
 
 function matchPlainOrder(t, raw) {
@@ -12139,7 +14280,12 @@ function matchPlainOrder(t, raw) {
 function orderHelp() {
   const base = ORDERS.map((o) => o.help);
   const abilities = Object.values(ABILITIES).map((a) => a.order);
-  return { orders: base, abilities: [...new Set(abilities)] };
+  const natural = intentHelp().map((i) => i.help);
+  return {
+    orders: [...new Set([...base, ...natural])],
+    abilities: [...new Set(abilities)],
+    phrasings: phraseCount(),
+  };
 }
 
 __exports.findSystem = findSystem;
@@ -12518,6 +14664,42 @@ class App {
     this.modalHandle = null;
   }
 
+  /**
+   * The parser has a reading it is not confident enough to act on. Show it,
+   * offer the runners-up, and let the captain settle it in one tap.
+   *
+   * This is the honest half of "type anything and it works": the table cannot
+   * cover every sentence in English, so what it does instead is never silently
+   * do the wrong thing.
+   */
+  confirmReading(result, raw) {
+    const alts = (result.alternatives ?? []).map((a) => button(a.help, () => {
+      this.closeModal();
+      // Re-parse the original line against the chosen intent's canonical form,
+      // so entities the captain actually gave — a system, a facing — survive.
+      const forced = parseOrder(`${a.help.replace(/<[^>]+>/g, '')} ${raw}`);
+      this.executeOrder(forced.confirm ? forced.order : forced, raw);
+    }, { color: 'ghost' }));
+
+    this.modalHandle = modal('Confirm order', [
+      el('p', { class: 'muted', text: `You said: “${raw}”` }),
+      el('p', { text: `I read that as: ${result.reading}` }),
+      alts.length ? el('p', { class: 'muted', text: 'Or did you mean:' }) : null,
+      ...alts,
+    ].filter(Boolean), [
+      button('Execute', () => {
+        this.closeModal();
+        this.executeOrder(result.order, raw);
+      }, { color: 'blue' }),
+      button('Belay that', () => {
+        audio.play('ui_deny');
+        this.closeModal();
+      }, { color: 'ghost' }),
+    ]);
+    audio.play('computer_query');
+    return this.modalHandle;
+  }
+
   showOfficer(officer) {
     this.closeModal();
     this.modalHandle = modal(officer.name,
@@ -12832,9 +15014,20 @@ class App {
     const g = this.game;
     const eng = g.engagement;
 
+    // The parser read something plausible but is not sure enough to act on it.
+    // Ask, rather than guess — a wrong order in combat costs more than a
+    // question does.
+    if (order.confirm) {
+      this.confirmReading(order, raw);
+      return;
+    }
+
     if (order.unknown) {
       audio.play('ui_deny');
       g.pushLog(`"${raw}" — the computer does not recognise that order.`, 'computer');
+      if (order.suggestions?.length) {
+        g.pushLog(`Did you mean: ${order.suggestions.join('  ·  ')}`, 'computer');
+      }
       this.render();
       return;
     }
@@ -12968,6 +15161,34 @@ class App {
         ]);
         break;
       }
+
+      // ---- the captain's chair, reachable equally from a typed order ----
+      case 'intercom': {
+        const dept = order.dept ?? 'security';
+        this.showMessage(`${dept[0].toUpperCase()}${dept.slice(1)}`, [g.intercom(dept)]);
+        break;
+      }
+      case 'log_entry': {
+        const recorded = g.logEntry(order.text ?? raw);
+        if (recorded) ack('captain', 'Log entry recorded.');
+        else audio.play('ui_deny');
+        break;
+      }
+      case 'jettison_pod': {
+        const r = g.jettisonPod();
+        if (r.ok) { audio.play('torpedo_launch'); haptic('warp'); }
+        else { audio.play('ui_deny'); g.pushLog(r.reason, 'engineering'); }
+        break;
+      }
+      case 'viewscreen': {
+        // The viewscreen shows the tactical picture when there is one to show,
+        // and the bridge otherwise. Same button, both directions.
+        const target = this.screen === 'tactical' ? 'bridge'
+          : (eng && !eng.over ? 'tactical' : 'galaxy');
+        this.go(target);
+        break;
+      }
+
       case 'eject_core':
         if (g.ship.ejectCore()) { audio.play('explosion'); haptic('explosion'); ack('engineering', 'Core away!'); }
         else audio.play('ui_deny');

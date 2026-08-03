@@ -8,6 +8,8 @@ import { SYSTEMS } from '../world/systems.data.js';
 import { SUBSYSTEMS } from '../sim/power.js';
 import { FACINGS } from '../sim/ship.js';
 import { ABILITIES } from '../sim/officers.js';
+import { parseText, CONFIDENT } from '../lang/parse.js';
+import { intentHelp, phraseCount } from '../lang/lexicon.js';
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
@@ -233,6 +235,14 @@ const ORDERS = [
       ? { action: 'cycle_target' }
       : { action: 'target_nearest' },
   },
+  // Ahead of `fire` on purpose: these tests run in order, and /\bfire\b/
+  // matches "cease fire" perfectly well.
+  {
+    id: 'cease_fire',
+    help: 'Cease fire / hold fire',
+    test: (t) => /\bcease fire\b|\bhold fire\b|\bstop firing\b|\bweapons hold\b/.test(t),
+    build: () => ({ action: 'cease_fire' }),
+  },
   {
     id: 'fire',
     help: 'Fire / fire phasers / fire torpedoes',
@@ -242,12 +252,6 @@ const ORDERS = [
       weaponType: /torpedo|photon/.test(t) ? 'torpedo'
         : /phaser|beam|disruptor/.test(t) ? 'beam' : 'all',
     }),
-  },
-  {
-    id: 'cease_fire',
-    help: 'Cease fire / hold fire',
-    test: (t) => /\bcease fire\b|\bhold fire\b|\bstop firing\b|\bweapons hold\b/.test(t),
-    build: () => ({ action: 'cease_fire' }),
   },
 
   // ---- Comms ----
@@ -306,17 +310,41 @@ const ORDERS = [
 /** Abilities are addressable by their order phrase, e.g. "attack pattern alpha". */
 function matchAbility(t) {
   for (const a of Object.values(ABILITIES)) {
-    const phrase = normalize(a.order);
-    if (t.includes(phrase)) return a.id;
-    // Also match the ability's short name.
-    if (t.includes(normalize(a.name))) return a.id;
+    if (t.includes(normalize(a.order))) return a.id;
+    // The ability's own name also addresses it — but only when the name is
+    // distinctive. A one-word name like "Brace" swallows every sentence it
+    // appears in, so "brace the port shields" became a bridge-officer power
+    // instead of an order to reinforce a shield facing.
+    const name = normalize(a.name);
+    if (name.includes(' ') && t.includes(name)) return a.id;
   }
   return null;
 }
 
 /**
  * Parse a typed order.
- * @returns {object} { action, ... } | { error } | { unknown: true }
+ *
+ * Order of precedence, and the reasoning for it:
+ *
+ *  1. Bridge officer abilities. "Evasive manoeuvres" is a trained power before
+ *     it is a helm instruction, so it wins — but it carries the ordinary
+ *     reading as a fallback for when nobody aboard can execute it.
+ *  2. The scoring pipeline, when it is confident. It weighs the whole sentence,
+ *     which the table cannot: the table tests regexes in file order, so
+ *     `/\bfire\b/` sitting above `cease fire` meant "cease fire" opened fire,
+ *     and `/\bimpulse\b/` above the targeting rule meant "target their impulse
+ *     engines" was read as a throttle change. Those were real bugs, and this
+ *     ordering is what fixes them.
+ *  3. The table, for anything the pipeline was unsure about. It is exact and
+ *     cheap, and it is the safety net for phrasings the lexicon has not learned.
+ *  4. The pipeline again, at lower confidence, so an uncertain reading still
+ *     reaches the captain as a question rather than as silence.
+ *
+ * @returns {object} one of
+ *   { action, ... }                     execute it
+ *   { confirm, order, alternatives }    understood, but ask first
+ *   { error }                           understood, missing something
+ *   { unknown: true, suggestions }      not understood
  */
 export function parseOrder(raw) {
   if (!raw || !raw.trim()) return { unknown: true };
@@ -324,15 +352,20 @@ export function parseOrder(raw) {
   const t = stripAddress(full);
 
   const plain = matchPlainOrder(t, raw);
+  const natural = parseText(raw);
 
-  // Abilities are the more specific reading — "evasive manoeuvres" is a bridge
-  // officer power, not just a helm instruction. But several ability phrases are
-  // also ordinary orders, so carry the plain reading as a fallback for when
-  // nobody aboard can execute the ability.
   const ability = matchAbility(t);
-  if (ability) return { action: 'ability', ability, raw, fallback: plain?.unknown ? null : plain };
+  if (ability) {
+    const fallback = plain && !plain.unknown && !plain.error ? plain
+      : (natural && !natural.unknown && !natural.confirm ? natural : null);
+    return { action: 'ability', ability, raw, fallback };
+  }
 
-  return plain ?? { unknown: true, raw };
+  if (natural?.action && natural.confidence >= CONFIDENT) return natural;
+  if (plain && !plain.unknown && !plain.error) return plain;
+  if (natural && !natural.unknown) return natural;
+
+  return plain?.error ? plain : natural;
 }
 
 function matchPlainOrder(t, raw) {
@@ -349,7 +382,12 @@ function matchPlainOrder(t, raw) {
 export function orderHelp() {
   const base = ORDERS.map((o) => o.help);
   const abilities = Object.values(ABILITIES).map((a) => a.order);
-  return { orders: base, abilities: [...new Set(abilities)] };
+  const natural = intentHelp().map((i) => i.help);
+  return {
+    orders: [...new Set([...base, ...natural])],
+    abilities: [...new Set(abilities)],
+    phrasings: phraseCount(),
+  };
 }
 
 export { findSystem, SUBSYSTEMS, FACINGS };

@@ -307,3 +307,116 @@ function applySignature(g) {
   c.signatureUsed = true;
   return true;
 }
+
+// ================================================================ the chair
+
+test('every intercom station gives a report built from live ship state', () => {
+  const g = gameWith();
+  const before = g.log.length;
+  const seen = new Set();
+
+  for (const dept of ['engineering', 'medical', 'tactical', 'science', 'helm', 'comms', 'security']) {
+    const text = g.intercom(dept);
+    assert.ok(text && text.length > 10, `${dept} said nothing worth hearing`);
+    seen.add(text);
+  }
+
+  // Seven departments, seven different answers. A shared placeholder string
+  // would pass a "returns a string" test and tell the captain nothing.
+  assert.equal(seen.size, 7, 'two departments gave the identical report');
+  assert.ok(g.log.length > before, 'nothing reached the ship’s log');
+});
+
+test('an intercom report changes when the ship does', () => {
+  const g = gameWith();
+  const quiet = g.intercom('medical');
+  g.ship.crew -= 40;
+  const loud = g.intercom('medical');
+  assert.notEqual(quiet, loud, 'sickbay reported the same thing with 40 more dead');
+  assert.match(loud, /40 dead/);
+});
+
+test('a captain’s log entry is recorded and refuses to record nothing', () => {
+  const g = gameWith();
+  const before = g.log.length;
+  assert.equal(g.logEntry('   '), null, 'an empty entry should not be recorded');
+  assert.equal(g.log.length, before, 'an empty entry still wrote to the log');
+
+  g.logEntry('The Klingon commander was as good as his word.');
+  assert.equal(g.log.length, before + 1);
+  assert.match(g.log.at(-1).text, /Klingon commander was as good as his word/);
+  assert.equal(g.log.at(-1).source, 'captain');
+});
+
+test('the ion pod is a real decoy, and only in a fight', () => {
+  const g = gameWith();
+
+  // Out of combat there is nothing to gain and a pod to lose.
+  assert.equal(g.jettisonPod().ok, false);
+
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  assert.equal(g.engagement.decoyTimer, 0);
+  assert.equal(g.jettisonPod().ok, true);
+  assert.ok(g.engagement.decoyTimer > 0, 'the decoy timer never started');
+
+  // And we only carry the one.
+  assert.equal(g.jettisonPod().ok, false);
+});
+
+test('the decoy actually makes the enemy miss more often', () => {
+  // The point of the wiring rule: a timer counting down is not an effect.
+  const shots = (withDecoy) => {
+    const g = gameWith({ difficulty: 'lieutenant' });
+    g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+    const eng = g.engagement;
+    if (withDecoy) eng.deployDecoy(9999);
+    const hostile = eng.hostiles[0];
+    const weapon = hostile.weapons[0];
+    let hits = 0;
+    for (let i = 0; i < 400; i++) {
+      if (eng.resolveHit(hostile, g.ship, weapon, 300).hit) hits++;
+    }
+    return hits;
+  };
+  const plain = shots(false);
+  const decoyed = shots(true);
+  assert.ok(decoyed < plain,
+    `decoy did not reduce hits: ${decoyed} with, ${plain} without`);
+});
+
+test('the decoy expires', () => {
+  const g = gameWith();
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  g.engagement.deployDecoy(2);
+  for (let i = 0; i < 90; i++) g.engagement.update(1 / 30);
+  assert.equal(g.engagement.decoyTimer, 0, 'the decoy never wore off');
+});
+
+test('blue alert makes repairs go further, and is refused under fire', () => {
+  const damage = (g) => { g.ship.hull = g.ship.maxHull * 0.5; };
+
+  const normal = gameWith();
+  damage(normal);
+  const a = normal.effectRepairs();
+
+  const blue = gameWith();
+  damage(blue);
+  blue.setAlert('blue');
+  assert.equal(blue.alert, 'blue', 'blue alert did not take');
+  const b = blue.effectRepairs();
+
+  assert.ok(b.after > a.after,
+    `blue alert did nothing: ${a.after} normal vs ${b.after} blue`);
+  assert.equal(b.blue, true);
+
+  // And it is a maintenance condition, not a combat one.
+  const fighting = gameWith();
+  fighting.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  fighting.setAlert('blue');
+  assert.notEqual(fighting.alert, 'blue', 'blue alert was accepted mid-engagement');
+});
+
+test('repairs refuse to run on an undamaged hull', () => {
+  const g = gameWith();
+  assert.equal(g.effectRepairs().ok, false);
+});

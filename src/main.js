@@ -367,6 +367,42 @@ class App {
     this.modalHandle = null;
   }
 
+  /**
+   * The parser has a reading it is not confident enough to act on. Show it,
+   * offer the runners-up, and let the captain settle it in one tap.
+   *
+   * This is the honest half of "type anything and it works": the table cannot
+   * cover every sentence in English, so what it does instead is never silently
+   * do the wrong thing.
+   */
+  confirmReading(result, raw) {
+    const alts = (result.alternatives ?? []).map((a) => button(a.help, () => {
+      this.closeModal();
+      // Re-parse the original line against the chosen intent's canonical form,
+      // so entities the captain actually gave — a system, a facing — survive.
+      const forced = parseOrder(`${a.help.replace(/<[^>]+>/g, '')} ${raw}`);
+      this.executeOrder(forced.confirm ? forced.order : forced, raw);
+    }, { color: 'ghost' }));
+
+    this.modalHandle = modal('Confirm order', [
+      el('p', { class: 'muted', text: `You said: “${raw}”` }),
+      el('p', { text: `I read that as: ${result.reading}` }),
+      alts.length ? el('p', { class: 'muted', text: 'Or did you mean:' }) : null,
+      ...alts,
+    ].filter(Boolean), [
+      button('Execute', () => {
+        this.closeModal();
+        this.executeOrder(result.order, raw);
+      }, { color: 'blue' }),
+      button('Belay that', () => {
+        audio.play('ui_deny');
+        this.closeModal();
+      }, { color: 'ghost' }),
+    ]);
+    audio.play('computer_query');
+    return this.modalHandle;
+  }
+
   showOfficer(officer) {
     this.closeModal();
     this.modalHandle = modal(officer.name,
@@ -681,9 +717,20 @@ class App {
     const g = this.game;
     const eng = g.engagement;
 
+    // The parser read something plausible but is not sure enough to act on it.
+    // Ask, rather than guess — a wrong order in combat costs more than a
+    // question does.
+    if (order.confirm) {
+      this.confirmReading(order, raw);
+      return;
+    }
+
     if (order.unknown) {
       audio.play('ui_deny');
       g.pushLog(`"${raw}" — the computer does not recognise that order.`, 'computer');
+      if (order.suggestions?.length) {
+        g.pushLog(`Did you mean: ${order.suggestions.join('  ·  ')}`, 'computer');
+      }
       this.render();
       return;
     }
@@ -817,6 +864,34 @@ class App {
         ]);
         break;
       }
+
+      // ---- the captain's chair, reachable equally from a typed order ----
+      case 'intercom': {
+        const dept = order.dept ?? 'security';
+        this.showMessage(`${dept[0].toUpperCase()}${dept.slice(1)}`, [g.intercom(dept)]);
+        break;
+      }
+      case 'log_entry': {
+        const recorded = g.logEntry(order.text ?? raw);
+        if (recorded) ack('captain', 'Log entry recorded.');
+        else audio.play('ui_deny');
+        break;
+      }
+      case 'jettison_pod': {
+        const r = g.jettisonPod();
+        if (r.ok) { audio.play('torpedo_launch'); haptic('warp'); }
+        else { audio.play('ui_deny'); g.pushLog(r.reason, 'engineering'); }
+        break;
+      }
+      case 'viewscreen': {
+        // The viewscreen shows the tactical picture when there is one to show,
+        // and the bridge otherwise. Same button, both directions.
+        const target = this.screen === 'tactical' ? 'bridge'
+          : (eng && !eng.over ? 'tactical' : 'galaxy');
+        this.go(target);
+        break;
+      }
+
       case 'eject_core':
         if (g.ship.ejectCore()) { audio.play('explosion'); haptic('explosion'); ack('engineering', 'Core away!'); }
         else audio.play('ui_deny');

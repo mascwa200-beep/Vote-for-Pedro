@@ -1,0 +1,612 @@
+# Order corpus.
+#
+# Every line is `expected_action | order as a person would actually type it`.
+# The expectation is the ACTION the game executes, not the intent the parser
+# chose, because two paths can reach the same command and only the outcome
+# matters.
+#
+# These are written to be hostile in the ways real input is hostile: typos,
+# phonetic spelling, politeness, British spelling, naval slang, wrong case,
+# missing punctuation, and orders phrased as questions, complaints or panic.
+#
+# tests/lang.test.js runs every line and fails below the coverage floor. When a
+# line here fails, the fix belongs in src/lang/lexicon.js, not in this file —
+# deleting an awkward line to make the number go up defeats the entire purpose
+# of having the file.
+
+# ---------------------------------------------------------------- course
+course | helm set course for vulcan warp eight
+course | set a course for andoria
+course | lay in a course to bajor warp 6
+course | plot a course for qonos
+course | take us to earth
+course | take us to sol at warp nine
+course | head for deep space nine
+course | make for the badlands
+course | proceed to risa
+course | go to betazed
+course | warp to vulcan
+course | set course sol
+course | course for andoria warp 4
+course | bring us to bajor
+course | navigate to qonos
+course | i want to go to risa
+course | lets go to earth
+course | take me to vulcan
+course | destination andoria
+course | next stop deep space nine
+course | mister sulu set course for vulcan
+course | helm lay in a course for the neutral zone
+course | chart a course to the badlands
+course | point us at qonos
+course | aim for bajor warp seven
+course | set a course for vulkan
+course | set course for andorea
+course | take us to erth
+course | lay in a corse for bajor
+course | plot a coarse to risa
+course | could you please set a course for vulcan
+course | i need you to take us to andoria
+course | helm, course for earth, warp factor five
+course | off to bajor
+course | move to the neutral zone
+course | fly to qonos
+course | travel to risa
+course | set sail for vulcan
+course | get us to deep space 9
+course | take us out to the badlands
+course | head over to andoria
+course | warp 8 to vulcan
+course | ds9 please
+course | terok nor
+course | set course for terra
+course | take us home
+course | starfleet command
+course | back to sector 001
+
+# ---------------------------------------------------------------- warp_factor
+warp_factor | warp eight
+warp_factor | warp factor six
+warp_factor | go to warp
+warp_factor | engage warp nine
+warp_factor | maximum warp
+warp_factor | best speed
+warp_factor | full warp
+warp_factor | warp 9
+warp_factor | take her to warp seven
+warp_factor | jump to warp four
+warp_factor | increase speed to warp six
+warp_factor | warp speed
+warp_factor | punch it
+warp_factor | helm warp 5
+warp_factor | warp factor nine now
+warp_factor | emergency warp
+warp_factor | top speed
+warp_factor | warp facter eight
+warp_factor | wrap factor six
+warp_factor | maximum wrap
+
+# ---------------------------------------------------------------- throttle (stop)
+throttle | all stop
+throttle | full stop
+throttle | hold position
+throttle | station keeping
+throttle | keep station
+throttle | stop the ship
+throttle | bring us to a stop
+throttle | halt
+throttle | maintain position
+throttle | hold us here
+throttle | stay put
+throttle | cut the engines
+throttle | kill the engines
+throttle | dead stop
+throttle | all stop mister sulu
+throttle | helm all stop
+throttle | stand still
+throttle | stop us here
+throttle | al stop
+throttle | full stopp
+
+# ---------------------------------------------------------------- throttle (speed)
+throttle | ahead full
+throttle | ahead one third
+throttle | ahead two thirds
+throttle | ahead half
+throttle | full impulse
+throttle | half impulse
+throttle | quarter impulse
+throttle | dead slow
+throttle | slow down
+throttle | reduce speed
+throttle | increase speed
+throttle | throttle up
+throttle | throttle down
+throttle | give her more
+throttle | open her up
+throttle | step on it
+throttle | faster
+throttle | slower
+throttle | ahead standard
+throttle | impulse power 50 percent
+throttle | helm ahead full
+throttle | ahead ful
+throttle | half impuls
+throttle | ahead 1/3
+
+# ---------------------------------------------------------------- come_about
+come_about | come about
+come_about | bring us around
+come_about | turn around
+come_about | turn us around
+come_about | come around
+come_about | face them
+come_about | turn into them
+come_about | point us at them
+come_about | get our nose on them
+come_about | swing around
+come_about | bring the bow around
+come_about | present our bow
+come_about | line up on them
+come_about | about face
+come_about | helm come about
+heading | come to bearing 210
+heading | bearing 090 mark 15
+heading | new heading 180
+heading | change heading to 045
+heading | steer to bearing 270
+come_about | come abuot
+come_about | bring us arround
+come_about | turn to face them
+
+# ---------------------------------------------------------------- evasive
+evasive | evasive maneuvers
+evasive | evasive manoeuvres
+evasive | evasive action
+evasive | evasive pattern delta
+evasive | take evasive action
+evasive | start evading
+evasive | dodge
+evasive | shake them off
+evasive | lose them
+evasive | jink
+evasive | zigzag
+evasive | serpentine
+evasive | do not fly straight
+evasive | random course
+evasive | helm evasive
+evasive | evasiv maneuvers
+evasive | evasive manuvers
+evasive | evassive action
+evasive | stop evading
+evasive | cancel evasive
+
+# ---------------------------------------------------------------- warp_out
+warp_out | get us out of here
+warp_out | get us out
+warp_out | break off
+warp_out | break off the attack
+warp_out | break off the engagement
+warp_out | disengage
+warp_out | retreat
+warp_out | withdraw
+warp_out | pull back
+warp_out | fall back
+warp_out | run for it
+warp_out | we are leaving
+warp_out | time to go
+warp_out | warp out
+warp_out | get us clear
+warp_out | bug out
+warp_out | lets get out of here
+warp_out | i want out
+warp_out | we cannot win this
+warp_out | abandon the fight
+warp_out | flee
+warp_out | escape
+warp_out | get us gone
+warp_out | helm get us out of here
+warp_out | get us outa here
+warp_out | brake off the attack
+warp_out | retret
+warp_out | disengag
+
+# ---------------------------------------------------------------- dock
+dock | request docking
+dock | permission to dock
+dock | docking clearance
+dock | dock with the station
+dock | put in for repairs
+dock | resupply
+dock | refit
+dock | take on supplies
+dock | go to spacedock
+dock | bring us alongside
+dock | reload torpedoes
+dock | take on torpedoes
+dock | rearm
+dock | refuel
+dock | shore leave
+dock | dock us
+dock | requst docking
+dock | put in for repares
+
+# ---------------------------------------------------------------- alert
+alert | red alert
+alert | yellow alert
+alert | condition red
+alert | condition yellow
+alert | battle stations
+alert | general quarters
+alert | action stations
+alert | all hands to battle stations
+alert | sound the alarm
+alert | go to red alert
+alert | go to yellow
+alert | stand down
+alert | secure from alert
+alert | condition green
+alert | cancel the alert
+alert | stand down from alert
+alert | red alert now
+alert | red allert
+alert | yelow alert
+alert | battel stations
+alert | tactical red alert
+
+# ---------------------------------------------------------------- shields
+shields | shields up
+shields | shields down
+shields | raise shields
+shields | lower shields
+shields | drop shields
+shields | bring up the shields
+shields | take down the shields
+shields | put up the shields
+shields | deflectors up
+shields | screens up
+shields | screens down
+shields | get the shields up
+shields | shields off
+shields | shields on
+shields | kill the shields
+shields | we need shields
+shields | tactical shields up
+shields | shealds up
+shields | sheilds up
+shields | shilds down
+shields | raise the deflector
+
+# ---------------------------------------------------------------- reinforce
+reinforce | reinforce the forward shields
+reinforce | reinforce the aft shields
+reinforce | strengthen the port shields
+reinforce | bolster the starboard shields
+reinforce | shore up the forward shields
+reinforce | harden the aft shields
+reinforce | boost the port shield
+reinforce | double up the forward shields
+reinforce | thicken the aft shields
+reinforce | all power to the forward shields
+reinforce | reinforce forward
+reinforce | reinforce aft
+reinforce | brace the port shields
+reinforce | reinfoce the forward shields
+reinforce | strenghten the aft shields
+
+# ---------------------------------------------------------------- power
+power | divert power to shields
+power | divert power to the weapons
+power | reroute power to engines
+power | transfer power to shields
+power | shunt power to the weapons
+power | redirect power to the engines
+power | all power to shields
+power | all power to weapons
+power | emergency power to shields
+power | more power to the engines
+power | power to auxiliary
+power | send power to the sensors
+power | give me more power to weapons
+power | reallocate power to shields
+power | i need power in the engines
+power | channel power to weapons
+power | route power to the deflector
+power | engineering divert power to shields
+power | divert 40 percent to weapons
+power | dvert power to shields
+power | reroute pwer to engines
+power | transfer powr to the weapons
+
+# ---------------------------------------------------------------- preset
+preset | attack posture
+preset | attack configuration
+preset | defensive posture
+preset | defense configuration
+preset | defensive stance
+preset | speed configuration
+preset | science configuration
+preset | balanced power
+preset | standard distribution
+preset | standard power
+preset | combat power
+preset | rig for battle
+preset | rig for speed
+preset | attack pattern power
+preset | atack posture
+preset | defensiv posture
+
+# ---------------------------------------------------------------- target_subsystem
+target_subsystem | target their engines
+target_subsystem | target their weapons
+target_subsystem | target their shields
+target_subsystem | target their warp core
+target_subsystem | target their sensors
+target_subsystem | target their life support
+target_subsystem | target their nacelles
+target_subsystem | aim for their engines
+target_subsystem | go for their warp core
+target_subsystem | hit their weapons
+target_subsystem | take out their engines
+target_subsystem | knock out their shields
+target_subsystem | disable their engines
+target_subsystem | cripple their weapons
+target_subsystem | focus fire on their nacelles
+target_subsystem | put a torpedo into their warp core
+target_subsystem | i want their engines
+target_subsystem | take down their shields
+target_subsystem | tactical target their engines
+target_subsystem | target ther engines
+target_subsystem | targt their weapons
+target_subsystem | aim for their nacels
+target_subsystem | target their impulse engines
+target_subsystem | shoot their sensor array
+target_subsystem | target the shield generator
+
+# ---------------------------------------------------------------- targeting
+cycle_target | next target
+cycle_target | switch targets
+cycle_target | change target
+cycle_target | cycle targets
+cycle_target | new target
+cycle_target | another target
+cycle_target | different target
+cycle_target | retarget
+cycle_target | pick a new target
+cycle_target | switch to the other one
+target_nearest | target the nearest ship
+target_nearest | target the closest
+target_nearest | target the lead ship
+target_nearest | lock weapons on them
+target_nearest | lock onto them
+target_nearest | get a lock
+target_nearest | acquire a target
+target_nearest | target that ship
+target_nearest | designate target
+target_nearest | paint the target
+target_nearest | target them
+
+# ---------------------------------------------------------------- fire
+fire | fire
+fire | open fire
+fire | fire at will
+fire | fire everything
+fire | fire all weapons
+fire | weapons free
+fire | let them have it
+fire | give them everything
+fire | shoot them
+fire | take the shot
+fire | fire when ready
+fire | fire phasers
+fire | fire torpedoes
+fire | fire a full spread
+fire | full spread
+fire | launch torpedoes
+fire | unload on them
+fire | return fire
+fire | light them up
+fire | all batteries
+fire | commence firing
+fire | blow them out of the sky
+fire | put them down
+fire | destroy them
+fire | tactical fire
+fire | fire phasors
+fire | fier phasers
+fire | fire torpedos
+fire | opne fire
+fire | shoot
+fire | fire the photon torpedoes
+
+# ---------------------------------------------------------------- cease_fire
+cease_fire | cease fire
+cease_fire | hold fire
+cease_fire | stop firing
+cease_fire | weapons hold
+cease_fire | check fire
+cease_fire | hold your fire
+cease_fire | stop shooting
+cease_fire | stand down weapons
+cease_fire | no more shooting
+cease_fire | weapons safe
+cease_fire | cease fier
+cease_fire | ceese fire
+cease_fire | tactical cease fire
+
+# ---------------------------------------------------------------- hail
+hail | open a channel
+hail | open channel
+hail | hailing frequencies open
+hail | hail them
+hail | hail the ship
+hail | hail that vessel
+hail | contact them
+hail | call them
+hail | get them on the line
+hail | put them on screen
+hail | on screen
+hail | let me talk to them
+hail | i want to speak to them
+hail | talk to them
+hail | signal them
+hail | send a message
+hail | raise them
+hail | try to communicate
+hail | establish contact
+hail | answer the hail
+hail | put them through
+hail | communications open a channel
+hail | hale them
+hail | hail thm
+hail | open a chanel
+hail | hailing frequences
+
+# ---------------------------------------------------------------- surrender
+hail_option | demand their surrender
+hail_option | demand surrender
+hail_option | tell them to surrender
+hail_option | order them to surrender
+hail_option | call on them to surrender
+hail_option | give them a chance to surrender
+hail_option | tell them to stand down
+hail_option | demand ther surrender
+
+# ---------------------------------------------------------------- scan
+scan | scan them
+scan | scan the ship
+scan | scan the area
+scan | full scan
+scan | sensor sweep
+scan | full sensor sweep
+scan | run a scan
+scan | analyze them
+scan | analyse them
+scan | what are we looking at
+scan | give me readings
+scan | sensor readings
+scan | what do the sensors say
+scan | probe them
+scan | survey
+scan | examine them
+scan | study them
+scan | identify them
+scan | who are they
+scan | science scan them
+scan | scann them
+scan | sensar sweep
+scan | run a sensor sweep
+
+# ---------------------------------------------------------------- status
+status | damage report
+status | status report
+status | report
+status | sitrep
+status | situation report
+status | how are we
+status | how are we doing
+status | how bad is it
+status | what is our status
+status | give me a status
+status | condition of the ship
+status | how is the ship
+status | casualty report
+status | what is our condition
+status | where do we stand
+status | how much damage
+status | are we still in one piece
+status | update me
+status | damge report
+status | status repot
+status | engineering damage report
+
+# ---------------------------------------------------------------- eject_core
+eject_core | eject the warp core
+eject_core | eject the core
+eject_core | jettison the core
+eject_core | dump the core
+eject_core | blow the core
+eject_core | get rid of the core
+eject_core | eject warp core
+eject_core | ejct the warp core
+
+# ---------------------------------------------------------------- brace / ability
+ability | brace for impact
+ability | all hands brace
+ability | brace yourselves
+ability | hang on
+ability | hold on to something
+ability | secure for impact
+ability | prepare for impact
+ability | brace for impakt
+
+# ---------------------------------------------------------------- away team
+away_team | assemble an away team
+away_team | away team
+away_team | landing party
+away_team | beam down
+away_team | send a team down
+away_team | put together a team
+away_team | send someone down
+away_team | i will lead the away team
+away_team | i am going down with them
+away_team | take a team down
+away_team | away teem
+away_team | landing partie
+
+# ---------------------------------------------------------------- transport
+transport | energize
+transport | beam them up
+transport | beam them aboard
+transport | beam him up
+transport | beam her up
+transport | bring them up
+transport | bring them aboard
+transport | get them out of there
+transport | transport them up
+transport | one to beam up
+transport | beam us back
+transport | transporter room energize
+transport | energise
+transport | enrgize
+transport | beem them up
+
+# ---------------------------------------------------------------- the chair
+intercom | engineering report
+intercom | bridge to sickbay
+intercom | get me engineering
+intercom | call sickbay
+intercom | ask the doctor
+intercom | tactical report
+intercom | science report
+intercom | helm report
+intercom | security report
+intercom | open the intercom
+intercom | put me through to engineering
+intercom | what does engineering say
+log_entry | captains log supplemental the crew is holding up
+log_entry | log entry we have lost contact with the colony
+log_entry | make a log entry
+log_entry | record a log entry
+log_entry | note in the log that we crossed the zone
+log_entry | for the record i objected
+log_entry | ships log
+log_entry | log this
+jettison_pod | jettison the pod
+jettison_pod | jettison the ion pod
+jettison_pod | eject the pod
+jettison_pod | drop the pod
+jettison_pod | dump the pod
+jettison_pod | launch the decoy
+jettison_pod | deploy a decoy
+jettison_pod | give them something else to shoot at
+jettison_pod | pod away
+viewscreen | main viewer
+viewscreen | tactical display
+viewscreen | show me the tactical display
+viewscreen | put it on the viewscreen
+viewscreen | switch the viewscreen
+viewscreen | let me see
+alert | blue alert
+alert | condition blue
+alert | secure for docking

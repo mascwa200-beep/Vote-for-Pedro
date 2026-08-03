@@ -621,7 +621,8 @@ test('the order parser understands the tactical vocabulary', () => {
   assert.equal(parseOrder('divert power to shields').subsystem, 'shields');
   assert.equal(parseOrder('all power to weapons').amount, 100);
   assert.equal(parseOrder('all stop').value, 0);
-  assert.equal(parseOrder('ahead one third').value, 0.33);
+  // A third, not the two-decimal approximation the regex table used to return.
+  assert.ok(Math.abs(parseOrder('ahead one third').value - 1 / 3) < 1e-9);
   assert.equal(parseOrder('open a channel').action, 'hail');
   assert.equal(parseOrder('damage report').action, 'status');
   assert.equal(parseOrder('eject the warp core').action, 'eject_core');

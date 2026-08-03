@@ -3,8 +3,15 @@
 // The whole app is code and markup — no audio files, no textures, no fonts to
 // fetch. Precaching it is a few tens of kilobytes, so the install is instant
 // and every later launch is served from disk without touching the network.
+//
+// The list below must name every module the app imports. A missing entry does
+// not fail loudly: the game keeps working online, and only stops working with
+// the radio off — which is the one thing this project promises. `tests/
+// offline.test.js` therefore walks src/ and fails if anything here is missing,
+// because a hand-maintained list of forty-odd paths will otherwise drift, and
+// drifted silently the first time a directory was added.
 
-const VERSION = 'sfc-v2';
+const VERSION = 'sfc-v3';
 const PRECACHE = [
   './',
   './index.html',
@@ -55,6 +62,13 @@ const PRECACHE = [
   './src/rules/character.js',
   './src/rules/reputation.js',
   './src/rules/difficulty.js',
+  './src/lang/normalize.js',
+  './src/lang/phonetic.js',
+  './src/lang/fuzzy.js',
+  './src/lang/gazetteer.js',
+  './src/lang/lexicon.js',
+  './src/lang/parse.js',
+  './src/ui/chair.js',
 ];
 
 self.addEventListener('install', (event) => {

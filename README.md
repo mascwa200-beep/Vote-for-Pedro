@@ -17,7 +17,7 @@ Three ways, all fully offline once installed:
 
 - **`dist/starfleet-command.apk`** — a real Android package. One permission,
   `VIBRATE`. **No `INTERNET` permission at all**, so it physically cannot
-  reach the network. ~164 KB, minSdk 26.
+  reach the network. ~190 KB, minSdk 26.
 - **PWA** — open the page once and tap **Add to Home screen**.
 - **`dist/starfleet-command.html`** — the whole game as one self-contained
   file. Drop it on the phone and open it from Files. No server, no install.
@@ -74,11 +74,33 @@ escorts, a loaned Romulan cloaking device, and titles. You can be honoured by
 the Klingon Defence Force and shot at by them in the same week — fighting well
 while losing earns their respect even as it costs you their goodwill.
 
-**Command.** Orders work as taps and as typed natural language —
-`"Helm, set course for Vulcan, warp eight"`, `"target their warp nacelles"`,
-`"divert power to forward shields"`. Officers acknowledge in their own voice,
-argue when they disagree, and can refuse an order outright if it is bad
-enough.
+**Command.** Anything you type is an order. Not a menu of phrasings — a
+layered parser that folds contractions, slang, British spelling and naval
+shorthand, strips politeness, works out who you addressed, and matches what is
+left phonetically and by edit distance. `"could you please aim for their
+nacels"` targets their engines. `"hale them"` opens a channel. `"ds9"` sets a
+course. When it is confident it acts; when it is only fairly sure it says *"I
+read that as X — confirm?"*; when it is lost it says so and offers the nearest
+readings, rather than doing something you did not ask for.
+
+It is not a language model and it does not understand English — it recognises
+orders, from a lexicon of 530 phrasings and 138 weighted keywords across
+30 intents. The honest
+measure is `tests/corpus/orders.txt`: 545 hand-written paraphrases, deliberately
+hostile — typos, phonetic spelling, panic, politeness — with CI failing below
+95%. It currently sits at 100%, and the fallback exists for the sentences the
+corpus has not thought of yet.
+
+Officers acknowledge in their own voice, argue when they disagree, and can
+refuse an order outright if it is bad enough.
+
+**The captain's chair.** The alert conditions, hailing frequencies, the
+viewscreen, the log recorder, an intercom to every department that answers with
+real numbers off the live ship, and the ion pod — which is a genuine sensor
+decoy that makes the people shooting at you miss. Built from what the chair
+actually had; of all the buttons on the prop, exactly three were ever assigned a
+function on screen. Every control emits the same order object the parser
+produces, so there is one execution path and not two.
 
 **Combat.** Four independent shield facings. Subsystem targeting. STO-style
 power distribution across weapons, shields, engines, and auxiliary, with an
@@ -144,6 +166,7 @@ engagement resolves identically on a 60 Hz and a 120 Hz panel.
 
 ```
 src/core/     rng, clock, event bus, consequence ledger, game state, saves
+src/lang/     normalisation, phonetics, edit distance, gazetteer, intent lexicon
 src/rules/    d20 dice, character sheet, reputation tracks, difficulty ladder
 src/sim/      ship, power, combat, AI, officers, skills, loadout, away teams, diplomacy
 src/world/    galaxy graph, encounters, and the systems/ships/crews/factions data
@@ -154,13 +177,14 @@ android/      WebView shell, manifest, resources for the APK
 ```
 
 **Content:** 40 star systems, 31 ship classes, 16 authored episodes, 12
-species, 12 difficulties, 6 reputation tracks, 37 synthesized sound cues.
+species, 12 difficulties, 6 reputation tracks, 37 synthesized sound cues, and
+a command lexicon of 530 phrasings tested against a 545-order corpus.
 
 ## Development
 
 ```sh
 npm start      # serve at http://localhost:8099
-npm test       # 126 tests — RNG determinism, combat maths, dice, saves, balance
+npm test       # 190 tests — RNG determinism, combat maths, dice, saves, balance
 npm run build  # regenerate dist/starfleet-command.html
 
 ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh   # build the APK
@@ -175,7 +199,9 @@ multipliers once made a Constitution lose 20 out of 20 to a single light
 raider, and the paper numbers hid it — they double-counted fore and aft
 batteries that a ship facing its target can never fire together.
 
-Browser verification drives the real UI at Pixel viewport — captain creation
+Browser verification drives the real UI at Pixel viewport — including typing
+orders into the actual order line rather than calling the app object, because
+"what you type is what the ship does" is only tested end to end — captain creation
 through warp, combat, the ledger, save/restore — and **proves the offline
 claim** by cutting the network after the service worker registers and
 reloading. It also extracts `assets/game.html` from the signed APK and runs
