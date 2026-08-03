@@ -10,6 +10,7 @@ import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { listBackups, downloadSave } from '../core/save.js';
+import { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } from '../sim/fabrication.js';
 
 import { MODES } from '../core/state.js';
 import { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } from '../sim/power.js';
@@ -622,6 +623,8 @@ export function shipScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'scroll' });
 
+  root.append(machineShopPanel(app));
+
   root.append(panel(`${g.ship.name} — ${g.ship.registry}`, [
     el('p', { class: 'muted', text: g.ship.cls.description }),
     el('div', {}, [
@@ -848,6 +851,23 @@ export function encounterScreen(app) {
           add('withdraw', 'Withdraw', null, 'ghost');
         }
         break;
+      case 'trapped': {
+        // Deliberately no "engage" and no "withdraw". There is nothing to
+        // shoot and nowhere to go; what gets you out is something you built,
+        // something you divert power to, or the patience to sit it out.
+        const trap = enc.trap ?? {};
+        const held = app.game.devices?.[trap.device] ?? 0;
+        const recipe = RECIPE_BY_ID[trap.device];
+        add('trap_device',
+          held > 0 ? `Use the ${recipe?.name?.toLowerCase() ?? 'device'}` : `No ${recipe?.name?.toLowerCase() ?? 'device'} aboard`,
+          held > 0 ? 'The clean way out — if you thought of it in advance.' : 'You would need to have built one already.',
+          held > 0 ? 'green' : 'ghost');
+        add('trap_power', `Everything to ${trap.powerChannel ?? 'auxiliary'}`,
+          'Costs antimatter and unbalances the grid.', 'amber');
+        add('trap_wait', 'Ride it out',
+          `${trap.waitHours ?? 0} hours${trap.damage ? ', and it will hurt' : ''}.`, 'ice');
+        break;
+      }
       case 'patrol':
         if (enc.hailable) add('hail', 'Hail them', null, 'lilac');
         add('withdraw', 'Continue', null, 'ghost');
@@ -1020,3 +1040,60 @@ export function gameOverScreen(app) {
 }
 
 export { modal, field, textInput, select };
+
+
+/**
+ * The machine shop: what is in the stores, what is on the bench, and what the
+ * chief could build if you asked.
+ *
+ * Only one job at a time, on purpose. A ship with one machine shop and one
+ * chief engineer cannot build four things at once, and being made to choose
+ * which one is the entire interest of the mechanic.
+ */
+export function machineShopPanel(app) {
+  const g = app.game;
+  const status = g.fabricationStatus;
+
+  const stores = el('div', { class: 'meta' }, MATERIAL_LIST.map((m) =>
+    pill(`${m.name} ${Math.round(g.stores?.[m.id] ?? 0)}`,
+      (g.stores?.[m.id] ?? 0) > 0 ? '' : 'red')));
+
+  const devices = Object.entries(g.devices ?? {}).filter(([, n]) => n > 0);
+
+  const body = [
+    el('p', { class: 'muted', text: 'Salvage from wrecks becomes stores; stores become whatever you have the hours for. Everything here runs on the commission clock, so a two-day job is two days whether the app is open or not.' }),
+    stores,
+    devices.length
+      ? el('div', { class: 'meta' }, devices.map(([id, n]) =>
+        pill(`${RECIPE_BY_ID[id]?.name ?? id} ×${n}`, 'green')))
+      : null,
+  ];
+
+  if (status) {
+    body.push(readout(status.name, status.progress,
+      status.hoursRemaining < 1
+        ? `${Math.round(status.hoursRemaining * 60)} min`
+        : `${status.hoursRemaining.toFixed(1)} h`));
+    body.push(button('Put the hours in', tap(() => {
+      const r = g.workTheShop(Math.min(status.hoursRemaining, 8));
+      if (r.done) app.showMessage(r.done.recipe.name, [r.done.text]);
+      app.render();
+    }), { color: 'amber', sub: 'Spends up to eight hours of the commission' }));
+  } else {
+    for (const { recipe, canMake, reason } of availableRecipes(g)) {
+      body.push(button(recipe.name, canMake ? tap(() => {
+        const r = g.fabricate(recipe.id);
+        if (!r.ok) app.showMessage('Engineering', [r.reason]);
+        app.render();
+      }) : null, {
+        color: canMake ? 'blue' : 'ghost',
+        disabled: !canMake,
+        sub: canMake
+          ? `${recipe.blurb} — ${recipe.hours < 1 ? `${Math.round(recipe.hours * 60)} min` : `${recipe.hours} h`}`
+          : reason,
+      }));
+    }
+  }
+
+  return panel('Machine Shop', body.filter(Boolean));
+}

@@ -164,6 +164,23 @@ in a ring, and a load that fails falls back through them rather than presenting
 a blank bridge to somebody four years into a commission. The browser
 verification deliberately corrupts the autosave and proves the recovery works.
 
+**Making things, and making do.** The engineering solution is half of what a
+starship captain does. Salvage stripped from wrecks becomes stores; stores
+become hull patches, torpedo casings, sensor pallets, jury-rigged EPS bypasses
+and improvised graviton charges. Every recipe has a real effect — a test walks
+the book and fails on any that changes nothing — and everything takes the hours
+it takes, on the commission clock, so a two-day job runs whether the app is
+open or not. One bench, one chief engineer, one job at a time: being made to
+choose is the point.
+
+**Situations you cannot shoot.** Some encounters have no combat option and
+withdrawing does not work. A gravimetric shear has the ship by the keel;
+something is running silent and matching your course; the containment field is
+building toward a cascade. What gets you out is a device you built in advance,
+everything you have diverted into one channel at once, or the patience to sit
+there while it costs you hours and hull. The browser verification checks that a
+trap never offers a way to shoot out of it.
+
 **A galaxy.** Sol, Vulcan, Andoria, Bajor, Deep Space 9, Wolf 359, the
 Romulan Neutral Zone, the Badlands, Qo'noS, and uncharted grids past the
 relay network — as a real graph with real light-year distances. Warp travel
@@ -243,7 +260,7 @@ and 31 procedurally generated hulls averaging 230 triangles each.
 
 ```sh
 npm start      # serve at http://localhost:8099
-npm test       # 255 tests — RNG determinism, combat maths, dice, saves, balance
+npm test       # 262 tests — RNG determinism, combat maths, dice, saves, balance
 npm run build  # regenerate dist/starfleet-command.html
 
 ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh   # build the APK

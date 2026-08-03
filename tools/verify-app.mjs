@@ -432,6 +432,51 @@ try {
     await page.screenshot({ path: join(SHOTS, `${shot}.png`) });
   }
 
+  // ------------------------------------------------ the machine shop
+  await nav(page, 'Ship');
+  const shop = await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    g.ship.hull = g.ship.maxHull * 0.5;
+    g.stores.duranium = 99;
+    globalThis.__app.render();
+    await new Promise((r) => setTimeout(r, 60));
+    const before = g.stores.duranium;
+    const btn = [...document.querySelectorAll('.btn')].find((b) => b.textContent.includes('Hull patch'));
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 80));
+    return {
+      rendered: !!btn,
+      started: !!g.fabricationStatus,
+      spent: g.stores.duranium < before,
+    };
+  });
+  check('the machine shop offers work the ship can actually do', shop.rendered,
+    JSON.stringify(shop));
+  check('starting a job spends the materials', shop.started && shop.spent, JSON.stringify(shop));
+
+  // A trap has no combat option and every way out actually works.
+  const trapped = await page.evaluate(async () => {
+    const { TRAPS } = await import('./src/world/encounters.js');
+    const g = globalThis.__app.game;
+    g.encounter = { kind: 'trapped', trap: TRAPS[0], title: TRAPS[0].title, text: TRAPS[0].text };
+    g.mode = 'encounter';
+    globalThis.__app.go('encounter');
+    await new Promise((r) => setTimeout(r, 120));
+    const labels = [...document.querySelectorAll('.btn')].map((b) => b.textContent);
+    const out = [...document.querySelectorAll('.btn')].find((b) => b.textContent.includes('Ride it out'));
+    out?.click();
+    await new Promise((r) => setTimeout(r, 120));
+    return {
+      offeredNoFight: !labels.some((l) => /^Engage/.test(l)),
+      hadAWayOut: !!out,
+      escaped: g.encounter === null,
+    };
+  });
+  check('a trap offers no way to shoot out of it', trapped.offeredNoFight, JSON.stringify(trapped));
+  check('riding out a trap actually gets you out', trapped.hadAWayOut && trapped.escaped,
+    JSON.stringify(trapped));
+  await dismissModals(page);
+
   // ------------------------------------------------ character & reputation UI
   await nav(page, 'Captain');
   const sheetAbilities = await page.locator('.abilityrow').count();

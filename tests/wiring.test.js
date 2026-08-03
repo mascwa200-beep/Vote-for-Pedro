@@ -18,6 +18,8 @@ import { RNG } from '../src/core/rng.js';
 import { Character, CAREERS } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { CONSOLES } from '../src/sim/loadout.js';
+import { RECIPES, advanceFabrication } from '../src/sim/fabrication.js';
+import { TRAPS } from '../src/world/encounters.js';
 
 const gameWith = (opts = {}) => new Game({
   seed: 1n, crewMode: 'original', ...opts,
@@ -419,4 +421,141 @@ test('blue alert makes repairs go further, and is refused under fire', () => {
 test('repairs refuse to run on an undamaged hull', () => {
   const g = gameWith();
   assert.equal(g.effectRepairs().ok, false);
+});
+
+// ================================================================ the shop
+
+test('every recipe has an effect that can be observed', () => {
+  // The rule this file exists for. A recipe is the easiest possible thing to
+  // add as a line in a menu and forget to connect to anything.
+  const inert = [];
+  for (const recipe of RECIPES) {
+    const g = gameWith();
+    // Put the ship in a state where every recipe has something to do.
+    g.ship.hull = g.ship.maxHull * 0.4;
+    g.ship.torpedoes = 0;
+    g.ship.subsystems.sensors = 0.3;
+    g.ship.fires = 3;
+    g.podJettisoned = true;
+    g.stores = { duranium: 999, isolinear: 999, deuterium: 999, salvage: 999 };
+
+    const before = JSON.stringify({
+      hull: g.ship.hull,
+      torps: g.ship.torpedoes,
+      subs: g.ship.subsystems,
+      fires: g.ship.fires,
+      buffs: g.ship.buffs.map((b) => b.id),
+      devices: g.devices,
+      pod: g.podJettisoned,
+      transfer: g.ship.power.transferRate,
+    });
+
+    assert.equal(g.fabricate(recipe.id).ok, true, `${recipe.id} could not be started`);
+    const done = advanceFabrication(g, recipe.hours + 1);
+    assert.ok(done, `${recipe.id} never finished`);
+
+    const after = JSON.stringify({
+      hull: g.ship.hull,
+      torps: g.ship.torpedoes,
+      subs: g.ship.subsystems,
+      fires: g.ship.fires,
+      buffs: g.ship.buffs.map((b) => b.id),
+      devices: g.devices,
+      pod: g.podJettisoned,
+      transfer: g.ship.power.transferRate,
+    });
+    if (before === after) inert.push(recipe.id);
+  }
+  assert.deepEqual(inert, [], `these recipes changed nothing: ${inert.join(', ')}`);
+});
+
+test('fabrication spends the materials and refuses without them', () => {
+  const g = gameWith();
+  g.ship.hull = g.ship.maxHull * 0.5;
+  g.stores = { duranium: 12, isolinear: 0, deuterium: 0, salvage: 0 };
+
+  assert.equal(g.fabricate('hull_patch').ok, true);
+  assert.equal(g.stores.duranium, 0, 'the materials were not spent');
+
+  // One bench, one chief engineer.
+  assert.equal(g.fabricate('eps_bypass').ok, false, 'two jobs ran at once');
+
+  const g2 = gameWith();
+  g2.stores = { duranium: 0, isolinear: 0, deuterium: 0, salvage: 0 };
+  g2.ship.hull = g2.ship.maxHull * 0.5;
+  assert.equal(g2.fabricate('hull_patch').ok, false, 'built something out of nothing');
+});
+
+test('the shop works while the app is closed', () => {
+  let t = 1_700_000_000_000;
+  const now = () => t;
+  const g = new Game({ seed: 1n, crewMode: 'original', now });
+  g.ship.hull = g.ship.maxHull * 0.5;
+  g.stores.duranium = 99;
+  g.fabricate('hull_patch');
+  assert.ok(g.fabricationStatus);
+
+  t += 12 * 3600 * 1000;          // twelve hours away
+  g.syncCampaign();
+  assert.equal(g.fabricationStatus, null, 'the job did not finish while we were away');
+});
+
+test('destroying a ship leaves stores behind', () => {
+  const g = gameWith();
+  const before = { ...g.stores };
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  g.engagement.hostiles[0].destroyed = true;
+  g.finishCombat('victory');
+  assert.ok(g.stores.salvage > before.salvage, 'the wreck gave up nothing');
+});
+
+test('a trap has no way out that involves shooting', () => {
+  // The whole point of these: `engage` is not on the menu and withdrawing does
+  // not work. If a trap ever grows a combat option, this fails.
+  for (const trap of TRAPS) {
+    assert.ok(trap.device, `${trap.id} has no device solution`);
+    assert.ok(trap.powerChannel, `${trap.id} has no power solution`);
+    assert.ok(trap.waitHours > 0, `${trap.id} has no patience solution`);
+    assert.ok(!('ships' in trap), `${trap.id} has ships in it`);
+  }
+});
+
+test('each way out of a trap actually gets you out', () => {
+  const setup = (trapId) => {
+    const g = gameWith();
+    const trap = TRAPS.find((t) => t.id === trapId);
+    g.encounter = { kind: 'trapped', trap, title: trap.title, text: trap.text };
+    g.mode = 'encounter';
+    return { g, trap };
+  };
+
+  for (const t of TRAPS) {
+    // The device, when you have one.
+    const a = setup(t.id);
+    a.g.devices = { [t.device]: 1 };
+    const viaDevice = a.g.resolveEncounter('trap_device');
+    assert.equal(a.g.encounter, null, `${t.id}: the device did not clear the trap`);
+    assert.equal(a.g.devices[t.device], 0, `${t.id}: the device was not consumed`);
+    assert.ok(viaDevice.messages.length > 0);
+
+    // The device, when you do not — this must not silently succeed.
+    const b = setup(t.id);
+    b.g.devices = {};
+    b.g.resolveEncounter('trap_device');
+    assert.ok(b.g.encounter, `${t.id}: escaped using a device that was not aboard`);
+
+    // Power.
+    const c = setup(t.id);
+    const amBefore = c.g.ship.antimatter;
+    c.g.resolveEncounter('trap_power');
+    assert.equal(c.g.encounter, null, `${t.id}: power did not clear the trap`);
+    assert.ok(c.g.ship.antimatter < amBefore, `${t.id}: power cost nothing`);
+
+    // Patience.
+    const d = setup(t.id);
+    const sdBefore = d.g.clock.stardate;
+    d.g.resolveEncounter('trap_wait');
+    assert.equal(d.g.encounter, null, `${t.id}: waiting did not clear the trap`);
+    assert.ok(d.g.clock.stardate > sdBefore, `${t.id}: waiting cost no time`);
+  }
 });

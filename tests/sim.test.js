@@ -644,8 +644,17 @@ test('a phrase that is both an ability and a plain order carries a fallback', ()
 });
 
 test('the order parser reports what it does not understand', () => {
-  assert.ok(parseOrder('make me a sandwich').unknown);
+  assert.ok(parseOrder('qwertyuiop asdfghjkl zxcvbnm').unknown);
   assert.ok(parseOrder('').unknown);
+});
+
+test('a verb it knows with an object it does not gets a question, not silence', () => {
+  // "Make me a sandwich" is understood perfectly well as a build order. What
+  // it lacks is something the shop can build, and the engineer saying so is a
+  // better answer than the computer pretending not to have heard.
+  const r = parseOrder('make me a sandwich');
+  assert.equal(r.unknown, undefined);
+  assert.match(r.error ?? '', /Build what/);
 });
 
 test('the parser strips forms of address', () => {

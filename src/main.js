@@ -930,6 +930,46 @@ class App {
         break;
       }
 
+      // ---- the machine shop ----
+      case 'fabricate': {
+        if (!order.recipe) {
+          audio.play('ui_deny');
+          g.officerSays('engineering', 'Build what, Captain?', 'object');
+          break;
+        }
+        const r = g.fabricate(order.recipe);
+        if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+        else { audio.play('ui_deny'); g.officerSays('engineering', r.reason, 'object'); }
+        break;
+      }
+      case 'work_shop': {
+        const status = g.fabricationStatus;
+        if (!status) {
+          audio.play('ui_deny');
+          g.officerSays('engineering', 'Nothing on the bench, Captain.', 'object');
+          break;
+        }
+        // Spend hours rather than merely asking. "Get on with it" is an order
+        // to put the time in, and the time is real.
+        const spend = Math.min(status.hoursRemaining, 8);
+        const r = g.workTheShop(spend);
+        if (r.done) {
+          this.showMessage(r.done.recipe.name, [r.done.text]);
+        } else {
+          g.officerSays('engineering',
+            `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
+            'report');
+        }
+        break;
+      }
+      case 'salvage': {
+        const haul = g.salvage({ tier: 3 });
+        const summary = Object.entries(haul).filter(([, n]) => n > 0)
+          .map(([m, n]) => `${n} ${m}`).join(', ');
+        ack('engineering', `Recovered ${summary}.`);
+        break;
+      }
+
       case 'eject_core':
         if (g.ship.ejectCore()) { audio.play('explosion'); haptic('explosion'); ack('engineering', 'Core away!'); }
         else audio.play('ui_deny');

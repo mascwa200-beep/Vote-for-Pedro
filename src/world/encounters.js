@@ -64,6 +64,10 @@ export function rollEncounter(rng, systemId, { ledger, inTransit = false } = {})
     : system.hazard ? 0.5
     : 0.4;
 
+  // Traps are rare and are not gated on danger: a gravimetric shear does not
+  // care whose space you are in.
+  if (rng.chance(system.hazard ? 0.1 : 0.045)) return buildTrap(rng, system);
+
   if (rng.float() > danger && !inTransit) {
     return rng.chance(0.45) ? { kind: 'quiet', system } : buildAnomaly(rng, system);
   }
@@ -112,6 +116,66 @@ function buildPatrol(rng, system, presence, ledger) {
     text: hostile
       ? `${FACTIONS[factionId].adjective} vessels closing on an intercept course. They are arming weapons.`
       : `A ${FACTIONS[factionId].adjective} patrol is holding position and scanning us. No weapons charged — yet.`,
+  };
+}
+
+/**
+ * A trap. Not a fight you are losing — a situation with no weapon in it.
+ *
+ * The point of these is that `engage` is not on the menu and `withdraw` does
+ * not work. What gets you out is something you build, something you divert
+ * power to, or the patience to sit still until whatever is out there loses
+ * interest. It is the third option this game did not previously have.
+ */
+export const TRAPS = [
+  {
+    id: 'gravity_well',
+    title: 'Gravimetric shear',
+    text: 'We are held. A gravimetric eddy has the ship by the keel and impulse '
+      + 'is not going to break it. Structural stress is climbing.',
+    device: 'graviton_charge',
+    deviceText: 'A graviton charge, detonated off the port quarter, tears the eddy open long enough to slip out.',
+    powerChannel: 'engines',
+    powerText: 'Everything to the engines, all at once. The frame screams and the ship comes free.',
+    waitHours: 14,
+    waitText: 'The eddy dissipates on its own, eventually. The wait costs fourteen hours and a lot of composure.',
+    damage: 0.06,
+  },
+  {
+    id: 'sensor_ghost',
+    title: 'Something is hunting us',
+    text: 'Sensors keep losing it. Whatever is out there is running silent, it '
+      + 'has been matching our course for an hour, and it is closing.',
+    device: 'sensor_decoy',
+    deviceText: 'The decoy goes out cold and dumb. Whatever it is takes the bait and breaks off after it.',
+    powerChannel: 'auxiliary',
+    powerText: 'Every scrap of power to the sensors. The return resolves, they realise they have been seen, and they leave.',
+    waitHours: 9,
+    waitText: 'Silent running for nine hours. It loses interest, or decides we are not worth it.',
+    damage: 0,
+  },
+  {
+    id: 'containment_cascade',
+    title: 'Containment cascade',
+    text: 'A feedback loop in the containment field. It is building, and in about '
+      + 'an hour it will not be a loop any more.',
+    device: 'eps_bypass',
+    deviceText: 'The bypass takes the load off the failing conduits and the cascade dies out.',
+    powerChannel: 'auxiliary',
+    powerText: 'Shunt everything spare into the containment field and hold it manually until it stabilises.',
+    waitHours: 1,
+    waitText: 'Nobody waits this one out. Engineering does it by hand, and it costs.',
+    damage: 0.14,
+  },
+];
+
+function buildTrap(rng, system) {
+  const trap = rng.pick(TRAPS);
+  return {
+    kind: 'trapped', system, hostile: false, hailable: false,
+    trap,
+    title: trap.title,
+    text: trap.text,
   };
 }
 

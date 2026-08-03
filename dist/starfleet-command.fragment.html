@@ -7258,6 +7258,308 @@ __exports.saveSettings = saveSettings;
 
 });
 
+__define("src/core/events.js", function (__exports, __require) {
+// Minimal synchronous pub/sub. The sim emits, the UI listens.
+// Synchronous on purpose: an order and its consequence land in the same frame,
+// so nothing ever shows a spinner waiting for a result.
+
+const handlers = new Map();
+function on(event, fn) {
+  if (!handlers.has(event)) handlers.set(event, new Set());
+  handlers.get(event).add(fn);
+  return () => off(event, fn);
+}
+function once(event, fn) {
+  const wrapped = (payload) => { off(event, wrapped); fn(payload); };
+  return on(event, wrapped);
+}
+function off(event, fn) {
+  handlers.get(event)?.delete(fn);
+}
+function emit(event, payload) {
+  const set = handlers.get(event);
+  if (set) {
+    for (const fn of [...set]) {
+      try { fn(payload); } catch (err) { console.error(`[events] ${event}`, err); }
+    }
+  }
+  const wildcard = handlers.get('*');
+  if (wildcard) {
+    for (const fn of [...wildcard]) {
+      try { fn({ event, payload }); } catch (err) { console.error('[events] *', err); }
+    }
+  }
+}
+function clearAll() {
+  handlers.clear();
+}
+
+__exports.on = on;
+__exports.once = once;
+__exports.off = off;
+__exports.emit = emit;
+__exports.clearAll = clearAll;
+
+});
+
+__define("src/sim/fabrication.js", function (__exports, __require) {
+// Making things, and making do.
+//
+// The engineering solution is half of what a starship captain does and none of
+// what this game could previously express. If you were trapped, your options
+// were to shoot your way out or to leave. This file is the third option: work
+// out what you have, work out what it could be, and spend the hours building it.
+//
+// Two rules shape everything here.
+//
+// EVERY RECIPE HAS A REAL EFFECT. No item exists as a line in an inventory
+// screen. `apply` mutates the game, and tests/wiring.test.js walks this table
+// and fails on any recipe whose effect is not observable — the same rule that
+// caught three inert features in this repository already.
+//
+// EVERYTHING TAKES THE TIME IT TAKES. A jury-rigged bypass is twenty minutes; a
+// replacement sensor pallet is two days. Those hours run on the commission
+// clock, which means they run whether the app is open or not, and a plan that
+// needs two days is a plan you commit to rather than a button you press.
+
+const { emit } = __require("src/core/events.js");
+
+/**
+ * What a ship carries that can be turned into something else.
+ *
+ * Deliberately short. A long materials list is a spreadsheet; four categories
+ * is enough to make "do we have what we need" a real question without making
+ * it an accounting exercise.
+ */
+const MATERIALS = {
+  duranium: { id: 'duranium', name: 'Duranium', of: 'structural stock — plating, spars, hull patches' },
+  isolinear: { id: 'isolinear', name: 'Isolinear circuitry', of: 'optical chips and control runs' },
+  deuterium: { id: 'deuterium', name: 'Deuterium', of: 'reaction mass and raw power' },
+  salvage: { id: 'salvage', name: 'Salvage', of: 'whatever the last wreck gave up' },
+};
+const MATERIAL_LIST = Object.values(MATERIALS);
+
+/** Stores a ship leaves a starbase with. */
+const STARTING_STORES = { duranium: 40, isolinear: 30, deuterium: 60, salvage: 0 };
+
+/**
+ * The recipe book.
+ *
+ * `hours` is campaign time. `needs` is materials. `requires` is an optional
+ * predicate on the game — a state the ship must be in for the work to make
+ * sense — and `apply` is what actually happens.
+ */
+const RECIPES = [
+  {
+    id: 'hull_patch',
+    name: 'Hull patch',
+    blurb: 'Plate over a breach with structural stock. Ugly, and it holds.',
+    needs: { duranium: 12 },
+    hours: 5,
+    requires: (g) => g.ship.hullPct < 0.95,
+    apply: (g) => {
+      const before = g.ship.hullPct;
+      g.ship.repair(g.ship.maxHull * 0.15);
+      return `Hull integrity ${Math.round(before * 100)} → ${Math.round(g.ship.hullPct * 100)} percent.`;
+    },
+  },
+  {
+    id: 'torpedo_casings',
+    name: 'Torpedo casings',
+    blurb: 'Machine new casings and load them. Slow work, and it beats an empty magazine.',
+    needs: { duranium: 8, deuterium: 14 },
+    hours: 9,
+    requires: (g) => g.ship.maxTorpedoes > 0 && g.ship.torpedoes < g.ship.maxTorpedoes,
+    apply: (g) => {
+      const made = Math.min(10, g.ship.maxTorpedoes - g.ship.torpedoes);
+      g.ship.torpedoes += made;
+      return `${made} torpedoes in the magazine.`;
+    },
+  },
+  {
+    id: 'sensor_pallet',
+    name: 'Replacement sensor pallet',
+    blurb: 'Rebuild the forward array from spares. Two days, and you can see again.',
+    needs: { isolinear: 22, duranium: 6 },
+    hours: 48,
+    requires: (g) => g.ship.subsystems.sensors < 0.9,
+    apply: (g) => {
+      g.ship.subsystems.sensors = Math.min(1, g.ship.subsystems.sensors + 0.5);
+      return `Sensors restored to ${Math.round(g.ship.subsystems.sensors * 100)} percent.`;
+    },
+  },
+  {
+    id: 'eps_bypass',
+    name: 'Jury-rigged EPS bypass',
+    blurb: 'Route power around the damaged conduits. Twenty minutes and a lot of swearing.',
+    needs: { isolinear: 6 },
+    hours: 0.4,
+    apply: (g) => {
+      g.ship.power.transferRate = Math.max(g.ship.power.transferRate, 160);
+      g.ship.addBuff({ id: 'eps_bypass', label: 'EPS bypass', until: 900, mods: { shieldRegen: 1.2 } });
+      return 'Power routing is quicker while the bypass holds.';
+    },
+  },
+  {
+    id: 'graviton_charge',
+    name: 'Improvised graviton charge',
+    blurb: 'A deuterium charge with a graviton shell. It will move something that does not want to move.',
+    needs: { deuterium: 20, isolinear: 8, salvage: 4 },
+    hours: 6,
+    apply: (g) => {
+      g.devices = g.devices ?? {};
+      g.devices.graviton_charge = (g.devices.graviton_charge ?? 0) + 1;
+      return 'One graviton charge, secured in the shuttle bay.';
+    },
+  },
+  {
+    id: 'sensor_decoy',
+    name: 'Sensor decoy',
+    blurb: 'A second ion pod, more or less. Something else for them to shoot at.',
+    needs: { duranium: 10, isolinear: 10, deuterium: 8 },
+    hours: 14,
+    requires: (g) => g.podJettisoned,
+    apply: (g) => {
+      g.podJettisoned = false;
+      return 'A replacement pod is in the launcher.';
+    },
+  },
+  {
+    id: 'shield_harmonics',
+    name: 'Rotating shield harmonics',
+    blurb: 'Recalibrate the emitters to a shifting frequency. It does not last, and it works.',
+    needs: { isolinear: 14, deuterium: 10 },
+    hours: 3,
+    apply: (g) => {
+      g.ship.addBuff({
+        id: 'shield_harmonics', label: 'Rotating harmonics', until: 600,
+        mods: { shieldMax: 1.2, shieldRegen: 1.35 },
+      });
+      return 'Shields are running a rotating frequency. It will hold for a while.';
+    },
+  },
+  {
+    id: 'coolant_purge',
+    name: 'Coolant purge rig',
+    blurb: 'Vent the coolant lines into the affected sections. Puts fires out, and costs you the coolant.',
+    needs: { deuterium: 12 },
+    hours: 1,
+    requires: (g) => g.ship.fires > 0,
+    apply: (g) => {
+      const put = g.ship.fires;
+      g.ship.fires = 0;
+      return `${put} fire${put > 1 ? 's' : ''} out. Decks are cold and breathable.`;
+    },
+  },
+];
+const RECIPE_BY_ID = Object.fromEntries(RECIPES.map((r) => [r.id, r]));
+
+/** Everything the fabricator can make right now, and why it cannot. */
+function availableRecipes(game) {
+  return RECIPES.map((r) => {
+    const short = Object.entries(r.needs)
+      .filter(([m, n]) => (game.stores?.[m] ?? 0) < n)
+      .map(([m]) => MATERIALS[m]?.name ?? m);
+    const wrongState = r.requires ? !r.requires(game) : false;
+    return {
+      recipe: r,
+      canMake: short.length === 0 && !wrongState,
+      short,
+      reason: short.length ? `Not enough ${short.join(' or ')}.`
+        : wrongState ? 'Nothing aboard needs it.' : null,
+    };
+  });
+}
+
+/**
+ * Begin fabricating. The materials are spent now; the thing arrives later.
+ *
+ * Only one job runs at a time, on purpose. A ship with one machine shop and one
+ * chief engineer cannot build four things at once, and being made to choose is
+ * the entire interest of the mechanic.
+ */
+function beginFabrication(game, recipeId) {
+  const recipe = RECIPE_BY_ID[recipeId];
+  if (!recipe) return { ok: false, reason: 'No such specification on file.' };
+  if (game.fabrication) {
+    return { ok: false, reason: `The shop is already building ${RECIPE_BY_ID[game.fabrication.recipeId]?.name ?? 'something'}.` };
+  }
+
+  game.stores = game.stores ?? { ...STARTING_STORES };
+  for (const [material, amount] of Object.entries(recipe.needs)) {
+    if ((game.stores[material] ?? 0) < amount) {
+      return { ok: false, reason: `Not enough ${MATERIALS[material]?.name ?? material}.` };
+    }
+  }
+  if (recipe.requires && !recipe.requires(game)) {
+    return { ok: false, reason: 'Nothing aboard needs it, Captain.' };
+  }
+
+  for (const [material, amount] of Object.entries(recipe.needs)) {
+    game.stores[material] -= amount;
+  }
+  game.fabrication = { recipeId, hoursRemaining: recipe.hours, hoursTotal: recipe.hours };
+
+  game.officerSays('engineering',
+    recipe.hours < 1
+      ? `${recipe.name} — give me ${Math.round(recipe.hours * 60)} minutes.`
+      : `${recipe.name} — ${recipe.hours < 24 ? `${Math.round(recipe.hours)} hours` : `${(recipe.hours / 24).toFixed(1)} days`}, Captain.`,
+    'report');
+  emit('fabrication:begin', { recipe });
+  return { ok: true, recipe };
+}
+
+/**
+ * Advance the current job by campaign hours.
+ * Called from the same place absences are credited, so work continues while the
+ * app is closed — which is the whole point of a job measured in days.
+ */
+function advanceFabrication(game, hours) {
+  if (!game.fabrication || hours <= 0) return null;
+  game.fabrication.hoursRemaining -= hours;
+  if (game.fabrication.hoursRemaining > 0) return null;
+
+  const recipe = RECIPE_BY_ID[game.fabrication.recipeId];
+  game.fabrication = null;
+  if (!recipe) return null;
+
+  const text = recipe.apply(game) ?? `${recipe.name} complete.`;
+  game.officerSays('engineering', `${recipe.name} is finished. ${text}`, 'report');
+  emit('fabrication:complete', { recipe, text });
+  return { recipe, text };
+}
+
+/**
+ * Recover materials from a wreck.
+ *
+ * This is where salvage comes from, and it is the reason destroying something
+ * is not always the same as winning: a hulk you leave intact is stores you do
+ * not have.
+ */
+function salvageWreck(game, rng, { tier = 3 } = {}) {
+  game.stores = game.stores ?? { ...STARTING_STORES };
+  const haul = {
+    duranium: Math.round(rng.range(4, 10) * tier * 0.5),
+    isolinear: Math.round(rng.range(2, 7) * tier * 0.4),
+    salvage: Math.round(rng.range(3, 9) * tier * 0.5),
+  };
+  for (const [m, n] of Object.entries(haul)) game.stores[m] = (game.stores[m] ?? 0) + n;
+  emit('salvage', haul);
+  return haul;
+}
+
+__exports.MATERIALS = MATERIALS;
+__exports.MATERIAL_LIST = MATERIAL_LIST;
+__exports.STARTING_STORES = STARTING_STORES;
+__exports.RECIPES = RECIPES;
+__exports.RECIPE_BY_ID = RECIPE_BY_ID;
+__exports.availableRecipes = availableRecipes;
+__exports.beginFabrication = beginFabrication;
+__exports.advanceFabrication = advanceFabrication;
+__exports.salvageWreck = salvageWreck;
+
+});
+
 __define("src/core/rng.js", function (__exports, __require) {
 // 64-bit deterministic pseudo-random number generation.
 //
@@ -7448,9 +7750,18 @@ class Clock {
     return this.accumulator / SIM_STEP;
   }
 
-  /** Advance the calendar. One stardate unit is roughly a day. */
+  /**
+   * Advance the calendar. One stardate unit is roughly a day.
+   *
+   * Full precision is kept internally and rounded only for display. Rounding
+   * here instead meant anything shorter than about two and a half hours
+   * advanced the clock by nothing at all — so an hour of work in the machine
+   * shop, or an hour spent riding out a containment cascade, cost no time
+   * whatsoever. Small increments have to accumulate, because the campaign is
+   * now made of them.
+   */
   advanceStardate(units) {
-    this.stardate = Math.round((this.stardate + units) * 10) / 10;
+    this.stardate += units;
   }
 
   format() {
@@ -7470,50 +7781,6 @@ function formatDuration(hours) {
 __exports.SIM_STEP = SIM_STEP;
 __exports.Clock = Clock;
 __exports.formatDuration = formatDuration;
-
-});
-
-__define("src/core/events.js", function (__exports, __require) {
-// Minimal synchronous pub/sub. The sim emits, the UI listens.
-// Synchronous on purpose: an order and its consequence land in the same frame,
-// so nothing ever shows a spinner waiting for a result.
-
-const handlers = new Map();
-function on(event, fn) {
-  if (!handlers.has(event)) handlers.set(event, new Set());
-  handlers.get(event).add(fn);
-  return () => off(event, fn);
-}
-function once(event, fn) {
-  const wrapped = (payload) => { off(event, wrapped); fn(payload); };
-  return on(event, wrapped);
-}
-function off(event, fn) {
-  handlers.get(event)?.delete(fn);
-}
-function emit(event, payload) {
-  const set = handlers.get(event);
-  if (set) {
-    for (const fn of [...set]) {
-      try { fn(payload); } catch (err) { console.error(`[events] ${event}`, err); }
-    }
-  }
-  const wildcard = handlers.get('*');
-  if (wildcard) {
-    for (const fn of [...wildcard]) {
-      try { fn({ event, payload }); } catch (err) { console.error('[events] *', err); }
-    }
-  }
-}
-function clearAll() {
-  handlers.clear();
-}
-
-__exports.on = on;
-__exports.once = once;
-__exports.off = off;
-__exports.emit = emit;
-__exports.clearAll = clearAll;
 
 });
 
@@ -10276,6 +10543,10 @@ function rollEncounter(rng, systemId, { ledger, inTransit = false } = {}) {
     : system.hazard ? 0.5
     : 0.4;
 
+  // Traps are rare and are not gated on danger: a gravimetric shear does not
+  // care whose space you are in.
+  if (rng.chance(system.hazard ? 0.1 : 0.045)) return buildTrap(rng, system);
+
   if (rng.float() > danger && !inTransit) {
     return rng.chance(0.45) ? { kind: 'quiet', system } : buildAnomaly(rng, system);
   }
@@ -10324,6 +10595,66 @@ function buildPatrol(rng, system, presence, ledger) {
     text: hostile
       ? `${FACTIONS[factionId].adjective} vessels closing on an intercept course. They are arming weapons.`
       : `A ${FACTIONS[factionId].adjective} patrol is holding position and scanning us. No weapons charged — yet.`,
+  };
+}
+
+/**
+ * A trap. Not a fight you are losing — a situation with no weapon in it.
+ *
+ * The point of these is that `engage` is not on the menu and `withdraw` does
+ * not work. What gets you out is something you build, something you divert
+ * power to, or the patience to sit still until whatever is out there loses
+ * interest. It is the third option this game did not previously have.
+ */
+const TRAPS = [
+  {
+    id: 'gravity_well',
+    title: 'Gravimetric shear',
+    text: 'We are held. A gravimetric eddy has the ship by the keel and impulse '
+      + 'is not going to break it. Structural stress is climbing.',
+    device: 'graviton_charge',
+    deviceText: 'A graviton charge, detonated off the port quarter, tears the eddy open long enough to slip out.',
+    powerChannel: 'engines',
+    powerText: 'Everything to the engines, all at once. The frame screams and the ship comes free.',
+    waitHours: 14,
+    waitText: 'The eddy dissipates on its own, eventually. The wait costs fourteen hours and a lot of composure.',
+    damage: 0.06,
+  },
+  {
+    id: 'sensor_ghost',
+    title: 'Something is hunting us',
+    text: 'Sensors keep losing it. Whatever is out there is running silent, it '
+      + 'has been matching our course for an hour, and it is closing.',
+    device: 'sensor_decoy',
+    deviceText: 'The decoy goes out cold and dumb. Whatever it is takes the bait and breaks off after it.',
+    powerChannel: 'auxiliary',
+    powerText: 'Every scrap of power to the sensors. The return resolves, they realise they have been seen, and they leave.',
+    waitHours: 9,
+    waitText: 'Silent running for nine hours. It loses interest, or decides we are not worth it.',
+    damage: 0,
+  },
+  {
+    id: 'containment_cascade',
+    title: 'Containment cascade',
+    text: 'A feedback loop in the containment field. It is building, and in about '
+      + 'an hour it will not be a loop any more.',
+    device: 'eps_bypass',
+    deviceText: 'The bypass takes the load off the failing conduits and the cascade dies out.',
+    powerChannel: 'auxiliary',
+    powerText: 'Shunt everything spare into the containment field and hold it manually until it stabilises.',
+    waitHours: 1,
+    waitText: 'Nobody waits this one out. Engineering does it by hand, and it costs.',
+    damage: 0.14,
+  },
+];
+
+function buildTrap(rng, system) {
+  const trap = rng.pick(TRAPS);
+  return {
+    kind: 'trapped', system, hostile: false, hailable: false,
+    trap,
+    title: trap.title,
+    text: trap.text,
   };
 }
 
@@ -10481,6 +10812,7 @@ function environmentalHazard(system, ship, rng, dt) {
 
 __exports.ENCOUNTER_KINDS = ENCOUNTER_KINDS;
 __exports.rollEncounter = rollEncounter;
+__exports.TRAPS = TRAPS;
 __exports.environmentalHazard = environmentalHazard;
 
 });
@@ -12359,6 +12691,7 @@ const { CaptainProgress, combatXP } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
 const { Engagement } = __require("src/sim/combat.js");
 const { AwayTeam } = __require("src/sim/away.js");
+const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { resolveHail, STANDING_EFFECTS } = __require("src/sim/diplomacy.js");
 
 const { Galaxy, plotTransit } = __require("src/world/galaxy.js");
@@ -12467,6 +12800,11 @@ class Game {
     this.pendingCombat = null;
     this.firstStrike = false;
     this.latinum = 500;
+
+    // ---- stores and the machine shop ----
+    this.stores = { ...STARTING_STORES };
+    this.fabrication = null;
+    this.devices = {};
 
     // ---- the commission ----
     // Five years of wall-clock time. The ship works whether the app is open or
@@ -12746,6 +13084,49 @@ class Game {
         return out;
       }
 
+      // ---- getting out of a trap ----
+      case 'trap_device': {
+        const trap = enc.trap;
+        if (!trap || (this.devices?.[trap.device] ?? 0) < 1) {
+          out.messages.push('We do not have one aboard, Captain.');
+          return out;
+        }
+        this.devices[trap.device] -= 1;
+        out.messages.push(trap.deviceText);
+        this.encounter = null;
+        this.mode = MODES.BRIDGE;
+        this.earnReputation('crisis_averted');
+        return out;
+      }
+      case 'trap_power': {
+        const trap = enc.trap;
+        if (!trap) return out;
+        // Costs the grid: everything goes to one channel and the rest starves.
+        this.ship.power.set(trap.powerChannel, 100);
+        this.ship.antimatter = Math.max(0, this.ship.antimatter - 12);
+        out.messages.push(trap.powerText);
+        this.encounter = null;
+        this.mode = MODES.BRIDGE;
+        return out;
+      }
+      case 'trap_wait': {
+        const trap = enc.trap;
+        if (!trap) return out;
+        this.clock.advanceStardate(trap.waitHours / 24);
+        if (trap.damage) {
+          this.ship.takeDamage(this.ship.maxHull * trap.damage, {
+            bearing: 0, type: 'kinetic', rng: this.rng,
+          });
+        }
+        out.messages.push(trap.waitText);
+        if (trap.damage) {
+          out.messages.push(`Hull integrity is down to ${Math.round(this.ship.hullPct * 100)} percent.`);
+        }
+        this.encounter = null;
+        this.mode = MODES.BRIDGE;
+        return out;
+      }
+
       case 'assist': {
         const lives = enc.lives ?? 200;
         this.ledger.record('distress_answered', { text: `Assisted at ${enc.system.name}`, system: enc.system.id });
@@ -12991,6 +13372,19 @@ class Game {
       );
     }
 
+    // A hulk is stores. Winning a fight and then leaving without stripping the
+    // wreck is a choice, and this is where the materials for the machine shop
+    // actually come from.
+    if (killed.length && (outcome === 'victory' || outcome === 'routed')) {
+      const tier = Math.max(...killed.map((s) => s.cls.tier ?? 1));
+      const haul = this.salvage({ tier });
+      const summary = Object.entries(haul)
+        .filter(([, n]) => n > 0)
+        .map(([m, n]) => `${n} ${m}`)
+        .join(', ');
+      this.officerSays('engineering', `Salvage teams recovered ${summary} from the wreckage.`, 'report');
+    }
+
     if (outcome === 'victory' || outcome === 'routed') {
       const xp = combatXP(eng.hostiles) * this.difficulty.scale('xpRate');
       // The Empire respects a captain who kept fighting while losing.
@@ -13179,6 +13573,9 @@ class Game {
       log: this.log.slice(-80),
       over: this.over ?? false,
       campaign: this.campaign?.save() ?? null,
+      stores: this.stores,
+      fabrication: this.fabrication,
+      devices: this.devices,
     };
   }
 
@@ -13231,6 +13628,14 @@ class Game {
       if (officer.alive && officer.injured) officer.recover?.(pending);
     }
 
+    // The machine shop works too. A two-day job is a two-day job whether you
+    // are watching it or not — which is what makes committing to one a
+    // decision rather than a button.
+    const finished = advanceFabrication(this, pending);
+    if (finished) {
+      this.pushLog(`${finished.recipe.name} completed while you were away. ${finished.text}`, 'engineering');
+    }
+
     // One stardate unit is roughly a day.
     this.clock.advanceStardate(pending / 24);
 
@@ -13245,6 +13650,38 @@ class Game {
 
     emit('campaign:resumed', { hours: pending, lines });
     return { hours: pending, lines };
+  }
+
+  /** Start a job in the machine shop. */
+  fabricate(recipeId) {
+    return beginFabrication(this, recipeId);
+  }
+
+  /**
+   * Work the shop for a stretch of hours the player has chosen to spend, rather
+   * than hours that merely passed. Costs the same time on the stardate.
+   */
+  workTheShop(hours = 1) {
+    if (!this.fabrication) return { ok: false, reason: 'Nothing on the bench, Captain.' };
+    const done = advanceFabrication(this, hours);
+    this.clock.advanceStardate(hours / 24);
+    return { ok: true, done, remaining: this.fabrication?.hoursRemaining ?? 0 };
+  }
+
+  /** Strip a wreck for stores. */
+  salvage(opts = {}) {
+    return salvageWreck(this, this.rng, opts);
+  }
+
+  /** What the shop is building, in a form the UI can render. */
+  get fabricationStatus() {
+    if (!this.fabrication) return null;
+    const recipe = RECIPE_BY_ID[this.fabrication.recipeId];
+    return {
+      name: recipe?.name ?? 'Unknown work',
+      hoursRemaining: this.fabrication.hoursRemaining,
+      progress: 1 - this.fabrication.hoursRemaining / Math.max(1e-6, this.fabrication.hoursTotal),
+    };
   }
 
   /** How far through the five-year mission this commission is. */
@@ -13288,6 +13725,10 @@ class Game {
     g.campaign = CampaignClock.load(data.campaign, opts.now ?? undefined);
     if (opts.compression) g.campaign.compression = opts.compression;
 
+    g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };
+    g.fabrication = data.fabrication ?? null;
+    g.devices = data.devices ?? {};
+
     g.applyAllMods();
     return g;
   }
@@ -13310,6 +13751,7 @@ const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
 const { listBackups, downloadSave } = __require("src/core/save.js");
+const { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } = __require("src/sim/fabrication.js");
 
 const { MODES } = __require("src/core/state.js");
 const { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } = __require("src/sim/power.js");
@@ -13913,6 +14355,8 @@ function shipScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'scroll' });
 
+  root.append(machineShopPanel(app));
+
   root.append(panel(`${g.ship.name} — ${g.ship.registry}`, [
     el('p', { class: 'muted', text: g.ship.cls.description }),
     el('div', {}, [
@@ -14136,6 +14580,23 @@ function encounterScreen(app) {
           add('withdraw', 'Withdraw', null, 'ghost');
         }
         break;
+      case 'trapped': {
+        // Deliberately no "engage" and no "withdraw". There is nothing to
+        // shoot and nowhere to go; what gets you out is something you built,
+        // something you divert power to, or the patience to sit it out.
+        const trap = enc.trap ?? {};
+        const held = app.game.devices?.[trap.device] ?? 0;
+        const recipe = RECIPE_BY_ID[trap.device];
+        add('trap_device',
+          held > 0 ? `Use the ${recipe?.name?.toLowerCase() ?? 'device'}` : `No ${recipe?.name?.toLowerCase() ?? 'device'} aboard`,
+          held > 0 ? 'The clean way out — if you thought of it in advance.' : 'You would need to have built one already.',
+          held > 0 ? 'green' : 'ghost');
+        add('trap_power', `Everything to ${trap.powerChannel ?? 'auxiliary'}`,
+          'Costs antimatter and unbalances the grid.', 'amber');
+        add('trap_wait', 'Ride it out',
+          `${trap.waitHours ?? 0} hours${trap.damage ? ', and it will hurt' : ''}.`, 'ice');
+        break;
+      }
       case 'patrol':
         if (enc.hailable) add('hail', 'Hail them', null, 'lilac');
         add('withdraw', 'Continue', null, 'ghost');
@@ -14308,6 +14769,63 @@ __exports.field = field;
 __exports.textInput = textInput;
 __exports.select = select;
 
+
+/**
+ * The machine shop: what is in the stores, what is on the bench, and what the
+ * chief could build if you asked.
+ *
+ * Only one job at a time, on purpose. A ship with one machine shop and one
+ * chief engineer cannot build four things at once, and being made to choose
+ * which one is the entire interest of the mechanic.
+ */
+function machineShopPanel(app) {
+  const g = app.game;
+  const status = g.fabricationStatus;
+
+  const stores = el('div', { class: 'meta' }, MATERIAL_LIST.map((m) =>
+    pill(`${m.name} ${Math.round(g.stores?.[m.id] ?? 0)}`,
+      (g.stores?.[m.id] ?? 0) > 0 ? '' : 'red')));
+
+  const devices = Object.entries(g.devices ?? {}).filter(([, n]) => n > 0);
+
+  const body = [
+    el('p', { class: 'muted', text: 'Salvage from wrecks becomes stores; stores become whatever you have the hours for. Everything here runs on the commission clock, so a two-day job is two days whether the app is open or not.' }),
+    stores,
+    devices.length
+      ? el('div', { class: 'meta' }, devices.map(([id, n]) =>
+        pill(`${RECIPE_BY_ID[id]?.name ?? id} ×${n}`, 'green')))
+      : null,
+  ];
+
+  if (status) {
+    body.push(readout(status.name, status.progress,
+      status.hoursRemaining < 1
+        ? `${Math.round(status.hoursRemaining * 60)} min`
+        : `${status.hoursRemaining.toFixed(1)} h`));
+    body.push(button('Put the hours in', tap(() => {
+      const r = g.workTheShop(Math.min(status.hoursRemaining, 8));
+      if (r.done) app.showMessage(r.done.recipe.name, [r.done.text]);
+      app.render();
+    }), { color: 'amber', sub: 'Spends up to eight hours of the commission' }));
+  } else {
+    for (const { recipe, canMake, reason } of availableRecipes(g)) {
+      body.push(button(recipe.name, canMake ? tap(() => {
+        const r = g.fabricate(recipe.id);
+        if (!r.ok) app.showMessage('Engineering', [r.reason]);
+        app.render();
+      }) : null, {
+        color: canMake ? 'blue' : 'ghost',
+        disabled: !canMake,
+        sub: canMake
+          ? `${recipe.blurb} — ${recipe.hours < 1 ? `${Math.round(recipe.hours * 60)} min` : `${recipe.hours} h`}`
+          : reason,
+      }));
+    }
+  }
+
+  return panel('Machine Shop', body.filter(Boolean));
+}
+
 __exports.bridgeScreen = bridgeScreen;
 __exports.transitScreen = transitScreen;
 __exports.tacticalScreen = tacticalScreen;
@@ -14324,6 +14842,7 @@ __exports.missionScreen = missionScreen;
 __exports.hailOptions = hailOptions;
 __exports.newGameScreen = newGameScreen;
 __exports.gameOverScreen = gameOverScreen;
+__exports.machineShopPanel = machineShopPanel;
 
 });
 
@@ -15463,6 +15982,7 @@ __define("src/lang/gazetteer.js", function (__exports, __require) {
 const { SYSTEMS } = __require("src/world/systems.data.js");
 const { FACTION_LIST } = __require("src/world/factions.data.js");
 const { SUBSYSTEMS } = __require("src/sim/power.js");
+const { RECIPES } = __require("src/sim/fabrication.js");
 const { FACINGS } = __require("src/sim/ship.js");
 const { similarity } = __require("src/lang/fuzzy.js");
 const { soundsLike } = __require("src/lang/phonetic.js");
@@ -15649,6 +16169,34 @@ function findTargetSystem(text, tokens) {
   return null;
 }
 
+/**
+ * Which thing in the recipe book an order is about.
+ *
+ * Built from the book itself, so the shop can learn to make something new
+ * without this function changing — the same reason every other extractor here
+ * reads the game's data rather than restating it.
+ */
+const RECIPE_WORDS = RECIPES.map((r) => ({
+  id: r.id,
+  words: `${r.name} ${r.id.replace(/_/g, ' ')}`
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .filter((w) => w.length > 3),
+}));
+function findRecipe(text) {
+  let best = null;
+  let bestScore = 0;
+  for (const r of RECIPE_WORDS) {
+    let score = 0;
+    for (const w of r.words) {
+      if (text.includes(w)) score += w.length;
+      else if (text.includes(w.replace(/s$/, ''))) score += w.length - 1;
+    }
+    if (score > bestScore) { bestScore = score; best = r.id; }
+  }
+  return best;
+}
+
 /** Which faction is being talked about. */
 function findFaction(text, tokens) {
   for (const f of FACTION_NAMES) {
@@ -15720,6 +16268,7 @@ __exports.findPlace = findPlace;
 __exports.findFacing = findFacing;
 __exports.findPowerChannel = findPowerChannel;
 __exports.findTargetSystem = findTargetSystem;
+__exports.findRecipe = findRecipe;
 __exports.findFaction = findFaction;
 __exports.findWarpFactor = findWarpFactor;
 __exports.findPercent = findPercent;
@@ -16095,7 +16644,8 @@ const INTENTS = [
       'light them up', 'all batteries', 'commence firing', 'shoot',
     ],
     keywords: { fire: 3, shoot: 3, attack: 1.5, launch: 1.5, torpedo: 1.5, phaser: 1.5 },
-    veto: ['cease', 'hold', 'stop', 'cancel', 'check', 'safe'],
+    veto: ['cease', 'hold', 'stop', 'cancel', 'check', 'safe',
+      'build', 'fabricate', 'replicate', 'improvise', 'machine', 'salvage'],
     build: (c) => ({
       action: 'fire',
       weaponType: /\b(?:torpedo|photon|spread|launch)\b/.test(c.text) ? 'torpedo'
@@ -16269,6 +16819,54 @@ const INTENTS = [
     veto: ['hail', 'channel', 'them'],
     build: () => ({ action: 'viewscreen' }),
   },
+  // ------------------------------------------------------------------
+  // The machine shop. Being trapped is a situation you build your way out
+  // of, and these are the orders that do it.
+  // ------------------------------------------------------------------
+  {
+    id: 'fabricate',
+    help: 'Build a hull patch / make torpedoes / rig a bypass',
+    phrases: [
+      'can you build', 'can you make', 'can you rig', 'can we build', 'can we make',
+      'build me', 'make me', 'fabricate', 'replicate', 'machine',
+      'get to work on', 'start work on', 'put together', 'knock together',
+      'rig up', 'jury rig', 'improvise', 'cobble together', 'run me off',
+      'i want you to build', 'get the shop working on',
+      'make torpedo', 'build torpedo', 'more torpedo', 'load more torpedo',
+      'patch the hull', 'make a patch', 'new sensor', 'fix the sensor',
+      'put out the fires', 'coolant purge',
+    ],
+    keywords: { build: 2.5, fabricate: 3, make: 1.2, rig: 2, improvise: 3, replicate: 3 },
+    veto: ['course', 'destination'],
+    // No specification, no work. "Make me a sandwich" is understood perfectly
+    // well as a build order; what it lacks is something the shop can build,
+    // and saying so is a better answer than pretending not to have heard.
+    requires: ['recipe'],
+    build: (c) => ({ action: 'fabricate', recipe: c.recipe }),
+  },
+  {
+    id: 'work_shop',
+    help: 'Get on with it / how long',
+    phrases: [
+      'get on with it', 'keep working', 'stay on it', 'work through the night',
+      'how long', 'how much longer', 'where are we on', 'status of the work',
+      'put the hours in', 'i will wait',
+    ],
+    keywords: { longer: 2 },
+    veto: ['course', 'warp', 'fire'],
+    build: () => ({ action: 'work_shop' }),
+  },
+  {
+    id: 'salvage',
+    help: 'Strip the wreck',
+    phrases: [
+      'strip the wreck', 'salvage the wreck', 'salvage what you can',
+      'recover what you can', 'scavenge', 'take what we can use',
+      'strip it for parts', 'salvage teams', 'board the hulk',
+    ],
+    keywords: { salvage: 3, scavenge: 3, wreck: 2, hulk: 2 },
+    build: () => ({ action: 'salvage' }),
+  },
   {
     id: 'brace',
     help: 'All hands brace for impact',
@@ -16385,7 +16983,7 @@ __define("src/lang/parse.js", function (__exports, __require) {
 const { normalize } = __require("src/lang/normalize.js");
 const { similarity } = __require("src/lang/fuzzy.js");
 const { soundsLike } = __require("src/lang/phonetic.js");
-const { findPlace, findFacing, findPowerChannel, findTargetSystem, findFaction, findWarpFactor, findPercent, findBearing } = __require("src/lang/gazetteer.js");
+const { findPlace, findFacing, findPowerChannel, findTargetSystem, findFaction, findWarpFactor, findPercent, findBearing, findRecipe } = __require("src/lang/gazetteer.js");
 const { INTENTS, STATION_AFFINITY } = __require("src/lang/lexicon.js");
 
 /** Above this, act. Below the lower bound, admit you did not understand. */
@@ -16402,6 +17000,7 @@ const SLOT_PROMPTS = {
   powerChannel: 'Power to which system, Captain?',
   targetSystem: 'Target which system, Captain?',
   warp: 'What warp factor, Captain?',
+  recipe: 'Build what, Captain? There is no specification for that.',
 };
 
 /**
@@ -16425,6 +17024,7 @@ function extract(norm) {
     warp: findWarpFactor(text),
     percent: findPercent(text),
     bearing: findBearing(text),
+    recipe: findRecipe(text),
   };
 }
 
@@ -17998,6 +18598,46 @@ class App {
         const target = this.screen === 'tactical' ? 'bridge'
           : (eng && !eng.over ? 'tactical' : 'galaxy');
         this.go(target);
+        break;
+      }
+
+      // ---- the machine shop ----
+      case 'fabricate': {
+        if (!order.recipe) {
+          audio.play('ui_deny');
+          g.officerSays('engineering', 'Build what, Captain?', 'object');
+          break;
+        }
+        const r = g.fabricate(order.recipe);
+        if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+        else { audio.play('ui_deny'); g.officerSays('engineering', r.reason, 'object'); }
+        break;
+      }
+      case 'work_shop': {
+        const status = g.fabricationStatus;
+        if (!status) {
+          audio.play('ui_deny');
+          g.officerSays('engineering', 'Nothing on the bench, Captain.', 'object');
+          break;
+        }
+        // Spend hours rather than merely asking. "Get on with it" is an order
+        // to put the time in, and the time is real.
+        const spend = Math.min(status.hoursRemaining, 8);
+        const r = g.workTheShop(spend);
+        if (r.done) {
+          this.showMessage(r.done.recipe.name, [r.done.text]);
+        } else {
+          g.officerSays('engineering',
+            `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
+            'report');
+        }
+        break;
+      }
+      case 'salvage': {
+        const haul = g.salvage({ tier: 3 });
+        const summary = Object.entries(haul).filter(([, n]) => n > 0)
+          .map(([m, n]) => `${n} ${m}`).join(', ');
+        ack('engineering', `Recovered ${summary}.`);
         break;
       }
 
