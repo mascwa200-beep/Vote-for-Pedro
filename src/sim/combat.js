@@ -12,6 +12,7 @@
 import { emit } from '../core/events.js';
 import { Ship, FACINGS, inArc, facingForBearing, facingForDirection } from './ship.js';
 import { chooseAction } from './ai.js';
+import { clamp, wrapDegrees, finite } from '../core/num.js';
 
 export const WEAPON_RANGE = {
   beam: 900,
@@ -170,10 +171,14 @@ export class Engagement {
     this.pushLog(key ? `Targeting ${key}.` : 'Targeting hull.', 'tactical');
   }
 
-  setThrottle(v) { this.player.throttle = Math.max(0, Math.min(1, v)); }
-  setHeading(deg) { this.player.desiredHeading = ((deg % 360) + 360) % 360; }
+  // Every one of these goes through a NaN-safe guard rather than a bare
+  // Math.min/Math.max pair. `Math.max(0, Math.min(1, NaN))` is NaN, and a NaN
+  // heading turns the ship's position into NaN on the next update and never
+  // gives it back.
+  setThrottle(v) { this.player.throttle = clamp(v, 0, 1); }
+  setHeading(deg) { this.player.desiredHeading = wrapDegrees(deg); }
 
-  setPitch(deg) { this.player.desiredPitch = Math.max(-70, Math.min(70, deg)); }
+  setPitch(deg) { this.player.desiredPitch = clamp(deg, -70, 70); }
 
   /** Steer to bring the target into the forward arc, in both axes. */
   comeAboutTo(ship) {
@@ -194,7 +199,7 @@ export class Engagement {
    * enough to matter.
    */
   deployDecoy(seconds) {
-    this.decoyTimer = Math.max(this.decoyTimer, seconds);
+    this.decoyTimer = Math.max(this.decoyTimer, clamp(seconds, 0, 600));
     this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, z: this.player.z ?? 0, life: 0.8 });
     this.pushLog('Decoy away — their targeting solutions just got harder.', 'tactical');
   }

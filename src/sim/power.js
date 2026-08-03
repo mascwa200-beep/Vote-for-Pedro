@@ -4,6 +4,8 @@
 // scales that subsystem's output. Presets are one tap; the sliders underneath
 // are the real control, and they're what a captain actually orders.
 
+import { clamp } from '../core/num.js';
+
 export const SUBSYSTEMS = ['weapons', 'shields', 'engines', 'auxiliary'];
 
 export const SUBSYSTEM_LABEL = {
@@ -68,7 +70,9 @@ export class PowerGrid {
    */
   set(subsystem, value) {
     if (!SUBSYSTEMS.includes(subsystem)) return false;
-    this.target[subsystem] = Math.max(0, Math.min(100, Math.round(value)));
+    // Rounded after the guard: Math.round(NaN) is NaN, and a NaN power level
+    // silently disables the subsystem it was meant to boost.
+    this.target[subsystem] = Math.round(clamp(value, 0, 100));
     this.preset = 'custom';
     this.normalize(subsystem);
     return true;

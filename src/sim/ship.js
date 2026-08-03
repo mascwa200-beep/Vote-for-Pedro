@@ -5,6 +5,7 @@
 
 import { PowerGrid } from './power.js';
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
+import { clamp } from '../core/num.js';
 
 // Six facings, not four.
 //
@@ -446,6 +447,11 @@ export class Ship {
   } = {}) {
     if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
 
+    // A hit that is not a finite, non-negative quantity is not a hit. Negative
+    // damage healed the ship; -Infinity took the hull to NaN and nothing after
+    // that was recoverable.
+    amount = clamp(amount, 0, this.maxHull * 100);
+
     // A direction covers all six facings; a bare bearing is the planar case and
     // is still accepted, because plenty of damage in this game — boarding,
     // hazards, collisions — has no meaningful elevation.
@@ -477,7 +483,11 @@ export class Ship {
       hullDamage = incoming;
     }
 
-    this.hull -= hullDamage;
+    // Floored at zero. A hull read as -456,745 is a ship that is very destroyed
+    // and, to every percentage the UI computes from it, absurd — hullPct goes
+    // deeply negative and the bars, the log lines and the AI's break-off
+    // threshold all read nonsense.
+    this.hull = Math.max(0, this.hull - hullDamage);
 
     // Crew casualties scale with how hard the hull was hit, less whatever
     // medical provision the ship carries — the biofunction monitor, a
@@ -580,7 +590,8 @@ export class Ship {
   reinforceShield(facing, fraction = 0.35) {
     if (!FACINGS.includes(facing)) return false;
     const others = FACINGS.filter((f) => f !== facing);
-    const available = others.reduce((n, f) => n + this.shields[f] * fraction, 0);
+    const draw = clamp(fraction, 0, 1);
+    const available = others.reduce((n, f) => n + this.shields[f] * draw, 0);
     const headroom = Math.max(0, this.maxShield * 1.2 - this.shields[facing]);
     const wanted = Math.min(available, headroom);
     if (wanted <= 0) return true;
@@ -590,7 +601,7 @@ export class Ship {
     const scale = wanted / available;
     let pooled = 0;
     for (const f of others) {
-      const take = this.shields[f] * fraction * scale;
+      const take = this.shields[f] * draw * scale;
       this.shields[f] -= take;
       pooled += take;
     }
@@ -599,9 +610,12 @@ export class Ship {
   }
 
   repair(amount) {
-    this.hull = Math.min(this.maxHull, this.hull + amount);
+    // Guarded, and never negative: `repair(-Infinity)` used to drive the hull
+    // to -Infinity, which is a destroyed ship the game does not know is dead.
+    const healed = clamp(amount, 0, this.maxHull);
+    this.hull = Math.min(this.maxHull, this.hull + healed);
     for (const k of SUBSYSTEM_KEYS) {
-      this.subsystems[k] = Math.min(1, this.subsystems[k] + amount / this.maxHull);
+      this.subsystems[k] = Math.min(1, this.subsystems[k] + healed / this.maxHull);
     }
     if (this.subsystems.shields > 0.05) this.shieldsUp = true;
     if (this.hull > 0) { this.breaching = false; this.breachTimer = 0; }

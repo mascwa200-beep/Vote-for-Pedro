@@ -933,3 +933,99 @@ test('every fight ends, and nothing leaves the arena', () => {
   assert.ok(maxRadius <= ARENA_RADIUS + 1,
     `a ship reached ${Math.round(maxRadius)} units, outside the ${ARENA_RADIUS}-unit arena`);
 });
+
+// ============================================================= number hygiene
+
+// `Math.max(0, Math.min(1, NaN))` is NaN. Every clamp in the simulation was
+// written that way, so a single bad number walked straight through and poisoned
+// whatever it touched — and a ship whose position is NaN never recovers, in any
+// engagement, for the rest of the save. It is the most complete soft-lock in
+// the game and it costs one guard to make impossible.
+//
+// The parser does not produce these (20,000 hostile inputs, zero non-finite
+// values in any order it returned). Saves, arithmetic edge cases and future
+// callers can, and the sim should not be one bad number away from unusable.
+const HOSTILE_NUMBERS = [Infinity, -Infinity, NaN, 1e308, -1e308, 1e-320];
+
+const shipIsSane = (ship, label) => {
+  for (const k of ['x', 'y', 'z', 'heading', 'pitch', 'throttle', 'hull']) {
+    assert.ok(Number.isFinite(ship[k] ?? 0), `${label} left ship.${k} = ${ship[k]}`);
+  }
+  for (const f of FACINGS) {
+    assert.ok(Number.isFinite(ship.shields[f]), `${label} left shields.${f} = ${ship.shields[f]}`);
+  }
+  assert.ok(ship.hull >= 0, `${label} left hull at ${ship.hull}`);
+};
+
+const inCombat = () => {
+  const g = new Game({ seed: 999n, crewMode: 'original' });
+  g.startCombat([new Ship('d7', { name: 'IKS Control' })]);
+  return g;
+};
+
+test('helm orders cannot be poisoned by a bad number', () => {
+  for (const v of HOSTILE_NUMBERS) {
+    for (const [name, apply] of [
+      ['setThrottle', (g) => g.engagement.setThrottle(v)],
+      ['setHeading', (g) => g.engagement.setHeading(v)],
+      ['setPitch', (g) => g.engagement.setPitch(v)],
+    ]) {
+      const g = inCombat();
+      apply(g);
+      for (let t = 0; t < 60; t++) g.update(1 / 30);
+      shipIsSane(g.ship, `${name}(${v})`);
+    }
+    const g = inCombat();
+    g.engagement.setThrottle(v);
+    assert.ok(g.ship.throttle >= 0 && g.ship.throttle <= 1,
+      `setThrottle(${v}) left throttle at ${g.ship.throttle}`);
+  }
+});
+
+test('power routing cannot be poisoned by a bad number', () => {
+  for (const v of HOSTILE_NUMBERS) {
+    const g = inCombat();
+    g.ship.power.set('weapons', v);
+    for (const k of Object.keys(g.ship.power.target)) {
+      const p = g.ship.power.target[k];
+      assert.ok(Number.isFinite(p) && p >= 0 && p <= 100,
+        `power.set(weapons, ${v}) left ${k} at ${p}`);
+    }
+  }
+});
+
+test('damage and repair cannot be poisoned by a bad number', () => {
+  for (const v of HOSTILE_NUMBERS) {
+    const a = inCombat();
+    a.ship.takeDamage(v, { direction: 0, type: 'beam', rng: a.rng });
+    shipIsSane(a.ship, `takeDamage(${v})`);
+
+    const b = inCombat();
+    b.ship.repair(v);
+    shipIsSane(b.ship, `repair(${v})`);
+    assert.ok(b.ship.hull <= b.ship.maxHull + 1e-9, `repair(${v}) overfilled the hull`);
+  }
+});
+
+test('shield reinforcement cannot be poisoned by a bad number', () => {
+  for (const v of HOSTILE_NUMBERS) {
+    const g = inCombat();
+    g.ship.reinforceShield('fore', v);
+    shipIsSane(g.ship, `reinforceShield(fore, ${v})`);
+    for (const f of FACINGS) {
+      assert.ok(g.ship.shields[f] >= -1e-9 && g.ship.shields[f] <= g.ship.maxShield * 1.2 + 1e-6,
+        `reinforceShield(fore, ${v}) left ${f} at ${g.ship.shields[f]}`);
+    }
+  }
+});
+
+test('a decoy cannot be poisoned by a bad number', () => {
+  for (const v of HOSTILE_NUMBERS) {
+    const g = inCombat();
+    g.engagement.deployDecoy(v);
+    for (let t = 0; t < 60; t++) g.update(1 / 30);
+    assert.ok(Number.isFinite(g.engagement.decoyTimer),
+      `deployDecoy(${v}) left decoyTimer = ${g.engagement.decoyTimer}`);
+    shipIsSane(g.ship, `deployDecoy(${v})`);
+  }
+});

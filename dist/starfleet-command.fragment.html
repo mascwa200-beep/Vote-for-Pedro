@@ -1707,12 +1707,70 @@ __exports.audio = audio;
 
 });
 
+__define("src/core/num.js", function (__exports, __require) {
+// Numeric guards for the simulation's edges.
+//
+// The clamps in this game were all written as `Math.max(lo, Math.min(hi, v))`,
+// which is correct for every number except the ones that matter: `Math.min(1,
+// NaN)` is NaN, and `Math.max(0, NaN)` is NaN. A single bad value therefore
+// walked straight through every clamp in the sim and poisoned whatever it
+// touched — and NaN is contagious. Once a ship's position is NaN, every
+// subsequent update multiplies NaN by a heading and stores NaN back. Nothing
+// recovers it: not repair, not warping out, not ending the engagement. It is
+// the most complete soft-lock the game can reach, and it is one guard away
+// from being impossible.
+//
+// Fuzzing the parser with 20,000 hostile inputs produced no non-finite values,
+// so this is not defending against typed orders. It is defending against saves,
+// arithmetic edge cases, and every future caller — the sim should not be one
+// bad number away from unusable.
+
+/**
+ * Coerce anything to a finite number.
+ *
+ * NaN, both infinities, and non-numeric values become `fallback`. This is the
+ * gate: put it in front of a clamp rather than trusting the clamp.
+ *
+ * @param {*} v
+ * @param {number} fallback  used when `v` is not a finite number
+ */
+function finite(v, fallback = 0) {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Clamp to a range, NaN-safe.
+ *
+ * A non-finite input lands on `lo` rather than propagating, because every
+ * caller here is clamping a quantity where the low end is the safe answer:
+ * no throttle, no power, no damage.
+ */
+function clamp(v, lo, hi) {
+  const n = finite(v, lo);
+  return n < lo ? lo : n > hi ? hi : n;
+}
+
+/** Wrap a bearing into 0..360, NaN-safe. */
+function wrapDegrees(v) {
+  const n = finite(v, 0) % 360;
+  return n < 0 ? n + 360 : n;
+}
+
+__exports.finite = finite;
+__exports.clamp = clamp;
+__exports.wrapDegrees = wrapDegrees;
+
+});
+
 __define("src/sim/power.js", function (__exports, __require) {
 // Power distribution — the STO model.
 //
 // Four subsystems draw from a fixed pool. Each level above/below the 50 nominal
 // scales that subsystem's output. Presets are one tap; the sliders underneath
 // are the real control, and they're what a captain actually orders.
+
+const { clamp } = __require("src/core/num.js");
 const SUBSYSTEMS = ['weapons', 'shields', 'engines', 'auxiliary'];
 const SUBSYSTEM_LABEL = {
   weapons: 'Weapons',
@@ -1773,7 +1831,9 @@ class PowerGrid {
    */
   set(subsystem, value) {
     if (!SUBSYSTEMS.includes(subsystem)) return false;
-    this.target[subsystem] = Math.max(0, Math.min(100, Math.round(value)));
+    // Rounded after the guard: Math.round(NaN) is NaN, and a NaN power level
+    // silently disables the subsystem it was meant to boost.
+    this.target[subsystem] = Math.round(clamp(value, 0, 100));
     this.preset = 'custom';
     this.normalize(subsystem);
     return true;
@@ -2371,6 +2431,7 @@ __define("src/sim/ship.js", function (__exports, __require) {
 
 const { PowerGrid } = __require("src/sim/power.js");
 const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
+const { clamp } = __require("src/core/num.js");
 
 // Six facings, not four.
 //
@@ -2809,6 +2870,11 @@ class Ship {
   } = {}) {
     if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
 
+    // A hit that is not a finite, non-negative quantity is not a hit. Negative
+    // damage healed the ship; -Infinity took the hull to NaN and nothing after
+    // that was recoverable.
+    amount = clamp(amount, 0, this.maxHull * 100);
+
     // A direction covers all six facings; a bare bearing is the planar case and
     // is still accepted, because plenty of damage in this game — boarding,
     // hazards, collisions — has no meaningful elevation.
@@ -2840,7 +2906,11 @@ class Ship {
       hullDamage = incoming;
     }
 
-    this.hull -= hullDamage;
+    // Floored at zero. A hull read as -456,745 is a ship that is very destroyed
+    // and, to every percentage the UI computes from it, absurd — hullPct goes
+    // deeply negative and the bars, the log lines and the AI's break-off
+    // threshold all read nonsense.
+    this.hull = Math.max(0, this.hull - hullDamage);
 
     // Crew casualties scale with how hard the hull was hit, less whatever
     // medical provision the ship carries — the biofunction monitor, a
@@ -2943,7 +3013,8 @@ class Ship {
   reinforceShield(facing, fraction = 0.35) {
     if (!FACINGS.includes(facing)) return false;
     const others = FACINGS.filter((f) => f !== facing);
-    const available = others.reduce((n, f) => n + this.shields[f] * fraction, 0);
+    const draw = clamp(fraction, 0, 1);
+    const available = others.reduce((n, f) => n + this.shields[f] * draw, 0);
     const headroom = Math.max(0, this.maxShield * 1.2 - this.shields[facing]);
     const wanted = Math.min(available, headroom);
     if (wanted <= 0) return true;
@@ -2953,7 +3024,7 @@ class Ship {
     const scale = wanted / available;
     let pooled = 0;
     for (const f of others) {
-      const take = this.shields[f] * fraction * scale;
+      const take = this.shields[f] * draw * scale;
       this.shields[f] -= take;
       pooled += take;
     }
@@ -2962,9 +3033,12 @@ class Ship {
   }
 
   repair(amount) {
-    this.hull = Math.min(this.maxHull, this.hull + amount);
+    // Guarded, and never negative: `repair(-Infinity)` used to drive the hull
+    // to -Infinity, which is a destroyed ship the game does not know is dead.
+    const healed = clamp(amount, 0, this.maxHull);
+    this.hull = Math.min(this.maxHull, this.hull + healed);
     for (const k of SUBSYSTEM_KEYS) {
-      this.subsystems[k] = Math.min(1, this.subsystems[k] + amount / this.maxHull);
+      this.subsystems[k] = Math.min(1, this.subsystems[k] + healed / this.maxHull);
     }
     if (this.subsystems.shields > 0.05) this.shieldsUp = true;
     if (this.hull > 0) { this.breaching = false; this.breachTimer = 0; }
@@ -9801,6 +9875,7 @@ __define("src/sim/combat.js", function (__exports, __require) {
 const { emit } = __require("src/core/events.js");
 const { Ship, FACINGS, inArc, facingForBearing, facingForDirection } = __require("src/sim/ship.js");
 const { chooseAction } = __require("src/sim/ai.js");
+const { clamp, wrapDegrees, finite } = __require("src/core/num.js");
 const WEAPON_RANGE = {
   beam: 900,
   cannon: 620,
@@ -9957,10 +10032,14 @@ class Engagement {
     this.pushLog(key ? `Targeting ${key}.` : 'Targeting hull.', 'tactical');
   }
 
-  setThrottle(v) { this.player.throttle = Math.max(0, Math.min(1, v)); }
-  setHeading(deg) { this.player.desiredHeading = ((deg % 360) + 360) % 360; }
+  // Every one of these goes through a NaN-safe guard rather than a bare
+  // Math.min/Math.max pair. `Math.max(0, Math.min(1, NaN))` is NaN, and a NaN
+  // heading turns the ship's position into NaN on the next update and never
+  // gives it back.
+  setThrottle(v) { this.player.throttle = clamp(v, 0, 1); }
+  setHeading(deg) { this.player.desiredHeading = wrapDegrees(deg); }
 
-  setPitch(deg) { this.player.desiredPitch = Math.max(-70, Math.min(70, deg)); }
+  setPitch(deg) { this.player.desiredPitch = clamp(deg, -70, 70); }
 
   /** Steer to bring the target into the forward arc, in both axes. */
   comeAboutTo(ship) {
@@ -9981,7 +10060,7 @@ class Engagement {
    * enough to matter.
    */
   deployDecoy(seconds) {
-    this.decoyTimer = Math.max(this.decoyTimer, seconds);
+    this.decoyTimer = Math.max(this.decoyTimer, clamp(seconds, 0, 600));
     this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, z: this.player.z ?? 0, life: 0.8 });
     this.pushLog('Decoy away — their targeting solutions just got harder.', 'tactical');
   }
