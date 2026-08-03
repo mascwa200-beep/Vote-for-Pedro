@@ -10,6 +10,8 @@
 // they go to the GPU without transposing. Every function that returns a matrix
 // takes an optional output array, because the render loop should not allocate.
 
+import { clamp } from '../core/num.js';
+
 export const DEG = Math.PI / 180;
 
 // ---------------------------------------------------------------- vectors
@@ -186,13 +188,25 @@ export function multiply(a, b, out = mat4()) {
 
 /** Right-handed perspective, depth in [-1, 1] as WebGL 1 expects. */
 export function perspective(fovyRad, aspect, near, far, out = mat4()) {
-  const f = 1 / Math.tan(fovyRad / 2);
+  // Guarded because the failure is silent. A zero aspect, a zero field of view
+  // or a near plane equal to the far one all produce a matrix full of NaN and
+  // Infinity, and the result is a black viewport with nothing logged anywhere.
+  //
+  // The callers do guard — tactical3d.js falls back to 320px and gl.js divides
+  // by `Math.max(1, h)` — so this is not reachable today. It is here because a
+  // canvas measured before layout is a very ordinary way to get a zero.
+  const fov = clamp(fovyRad, 1e-3, Math.PI - 1e-3);
+  const ratio = clamp(aspect, 1e-3, 1e3);
+  const n = clamp(near, 1e-4, 1e9);
+  const fPlane = Math.max(n + 1e-4, clamp(far, 1e-4, 1e12));
+
+  const f = 1 / Math.tan(fov / 2);
   out.fill(0);
-  out[0] = f / aspect;
+  out[0] = f / ratio;
   out[5] = f;
-  out[10] = (far + near) / (near - far);
+  out[10] = (fPlane + n) / (n - fPlane);
   out[11] = -1;
-  out[14] = (2 * far * near) / (near - far);
+  out[14] = (2 * fPlane * n) / (n - fPlane);
   return out;
 }
 
@@ -257,14 +271,25 @@ export function normalMatrix(m, out = new Float64Array(9)) {
   if (!det) { out.fill(0); out[0] = 1; out[4] = 1; out[8] = 1; return out; }
   det = 1 / det;
 
+  // The inverse, written out TRANSPOSED. That transpose is the whole point of
+  // a normal matrix and it was missing: the terms below were previously stored
+  // in reading order, which yields inverse(M3) rather than its transpose.
+  //
+  // For a rotation the two differ exactly by the direction of the turn — a
+  // rotation's inverse-transpose is the rotation itself, so the correct matrix
+  // at unit scale is the model's own rotation, and what came out was its
+  // inverse. Every hull was therefore lit by a normal turned the wrong way by
+  // its own orientation. An unrotated ship looks identical (the identity is
+  // its own transpose), which is why it survived: the browser harness checks
+  // that pixels are drawn, not that the light lands on the right side.
   out[0] = b01 * det;
-  out[1] = (-a22 * a01 + a02 * a21) * det;
-  out[2] = (a12 * a01 - a02 * a11) * det;
-  out[3] = b11 * det;
+  out[3] = (-a22 * a01 + a02 * a21) * det;
+  out[6] = (a12 * a01 - a02 * a11) * det;
+  out[1] = b11 * det;
   out[4] = (a22 * a00 - a02 * a20) * det;
-  out[5] = (-a12 * a00 + a02 * a10) * det;
-  out[6] = b21 * det;
-  out[7] = (-a21 * a00 + a01 * a20) * det;
+  out[7] = (-a12 * a00 + a02 * a10) * det;
+  out[2] = b21 * det;
+  out[5] = (-a21 * a00 + a01 * a20) * det;
   out[8] = (a11 * a00 - a01 * a10) * det;
   return out;
 }
