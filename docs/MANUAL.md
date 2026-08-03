@@ -112,7 +112,14 @@ can see it.
 | `ahead full` / `ahead one third` / `ahead 40 percent` | Impulse throttle. |
 | `come about` | Turn to face the current target. |
 | `come to bearing 090` | Turn to an absolute bearing. |
+| `come to bearing 090 mark 15` | Bearing and elevation together. |
+| `hard to port` / `come right` | A relative turn from where the bow is now. |
+| `steady as she goes` | Hold the current heading. |
+| `take us up` / `dive` / `climb 30 degrees` | The third axis. Also on the Helm panel. |
+| `level off` | Nose back to the horizontal. |
 | `evasive manoeuvres` | Defence up, turn rate up, accuracy down. |
+| `belay that` | Stop what you just ordered. In a fight, that means the guns. |
+| `cloak` | Refused, with a reason. No Federation hull in this game has one. |
 | `get us out of here` | Begin an eight-second warp-out. They get those eight seconds. |
 | `request docking` | Full repair and resupply, where facilities exist. |
 
@@ -122,7 +129,7 @@ can see it.
 |---|---|
 | `red alert` / `yellow alert` / `stand down` | Alert state, ambience, and haptics. |
 | `shields up` / `lower shields` | Shields cannot regenerate while down. |
-| `reinforce forward shields` | Drains the other three facings into that one. |
+| `reinforce forward shields` | Draws from the other five facings — but only as much as the reinforced facing can actually hold. |
 
 ### Power
 
@@ -176,6 +183,12 @@ down, because getting at a weak facing that way does not require out-turning
 you.
 
 This is why **turning matters**, and why **pitching** now matters too. When one
+**Use the third axis.** The enemy does. Klingon and Cardassian captains
+deliberately come at you from above or below whichever face you are presenting,
+because a ship that is climbing is a ship whose dorsal shield is toward you.
+`Take us up`, `dive`, and `level off` are orders, the Helm panel has Climb /
+Level / Dive, and `bearing 210 mark 15` gives both axes in one breath.
+
 facing is stripped, present a fresh one. `Come about` brings the target into
 your forward arc in both axes at once. Climbing is slower than turning on every
 hull in the game, so using the vertical is a real trade rather than a free extra

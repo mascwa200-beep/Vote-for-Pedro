@@ -859,8 +859,55 @@ class App {
         break;
       case 'heading':
         eng?.setHeading(order.value);
-        ack('helm', `Coming to bearing ${order.value}.`);
+        // "Bearing 210 mark 15" always parsed its mark, carried it in the order
+        // object, and had it dropped here. The mark is the elevation, and it is
+        // the only reason the third axis is in the sentence.
+        if (order.mark) eng?.setPitch(order.mark);
+        ack('helm', order.mark
+          ? `Coming to bearing ${order.value} mark ${order.mark}.`
+          : `Coming to bearing ${order.value}.`);
         break;
+      case 'turn': {
+        if (!eng) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        if (order.value === 0) {
+          eng.setHeading(g.ship.heading);
+          ack('helm', 'Steady as she goes.');
+          break;
+        }
+        eng.setHeading(g.ship.heading + order.value);
+        ack('helm', order.value < 0 ? 'Coming to port.' : 'Coming to starboard.');
+        break;
+      }
+      case 'cloak': {
+        // No Federation hull in this game carries one. The refusal is the
+        // point: an officer says why, rather than the parser shrugging at an
+        // order every captain in this setting knows the words to.
+        if (!g.ship.cloakCapable) {
+          audio.play('ui_deny');
+          ack('engineering', 'We have no cloaking device, Captain. Treaty of Algeron.');
+          break;
+        }
+        const worked = order.on ? g.ship.cloak() : g.ship.decloak();
+        if (!worked) {
+          audio.play('ui_deny');
+          ack('engineering', order.on
+            ? 'The cloak is still cycling, Captain.'
+            : 'We are not cloaked.');
+          break;
+        }
+        audio.play('power_reroute');
+        ack('tactical', order.on ? 'Cloaking device engaged.' : 'Decloaking.');
+        break;
+      }
+      case 'pitch': {
+        if (!eng) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        eng.setPitch(order.value);
+        const said = order.value === 0 ? 'Levelling off.'
+          : order.value > 0 ? `Coming up ${Math.round(order.value)} degrees.`
+            : `Taking her down ${Math.round(-order.value)} degrees.`;
+        ack('helm', said);
+        break;
+      }
       case 'come_about':
         eng?.comeAboutTo(eng.target);
         ack('helm', 'Coming about.');

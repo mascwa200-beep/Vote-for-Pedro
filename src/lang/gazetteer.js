@@ -274,6 +274,92 @@ export function findBearing(text) {
   };
 }
 
+/**
+ * How far up or down, in degrees, from a spoken elevation order.
+ *
+ * The third axis is what the 3D simulation is for — the enemy AI comes at you
+ * from above or below whichever face you are not presenting — and until this
+ * existed there was no way to type an order that used it.
+ *
+ * Returns null when the text is not an elevation order at all, so a caller can
+ * tell "not about elevation" from "level off", which is a real order meaning
+ * zero.
+ */
+/** Vertical verbs — words that are themselves an elevation order. */
+const CLIMB_VERBS = ['climb', 'ascend', 'ascent', 'soar'];
+const DIVE_VERBS = ['dive', 'descend', 'descent', 'plunge'];
+
+/** Words that only mean elevation when a movement verb is with them. */
+const UP_WORDS = ['up', 'above', 'over', 'top', 'higher', 'upward', 'upwards', 'altitude'];
+const DOWN_WORDS = ['down', 'below', 'under', 'underneath', 'beneath', 'downward', 'downwards', 'lower'];
+
+/** Verbs that turn a bare direction into a manoeuvre. */
+const MOVE_VERBS = ['take', 'bring', 'get', 'put', 'come', 'go', 'drop', 'push',
+  'pull', 'nose', 'pitch', 'gain', 'lose', 'move', 'swing'];
+
+/** Level-off phrasings, which mean an elevation of exactly zero. */
+const LEVEL_RE = /\b(?:level (?:off|out|us|the ship|her|it)?|even keel|straighten (?:up|out|us|her))\b/;
+
+/** Does any token match `word` exactly, by close spelling, or by sound? */
+function tokenHits(tokens, word) {
+  for (const tok of tokens) {
+    if (tok === word) return true;
+    // Same thresholds as the other extractors here: loose enough for a real
+    // typo, strict enough that "up" does not swallow every two-letter token.
+    if (tok.length >= 4 && word.length >= 4
+      && (similarity(tok, word) > 0.75 || soundsLike(tok, word))) return true;
+  }
+  return false;
+}
+
+/**
+ * How far up or down, in degrees, from a spoken elevation order.
+ *
+ * The third axis is what the 3D simulation is for — the enemy AI comes at you
+ * from above or below whichever face you are not presenting — and until this
+ * existed there was no way to type an order that used it.
+ *
+ * Token-based and fuzzy rather than a flat regex, to match how every other
+ * extractor in this file works: "climd" and "tkae us up" are exactly the kind
+ * of input the rest of the pipeline already absorbs, and an order layer that
+ * handles a typo in "shields" but not in "climb" is inconsistent in a way a
+ * player would feel.
+ *
+ * Returns null when the text is not about elevation at all, so a caller can
+ * tell "not an elevation order" from "level off", which is a real order
+ * meaning zero.
+ */
+export function findElevation(text, tokens = text.split(/\s+/).filter(Boolean)) {
+  if (LEVEL_RE.test(text)) return 0;
+
+  // A vertical verb stands alone: "climb" needs no preposition.
+  let up = CLIMB_VERBS.some((v) => tokenHits(tokens, v));
+  let down = DIVE_VERBS.some((v) => tokenHits(tokens, v));
+
+  // A bare direction needs a movement verb with it, or "shields up" and
+  // "power down" become manoeuvres.
+  if (!up && !down) {
+    const moving = MOVE_VERBS.some((v) => tokenHits(tokens, v));
+    if (moving) {
+      up = UP_WORDS.some((w) => tokenHits(tokens, w));
+      down = DOWN_WORDS.some((w) => tokenHits(tokens, w));
+    }
+  }
+
+  // "on top of them" / "from above" name a position rather than a movement.
+  if (!up && !down) {
+    if (/\b(?:on top of|from above|up and over|over the top)\b/.test(text)) up = true;
+    else if (/\b(?:from below|from underneath|underneath them|from under)\b/.test(text)) down = true;
+  }
+
+  if (up === down) return null;   // neither, or a contradictory both
+
+  // "climb 30 degrees" is exact; a bare "climb" is a decisive but sane angle.
+  const m = text.match(/\b(-?\d{1,2})\s*(?:deg|degrees?)?\b/);
+  const magnitude = m ? Math.min(70, Math.abs(parseInt(m[1], 10))) : 35;
+  return (up ? 1 : -1) * magnitude;
+}
+
 /** Everything the parser can name, for the help sheet and for tests. */
 export function gazetteerSummary() {
   return {

@@ -348,6 +348,38 @@ try {
   }
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
 
+  // ---- The third axis ----
+  //
+  // The 3D rewrite's headline feature had no player control of any kind:
+  // `setPitch` existed in the Engagement API and was called from nowhere in the
+  // UI or the command layer, while the enemy AI used elevation tactically
+  // against you. Both routes are checked here — the button and the typed order —
+  // because either one alone would leave the axis half-reachable.
+  await dismissModals(page);
+  const climbed = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const before = app.game.ship.desiredPitch;
+    const btn = [...document.querySelectorAll('.btn')]
+      .find((b) => /^climb$/i.test(b.textContent.trim()));
+    if (!btn) return { error: 'no Climb control on the tactical screen' };
+    btn.click();
+    await new Promise((r) => setTimeout(r, 60));
+    return { before, after: app.game.ship.desiredPitch };
+  });
+  check('the tactical screen can order a climb',
+    !climbed.error && climbed.after > climbed.before, JSON.stringify(climbed));
+
+  const levelled = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const btn = [...document.querySelectorAll('.btn')]
+      .find((b) => /^level$/i.test(b.textContent.trim()));
+    if (!btn) return { error: 'no Level control' };
+    btn.click();
+    await new Promise((r) => setTimeout(r, 60));
+    return { pitch: app.game.ship.desiredPitch };
+  });
+  check('levelling off is a control too', levelled.pitch === 0, JSON.stringify(levelled));
+
   // ---- Typed orders, through the real input box ----
   //
   // Everything below this point in the file drives the app object directly.
@@ -360,6 +392,14 @@ try {
     await page.click('.orderbar button');
     await page.waitForTimeout(120);
   };
+
+  await typeOrder('helm, take us down');
+  const dived = await page.evaluate(() => globalThis.__app.game.ship.desiredPitch);
+  check('a typed elevation order reaches the helm', dived < 0, `desiredPitch ${dived}`);
+
+  await typeOrder('level off');
+  const levelledByOrder = await page.evaluate(() => globalThis.__app.game.ship.desiredPitch);
+  check('and levelling off is a typed order as well', levelledByOrder === 0, String(levelledByOrder));
 
   await typeOrder('helm, take evasive action');
   const evadingTyped = await page.evaluate(() => globalThis.__app.game.ship.evasive);

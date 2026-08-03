@@ -29,21 +29,20 @@ import { parseOrder } from '../src/ui/orders.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** Actions the game can actually execute — the list App.executeOrder switches on. */
-const EXECUTABLE = new Set([
-  'course', 'warp_factor', 'throttle', 'heading', 'come_about', 'evasive',
-  'warp_out', 'dock', 'alert', 'shields', 'reinforce', 'power', 'preset',
-  'target_subsystem', 'cycle_target', 'target_nearest', 'fire', 'cease_fire',
-  'hail', 'hail_option', 'scan', 'status', 'eject_core', 'ability',
-  'away_team', 'transport',
-  // The captain's chair. Each is reachable from a control and from a typed
-  // order, through this same list.
-  'intercom', 'log_entry', 'jettison_pod', 'viewscreen',
-  // The machine shop.
-  'fabricate', 'work_shop', 'salvage',
-  // The gambit.
-  'force_channel',
-]);
+/**
+ * Actions the game can actually execute.
+ *
+ * Read out of main.js rather than restated here. A hand-kept copy of this list
+ * is a data table checked against another data table: it passes while the
+ * lexicon and the dispatch drift apart, which is the exact failure mode the
+ * test below exists to catch. Extracting the real `case` labels means the only
+ * way to satisfy it is to write a handler.
+ */
+const MAIN_JS = readFileSync(join(HERE, '..', 'src', 'main.js'), 'utf8');
+const EXECUTABLE = new Set(
+  [...MAIN_JS.slice(MAIN_JS.indexOf('executeOrder('))
+    .matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]),
+);
 
 describe('normalisation', () => {
   test('expands contractions and slang', () => {
@@ -322,5 +321,134 @@ describe('corpus coverage', () => {
     // part of this design that could plausibly break that.
     assert.ok(phraseCount() > 250, 'the lexicon is suspiciously thin');
     assert.ok(phraseCount() < 6000, 'the lexicon has outgrown the precache budget');
+  });
+});
+
+// ================================================================= the z axis
+
+// The third axis is the whole point of the 3D simulation, and the enemy AI
+// uses it tactically — chooseElevation() deliberately comes at you from above
+// or below whichever face you are not presenting. The player could not.
+//
+// `Engagement.setPitch` existed and was called from nowhere in the UI or the
+// command layer. "bearing 210 mark 15" parsed correctly, extracted the mark,
+// carried it in the order object, and main.js dropped it on the floor.
+describe('elevation orders reach the helm', () => {
+  const order = (t) => {
+    const r = parseOrder(t);
+    return r?.confirm ? r.order : r;
+  };
+
+  test('a bearing carries its mark', () => {
+    const r = order('bearing 210 mark 15');
+    assert.equal(r.action, 'heading');
+    assert.equal(r.value, 210);
+    assert.equal(r.mark, 15, 'the elevation was parsed away');
+  });
+
+  test('a negative mark is a dive, not a parse failure', () => {
+    const r = order('come to heading 090 mark -20');
+    assert.equal(r.value, 90);
+    assert.equal(r.mark, -20);
+  });
+
+  test('climbing and diving are orders in their own right', () => {
+    for (const [text, sign] of [
+      ['take us up', 1], ['climb', 1], ['nose up', 1], ['take us over them', 1],
+      ['bring us above them', 1], ['gain altitude', 1],
+      ['take us down', -1], ['dive', -1], ['nose down', -1],
+      ['get us under them', -1], ['drop below them', -1],
+    ]) {
+      const r = order(text);
+      assert.ok(r && !r.unknown, `"${text}" was not understood at all`);
+      assert.equal(r.action, 'pitch', `"${text}" produced ${r.action}`);
+      assert.ok(Math.sign(r.value) === sign,
+        `"${text}" gave pitch ${r.value}, expected sign ${sign}`);
+    }
+  });
+
+  test('levelling off is an order too', () => {
+    for (const text of ['level off', 'level out', 'even keel', 'level the ship']) {
+      const r = order(text);
+      assert.ok(r && !r.unknown, `"${text}" was not understood`);
+      assert.equal(r.action, 'pitch', `"${text}" produced ${r.action}`);
+      assert.equal(r.value, 0, `"${text}" gave pitch ${r.value}`);
+    }
+  });
+
+  test('an explicit elevation is honoured', () => {
+    const r = order('climb 30 degrees');
+    assert.equal(r.action, 'pitch');
+    assert.equal(r.value, 30);
+  });
+
+  test('a climb order is not mistaken for a throttle order', () => {
+    // "take us up" and "step on it" are close enough in shape that a keyword
+    // parser will happily read one as the other.
+    assert.equal(order('take us up').action, 'pitch');
+    assert.equal(order('take us down').action, 'pitch');
+    // These stay speed orders. "up"/"down" appear in both families, so the
+    // elevation extractor has to be the thing that decides, not the words.
+    assert.equal(order('speed up').action, 'throttle');
+    assert.equal(order('slow down').action, 'throttle');
+    assert.equal(order('step on it').action, 'throttle');
+  });
+});
+
+// ========================================================== helm and refusals
+
+// Three phrasings a captain will certainly type, which the parser answered with
+// "I do not understand". The design goal for this layer is that anything typed
+// is an order that gets enacted; a shrug at "hard to port" is a defect against
+// that, not a missing feature.
+describe('orders a captain will actually give', () => {
+  const order = (t) => {
+    const r = parseOrder(t);
+    return r?.confirm ? r.order : r;
+  };
+
+  test('a relative turn is an order', () => {
+    for (const [text, sign] of [
+      ['hard to port', -1], ['hard aport', -1], ['come left', -1], ['turn to port', -1],
+      ['hard to starboard', 1], ['hard astarboard', 1], ['come right', 1],
+      ['turn to starboard', 1],
+    ]) {
+      const r = order(text);
+      assert.ok(r && !r.unknown, `"${text}" was not understood`);
+      assert.equal(r.action, 'turn', `"${text}" produced ${r.action}`);
+      assert.equal(Math.sign(r.value), sign, `"${text}" turned ${r.value}`);
+    }
+  });
+
+  test('steady as she goes holds the current heading', () => {
+    for (const text of ['steady as she goes', 'steady on', 'hold this heading', 'maintain heading']) {
+      const r = order(text);
+      assert.ok(r && !r.unknown, `"${text}" was not understood`);
+      assert.equal(r.action, 'turn', `"${text}" produced ${r.action}`);
+      assert.equal(r.value, 0);
+    }
+  });
+
+  test('belaying an order is understood', () => {
+    for (const text of ['belay that', 'cancel that', 'belay my last', 'belay that order']) {
+      const r = order(text);
+      assert.ok(r && !r.unknown, `"${text}" was not understood`);
+      assert.equal(r.action, 'cease_fire', `"${text}" produced ${r.action}`);
+    }
+  });
+
+  test('the cloak is an order, even on a ship that has not got one', () => {
+    for (const text of ['cloak', 'engage the cloaking device', 'cloak the ship']) {
+      const r = order(text);
+      assert.ok(r && !r.unknown, `"${text}" was not understood`);
+      assert.equal(r.action, 'cloak');
+      assert.equal(r.on, true);
+    }
+    for (const text of ['decloak', 'drop the cloak', 'uncloak']) {
+      const r = order(text);
+      assert.ok(r && !r.unknown, `"${text}" was not understood`);
+      assert.equal(r.action, 'cloak');
+      assert.equal(r.on, false);
+    }
   });
 });
