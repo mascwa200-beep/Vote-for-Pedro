@@ -3,6 +3,8 @@
 // Skill points buy modifiers that go straight into Ship.mods, so a point in
 // Beam Weapons is a real number in the damage formula, not a cosmetic tier.
 
+import { ADDITIVE_MODS } from './ship.js';
+
 export const RANKS = [
   { id: 'ensign', name: 'Ensign', tier: 1, xp: 0, skillPoints: 2 },
   { id: 'lieutenant_jg', name: 'Lieutenant JG', tier: 1, xp: 800, skillPoints: 2 },
@@ -143,7 +145,7 @@ export class CaptainProgress {
       const skill = SKILLS[id];
       if (!skill) continue;
       for (const [k, v] of Object.entries(skill.mods ?? {})) {
-        if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') {
+        if (ADDITIVE_MODS.has(k)) {
           mods[k] = (mods[k] ?? 0) + v * ranks;
         } else {
           mods[k] = (mods[k] ?? 1) * (1 + v * ranks);

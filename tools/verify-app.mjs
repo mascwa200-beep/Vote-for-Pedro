@@ -10,7 +10,8 @@
 //   NODE_PATH=/tmp/pw/node_modules node tools/verify-app.mjs
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, openSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -34,6 +35,23 @@ const notes = [];
 function check(label, condition, detail = '') {
   if (condition) { notes.push(`  PASS  ${label}`); }
   else { failures.push(`  FAIL  ${label}${detail ? ` — ${detail}` : ''}`); }
+}
+
+/** Close any open modal so it cannot swallow the next click. */
+async function dismissModals(page) {
+  for (let i = 0; i < 6; i++) {
+    const btn = page.locator('.modal .btn').first();
+    if (!(await btn.count())) return;
+    await btn.click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(150);
+  }
+}
+
+/** Click a bottom-nav destination, clearing modals first. */
+async function nav(page, label) {
+  await dismissModals(page);
+  await page.click(`.nav button:has-text("${label}")`, { timeout: 8000 });
+  await page.waitForTimeout(400);
 }
 
 const server = spawn(process.execPath, [join(ROOT, 'tools', 'serve.mjs')], {
@@ -69,17 +87,72 @@ try {
   await page.waitForSelector('#app .screen', { timeout: 10000 });
   check('app boots', await page.locator('#app').isVisible());
 
-  // New-captain screen (no prior save in a fresh context).
-  await page.waitForSelector('text=Starfleet Personnel File', { timeout: 5000 });
+  // Multi-step captain creation (no prior save in a fresh context).
+  await page.waitForSelector('.steprail', { timeout: 5000 });
   check('captain creation is shown', true);
-  await page.screenshot({ path: join(SHOTS, '01-new-captain.png') });
+  await page.screenshot({ path: join(SHOTS, '01-difficulty.png') });
 
-  // Choose an original crew to exercise the generator, and pin the world seed
-  // so every run of this harness plays out identically.
+  // Step 1: difficulty. Pick something above the default so the effect is
+  // observable later, and confirm the ladder is all present.
+  const difficultyCount = await page.locator('.diffcard').count();
+  check('the full difficulty ladder is offered', difficultyCount === 12, `${difficultyCount} rungs`);
+  // "Commander" is a substring of "Lieutenant Commander", so match the
+  // heading exactly rather than by containment.
+  await page.locator('.diffcard', { has: page.locator('.diffhead b', { hasText: /^Commander$/ }) })
+    .first().click();
+  await page.click('text=Continue');
+  await page.waitForTimeout(250);
+
+  // Step 2: identity.
+  await page.fill('.field input >> nth=0', 'Naomi');
+  await page.fill('.field input >> nth=1', 'Okafor');
+  await page.click('text=Continue');
+  await page.waitForTimeout(250);
+
+  // Step 3: species — pick Vulcan, whose bonuses are easy to assert.
+  await page.click('.optcard:has-text("Vulcan") >> nth=0');
+  await page.screenshot({ path: join(SHOTS, '01b-species.png') });
+  await page.click('text=Continue');
+  await page.waitForTimeout(250);
+
+  // Step 4: origin.
+  await page.click('.optcard:has-text("Frontier Colony") >> nth=0');
+  await page.click('text=Continue');
+  await page.waitForTimeout(250);
+
+  // Step 5: career.
+  await page.click('.optcard:has-text("Science") >> nth=0');
+  await page.click('text=Continue');
+  await page.waitForTimeout(250);
+
+  // Step 6: abilities. Spend a point and confirm the budget responds.
+  const budgetBefore = await page.textContent('.panel h2');
+  const plusButtons = page.locator('.stepbtn:not([disabled])');
+  if (await plusButtons.count()) await plusButtons.last().click();
+  await page.waitForTimeout(200);
+  const budgetAfter = await page.textContent('.panel h2');
+  check('point buy spends from a visible budget', budgetBefore !== budgetAfter,
+    `${budgetBefore} -> ${budgetAfter}`);
+  await page.screenshot({ path: join(SHOTS, '01c-abilities.png') });
+  await page.click('text=Continue');
+  await page.waitForTimeout(250);
+
+  // Step 7: traits — take one advantage and one complication.
+  await page.click('.optcard:has-text("Tinkerer") >> nth=0');
+  await page.click('.optcard:has-text("Reckless") >> nth=0');
+  await page.click('text=Continue');
+  await page.waitForTimeout(250);
+
+  // Step 8: crew and ship. Original crew, pinned seed.
   await page.click('text=Original crew');
   await page.fill('.field input[placeholder*="blank"]', 'verification-1701');
+  await page.click('text=Continue');
+  await page.waitForTimeout(250);
+
+  // Step 9: review.
+  await page.screenshot({ path: join(SHOTS, '01d-review.png') });
   await page.click('text=Assume command');
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(700);
 
   // Dismiss the opening briefing modal.
   const ack = page.locator('.modal .btn').first();
@@ -87,6 +160,32 @@ try {
   await page.waitForTimeout(400);
 
   check('game state exists', await page.evaluate(() => !!globalThis.__app?.game));
+
+  const built = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return {
+      name: g.character.name,
+      species: g.character.speciesId,
+      career: g.character.careerId,
+      origin: g.character.originId,
+      traits: g.character.traits,
+      difficulty: g.difficulty.id,
+      science: g.character.score('science'),
+      proficientScience: g.character.isProficient('science'),
+      hasRep: !!g.reputation,
+    };
+  });
+  check('the created captain is the one that was built',
+    built.name === 'Naomi Okafor' && built.species === 'vulcan'
+      && built.career === 'science' && built.origin === 'frontier_colony',
+    JSON.stringify(built));
+  check('chosen traits carried through',
+    built.traits.includes('tinkerer') && built.traits.includes('reckless'), JSON.stringify(built.traits));
+  check('chosen difficulty carried through', built.difficulty === 'commander', built.difficulty);
+  check('species and career shaped the sheet',
+    built.science >= 14 && built.proficientScience,
+    `science ${built.science}, proficient ${built.proficientScience}`);
+
   await page.screenshot({ path: join(SHOTS, '02-bridge.png') });
 
   // ------------------------------------------------ audio graph
@@ -135,23 +234,19 @@ try {
   // is pending — check that, then clear it before continuing.
   if (await page.evaluate(() => globalThis.__app.game.mode === 'encounter')) {
     await page.screenshot({ path: join(SHOTS, '03b-encounter.png') });
-    await page.click('.nav button:has-text("Map")');
-    await page.waitForTimeout(400);
+    await nav(page, 'Map');
     check('the map is reachable with a contact pending',
       await page.locator('#galaxy').isVisible());
-    await page.click('.nav button:has-text("Bridge")');
-    await page.waitForTimeout(300);
+    await nav(page, 'Bridge');
     check('the bridge returns to the pending contact',
       await page.evaluate(() => !!document.querySelector('.panel')));
     await page.evaluate(() => { globalThis.__app.game.endEncounter(); globalThis.__app.render(); });
     await page.waitForTimeout(400);
   }
-  const stray = page.locator('.modal .btn').first();
-  if (await stray.count()) { await stray.click(); await page.waitForTimeout(300); }
+  await dismissModals(page);
 
   // ------------------------------------------------ galaxy map
-  await page.click('.nav button:has-text("Map")');
-  await page.waitForTimeout(600);
+  await nav(page, 'Map');
   check('galaxy map canvas renders', await page.locator('#galaxy').isVisible());
   const mapDrawn = await page.evaluate(() => {
     const c = document.getElementById('galaxy');
@@ -229,8 +324,7 @@ try {
 
   // A Klingon captain may withdraw rather than die, so run a second, decided
   // engagement to exercise the permanent-kill path through the real UI.
-  const stray2 = page.locator('.modal .btn').first();
-  if (await stray2.count()) { await stray2.click(); await page.waitForTimeout(300); }
+  await dismissModals(page);
 
   const killRecorded = await page.evaluate(async () => {
     const app = globalThis.__app;
@@ -257,18 +351,143 @@ try {
     killRecorded.standing < 0, String(killRecorded.standing));
 
   // ------------------------------------------------ the rest of the screens
-  for (const [nav, shot] of [['Ship', '06-ship'], ['Crew', '07-crew'], ['Record', '08-record']]) {
-    const modalBtn = page.locator('.modal .btn').first();
-    if (await modalBtn.count()) await modalBtn.click();
-    await page.click(`.nav button:has-text("${nav}")`);
-    await page.waitForTimeout(500);
-    check(`${nav} screen renders`, (await page.locator('.panel').count()) > 0);
+  for (const [navLabel, shot] of [['Ship', '06-ship'], ['Crew', '07-crew'], ['Record', '08-record']]) {
+    await nav(page, navLabel);
+    check(`${navLabel} screen renders`, (await page.locator('.panel').count()) > 0);
     await page.screenshot({ path: join(SHOTS, `${shot}.png`) });
   }
 
+  // ------------------------------------------------ character & reputation UI
+  await nav(page, 'Captain');
+  const sheetAbilities = await page.locator('.abilityrow').count();
+  check('the character sheet lists all six abilities', sheetAbilities === 6, `${sheetAbilities}`);
+  await page.screenshot({ path: join(SHOTS, '12-character-sheet.png') });
+
+  await nav(page, 'Rep');
+  const repPanels = await page.locator('.panel').count();
+  check('the reputation screen renders every track', repPanels >= 6, `${repPanels} panels`);
+  await page.screenshot({ path: join(SHOTS, '13-reputation.png') });
+
+  // Earn enough reputation to unlock and buy a project through the real UI.
+  const repFlow = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    for (let i = 0; i < 12; i++) g.earnReputation('colony_saved');
+    const fed = g.reputation.track('federation');
+    return { tier: fed.tier, marks: fed.marks, available: fed.availableProjects().length };
+  });
+  check('reputation tiers advance from earned events',
+    repFlow.tier >= 1 && repFlow.available > 0, JSON.stringify(repFlow));
+
+  await nav(page, 'Bridge');
+  await nav(page, 'Rep');
+  const buyBtn = page.locator('.panel .btn:not([disabled])').first();
+  if (await buyBtn.count()) { await buyBtn.click(); await page.waitForTimeout(500); }
+  const afterBuy = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    const fed = g.reputation.track('federation');
+    return { completed: fed.completed.length, marks: fed.marks };
+  });
+  check('a reputation project can be bought from the UI',
+    afterBuy.completed >= 1, JSON.stringify(afterBuy));
+
+  // ------------------------------------------------ signature power
+  const signature = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const { Ship } = await import('./src/sim/ship.js');
+    app.game.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Sig' })]);
+    app.render();
+    const before = {
+      used: app.game.character.signatureUsed,
+      career: app.game.character.careerId,
+      label: app.game.character.career.signature,
+    };
+    const btn = [...document.querySelectorAll('.btn')]
+      .find((b) => b.textContent.trim().startsWith(before.label));
+    if (!btn) return { ...before, error: 'no signature button on the tactical screen' };
+    btn.click();
+    return {
+      ...before,
+      after: app.game.character.signatureUsed,
+      disabledNow: !![...document.querySelectorAll('.btn')]
+        .find((b) => b.textContent.trim().startsWith(before.label) && b.disabled),
+    };
+  });
+  check('the career signature power is usable from the tactical screen',
+    !signature.error && signature.before !== true && signature.after === true,
+    JSON.stringify(signature));
+  await page.screenshot({ path: join(SHOTS, '15-signature.png') });
+
+  // Difficulty must actually field more hulls, not just claim to.
+  const outnumbered = await page.evaluate(async () => {
+    const { Game } = await import('./src/core/state.js');
+    const { Ship } = await import('./src/sim/ship.js');
+    const count = (difficulty) => {
+      const g = new Game({ seed: 1n, crewMode: 'original', difficulty });
+      g.startCombat([new Ship('orion_raider', { faction: 'orion', name: 'R' })]);
+      return g.engagement.hostiles.length;
+    };
+    return { lieutenant: count('lieutenant'), fleet: count('fleet_admiral') };
+  });
+  check('higher difficulty actually fields more hostiles',
+    outnumbered.fleet > outnumbered.lieutenant, JSON.stringify(outnumbered));
+
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    if (g.engagement) { g.engagement.end('escaped'); }
+    globalThis.__app.render();
+  });
+  await page.waitForTimeout(600);
+  await dismissModals(page);
+
+  // ------------------------------------------------ the dice
+  const dice = await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    const team = g.buildAwayTeam(['science', 'medical', 'tactical'], true);
+    const roll = (dc) => team.check(g.rng, 'science', { dc, hazard: 'routine' });
+
+    const sample = Array.from({ length: 30 }, () => roll(12));
+    // Assert the mechanism deterministically rather than sampling for both
+    // outcomes: a lucky run of 30 successes is a real possibility and would
+    // otherwise fail the build for no reason.
+    const impossible = Array.from({ length: 12 }, () => roll(60));
+    const trivial = Array.from({ length: 12 }, () => roll(-20));
+
+    return {
+      captured: globalThis.__app.recentRolls.length,
+      allInRange: sample.every((r) => r.natural >= 1 && r.natural <= 20),
+      arithmeticShown: sample.every((r) => r.parts.length > 0),
+      // The die actually varies rather than returning a constant.
+      distinctFaces: new Set(sample.map((r) => r.natural)).size,
+      // Only a natural 20 beats an impossible DC; only a natural 1 fails a
+      // trivial one. Both are guaranteed by the rules, whatever the modifier.
+      impossibleOnlyOnNat20: impossible.every((r) => r.success === (r.natural === 20)),
+      trivialOnlyFailsOnNat1: trivial.every((r) => r.success === (r.natural !== 1)),
+    };
+  });
+  check('d20 rolls stay in range', dice.allInRange);
+  check('every roll itemises where its modifier came from', dice.arithmeticShown);
+  check('the die actually varies', dice.distinctFaces >= 5, `${dice.distinctFaces} distinct faces in 30 rolls`);
+  check('a natural 20 is the only thing that beats an impossible DC',
+    dice.impossibleOnlyOnNat20);
+  check('a natural 1 is the only thing that fails a trivial DC',
+    dice.trivialOnlyFailsOnNat1);
+  check('rolls are captured for the audit log', dice.captured >= 30, `${dice.captured}`);
+
+  // Difficulty must actually move the DCs.
+  const dcShift = await page.evaluate(async () => {
+    const { DifficultySettings } = await import('./src/rules/difficulty.js');
+    return {
+      story: new DifficultySettings('story').dc(15),
+      lieutenant: new DifficultySettings('lieutenant').dc(15),
+      fleet: new DifficultySettings('fleet_admiral').dc(15),
+    };
+  });
+  check('difficulty shifts the target numbers',
+    dcShift.story < dcShift.lieutenant && dcShift.lieutenant < dcShift.fleet,
+    JSON.stringify(dcShift));
+
   // Spend a skill point through the real UI.
-  await page.click('.nav button:has-text("Record")');
-  await page.waitForTimeout(300);
+  await nav(page, 'Record');
   const before = await page.evaluate(() => globalThis.__app.game.progress.unspent);
   const plus = page.locator('.skill button:not([disabled])').first();
   if (await plus.count()) await plus.click();
@@ -356,7 +575,13 @@ try {
   // someone downloads the one-file version instead of installing the PWA.
   const singleFile = join(ROOT, 'dist', 'starfleet-command.html');
   if (existsSync(singleFile)) {
-    const page2 = await context.newPage();
+    // A fresh context, so this is genuinely a first launch: the main run
+    // above already wrote a save, and a shared origin would show the
+    // "Resume Command" prompt instead of captain creation.
+    const freshCtx = await browser.newContext({
+      viewport: VIEWPORT, deviceScaleFactor: DPR, isMobile: true, hasTouch: true,
+    });
+    const page2 = await freshCtx.newPage();
     const errs2 = [];
     page2.on('pageerror', (e) => errs2.push(String(e)));
     page2.on('console', (m) => { if (m.type() === 'error') errs2.push(m.text()); });
@@ -370,16 +595,24 @@ try {
     // Play it, to prove the bundle is functional and not merely parseable.
     const bundlePlayable = await page2.evaluate(() => {
       const app = globalThis.__app;
+      const click = (text) => {
+        const b = [...document.querySelectorAll('.btn')]
+          .find((x) => x.textContent.trim().startsWith(text));
+        if (b) b.click();
+        return !!b;
+      };
+      // Creation is a nine-step flow; walk it to the end and commit.
+      if (!click('Random captain')) return { error: 'no random captain button' };
+      for (let i = 0; i < 12; i++) if (!click('Continue')) break;
       const seedField = document.querySelector('.field input[placeholder*="blank"]');
       if (seedField) {
         seedField.value = 'bundle-check';
         seedField.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      const start = [...document.querySelectorAll('.btn')]
-        .find((b) => b.textContent.includes('Assume command'));
-      if (!start) return { error: 'no start button' };
-      start.click();
+      for (let i = 0; i < 12; i++) if (!click('Continue')) break;
+      if (!click('Assume command')) return { error: 'never reached the final step' };
       if (!app.game) return { error: 'no game after start' };
+
       app.executeOrder({ action: 'alert', level: 'red' }, 'red alert');
       const r = app.game.setCourse('vulcan', 8);
       return {
@@ -388,17 +621,80 @@ try {
         crew: app.game.crew.living.length,
         systems: app.game.galaxy.systems.length,
         episodes: app.game.missions.episodes.length,
+        character: app.game.character.name,
+        difficulty: app.game.difficulty.id,
       };
     });
     check('the single-file build is fully playable',
       bundlePlayable.alert === 'red' && bundlePlayable.courseOk
-        && bundlePlayable.crew >= 6 && bundlePlayable.systems > 20,
+        && bundlePlayable.crew >= 6 && bundlePlayable.systems > 30
+        && bundlePlayable.episodes >= 16 && !!bundlePlayable.character,
       JSON.stringify(bundlePlayable));
     check('no errors in the single-file build', errs2.length === 0, errs2.slice(0, 3).join(' | '));
     await page2.screenshot({ path: join(SHOTS, '11-single-file.png') });
     await page2.close();
+    await freshCtx.close();
   } else {
     notes.push('  SKIP  single-file build not present (run: npm run build)');
+  }
+
+  // ------------------------------------------------ the APK payload
+  // The Android app is a WebView pointed at assets/game.html. Extract that
+  // asset from the signed APK and run it, which is exactly what the phone does.
+  const apk = join(ROOT, 'dist', 'starfleet-command.apk');
+  if (existsSync(apk)) {
+    const extracted = join(ROOT, 'build', 'apk-asset-check.html');
+    mkdirSync(dirname(extracted), { recursive: true });
+    try {
+      execFileSync('unzip', ['-p', apk, 'assets/game.html'], {
+        stdio: ['ignore', openSync(extracted, 'w'), 'ignore'], maxBuffer: 64 * 1024 * 1024,
+      });
+    } catch { /* handled by the existsSync below */ }
+
+    if (existsSync(extracted) && statSync(extracted).size > 1000) {
+      const apkCtx = await browser.newContext({
+        viewport: VIEWPORT, deviceScaleFactor: DPR, isMobile: true, hasTouch: true,
+      });
+      const page3 = await apkCtx.newPage();
+      const errs3 = [];
+      page3.on('pageerror', (e) => errs3.push(String(e)));
+      page3.on('console', (m) => { if (m.type() === 'error') errs3.push(m.text()); });
+      await page3.goto(pathToFileURL(extracted).href, { waitUntil: 'domcontentloaded' });
+      await page3.waitForTimeout(1800);
+
+      const apkPlayable = await page3.evaluate(() => {
+        const app = globalThis.__app;
+        if (!app) return { error: 'no app' };
+        if (!app.creator) return { error: 'captain creation was not shown on first launch' };
+        const click = (t) => {
+          const b = [...document.querySelectorAll('.btn')]
+            .find((x) => x.textContent.trim().startsWith(t));
+          if (b) b.click();
+          return !!b;
+        };
+        click('Random captain');
+        for (let i = 0; i < 12; i++) if (!click('Continue')) break;
+        if (!click('Assume command')) return { error: 'never reached the final step' };
+        if (!app.game) return { error: 'no game after creation' };
+        return {
+          captain: app.game.character.name,
+          difficulty: app.game.difficulty.id,
+          systems: app.game.galaxy.systems.length,
+          ships: Object.keys(app.game.ship.cls).length > 0,
+          episodes: app.game.missions.episodes.length,
+        };
+      });
+      check('the game inside the APK boots and creates a captain',
+        !apkPlayable.error && apkPlayable.systems > 30, JSON.stringify(apkPlayable));
+      check('no errors in the APK payload', errs3.length === 0, errs3.slice(0, 3).join(' | '));
+      await page3.screenshot({ path: join(SHOTS, '14-apk-payload.png') });
+      await page3.close();
+      await apkCtx.close();
+    } else {
+      notes.push('  SKIP  could not extract assets/game.html from the APK');
+    }
+  } else {
+    notes.push('  SKIP  APK not built (run: ANDROID_HOME=... ./tools/build-apk.sh)');
   }
 } catch (err) {
   failures.push(`  FAIL  harness threw — ${err.message}`);

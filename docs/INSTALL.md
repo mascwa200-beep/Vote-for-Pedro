@@ -8,7 +8,36 @@ phone in airplane mode and it will keep working, permanently.
 
 ---
 
-## Option 1 — Install as an app (recommended)
+## Option 1 — Install the APK (recommended on Android)
+
+`dist/starfleet-command.apk` is a real Android package. It is a WebView shell
+around the game, and it declares **exactly one permission: `VIBRATE`**. There
+is no `INTERNET` permission, so the app physically cannot reach the network —
+not "does not", *cannot*.
+
+1. Copy `starfleet-command.apk` to the phone.
+2. Open **Files**, tap it, and allow installation from that source when asked.
+   GrapheneOS will prompt once per installing app; that is expected.
+3. It appears in your app drawer as **Starfleet Command**.
+
+The APK is signed with a project debug key, not a Play Store key, so Android
+will describe it as coming from an unknown developer. That is accurate.
+
+`minSdk 26 (Android 8) · targetSdk 35 · ~164 KB`
+
+To rebuild it yourself you need an Android SDK with build-tools and a
+platform installed — no Gradle, no Maven, no network at build time:
+
+```sh
+ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh
+```
+
+The back button steps through the game's own screens before it leaves the app,
+and backgrounding it triggers an autosave.
+
+---
+
+## Option 2 — Install as a web app (PWA)
 
 This gives you a home-screen icon that opens fullscreen with no browser
 chrome, and works with the radio off.
@@ -51,7 +80,7 @@ branch and the `/` root folder. The resulting HTTPS URL installs cleanly.
 
 ---
 
-## Option 2 — One file, no server, no install
+## Option 3 — One file, no server, no install
 
 `dist/starfleet-command.html` is the entire game — code, styles, and icon —
 in a single self-contained HTML file. No network requests of any kind.

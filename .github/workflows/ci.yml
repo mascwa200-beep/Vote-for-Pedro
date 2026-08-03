@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes an in-flight run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit and balance tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The project has no dependencies, so there is nothing to install.
+      - name: Confirm the project is dependency-free
+        run: |
+          deps=$(node -p "Object.keys(require('./package.json').dependencies||{}).length + Object.keys(require('./package.json').devDependencies||{}).length")
+          if [ "$deps" != "0" ]; then
+            echo "::error::package.json declares $deps dependencies; this project is meant to have none"
+            exit 1
+          fi
+          echo "0 dependencies, as intended"
+
+      - name: Run the test suite
+        run: node --test tests/*.test.js
+
+  build:
+    name: Bundle and offline guarantees
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Regenerate icons
+        run: node tools/gen-icons.mjs
+
+      - name: Build the single-file bundle
+        run: |
+          node tools/build-single.mjs
+          node tools/build-single.mjs --fragment
+
+      # The headline claim of this project is that it never touches the
+      # network. That is worth enforcing rather than trusting.
+      - name: Assert the bundle makes no external requests
+        run: |
+          if grep -oE 'https?://[^"'"'"' )]+' dist/starfleet-command.html \
+             | grep -vE 'schemas\.org|w3\.org' | sort -u | grep .; then
+            echo "::error::the bundle references an external URL"
+            exit 1
+          fi
+          echo "no external references in the bundle"
+
+      - name: Assert the source fetches nothing
+        run: |
+          if grep -rnoE '(fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(' src/ | grep .; then
+            echo "::error::source performs a network call"
+            exit 1
+          fi
+          echo "no network calls in src/"
+
+      - name: Assert committed build outputs are current
+        run: |
+          if ! git diff --quiet -- dist/; then
+            echo "::error::dist/ is stale — run 'npm run build' and commit the result"
+            git diff --stat -- dist/
+            exit 1
+          fi
+          echo "dist/ matches the source"
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # The ubuntu-latest image ships the Android SDK; the build script needs
+      # build-tools and a platform, which it discovers from ANDROID_HOME.
+      - name: Install build-tools and platform
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;35.0.0" > /dev/null
+
+      - name: Build the APK
+        run: ANDROID_HOME="$ANDROID_SDK_ROOT" ./tools/build-apk.sh
+
+      # The app must not be able to reach the network. This asserts it at the
+      # manifest level rather than taking the source comment's word for it.
+      - name: Assert the APK holds no INTERNET permission
+        run: |
+          BT="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/ | sort -V | tail -1)"
+          PERMS="$("${BT%/}/aapt2" dump permissions dist/starfleet-command.apk || true)"
+          echo "$PERMS"
+          if echo "$PERMS" | grep -q 'android.permission.INTERNET'; then
+            echo "::error::the APK requests INTERNET; it is supposed to be incapable of networking"
+            exit 1
+          fi
+          echo "no INTERNET permission, as intended"
+
+      - name: Verify the APK signature
+        run: |
+          BT="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/ | sort -V | tail -1)"
+          "${BT%/}/apksigner" verify --verbose dist/starfleet-command.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: starfleet-command-apk
+          path: dist/starfleet-command.apk
+          if-no-files-found: error
+
+  browser:
+    name: Browser verification and offline proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Playwright is deliberately not a project dependency, so it is
+      # installed here into a scratch prefix and pointed at via NODE_PATH.
+      - name: Install Playwright
+        run: |
+          npm install playwright --prefix /tmp/pw --no-audit --no-fund
+          /tmp/pw/node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Build the bundle the harness checks
+        run: node tools/build-single.mjs
+
+      - name: Drive the real UI, and prove it plays offline
+        env:
+          NODE_PATH: /tmp/pw/node_modules
+        run: node tools/verify-app.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: warn

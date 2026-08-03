@@ -22,6 +22,28 @@ import { SYSTEM_BY_ID } from '../world/systems.data.js';
 import { MissionBook } from '../missions/engine.js';
 import { EPISODES } from '../missions/episodes/index.js';
 
+import { Character } from '../rules/character.js';
+import { Reputation, REP_TRACKS } from '../rules/reputation.js';
+import { DifficultySettings, DEFAULT_DIFFICULTY } from '../rules/difficulty.js';
+
+/**
+ * Ceiling on hostiles in one engagement. Beyond this the tactical display
+ * stops being readable on a phone, whatever the difficulty asks for.
+ */
+const MAX_HOSTILES = 6;
+
+/** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
+const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
+
+const ROMAN = ['', '', 'II', 'III', 'IV', 'V', 'VI'];
+const romanNumeral = (n) => ROMAN[n] ?? String(n);
+
+/** Events the Idealist trait doubles reputation for. */
+const PEACEFUL_EVENTS = new Set([
+  'distress_answered', 'colony_saved', 'first_contact', 'treaty_signed',
+  'accepted_surrender', 'honourable_release', 'agreement_honoured',
+]);
+
 export const MODES = {
   BRIDGE: 'bridge',       // at a location, taking orders
   TRANSIT: 'transit',     // at warp between systems
@@ -35,15 +57,30 @@ export class Game {
     this.seed = options.seed ?? hashSeed(String(Date.now()));
     this.rng = new RNG(this.seed);
 
+    // ---- difficulty ----
+    // Read by combat, the dice, and the economy, so it is established first.
+    this.difficulty = new DifficultySettings(options.difficulty ?? DEFAULT_DIFFICULTY);
+
     // ---- captain ----
+    this.character = options.character instanceof Character
+      ? options.character
+      : new Character(options.character ?? {
+        firstName: options.captainFirstName ?? 'Alexander',
+        lastName: options.captainName ?? 'Reyes',
+        pronouns: options.pronouns ?? 'they/them',
+        careerId: options.background ?? 'command',
+      });
+    this.character.refresh();
+    // Kept as a flat view for the log, the topbar, and older save files.
     this.captain = {
-      name: options.captainName ?? 'Kirk',
-      firstName: options.captainFirstName ?? 'James',
-      species: options.species ?? 'Human',
-      pronouns: options.pronouns ?? 'they/them',
-      background: options.background ?? 'command',
-      serialNumber: options.serialNumber ?? 'SC-937-0176-CEC',
+      name: this.character.lastName,
+      firstName: this.character.firstName,
+      species: this.character.species.name,
+      pronouns: this.character.pronouns,
+      background: this.character.careerId,
+      serialNumber: this.character.serialNumber,
     };
+    this.reputation = new Reputation();
 
     // ---- crew ----
     this.crewMode = options.crewMode ?? 'canon';
@@ -96,12 +133,40 @@ export class Game {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0,
     };
     this.ship.applyMods(this.progress.shipMods());
     this.ship.applyMods(this.loadout.shipMods());
+    // The captain's own abilities are part of the ship's performance.
+    if (this.character) this.ship.applyMods(this.character.shipMods());
+    if (this.difficulty) this.ship.applyMods(this.difficulty.playerMods());
+
+    // The biofunction monitor and a physician captain both reduce casualties
+    // from hull hits, not merely on away missions.
+    const crewProtect = this.loadout.special('crewProtect')
+      + (this.character?.mechanic('casualtyReduction') ?? 0);
+    if (crewProtect) this.ship.applyMods({ crewProtect });
+
     const eps = this.loadout.special('powerTransfer');
     if (eps) this.ship.power.transferRate = 55 + eps;
+    if (this.character?.hasFeat('master_engineer')) this.ship.power.transferRate = 400;
+  }
+
+  /**
+   * Reputation is earned by named world events rather than sprinkled
+   * everywhere, so the awards stay auditable in one place.
+   */
+  earnReputation(event) {
+    if (!this.reputation) return;
+    const mult = (this.character?.mechanic('repGain') ?? 1)
+      * (this.character?.hasTrait('idealist') && PEACEFUL_EVENTS.has(event) ? 2 : 1);
+    for (const up of this.reputation.recordEvent(event, mult)) {
+      this.pushLog(
+        `${REP_TRACKS[up.track]?.name ?? up.track} standing advanced to ${up.name}.`,
+        'captain',
+      );
+      emit('reputation:tier', up);
+    }
   }
 
   get location() { return this.galaxy.get(this.locationId); }
@@ -223,6 +288,7 @@ export class Game {
         this.ledger.record('lives_saved', { count: lives, system: enc.system.id });
         this.progress.addXP(300 + lives / 6, { ledger: this.ledger });
         this.ledger.adjustStanding('federation', STANDING_EFFECTS.answered_distress, 'Answered a distress call');
+        this.earnReputation('distress_answered');
         this.clock.advanceStardate(0.6);
         out.messages.push(`Assistance rendered. ${lives} lives saved.`);
         if (enc.hostile && enc.ships?.length) {
@@ -270,14 +336,18 @@ export class Game {
         });
         this.progress.addXP(260 * (enc.anomaly?.value ?? 1), { ledger: this.ledger });
         this.galaxy.markSurveyed(enc.system.id, enc.anomaly?.name);
+        this.earnReputation('anomaly_catalogued');
         out.messages.push('Close survey complete. Science has what they need.');
         break;
       }
 
       case 'board': {
         const team = this.buildAwayTeam();
-        const r1 = team.check(this.rng, 'engineering', { difficulty: enc.risk ?? 0.4, hazard: 'dangerous' });
-        out.messages.push(r1.text);
+        // DC scales with how dangerous the specific derelict looked.
+        const r1 = team.check(this.rng, 'engineering', {
+          dc: 10 + Math.round((enc.risk ?? 0.4) * 14), hazard: 'dangerous',
+        });
+        out.messages.push(r1);
         if (r1.killed) this.ledger.loseOfficer(r1.killed, { system: enc.system.id });
         if (r1.success && enc.salvage) {
           this.loadout.acquire(enc.salvage);
@@ -289,7 +359,8 @@ export class Game {
 
       case 'escort': {
         this.ledger.adjustStanding(enc.factionId ?? 'independent', STANDING_EFFECTS.completed_escort, 'Escort completed');
-        this.latinum += enc.escortReward ?? 300;
+        this.latinum += Math.round((enc.escortReward ?? 300) * (this.reputation.has('better_prices') ? 1.25 : 1));
+        this.earnReputation('escort_completed');
         this.progress.addXP(280, { ledger: this.ledger });
         this.clock.advanceStardate(0.8);
         out.messages.push(`Escort complete. ${enc.escortReward ?? 300} credits transferred.`);
@@ -304,6 +375,7 @@ export class Game {
           });
           this.progress.addXP(900, { ledger: this.ledger });
           this.ledger.adjustStanding('federation', 12, 'First contact');
+          this.earnReputation('first_contact');
           out.messages.push(`Contact established with the ${enc.speciesName}. They are... cautious, but talking.`);
         } else {
           out.messages.push('They break off without answering. The database gets a new entry and nothing else.');
@@ -345,6 +417,9 @@ export class Game {
 
     const result = resolveHail(this.rng, optionId, {
       factionId,
+      // The Diplomatic Corps signature forces a hearing from a faction whose
+      // doctrine would otherwise refuse the channel outright.
+      forced: this.parleyForced === true,
       standing: this.ledger.standingOf(factionId),
       diplomacyBonus: this.progress.diplomacyBonus,
       winning: eng ? this.ship.hullPct > enemyHull : false,
@@ -353,6 +428,7 @@ export class Game {
       firstStrike: this.firstStrike,
     });
 
+    this.parleyForced = false;
     this.pushLog(result.text, 'comms');
     if (result.standingDelta) {
       this.ledger.adjustStanding(factionId, result.standingDelta, 'Hail');
@@ -361,6 +437,7 @@ export class Game {
 
     if (result.surrender) {
       this.ledger.record('surrender_accepted', { text: 'Accepted a surrender', faction: factionId });
+      this.earnReputation('accepted_surrender');
     }
 
     if (result.endsCombat) {
@@ -384,12 +461,53 @@ export class Game {
 
   // ------------------------------------------------------------------ combat
 
+  /**
+   * Difficulty's main lever above Lieutenant is how many hulls arrive, not how
+   * much each one absorbs. Reinforcements are cloned from the classes already
+   * present, so an encounter never has to know the difficulty setting.
+   *
+   * Capital ships are exempt: two Borg cubes is not a harder fight, it is a
+   * different genre. Anything at tier 7 or above arrives alone.
+   */
+  scaleHostileFleet(hostiles) {
+    const wanted = this.difficulty.enemyCount(hostiles.length);
+    if (wanted <= hostiles.length) return hostiles;
+
+    const capital = hostiles.some((s) => (s.cls.tier ?? 1) >= 7);
+    if (capital) return hostiles;
+
+    // Never field more than the tactical display can stay readable with.
+    const target = Math.min(wanted, MAX_HOSTILES);
+    const fleet = [...hostiles];
+    for (let i = fleet.length; i < target; i++) {
+      const source = hostiles[i % hostiles.length];
+      fleet.push(new Ship(source.classId, {
+        name: `${stripSuffix(source.name)} ${romanNumeral(Math.floor(i / hostiles.length) + 1)}`,
+        faction: source.faction,
+      }));
+    }
+    return fleet;
+  }
+
+  /**
+   * Every fight in the game passes through here — encounters, mission-scripted
+   * combat, and anything added later — so difficulty is applied to the enemy
+   * at this one point rather than at each generator.
+   */
   startCombat(hostiles, opts = {}) {
     if (!hostiles.length) return null;
+
+    const fleet = this.scaleHostileFleet(hostiles);
+    const enemyMods = this.difficulty.enemyMods();
+    for (const s of fleet) s.applyMods(enemyMods);
+
+    // Signature powers are once per engagement, so a new one restores them.
+    this.character?.refresh();
+
     this.setAlert('red');
-    this.engagement = new Engagement(this.ship, hostiles, this.rng, opts);
+    this.engagement = new Engagement(this.ship, fleet, this.rng, opts);
     this.mode = MODES.COMBAT;
-    this.engagement.pushLog(`${hostiles.length} hostile contact${hostiles.length > 1 ? 's' : ''}.`, 'tactical');
+    this.engagement.pushLog(`${fleet.length} hostile contact${fleet.length > 1 ? 's' : ''}.`, 'tactical');
     emit('combat:begin', this.engagement);
     return this.engagement;
   }
@@ -410,7 +528,10 @@ export class Game {
     }
 
     if (outcome === 'victory' || outcome === 'routed') {
-      const xp = combatXP(eng.hostiles);
+      const xp = combatXP(eng.hostiles) * this.difficulty.scale('xpRate');
+      // The Empire respects a captain who kept fighting while losing.
+      if (this.ship.hullPct < 0.35) this.earnReputation('fought_while_losing');
+      this.earnReputation('combat_victory');
       const promo = this.progress.addXP(xp, { ledger: this.ledger });
       this.pushLog(`Engagement concluded. +${Math.round(xp)} experience.`, 'captain');
       if (promo?.promoted) emit('captain:promoted', promo);
@@ -465,6 +586,7 @@ export class Game {
     }
 
     if (result.complete) {
+      this.earnReputation('mission_complete');
       this.missions.finishActive();
       this.mode = MODES.BRIDGE;
     }
@@ -475,7 +597,11 @@ export class Game {
 
   buildAwayTeam(stations = ['science', 'medical', 'tactical'], captainLeads = false) {
     const members = stations.map((s) => this.crew.at(s)).filter(Boolean);
-    this.awayTeam = new AwayTeam(members, captainLeads);
+    this.awayTeam = new AwayTeam(members, {
+      captainLeads,
+      character: this.character,
+      difficulty: this.difficulty,
+    });
     return this.awayTeam;
   }
 
@@ -567,10 +693,13 @@ export class Game {
 
   save() {
     return {
-      version: 1,
+      version: 2,
       seed: this.seed.toString(),
       rng: this.rng.save(),
       captain: this.captain,
+      character: this.character.save(),
+      reputation: this.reputation.save(),
+      difficulty: this.difficulty.save(),
       crewMode: this.crewMode,
       era: this.era,
       crew: this.crew.save(),
@@ -594,6 +723,10 @@ export class Game {
       captainName: data.captain?.name,
       crewMode: data.crewMode,
       era: data.era,
+      // Version 1 saves predate the character sheet; Character's own
+      // defaults fill the gaps rather than failing the load.
+      character: data.character ?? undefined,
+      difficulty: data.difficulty?.id,
     });
     g.rng = RNG.load(data.rng);
     g.captain = { ...g.captain, ...data.captain };
@@ -602,6 +735,8 @@ export class Game {
     g.progress = CaptainProgress.load(data.progress);
     g.loadout = Loadout.load(data.loadout, g.ship.cls.slots);
     g.ledger = Ledger.load(data.ledger);
+    g.reputation = Reputation.load(data.reputation);
+    g.difficulty = DifficultySettings.load(data.difficulty);
     g.galaxy.load(data.galaxy);
     g.missions.load(data.missions, g);
     g.locationId = data.locationId ?? 'sol';

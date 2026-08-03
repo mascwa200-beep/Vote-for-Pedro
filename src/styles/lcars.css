@@ -507,3 +507,87 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   .screen { padding: 0 16px 6px; }
   .grid-2 { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------------- Character creation ---------------- */
+
+.steprail { display: flex; gap: 4px; margin: 4px 0 8px; }
+.steppip {
+  flex: 1; height: 5px; border-radius: 3px; background: #2a2a3c;
+  transition: background 0.2s;
+}
+.steppip.done { background: var(--lcars-blue); }
+.steppip.on { background: var(--accent); }
+
+.creator-footer { flex: 0 0 auto; padding-top: 6px; }
+.creator-footer .btn-row .btn { margin-bottom: 0; }
+
+/* Selectable option cards — species, origin, career, traits */
+.optcard, .diffcard {
+  background: var(--panel); border-radius: 8px;
+  border-left: 8px solid #33334a;
+  padding: 10px 12px; margin-bottom: 6px;
+  cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.optcard.on, .diffcard.on {
+  border-left-color: var(--accent);
+  background: var(--panel-2);
+}
+.optcard.disabled { opacity: 0.4; cursor: not-allowed; }
+.optcard:active, .diffcard:active { background: #22222e; }
+
+.opthead, .diffhead {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+.opthead b, .diffhead b { color: var(--lcars-amber); }
+.bonuslist {
+  font-size: 0.72em; letter-spacing: 0.06em; color: var(--lcars-ice);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.small { font-size: 0.82em; line-height: 1.4; }
+.diffhead .insignia { color: var(--lcars-orange); letter-spacing: 0.1em; }
+.difftag { font-size: 0.84em; color: var(--text); margin-top: 3px; }
+.traitgroup {
+  margin: 12px 0 6px; font-size: 0.8em; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--lcars-lilac);
+}
+
+/* Ability score rows with steppers */
+.abilityrow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 0; border-bottom: 1px solid #22222e;
+}
+.abilityname { flex: 1; min-width: 0; }
+.abilityname b { color: var(--lcars-amber); display: block; font-size: 0.95em; }
+.abilityname small { color: var(--text-dim); font-size: 0.72em; line-height: 1.3; display: block; }
+.abilitycontrols { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.abilityval {
+  min-width: 52px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.abilityval b { display: block; font-size: 1.3em; color: var(--lcars-ice); }
+.abilityval small { color: var(--text-dim); font-size: 0.8em; }
+.stepbtn {
+  width: 44px; height: 44px; border: none; border-radius: 6px;
+  background: var(--lcars-blue); color: #000;
+  font-size: 1.4em; font-weight: 700; cursor: pointer;
+}
+.stepbtn[disabled] { background: #2a2a3c; color: #55556a; cursor: not-allowed; }
+.abilityrow.static { padding: 9px 0; }
+.profdot { color: var(--lcars-orange); font-size: 0.7em; margin-left: 5px; }
+
+/* Dice roll log */
+.roll { font-variant-numeric: tabular-nums; }
+.roll.crit { color: var(--lcars-green); }
+.roll.fumble { color: var(--lcars-red); }
+
+/* A roll shown inline in an away-mission report */
+.rollcard {
+  background: #10101c; border-radius: 6px; padding: 8px 10px; margin: 6px 0;
+  border-left: 4px solid var(--lcars-blue);
+  font-variant-numeric: tabular-nums;
+}
+.rollcard.crit { border-left-color: var(--lcars-green); }
+.rollcard.fumble { border-left-color: var(--lcars-red); }
+.rollcard .dieline { font-size: 1.05em; color: var(--lcars-ice); }
+.rollcard .breakdown {
+  font-size: 0.76em; color: var(--text-dim); margin-top: 4px; line-height: 1.4;
+}

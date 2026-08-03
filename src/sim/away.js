@@ -1,41 +1,50 @@
-// Away teams.
+// Away teams, resolved on the d20.
 //
-// You pick who beams down. They can be hurt, and they can die, and the ones
-// who die are the ones you sent. The captain may go personally, which is
-// better for the roll and considerably worse if it goes wrong.
+// You pick who beams down. Checks roll against a DC, the captain's ability
+// modifiers apply, officers contribute their own expertise, and the result is
+// shown as arithmetic the player can audit. People can be hurt, and people can
+// die, and the ones who die are the ones you sent.
 
 import { emit } from '../core/events.js';
+import { check, formatCheck, describeDC, DC } from '../rules/dice.js';
 
 export const HAZARD_LEVEL = {
-  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004 },
-  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02 },
-  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06 },
-  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14 },
+  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy },
+  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate },
+  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06, dc: DC.hard },
+  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14, dc: DC.formidable },
 };
 
-/** Which trait a check leans on. */
+/**
+ * Check types map to a captain ability and to the bridge stations whose
+ * officers are competent at them.
+ */
 export const CHECK_TYPES = {
-  science: { label: 'Science', stations: ['science'], trait: 'expertise' },
-  medical: { label: 'Medical', stations: ['medical'], trait: 'expertise' },
-  engineering: { label: 'Engineering', stations: ['engineering'], trait: 'expertise' },
-  combat: { label: 'Security', stations: ['tactical'], trait: 'daring' },
-  diplomacy: { label: 'Diplomacy', stations: ['first_officer', 'comms'], trait: 'candor' },
-  stealth: { label: 'Stealth', stations: ['tactical', 'helm'], trait: 'daring' },
+  science: { label: 'Science', ability: 'science', stations: ['science'], trait: 'expertise' },
+  medical: { label: 'Medicine', ability: 'medicine', stations: ['medical'], trait: 'expertise' },
+  engineering: { label: 'Engineering', ability: 'engineering', stations: ['engineering'], trait: 'expertise' },
+  combat: { label: 'Security', ability: 'tactics', stations: ['tactical'], trait: 'daring' },
+  diplomacy: { label: 'Diplomacy', ability: 'diplomacy', stations: ['first_officer', 'comms'], trait: 'candor' },
+  stealth: { label: 'Stealth', ability: 'tactics', stations: ['tactical', 'helm'], trait: 'daring' },
+  command: { label: 'Command', ability: 'command', stations: ['first_officer'], trait: 'discipline' },
 };
 
 export class AwayTeam {
   /**
    * @param {Officer[]} members
-   * @param {boolean} captainLeads
+   * @param {object} opts { captainLeads, character, difficulty, security }
    */
-  constructor(members, captainLeads = false) {
+  constructor(members, opts = {}) {
     this.members = members.filter((o) => o.available);
-    this.captainLeads = captainLeads;
-    this.security = 4; // redshirts; they die first, and it matters
+    this.captainLeads = !!opts.captainLeads;
+    this.character = opts.character ?? null;
+    this.difficulty = opts.difficulty ?? null;
+    this.security = opts.security ?? 4;   // they die first, and it matters
     this.casualties = [];
+    this.rolls = [];                      // full audit trail for the UI
   }
 
-  get size() { return this.members.length + this.security; }
+  get size() { return this.members.length + this.security + (this.captainLeads ? 1 : 0); }
 
   /** Best relevant officer for a check type. */
   bestFor(checkType) {
@@ -48,57 +57,139 @@ export class AwayTeam {
   }
 
   /**
-   * Resolve a skill check.
-   * @param {RNG} rng
-   * @param {string} checkType
-   * @param {object} opts { difficulty 0..1, hazard, captainBonus }
-   * @returns {object} { success, margin, officer, injured, killed, text }
+   * Build the full modifier for a check, itemised so the UI can show where
+   * every point came from.
    */
-  check(rng, checkType, { difficulty = 0.5, hazard = 'elevated', captainBonus = 0 } = {}) {
+  modifierFor(checkType, situational = 0) {
     const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
     const officer = this.bestFor(checkType);
-    const skill = officer ? officer[spec.trait] / 100 : 0.4;
+    const parts = [];
 
-    // Captain's presence helps, and exposes them.
-    const bonus = captainBonus + (this.captainLeads ? 0.1 : 0);
-    const roll = rng.float();
-    const target = Math.max(0.05, Math.min(0.95, skill + bonus - difficulty + 0.35));
-    const success = roll < target;
-    const margin = target - roll;
+    let total = 0;
+    if (this.character) {
+      const abilityMod = this.character.mod(spec.ability);
+      total += abilityMod;
+      parts.push({ source: `${spec.label} ability`, value: abilityMod });
+      if (this.character.isProficient(spec.ability)) {
+        const prof = this.character.proficiencyBonus;
+        total += prof;
+        parts.push({ source: 'proficiency', value: prof });
+      }
+      if (this.captainLeads) {
+        total += 2;
+        parts.push({ source: 'captain leading', value: 2 });
+      }
+    }
 
+    if (officer) {
+      // An expert officer is worth up to +5 on their own speciality.
+      const officerBonus = Math.round((officer[spec.trait] - 50) / 12);
+      total += officerBonus;
+      parts.push({ source: officer.name, value: officerBonus });
+      if (officer.injured) {
+        total -= 2;
+        parts.push({ source: 'wounded', value: -2 });
+      }
+    }
+
+    // A larger security detail helps with anything physical.
+    if ((checkType === 'combat' || checkType === 'stealth') && this.security > 0) {
+      const detail = Math.min(3, Math.floor(this.security / 2));
+      total += detail;
+      parts.push({ source: 'security detail', value: detail });
+    }
+
+    if (situational) {
+      total += situational;
+      parts.push({ source: 'circumstance', value: situational });
+    }
+
+    return { total, parts, officer, spec };
+  }
+
+  /**
+   * Resolve one check.
+   * @returns {object} the roll, the consequences, and readable prose
+   */
+  check(rng, checkType, { dc = null, hazard = 'elevated', situational = 0, label = '' } = {}) {
     const level = HAZARD_LEVEL[hazard] ?? HAZARD_LEVEL.elevated;
-    // Failure is more dangerous than success, but success is not free.
-    const dangerScale = success ? 0.4 : 1.6;
+    const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
+    const { total: modifier, parts, officer } = this.modifierFor(checkType, situational);
 
-    const result = { success, margin, officer, injured: null, killed: null, securityLost: 0 };
+    let targetDC = dc ?? level.dc;
+    if (this.difficulty) targetDC = this.difficulty.dc(targetDC);
 
-    // Security personnel absorb the first casualties.
-    if (rng.chance(level.death * dangerScale) && this.security > 0) {
+    const advantage = this.character?.hasAdvantageOn(spec.ability) ?? false;
+    const roll = check(rng, {
+      modifier, dc: targetDC, advantage,
+      luck: this.difficulty?.luck ?? 0,
+      critRange: this.character?.hasFeat('tactical_genius') ? 19 : 20,
+      label: label || spec.label,
+    });
+
+    const record = { ...roll, checkType, parts, officer: officer?.name ?? null };
+    this.rolls.push(record);
+
+    const result = {
+      ...roll, checkType, spec, parts, officer,
+      injured: null, killed: null, securityLost: 0,
+      formatted: formatCheck(roll, spec.label),
+      difficultyLabel: describeDC(targetDC),
+    };
+
+    // Consequences scale with how badly it went, not merely whether it failed.
+    // A critical failure is dangerous; a comfortable success is nearly free.
+    const dangerScale = roll.criticalFailure ? 2.5
+      : !roll.success ? 1.6
+      : roll.criticalSuccess ? 0.1
+      : roll.degree >= 1 ? 0.25
+      : 0.5;
+
+    let deathChance = level.death * dangerScale;
+    let injuryChance = level.injury * dangerScale;
+
+    // Medicine aboard, and anything that reduces casualties, applies here.
+    const reduction = this.character?.mechanic('casualtyReduction') ?? 0;
+    deathChance *= (1 - reduction);
+    injuryChance *= (1 - reduction);
+    if (this.difficulty) {
+      const scale = this.difficulty.scale('crewLossScale');
+      deathChance *= scale;
+      injuryChance *= scale;
+    }
+    // Difficulties below Ensign do not kill named officers at all.
+    const lethal = this.difficulty ? this.difficulty.permadeath : true;
+
+    if (rng.chance(deathChance) && this.security > 0) {
       this.security--;
       result.securityLost = 1;
       this.casualties.push({ name: 'Security crewman', killed: true });
       emit('away:security-lost', { checkType });
     } else if (officer) {
-      if (rng.chance(level.death * dangerScale * 0.5)) {
+      if (lethal && rng.chance(deathChance * 0.5)) {
         officer.kill(`killed on an away mission (${spec.label.toLowerCase()})`);
         result.killed = officer;
         this.casualties.push({ name: officer.name, killed: true });
         this.members = this.members.filter((o) => o.alive);
-      } else if (rng.chance(level.injury * dangerScale)) {
+      } else if (rng.chance(injuryChance)) {
         officer.injure(rng.range(0.3, 0.9));
         result.injured = officer;
         this.casualties.push({ name: officer.name, injured: true });
       }
     }
 
-    // The captain is not exempt.
-    if (this.captainLeads && rng.chance(level.death * dangerScale * 0.35)) {
+    if (this.captainLeads && lethal && rng.chance(deathChance * 0.35)) {
       result.captainWounded = true;
     }
 
-    result.text = buildCheckText(spec, result, success);
+    result.text = buildCheckText(spec, result, roll);
     emit('away:check', result);
     return result;
+  }
+
+  /** Spend the species reroll, if the character has one left. */
+  canReroll() {
+    return (this.character?.rerollsRemaining ?? 0) > 0;
   }
 
   save() {
@@ -111,19 +202,33 @@ export class AwayTeam {
   }
 }
 
-function buildCheckText(spec, result, success) {
+function buildCheckText(spec, result, roll) {
   const who = result.officer ? result.officer.name : 'The team';
+
+  if (roll.criticalSuccess) {
+    return `${who} does it perfectly — better than the plan called for.`;
+  }
+  if (roll.criticalFailure) {
+    if (result.killed) return `It goes wrong at once. ${result.killed.name} does not come back.`;
+    if (result.securityLost) return `It goes badly wrong. We are carrying someone out.`;
+    return `${who} makes it worse. Whatever the plan was, it is gone.`;
+  }
   if (result.killed) {
-    return `${who} is down. ${success ? 'The work is done, but' : 'It failed, and'} we are bringing a body back.`;
+    return `${who} is down. ${roll.success ? 'The work is done, but' : 'It failed, and'} we are bringing a body back.`;
   }
   if (result.injured) {
-    return `${who} is hurt — ${success ? 'they finished the job first' : 'and we got nothing for it'}.`;
+    return `${who} is hurt — ${roll.success ? 'they finished the job first' : 'and we got nothing for it'}.`;
   }
   if (result.securityLost) {
-    return `We lost a crewman. ${success ? 'The objective is secure.' : 'And we still failed.'}`;
+    return `We lost a crewman. ${roll.success ? 'The objective is secure.' : 'And we still failed.'}`;
   }
-  return success
-    ? `${who} handled it. ${spec.label} objective complete.`
+  if (roll.success) {
+    return roll.degree >= 1
+      ? `${who} handles it cleanly. ${spec.label} objective complete.`
+      : `${who} gets there, barely. ${spec.label} objective complete.`;
+  }
+  return roll.degree === -1
+    ? `${who} very nearly has it, and then does not.`
     : `${who} could not make it work. We are coming back empty.`;
 }
 
@@ -132,31 +237,39 @@ export const AWAY_TEMPLATES = {
   derelict_search: {
     id: 'derelict_search', title: 'Board the derelict', hazard: 'dangerous',
     steps: [
-      { check: 'engineering', difficulty: 0.45, text: 'Restore enough power to read the logs.' },
-      { check: 'science', difficulty: 0.5, text: 'Determine what killed the crew.' },
-      { check: 'combat', difficulty: 0.55, text: 'Whatever it was is still aboard.' },
+      { check: 'engineering', dc: DC.moderate, text: 'Restore enough power to read the logs.' },
+      { check: 'science', dc: DC.hard, text: 'Determine what killed the crew.' },
+      { check: 'combat', dc: DC.hard, text: 'Whatever it was is still aboard.' },
     ],
   },
   colony_rescue: {
     id: 'colony_rescue', title: 'Evacuate the colony', hazard: 'elevated',
     steps: [
-      { check: 'medical', difficulty: 0.4, text: 'Triage the wounded before transport.' },
-      { check: 'engineering', difficulty: 0.5, text: 'Get the shelter’s shield generator running.' },
+      { check: 'medical', dc: DC.moderate, text: 'Triage the wounded before transport.' },
+      { check: 'engineering', dc: DC.hard, text: 'Get the shelter’s shield generator running.' },
     ],
   },
   diplomatic_landing: {
     id: 'diplomatic_landing', title: 'Beam down to the capital', hazard: 'routine',
     steps: [
-      { check: 'diplomacy', difficulty: 0.5, text: 'Open the discussion without insulting anyone.' },
-      { check: 'science', difficulty: 0.45, text: 'Verify their claims about the resource survey.' },
+      { check: 'diplomacy', dc: DC.hard, text: 'Open the discussion without insulting anyone.' },
+      { check: 'science', dc: DC.moderate, text: 'Verify their claims about the resource survey.' },
     ],
   },
   covert_landing: {
     id: 'covert_landing', title: 'Covert survey', hazard: 'dangerous',
     steps: [
-      { check: 'stealth', difficulty: 0.55, text: 'Reach the site without being observed.' },
-      { check: 'science', difficulty: 0.5, text: 'Take the readings.' },
-      { check: 'stealth', difficulty: 0.6, text: 'Get back to the beam-out point.' },
+      { check: 'stealth', dc: DC.hard, text: 'Reach the site without being observed.' },
+      { check: 'science', dc: DC.moderate, text: 'Take the readings.' },
+      { check: 'stealth', dc: DC.very_hard, text: 'Get back to the beam-out point.' },
+    ],
+  },
+  boarding_action: {
+    id: 'boarding_action', title: 'Board the hostile', hazard: 'extreme',
+    steps: [
+      { check: 'engineering', dc: DC.hard, text: 'Beam through their shields.' },
+      { check: 'combat', dc: DC.very_hard, text: 'Take the bridge.' },
+      { check: 'command', dc: DC.hard, text: 'Persuade the survivors to stand down.' },
     ],
   },
 };

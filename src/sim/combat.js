@@ -48,6 +48,8 @@ export class Engagement {
     this.targetedSubsystem = null;
     this.autoFire = true;
     this.warpOutTimer = 0;
+    // Consumed by the Tactical career's Called Shot.
+    this.guaranteedCrits = 0;
     this.canWarpOut = opts.canWarpOut !== false;
 
     this.placeCombatants();
@@ -203,7 +205,14 @@ export class Engagement {
       * attacker.power.factor('weapons') * attacker.subsystems.weapons
       * this.rng.range(0.9, 1.1);
 
-    const crit = this.rng.chance(attacker.mod('critChance'));
+    // A Called Shot spends itself on the next hit that lands, guaranteeing
+    // the critical rather than merely improving the odds.
+    let crit = this.rng.chance(attacker.mod('critChance'));
+    if (attacker === this.player && this.guaranteedCrits > 0) {
+      crit = true;
+      this.guaranteedCrits--;
+      this.pushLog('Called shot — direct hit.', 'tactical');
+    }
     if (crit) damage *= 1 + attacker.mod('critSeverity');
 
     const bearing = target.bearingFrom(attacker);

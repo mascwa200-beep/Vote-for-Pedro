@@ -216,6 +216,169 @@ Shooting first is remembered and makes every subsequent hail harder.
 
 ---
 
+## The dice
+
+Every uncertain action — an away team forcing a door, a negotiation, a
+science analysis — resolves on a **d20** against a target number. If you have
+played a tabletop RPG, you already know this system.
+
+```
+d20 [14] + 7 = 21 vs DC 15 — success
+```
+
+The arithmetic is always shown, and always itemised: which ability, which
+proficiency, which officer, which circumstance. Nothing is hidden.
+
+- **Natural 20 always succeeds. Natural 1 always fails.** No modifier changes that.
+- **Advantage** rolls twice and keeps the higher; **disadvantage** keeps the
+  lower. They cancel each other exactly.
+- **Degree of success** matters, not just pass or fail. A comfortable success
+  is nearly free; a critical failure hurts people.
+
+### Your six abilities
+
+| Ability | Governs |
+|---|---|
+| **Command** | Officer cooldowns, crew morale, rally effects, contested wills |
+| **Tactics** | Weapon accuracy, critical chance, boarding actions |
+| **Engineering** | Repair speed, power routing, warp efficiency, jury-rigging |
+| **Science** | Scans, anomalies, cloak detection, technical solutions |
+| **Medicine** | Casualty rates, officer recovery, away-team survival |
+| **Diplomacy** | Hails, negotiations, first contact, reputation gains |
+
+Scores run 1–20. The modifier is `(score − 10) ÷ 2`, rounded down — so 14 is
++2, 8 is −1. **Proficiency** adds a further +2 to +6 depending on your level,
+on the two abilities your career trained you in.
+
+Ability scores are not only for away missions: Tactics feeds your ship's
+accuracy and critical chance, Engineering feeds repair rate and shield
+regeneration, Science feeds cloak detection.
+
+---
+
+## Building a captain
+
+Nine steps, none of them cosmetic.
+
+**Difficulty** — see below.
+
+**Species** — shifts ability scores and grants a permanent trait. Vulcans get
+advantage on every Science check and are immune to fear. Andorians get
+advantage on Tactics and harder criticals. Trill start with an extra
+proficiency. Denobulans cut casualties by a quarter.
+
+**Origin** — where you were raised. Smaller bonuses, one lasting perk. Frontier
+Colony makes field repairs 30% better; Occupied World gives advantage while
+outnumbered; Starfleet Family starts you a rank higher with the scrutiny to match.
+
+**Career** — grants proficiency in two abilities and a **signature power** usable
+once per engagement. Engineering's *Miracle Worker* restores 30% hull instantly.
+Science's *Insight* reveals every enemy weakness and grants advantage for 20
+seconds. Intelligence's *Prior Knowledge* lets you act before the enemy does.
+
+**Abilities** — 27-point buy, 8 to 15, before species and origin. The standard
+array is one tap if you would rather not do arithmetic.
+
+**Traits** — up to two, and each is a real trade rather than a bonus:
+
+- *Maverick*: advantage on anything the regulations forbid — Prime Directive violations cost double.
+- *Reckless*: advantage on every attack, disadvantage on every saving throw.
+- *Haunted*: disadvantage on Command below 25% hull — and +3 on everything else.
+- *Idealist*: double reputation from peace, double standing loss from kills.
+- *Notorious*: enemies break off sooner out of fear; every Diplomacy check is at disadvantage.
+
+**Feats** — chosen on promotion, on the Captain screen. *Tactical Genius* crits
+on 19–20. *Master Engineer* lets you recover an ejected core. *Survivor* lets
+you live through what would destroy the ship, once per commission.
+
+### Signature powers
+
+Your career grants one large effect, usable **once per engagement**. It is on
+the Tactical screen under *Captain*, and it recharges when the next fight
+starts.
+
+| Career | Power | Effect |
+|---|---|---|
+| Command | Take the Conn | Every bridge officer cooldown clears at once |
+| Tactical | Called Shot | The next hit that lands is a guaranteed critical on a subsystem |
+| Engineering | Miracle Worker | Restores 30% hull and puts every fire out |
+| Science | Insight | Reveals the target's weakest facing; accuracy and criticals up for 20s |
+| Medical | Triage | A wounded officer returns to duty; casualties halved for 30s |
+| Diplomatic Corps | Parley | Forces a hearing from a faction whose doctrine refuses the channel — including the Jem'Hadar |
+| Intelligence | Prior Knowledge | Every hostile loses six seconds of weapon cycle; you gain accuracy and defence |
+
+Parley is the only way to get the Dominion to answer at all. It buys a
+conversation, not agreement.
+
+---
+
+## Difficulty
+
+Twelve rungs, named up the real commissioned-officer ladder. This is the
+difficulty of the game, not your character's rank — you command a starship
+either way.
+
+**Story · Cadet · Ensign · Lieutenant · Lieutenant Commander · Commander ·
+Captain · Commodore · Rear Admiral · Vice Admiral · Admiral · Fleet Admiral**
+
+What actually changes:
+
+- **Story** — nothing is permanently lost, the ship cannot be destroyed, and
+  failed rolls of 1 are re-rolled twice. The episodes without the arithmetic.
+- **Cadet** — officers can be wounded but not killed.
+- **Ensign** — permadeath and ship loss switch on.
+- **Lieutenant** — the intended experience. No thumb on the scale either way.
+- **Commodore and above** — autosave only. The record stands as written.
+- **Fleet Admiral** — ironman. If the ship is lost, the commission is over.
+
+Target numbers shift with difficulty too: −3 on Story, +8 at Fleet Admiral.
+
+The difficulty curve leans on **being outnumbered** rather than on enemies
+becoming damage sponges. A single same-tier opponent stays beatable at every
+rung — that is a tested guarantee, not a claim. What changes at the top is that
+patrols stop arriving one at a time: a lone raider stays lone until Vice
+Admiral, but a three-ship patrol becomes six by Fleet Admiral.
+
+Two same-tier ships is roughly a four-to-one disadvantage, not two-to-one —
+they concentrate fire while you divide yours. That fight is one to **break
+off**, not win. `get us out of here` starts an eight-second warp-out, and it
+works: disengaging is a real outcome, not a failure state.
+
+---
+
+## Reputation
+
+Two separate things, deliberately not merged:
+
+**Standing** is how a faction feels about you *right now*. It moves both ways,
+fast, and decides who fires on sight. It is on the Record screen.
+
+**Reputation** is what you have *earned* over a career. It only ever rises, it
+advances through six tiers — Unknown, Recognised, Acknowledged, Trusted,
+Honoured, Exemplar — and it accrues a currency you spend on **projects**.
+
+You can be deeply respected by the Klingon Defence Force and still be shot at
+this week for a border violation. That distinction is the point: fighting well
+while losing *earns Klingon reputation* even as destroying their ships costs
+you Klingon standing.
+
+Each power has its own track, its own currency, and its own shop:
+
+| Power | Currency | Earned by |
+|---|---|---|
+| Starfleet Command | Commendations | Missions, first contact, treaties, saved colonies |
+| Klingon Defence Force | Marks of Honour | Fighting well, especially while losing |
+| Romulan Star Empire | Tokens of Regard | Respecting borders, honourable releases |
+| Cardassian Union | Writs of Accord | Agreements honoured precisely |
+| Ferengi Alliance | Bars of Latinum | Trade, escorts, and paying up |
+| Unaligned Worlds | Letters of Thanks | Distress calls nobody made you answer |
+
+Projects grant real things: consoles, torpedo resupply, a **loaned Romulan
+cloaking device** at Trusted, free passage through Klingon space, a Federation
+escort that joins your engagements, and titles that follow your name.
+
+---
+
 ## Progression
 
 Ensign through Admiral. Experience comes from combat, exploration,

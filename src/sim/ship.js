@@ -12,6 +12,9 @@ export const FACING_LABEL = {
   fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
 };
 
+/** Modifiers that add rather than multiply. */
+export const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
+
 export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
@@ -95,7 +98,7 @@ export class Ship {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0,
     };
     this.buffs = [];               // { id, label, until, mods }
 
@@ -108,7 +111,7 @@ export class Ship {
   applyMods(mods) {
     for (const [k, v] of Object.entries(mods)) {
       if (typeof v !== 'number') continue;
-      if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') this.mods[k] += v;
+      if (ADDITIVE_MODS.has(k)) this.mods[k] += v;
       else this.mods[k] = (this.mods[k] ?? 1) * v;
     }
     this.recomputeDerived();
@@ -140,7 +143,7 @@ export class Ship {
     for (const b of this.buffs) {
       const v = b.mods?.[key];
       if (typeof v !== 'number') continue;
-      if (key === 'critChance' || key === 'critSeverity' || key === 'damageResist') value += v;
+      if (ADDITIVE_MODS.has(key)) value += v;
       else value *= v;
     }
     return value;
@@ -341,11 +344,16 @@ export class Ship {
 
     this.hull -= hullDamage;
 
-    // Crew casualties scale with how hard the hull was hit.
+    // Crew casualties scale with how hard the hull was hit, less whatever
+    // medical provision the ship carries — the biofunction monitor, a
+    // physician captain, and Triage all feed the same number.
     let crewKilled = 0;
     if (hullDamage > 0 && this.maxCrew > 0) {
       const severity = hullDamage / this.maxHull;
-      crewKilled = Math.floor(this.maxCrew * severity * 0.55 * (rng ? rng.range(0.5, 1.5) : 1));
+      const protection = 1 - Math.min(0.85, this.mod('crewProtect'));
+      crewKilled = Math.floor(
+        this.maxCrew * severity * 0.55 * protection * (rng ? rng.range(0.5, 1.5) : 1),
+      );
       crewKilled = Math.min(this.crew, crewKilled);
       this.crew -= crewKilled;
       this.injured += Math.floor(crewKilled * 1.6);

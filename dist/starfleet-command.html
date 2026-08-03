@@ -524,6 +524,90 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   .grid-2 { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* ---------------- Character creation ---------------- */
+
+.steprail { display: flex; gap: 4px; margin: 4px 0 8px; }
+.steppip {
+  flex: 1; height: 5px; border-radius: 3px; background: #2a2a3c;
+  transition: background 0.2s;
+}
+.steppip.done { background: var(--lcars-blue); }
+.steppip.on { background: var(--accent); }
+
+.creator-footer { flex: 0 0 auto; padding-top: 6px; }
+.creator-footer .btn-row .btn { margin-bottom: 0; }
+
+/* Selectable option cards — species, origin, career, traits */
+.optcard, .diffcard {
+  background: var(--panel); border-radius: 8px;
+  border-left: 8px solid #33334a;
+  padding: 10px 12px; margin-bottom: 6px;
+  cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.optcard.on, .diffcard.on {
+  border-left-color: var(--accent);
+  background: var(--panel-2);
+}
+.optcard.disabled { opacity: 0.4; cursor: not-allowed; }
+.optcard:active, .diffcard:active { background: #22222e; }
+
+.opthead, .diffhead {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+.opthead b, .diffhead b { color: var(--lcars-amber); }
+.bonuslist {
+  font-size: 0.72em; letter-spacing: 0.06em; color: var(--lcars-ice);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.small { font-size: 0.82em; line-height: 1.4; }
+.diffhead .insignia { color: var(--lcars-orange); letter-spacing: 0.1em; }
+.difftag { font-size: 0.84em; color: var(--text); margin-top: 3px; }
+.traitgroup {
+  margin: 12px 0 6px; font-size: 0.8em; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--lcars-lilac);
+}
+
+/* Ability score rows with steppers */
+.abilityrow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 0; border-bottom: 1px solid #22222e;
+}
+.abilityname { flex: 1; min-width: 0; }
+.abilityname b { color: var(--lcars-amber); display: block; font-size: 0.95em; }
+.abilityname small { color: var(--text-dim); font-size: 0.72em; line-height: 1.3; display: block; }
+.abilitycontrols { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.abilityval {
+  min-width: 52px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.abilityval b { display: block; font-size: 1.3em; color: var(--lcars-ice); }
+.abilityval small { color: var(--text-dim); font-size: 0.8em; }
+.stepbtn {
+  width: 44px; height: 44px; border: none; border-radius: 6px;
+  background: var(--lcars-blue); color: #000;
+  font-size: 1.4em; font-weight: 700; cursor: pointer;
+}
+.stepbtn[disabled] { background: #2a2a3c; color: #55556a; cursor: not-allowed; }
+.abilityrow.static { padding: 9px 0; }
+.profdot { color: var(--lcars-orange); font-size: 0.7em; margin-left: 5px; }
+
+/* Dice roll log */
+.roll { font-variant-numeric: tabular-nums; }
+.roll.crit { color: var(--lcars-green); }
+.roll.fumble { color: var(--lcars-red); }
+
+/* A roll shown inline in an away-mission report */
+.rollcard {
+  background: #10101c; border-radius: 6px; padding: 8px 10px; margin: 6px 0;
+  border-left: 4px solid var(--lcars-blue);
+  font-variant-numeric: tabular-nums;
+}
+.rollcard.crit { border-left-color: var(--lcars-green); }
+.rollcard.fumble { border-left-color: var(--lcars-red); }
+.rollcard .dieline { font-size: 1.05em; color: var(--lcars-ice); }
+.rollcard .breakdown {
+  font-size: 0.76em; color: var(--text-dim); margin-top: 4px; line-height: 1.4;
+}
+
 </style>
 </head>
 <body>
@@ -1695,9 +1779,9 @@ const SHIP_CLASSES = {
     impulse: 0.72, turnRate: 9.0, maxWarp: 8.0, warpEfficiency: 1.0,
     powerCap: 200,
     weapons: [
-      { id: 'phaser_bank_fwd', type: 'beam', name: 'Forward Phaser Banks', damage: 118, cycle: 3.2, ...arc(0, 250) },
-      { id: 'phaser_bank_aft', type: 'beam', name: 'Aft Phaser Banks', damage: 96, cycle: 3.2, ...arc(180, 200) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Photon Tubes', damage: 380, cycle: 7.5, ...arc(0, 90) },
+      { id: 'phaser_bank_fwd', type: 'beam', name: 'Forward Phaser Banks', damage: 168, cycle: 3.2, ...arc(0, 250) },
+      { id: 'phaser_bank_aft', type: 'beam', name: 'Aft Phaser Banks', damage: 120, cycle: 3.2, ...arc(180, 200) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Photon Tubes', damage: 420, cycle: 7.5, ...arc(0, 90) },
     ],
     slots: { tactical: 3, engineering: 3, science: 2, device: 2 },
     boffSeats: [
@@ -1714,8 +1798,8 @@ const SHIP_CLASSES = {
     impulse: 0.78, turnRate: 9.5, maxWarp: 9.0, warpEfficiency: 1.15,
     powerCap: 220,
     weapons: [
-      { id: 'phaser_bank_fwd', type: 'beam', name: 'Forward Phaser Banks', damage: 142, cycle: 3.0, ...arc(0, 250) },
-      { id: 'phaser_bank_aft', type: 'beam', name: 'Aft Phaser Banks', damage: 118, cycle: 3.0, ...arc(180, 200) },
+      { id: 'phaser_bank_fwd', type: 'beam', name: 'Forward Phaser Banks', damage: 196, cycle: 3.0, ...arc(0, 250) },
+      { id: 'phaser_bank_aft', type: 'beam', name: 'Aft Phaser Banks', damage: 140, cycle: 3.0, ...arc(180, 200) },
       { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Torpedo Bay', damage: 430, cycle: 6.8, ...arc(0, 90) },
       { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Photon Tube', damage: 340, cycle: 8.0, ...arc(180, 90) },
     ],
@@ -1734,7 +1818,7 @@ const SHIP_CLASSES = {
     impulse: 0.8, turnRate: 12.0, maxWarp: 8.0, warpEfficiency: 1.1,
     powerCap: 180,
     weapons: [
-      { id: 'phaser_bank_fwd', type: 'beam', name: 'Phaser Banks', damage: 96, cycle: 3.2, ...arc(0, 250) },
+      { id: 'phaser_bank_fwd', type: 'beam', name: 'Phaser Banks', damage: 132, cycle: 3.2, ...arc(0, 250) },
       { id: 'torpedo_roll', type: 'torpedo', name: 'Rollbar Torpedo Pod', damage: 320, cycle: 7.0, ...arc(0, 180) },
     ],
     slots: { tactical: 2, engineering: 2, science: 2, device: 1 },
@@ -1751,7 +1835,7 @@ const SHIP_CLASSES = {
     impulse: 0.68, turnRate: 14.0, maxWarp: 7.5, warpEfficiency: 1.3,
     powerCap: 190, auxBonus: 25,
     weapons: [
-      { id: 'phaser_light', type: 'beam', name: 'Light Phaser Emitters', damage: 64, cycle: 3.5, ...arc(0, 300) },
+      { id: 'phaser_light', type: 'beam', name: 'Light Phaser Emitters', damage: 90, cycle: 3.5, ...arc(0, 300) },
     ],
     slots: { tactical: 1, engineering: 2, science: 4, device: 2 },
     boffSeats: [
@@ -1767,9 +1851,9 @@ const SHIP_CLASSES = {
     impulse: 0.75, turnRate: 7.5, maxWarp: 9.2, warpEfficiency: 1.25,
     powerCap: 240,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 156, cycle: 3.0, ...arc(0, 250) },
-      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 140, cycle: 3.0, ...arc(180, 250) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 470, cycle: 6.5, ...arc(0, 90) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 244, cycle: 3.0, ...arc(0, 250) },
+      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 168, cycle: 3.0, ...arc(180, 250) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 545, cycle: 6.5, ...arc(0, 90) },
       { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 400, cycle: 7.2, ...arc(180, 90) },
     ],
     slots: { tactical: 4, engineering: 4, science: 3, device: 3 },
@@ -1787,7 +1871,7 @@ const SHIP_CLASSES = {
     impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 1.35,
     powerCap: 200,
     weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Banks', damage: 108, cycle: 3.2, ...arc(0, 270) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Banks', damage: 152, cycle: 3.2, ...arc(0, 270) },
       { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 360, cycle: 7.2, ...arc(0, 120) },
     ],
     slots: { tactical: 2, engineering: 3, science: 3, device: 3 },
@@ -1807,8 +1891,8 @@ const SHIP_CLASSES = {
     impulse: 0.95, turnRate: 18.0, maxWarp: 8.5, warpEfficiency: 1.0,
     powerCap: 190, cloak: true,
     weapons: [
-      { id: 'disruptor_fwd', type: 'cannon', name: 'Forward Disruptor Cannons', damage: 168, cycle: 2.4, ...arc(0, 45) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Torpedo', damage: 400, cycle: 8.0, ...arc(0, 45) },
+      { id: 'disruptor_fwd', type: 'cannon', name: 'Forward Disruptor Cannons', damage: 138, cycle: 2.4, ...arc(0, 45) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Torpedo', damage: 330, cycle: 8.0, ...arc(0, 45) },
     ],
     description: 'Fast, cloaked, and fragile. It must decloak to fire, and it knows exactly when to.',
   },
@@ -1849,7 +1933,7 @@ const SHIP_CLASSES = {
     impulse: 1.0, turnRate: 20.0, maxWarp: 8.0, warpEfficiency: 1.2,
     powerCap: 170, cloak: true,
     weapons: [
-      { id: 'disruptor', type: 'cannon', name: 'Disruptor Cannon', damage: 96, cycle: 2.6, ...arc(0, 60) },
+      { id: 'disruptor', type: 'cannon', name: 'Disruptor Cannon', damage: 84, cycle: 2.6, ...arc(0, 60) },
     ],
     description: 'Sent to look, not to fight. It will run the moment looking becomes expensive.',
   },
@@ -1890,7 +1974,7 @@ const SHIP_CLASSES = {
     impulse: 0.92, turnRate: 16.0, maxWarp: 8.0, warpEfficiency: 1.0,
     powerCap: 170,
     weapons: [
-      { id: 'disruptor', type: 'cannon', name: 'Salvaged Disruptors', damage: 88, cycle: 2.5, ...arc(0, 70) },
+      { id: 'disruptor', type: 'cannon', name: 'Salvaged Disruptors', damage: 76, cycle: 2.5, ...arc(0, 70) },
     ],
     description: 'Whatever they could bolt to a hull. Dangerous in threes, worthless alone.',
   },
@@ -1931,6 +2015,229 @@ const SHIP_CLASSES = {
       { id: 'torpedo', type: 'torpedo', name: 'Plasma Projector', damage: 1100, cycle: 8.0, ...arc(0, 360) },
     ],
     description: 'It has no front. It adapts to your weapon frequencies. You are not expected to win this.',
+  },
+
+  // ---------- Player-commandable, later eras ----------
+  ambassador: {
+    id: 'ambassador', name: 'Ambassador class', faction: 'federation',
+    tier: 5, role: 'explorer',
+    hull: 6800, shields: 5600, shieldRegen: 62,
+    crew: 700, mass: 1.4,
+    impulse: 0.72, turnRate: 7.0, maxWarp: 9.2, warpEfficiency: 1.3,
+    powerCap: 240,
+    weapons: [
+      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 252, cycle: 3.0, ...arc(0, 270) },
+      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 138, cycle: 3.0, ...arc(180, 240) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 560, cycle: 6.4, ...arc(0, 120) },
+    ],
+    slots: { tactical: 3, engineering: 4, science: 4, device: 3 },
+    boffSeats: [
+      { dept: 'command', rank: 3 }, { dept: 'engineering', rank: 4 },
+      { dept: 'science', rank: 3 }, { dept: 'tactical', rank: 3 },
+    ],
+    description: 'The bridge between eras. Diplomatic suites forward, and enough hull to survive the diplomacy failing.',
+  },
+  galaxy: {
+    id: 'galaxy', name: 'Galaxy class', faction: 'federation',
+    tier: 6, role: 'explorer',
+    hull: 9200, shields: 7600, shieldRegen: 78,
+    crew: 1014, mass: 2.0,
+    impulse: 0.68, turnRate: 5.5, maxWarp: 9.6, warpEfficiency: 1.5,
+    powerCap: 265, saucerSeparation: true,
+    weapons: [
+      { id: 'phaser_dorsal', type: 'beam', name: 'Dorsal Phaser Array', damage: 330, cycle: 2.8, ...arc(0, 300) },
+      { id: 'phaser_ventral', type: 'beam', name: 'Ventral Phaser Array', damage: 168, cycle: 2.8, ...arc(180, 300) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 720, cycle: 6.0, ...arc(0, 120) },
+      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 480, cycle: 7.0, ...arc(180, 120) },
+    ],
+    slots: { tactical: 4, engineering: 5, science: 4, device: 4 },
+    boffSeats: [
+      { dept: 'command', rank: 4 }, { dept: 'engineering', rank: 4 },
+      { dept: 'science', rank: 4 }, { dept: 'tactical', rank: 3 },
+    ],
+    description: 'A city that goes to warp. Families aboard, which changes every decision you make with it.',
+  },
+  nebula: {
+    id: 'nebula', name: 'Nebula class', faction: 'federation',
+    tier: 6, role: 'science cruiser',
+    hull: 7800, shields: 7200, shieldRegen: 96,
+    crew: 750, mass: 1.7,
+    impulse: 0.7, turnRate: 6.5, maxWarp: 9.5, warpEfficiency: 1.45,
+    powerCap: 270, auxBonus: 35,
+    weapons: [
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 262, cycle: 2.9, ...arc(0, 300) },
+      { id: 'torpedo_pod', type: 'torpedo', name: 'Sensor Pod Launcher', damage: 600, cycle: 6.5, ...arc(0, 180) },
+    ],
+    slots: { tactical: 3, engineering: 4, science: 6, device: 3 },
+    boffSeats: [
+      { dept: 'science', rank: 4 }, { dept: 'science', rank: 3 },
+      { dept: 'engineering', rank: 4 }, { dept: 'tactical', rank: 3 },
+    ],
+    description: 'The Galaxy spaceframe with the mission pod that matters. Sees things nothing else in the fleet can.',
+  },
+  intrepid: {
+    id: 'intrepid', name: 'Intrepid class', faction: 'federation',
+    tier: 5, role: 'science vessel',
+    hull: 5400, shields: 5800, shieldRegen: 104,
+    crew: 150, mass: 0.9,
+    impulse: 0.92, turnRate: 13.0, maxWarp: 9.975, warpEfficiency: 1.7,
+    powerCap: 250, auxBonus: 30,
+    weapons: [
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 222, cycle: 2.9, ...arc(0, 300) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Tubes', damage: 530, cycle: 6.2, ...arc(0, 120) },
+    ],
+    slots: { tactical: 3, engineering: 3, science: 5, device: 3 },
+    boffSeats: [
+      { dept: 'science', rank: 4 }, { dept: 'engineering', rank: 3 },
+      { dept: 'tactical', rank: 3 }, { dept: 'universal', rank: 3 },
+    ],
+    description: 'Fast, small, and built to be a long way from home. Variable geometry nacelles and a bio-neural computer.',
+  },
+  defiant: {
+    id: 'defiant', name: 'Defiant class', faction: 'federation',
+    tier: 5, role: 'escort',
+    hull: 4400, shields: 4600, shieldRegen: 58,
+    crew: 50, mass: 0.6,
+    impulse: 1.05, turnRate: 20.0, maxWarp: 9.5, warpEfficiency: 1.0,
+    powerCap: 245, ablative: true,
+    weapons: [
+      { id: 'pulse_fwd', type: 'cannon', name: 'Pulse Phaser Cannons', damage: 248, cycle: 2.0, ...arc(0, 45) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 108, cycle: 3.0, ...arc(0, 200) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedoes', damage: 700, cycle: 7.0, ...arc(0, 60) },
+    ],
+    slots: { tactical: 5, engineering: 3, science: 2, device: 3 },
+    boffSeats: [
+      { dept: 'tactical', rank: 4 }, { dept: 'tactical', rank: 3 },
+      { dept: 'engineering', rank: 3 }, { dept: 'science', rank: 2 },
+    ],
+    description: 'A warship, and the fleet stopped pretending otherwise. Overpowered, overgunned, and nearly tore itself apart in trials.',
+  },
+  sovereign: {
+    id: 'sovereign', name: 'Sovereign class', faction: 'federation',
+    tier: 6, role: 'heavy explorer',
+    hull: 9800, shields: 8200, shieldRegen: 88,
+    crew: 855, mass: 1.9,
+    impulse: 0.82, turnRate: 8.0, maxWarp: 9.9, warpEfficiency: 1.6,
+    powerCap: 285,
+    weapons: [
+      { id: 'phaser_dorsal', type: 'beam', name: 'Type-XII Phaser Arrays', damage: 330, cycle: 2.7, ...arc(0, 300) },
+      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 184, cycle: 2.7, ...arc(180, 260) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedo Bay', damage: 820, cycle: 5.8, ...arc(0, 120) },
+      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 580, cycle: 6.8, ...arc(180, 120) },
+    ],
+    slots: { tactical: 5, engineering: 5, science: 4, device: 4 },
+    boffSeats: [
+      { dept: 'command', rank: 4 }, { dept: 'tactical', rank: 4 },
+      { dept: 'engineering', rank: 4 }, { dept: 'science', rank: 4 },
+    ],
+    description: 'The best hull Starfleet has. If you are flying one, the situation is already serious.',
+  },
+  runabout: {
+    id: 'runabout', name: 'Danube-class Runabout', faction: 'federation',
+    tier: 1, role: 'runabout',
+    hull: 1200, shields: 1100, shieldRegen: 30,
+    crew: 4, mass: 0.25,
+    impulse: 1.0, turnRate: 24.0, maxWarp: 5.0, warpEfficiency: 0.9,
+    powerCap: 140,
+    weapons: [
+      { id: 'phaser', type: 'beam', name: 'Phaser Emitters', damage: 58, cycle: 3.0, ...arc(0, 240) },
+      { id: 'micro_torp', type: 'torpedo', name: 'Micro-Torpedoes', damage: 180, cycle: 8.0, ...arc(0, 90) },
+    ],
+    slots: { tactical: 1, engineering: 1, science: 1, device: 1 },
+    boffSeats: [{ dept: 'universal', rank: 1 }],
+    description: 'Four bunks and a warp drive. You are not fighting anything in this; you are getting somewhere.',
+  },
+
+  // ---------- Later hostiles ----------
+  vorcha: {
+    id: 'vorcha', name: 'Vor’cha-class Attack Cruiser', faction: 'klingon',
+    tier: 5, role: 'attack cruiser',
+    hull: 6200, shields: 5000, shieldRegen: 52,
+    crew: 1900, mass: 1.5,
+    impulse: 0.76, turnRate: 7.5, maxWarp: 9.6, warpEfficiency: 1.1,
+    powerCap: 245, cloak: true,
+    weapons: [
+      { id: 'disruptor_cannon', type: 'cannon', name: 'Forward Disruptor Cannon', damage: 240, cycle: 2.6, ...arc(0, 60) },
+      { id: 'disruptor_fwd', type: 'beam', name: 'Disruptor Arrays', damage: 158, cycle: 3.0, ...arc(0, 240) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 520, cycle: 6.8, ...arc(0, 120) },
+    ],
+    description: 'The Empire’s line ship of the modern fleet. Cloaks, closes, and does not negotiate afterwards.',
+  },
+  neghvar: {
+    id: 'neghvar', name: 'Negh’Var-class Warship', faction: 'klingon',
+    tier: 7, role: 'flagship',
+    hull: 11000, shields: 8400, shieldRegen: 72,
+    crew: 2500, mass: 2.4,
+    impulse: 0.64, turnRate: 4.5, maxWarp: 9.6, warpEfficiency: 1.0,
+    powerCap: 300, cloak: true,
+    weapons: [
+      { id: 'disruptor_heavy', type: 'beam', name: 'Heavy Disruptor Arrays', damage: 250, cycle: 2.9, ...arc(0, 280) },
+      { id: 'disruptor_aft', type: 'beam', name: 'Aft Disruptors', damage: 190, cycle: 3.1, ...arc(180, 220) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Heavy Torpedo Bay', damage: 820, cycle: 7.2, ...arc(0, 120) },
+    ],
+    description: 'The Chancellor’s flagship class. Fighting one alone is a decision, not an accident.',
+  },
+  ktinga: {
+    id: 'ktinga', name: 'K’t’inga-class Battlecruiser', faction: 'klingon',
+    tier: 4, role: 'battlecruiser',
+    hull: 5000, shields: 3900, shieldRegen: 42,
+    crew: 440, mass: 1.15,
+    impulse: 0.72, turnRate: 8.0, maxWarp: 9.0, warpEfficiency: 1.0,
+    powerCap: 215,
+    weapons: [
+      { id: 'disruptor_fwd', type: 'beam', name: 'Forward Disruptors', damage: 148, cycle: 2.9, ...arc(0, 220) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 460, cycle: 7.2, ...arc(0, 90) },
+    ],
+    description: 'The D7 rebuilt and kept in service for a century, because it works.',
+  },
+  keldon: {
+    id: 'keldon', name: 'Keldon-class Cruiser', faction: 'cardassian',
+    tier: 5, role: 'heavy cruiser',
+    hull: 5800, shields: 4800, shieldRegen: 56,
+    crew: 400, mass: 1.3,
+    impulse: 0.76, turnRate: 8.0, maxWarp: 9.2, warpEfficiency: 1.05,
+    powerCap: 235,
+    weapons: [
+      { id: 'spiral_fwd', type: 'beam', name: 'Spiral-Wave Disruptors', damage: 178, cycle: 2.8, ...arc(0, 250) },
+      { id: 'spiral_aft', type: 'beam', name: 'Aft Emitters', damage: 130, cycle: 3.0, ...arc(180, 200) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Launcher', damage: 480, cycle: 6.8, ...arc(0, 120) },
+    ],
+    description: 'The Galor with everything the Order wanted added. Drilled, patient, and very hard to surprise.',
+  },
+  jem_hadar_battleship: {
+    id: 'jem_hadar_battleship', name: 'Jem’Hadar Battleship', faction: 'dominion',
+    tier: 8, role: 'battleship',
+    hull: 16000, shields: 12000, shieldRegen: 120,
+    crew: 900, mass: 3.2,
+    impulse: 0.62, turnRate: 4.0, maxWarp: 9.4, warpEfficiency: 1.1,
+    powerCap: 330, ramsWhenDoomed: true,
+    weapons: [
+      { id: 'polaron_heavy', type: 'beam', name: 'Heavy Polaron Beams', damage: 300, cycle: 2.8, ...arc(0, 300) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Batteries', damage: 900, cycle: 6.5, ...arc(0, 180) },
+    ],
+    description: 'The Dominion does not build escorts for prestige. This is what they send when the escorts failed.',
+  },
+  bioship: {
+    id: 'bioship', name: 'Bioship', faction: 'borg',
+    tier: 9, role: 'bioship',
+    hull: 20000, shields: 14000, shieldRegen: 200,
+    crew: 1, mass: 2.6,
+    impulse: 1.2, turnRate: 14.0, maxWarp: 9.9, warpEfficiency: 2.0,
+    powerCap: 360, adapts: true, regenerates: 120,
+    weapons: [
+      { id: 'bio_beam', type: 'beam', name: 'Bioplasmic Discharge', damage: 460, cycle: 3.2, ...arc(0, 360) },
+    ],
+    description: 'Organic, fast, and outside every doctrine Starfleet has written. Weapons adapt within seconds.',
+  },
+  transport: {
+    id: 'transport', name: 'Colony Transport', faction: 'independent',
+    tier: 1, role: 'transport',
+    hull: 2200, shields: 1200, shieldRegen: 20,
+    crew: 1400, mass: 1.6,
+    impulse: 0.45, turnRate: 4.0, maxWarp: 6.0, warpEfficiency: 1.0,
+    powerCap: 130, civilian: true,
+    weapons: [],
+    description: 'Fourteen hundred colonists and no weapons at all. Whatever happens to it happens because of you.',
   },
   freighter: {
     id: 'freighter', name: 'Civilian Freighter', faction: 'independent',
@@ -1979,6 +2286,9 @@ const FACINGS = ['fore', 'aft', 'port', 'starboard'];
 const FACING_LABEL = {
   fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
 };
+
+/** Modifiers that add rather than multiply. */
+const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
 const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
@@ -2061,7 +2371,7 @@ class Ship {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0,
     };
     this.buffs = [];               // { id, label, until, mods }
 
@@ -2074,7 +2384,7 @@ class Ship {
   applyMods(mods) {
     for (const [k, v] of Object.entries(mods)) {
       if (typeof v !== 'number') continue;
-      if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') this.mods[k] += v;
+      if (ADDITIVE_MODS.has(k)) this.mods[k] += v;
       else this.mods[k] = (this.mods[k] ?? 1) * v;
     }
     this.recomputeDerived();
@@ -2106,7 +2416,7 @@ class Ship {
     for (const b of this.buffs) {
       const v = b.mods?.[key];
       if (typeof v !== 'number') continue;
-      if (key === 'critChance' || key === 'critSeverity' || key === 'damageResist') value += v;
+      if (ADDITIVE_MODS.has(key)) value += v;
       else value *= v;
     }
     return value;
@@ -2307,11 +2617,16 @@ class Ship {
 
     this.hull -= hullDamage;
 
-    // Crew casualties scale with how hard the hull was hit.
+    // Crew casualties scale with how hard the hull was hit, less whatever
+    // medical provision the ship carries — the biofunction monitor, a
+    // physician captain, and Triage all feed the same number.
     let crewKilled = 0;
     if (hullDamage > 0 && this.maxCrew > 0) {
       const severity = hullDamage / this.maxHull;
-      crewKilled = Math.floor(this.maxCrew * severity * 0.55 * (rng ? rng.range(0.5, 1.5) : 1));
+      const protection = 1 - Math.min(0.85, this.mod('crewProtect'));
+      crewKilled = Math.floor(
+        this.maxCrew * severity * 0.55 * protection * (rng ? rng.range(0.5, 1.5) : 1),
+      );
       crewKilled = Math.min(this.crew, crewKilled);
       this.crew -= crewKilled;
       this.injured += Math.floor(crewKilled * 1.6);
@@ -2473,6 +2788,7 @@ class Ship {
 
 __exports.FACINGS = FACINGS;
 __exports.FACING_LABEL = FACING_LABEL;
+__exports.ADDITIVE_MODS = ADDITIVE_MODS;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
 __exports.facingForBearing = facingForBearing;
 __exports.inArc = inArc;
@@ -2971,6 +3287,10 @@ const SECTORS = {
   cardassia: { id: 'cardassia', name: 'Cardassian Union', owner: 'cardassian', color: '#d9a441' },
   badlands: { id: 'badlands', name: 'The Badlands', owner: 'contested', color: '#ff9a3c' },
   tholia: { id: 'tholia', name: 'Tholian Assembly', owner: 'tholian', color: '#ff6fae' },
+  risa: { id: 'risa', name: 'Risa Sector', owner: 'federation', color: '#9cf' },
+  betazed: { id: 'betazed', name: 'Betazed Sector', owner: 'federation', color: '#9cf' },
+  gamma: { id: 'gamma', name: 'Gamma Quadrant', owner: 'dominion', color: '#b08cff' },
+  ferenginar: { id: 'ferenginar', name: 'Ferengi Alliance', owner: 'ferengi', color: '#e9913c' },
   frontier: { id: 'frontier', name: 'Beta Quadrant Frontier', owner: 'unexplored', color: '#8ea2c6' },
   deepspace: { id: 'deepspace', name: 'Uncharted Space', owner: 'unexplored', color: '#6f7f9c' },
 };
@@ -3165,6 +3485,94 @@ const SYSTEMS = [
     unexplored: true,
     description: 'Beyond the relay network. Whatever you find here, you report weeks later.',
     links: ['frontier_1', 'frontier_2', 'orion_reach'],
+  },
+
+  // ---- Federation interior, expanded ----
+  {
+    id: 'risa', name: 'Risa', sector: 'risa', x: -14.0, y: -18.0, type: 'colony', faction: 'federation',
+    facilities: ['dock', 'medical', 'trade'],
+    description: 'Engineered weather, engineered hospitality, and the only system where Starfleet crews outnumber the locals.',
+    links: ['alpha_centauri', 'rigel', 'betazed'],
+  },
+  {
+    id: 'betazed', name: 'Betazed', sector: 'betazed', x: -22.0, y: -9.0, type: 'homeworld', faction: 'federation',
+    facilities: ['dock', 'medical', 'academy', 'trade'],
+    description: 'Nothing you are thinking is private here, and the customs officer will mention it.',
+    links: ['risa', 'vulcan', 'alpha_centauri'],
+  },
+  {
+    id: 'starbase_1', name: 'Starbase 1', sector: 'sol', x: 2.4, y: 3.1, type: 'starbase', faction: 'federation',
+    facilities: ['dock', 'shipyard', 'medical', 'academy', 'trade'],
+    description: 'Earth orbit. The fleet yard, the archive, and the office where the orders are written.',
+    links: ['sol', 'wolf359', 'neutral_zone_1'],
+  },
+  {
+    id: 'utopia', name: 'Utopia Planitia', sector: 'sol', x: -1.6, y: 2.2, type: 'station', faction: 'federation',
+    facilities: ['dock', 'shipyard'],
+    description: 'Mars orbit. Where the hulls are built, and where yours was signed off two months late.',
+    links: ['sol', 'starbase_1'],
+  },
+  {
+    id: 'setlik', name: 'Setlik III', sector: 'bajor', x: 24.5, y: -18.0, type: 'colony', faction: 'federation',
+    facilities: ['dock'],
+    contested: true,
+    description: 'A colony with a massacre in its history and a garrison that has never fully stood down.',
+    links: ['bajor', 'starbase_11', 'cardassia_prime'],
+  },
+  {
+    id: 'khitomer', name: 'Khitomer', sector: 'archanis', x: -1.5, y: 36.0, type: 'outpost', faction: 'independent',
+    facilities: ['dock'],
+    description: 'Neutral ground, chosen because both empires could reach it and neither could hold it.',
+    links: ['archanis', 'organia', 'qonos'],
+  },
+  {
+    id: 'narendra', name: 'Narendra III', sector: 'donatu', x: -24.0, y: 33.0, type: 'colony', faction: 'klingon',
+    facilities: [],
+    contested: true,
+    description: 'A Klingon outpost. What a Federation ship chooses to do here tends to be remembered for decades.',
+    links: ['donatu_v', 'organia'],
+  },
+  {
+    id: 'ferenginar', name: 'Ferenginar', sector: 'ferenginar', x: 12.0, y: -34.0, type: 'homeworld', faction: 'ferengi',
+    facilities: ['dock', 'trade'],
+    description: 'It has been raining for four hundred years. Everything else is negotiable.',
+    links: ['orion_reach', 'bajor', 'deep_2'],
+  },
+  {
+    id: 'wormhole', name: 'Bajoran Wormhole', sector: 'bajor', x: 22.8, y: -26.8, type: 'anomaly', faction: 'none',
+    facilities: [],
+    anomalous: true,
+    description: 'Stable, artificial, and seventy thousand light-years long. The only door to the Gamma Quadrant.',
+    links: ['terok_nor', 'gamma_1'],
+  },
+  {
+    id: 'gamma_1', name: 'Idran', sector: 'gamma', x: 46.0, y: -44.0, type: 'anomaly', faction: 'none',
+    facilities: [],
+    unexplored: true,
+    description: 'The far side of the wormhole. Seventy thousand light-years from any help at all.',
+    links: ['wormhole', 'gamma_2'],
+  },
+  {
+    id: 'gamma_2', name: 'Founders’ Homeworld', sector: 'gamma', x: 54.0, y: -50.0, type: 'homeworld', faction: 'dominion',
+    facilities: [],
+    unexplored: true,
+    requiresStanding: { dominion: 40 },
+    description: 'A rogue world in a nebula. Everything on the other side of the wormhole answers to what is here.',
+    links: ['gamma_1'],
+  },
+  {
+    id: 'mutara', name: 'Mutara Nebula', sector: 'rigel', x: 3.0, y: -19.0, type: 'anomaly', faction: 'none',
+    facilities: [],
+    hazard: 'nebula',
+    description: 'Static discharge blinds shields and sensors alike in here. It reduces a battle to two ships guessing.',
+    links: ['rigel', 'vega', 'orion_reach'],
+  },
+  {
+    id: 'briar', name: 'Briar Patch', sector: 'frontier', x: 19.0, y: 20.0, type: 'anomaly', faction: 'none',
+    facilities: [],
+    hazard: 'metreon',
+    description: 'Metreon gas across two dozen light-years. Warp drive does not work in here, and everyone knows it.',
+    links: ['frontier_1', 'frontier_2', 'neutral_zone_1'],
   },
 ];
 const SYSTEM_BY_ID = Object.fromEntries(SYSTEMS.map((s) => [s.id, s]));
@@ -5437,6 +5845,8 @@ __define("src/sim/skills.js", function (__exports, __require) {
 //
 // Skill points buy modifiers that go straight into Ship.mods, so a point in
 // Beam Weapons is a real number in the damage formula, not a cosmetic tier.
+
+const { ADDITIVE_MODS } = __require("src/sim/ship.js");
 const RANKS = [
   { id: 'ensign', name: 'Ensign', tier: 1, xp: 0, skillPoints: 2 },
   { id: 'lieutenant_jg', name: 'Lieutenant JG', tier: 1, xp: 800, skillPoints: 2 },
@@ -5574,7 +5984,7 @@ class CaptainProgress {
       const skill = SKILLS[id];
       if (!skill) continue;
       for (const [k, v] of Object.entries(skill.mods ?? {})) {
-        if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') {
+        if (ADDITIVE_MODS.has(k)) {
           mods[k] = (mods[k] ?? 0) + v * ranks;
         } else {
           mods[k] = (mods[k] ?? 1) * (1 + v * ranks);
@@ -5628,6 +6038,8 @@ __define("src/sim/loadout.js", function (__exports, __require) {
 //
 // Consoles are the fine-tuning layer over the skill tree — same modifier
 // system, but swappable at a starbase without spending skill points.
+
+const { ADDITIVE_MODS } = __require("src/sim/ship.js");
 const CONSOLES = {
   // --- Tactical ---
   phaser_relay: { id: 'phaser_relay', slot: 'tactical', name: 'Phaser Relay', tier: 1,
@@ -5725,7 +6137,7 @@ class Loadout {
       const c = CONSOLES[id];
       if (!c?.mods) continue;
       for (const [k, v] of Object.entries(c.mods)) {
-        if (k === 'critChance' || k === 'critSeverity' || k === 'damageResist') {
+        if (ADDITIVE_MODS.has(k)) {
           mods[k] = (mods[k] ?? 0) + v;
         } else {
           mods[k] = (mods[k] ?? 1) * (1 + v);
@@ -6022,6 +6434,8 @@ class Engagement {
     this.targetedSubsystem = null;
     this.autoFire = true;
     this.warpOutTimer = 0;
+    // Consumed by the Tactical career's Called Shot.
+    this.guaranteedCrits = 0;
     this.canWarpOut = opts.canWarpOut !== false;
 
     this.placeCombatants();
@@ -6177,7 +6591,14 @@ class Engagement {
       * attacker.power.factor('weapons') * attacker.subsystems.weapons
       * this.rng.range(0.9, 1.1);
 
-    const crit = this.rng.chance(attacker.mod('critChance'));
+    // A Called Shot spends itself on the next hit that lands, guaranteeing
+    // the critical rather than merely improving the odds.
+    let crit = this.rng.chance(attacker.mod('critChance'));
+    if (attacker === this.player && this.guaranteedCrits > 0) {
+      crit = true;
+      this.guaranteedCrits--;
+      this.pushLog('Called shot — direct hit.', 'tactical');
+    }
     if (crit) damage *= 1 + attacker.mod('critSeverity');
 
     const bearing = target.bearingFrom(attacker);
@@ -6343,43 +6764,213 @@ __exports.buildHostiles = buildHostiles;
 
 });
 
-__define("src/sim/away.js", function (__exports, __require) {
-// Away teams.
+__define("src/rules/dice.js", function (__exports, __require) {
+// The d20 layer.
 //
-// You pick who beams down. They can be hurt, and they can die, and the ones
-// who die are the ones you sent. The captain may go personally, which is
-// better for the roll and considerably worse if it goes wrong.
+// Every uncertain action in the game — an away team forcing a door, a
+// negotiation, a science analysis, a saving throw against a plasma burst —
+// resolves through this module. It is deliberately conventional: ability
+// scores, a proficiency bonus, a target number, advantage, and criticals.
+// If you have played a tabletop RPG you already know how this works.
+//
+// All randomness comes from the seeded 64-bit RNG, so a roll is reproducible
+// and the whole session can be replayed from its seed.
+
+/** Standard polyhedral roll. `n` dice of `sides`, plus a flat modifier. */
+function roll(rng, n, sides, modifier = 0) {
+  const dice = [];
+  for (let i = 0; i < n; i++) dice.push(rng.int(1, sides));
+  return { dice, total: dice.reduce((a, b) => a + b, 0) + modifier, modifier };
+}
+const d = (rng, sides) => rng.int(1, sides);
+
+/** 5e-style ability modifier: (score - 10) / 2, rounded down. */
+function abilityMod(score) {
+  return Math.floor((score - 10) / 2);
+}
+
+/** Proficiency scales with character level, 2 at level 1 up to 6 at 17+. */
+function proficiencyBonus(level) {
+  return 2 + Math.floor((Math.max(1, level) - 1) / 4);
+}
+const DC = {
+  trivial: 5,
+  easy: 10,
+  moderate: 12,
+  hard: 15,
+  very_hard: 18,
+  formidable: 20,
+  legendary: 25,
+  impossible: 30,
+};
+const DC_LABEL = {
+  5: 'Trivial', 10: 'Easy', 12: 'Moderate', 15: 'Hard',
+  18: 'Very Hard', 20: 'Formidable', 25: 'Legendary', 30: 'Near Impossible',
+};
+function describeDC(dc) {
+  const keys = Object.keys(DC_LABEL).map(Number).sort((a, b) => a - b);
+  let best = keys[0];
+  for (const k of keys) if (dc >= k) best = k;
+  return DC_LABEL[best];
+}
+
+/**
+ * The core resolution.
+ *
+ * @param {RNG} rng
+ * @param {object} opts
+ *   modifier      total bonus (ability mod + proficiency + situational)
+ *   dc            target number
+ *   advantage     roll twice, keep the higher
+ *   disadvantage  roll twice, keep the lower (cancels advantage)
+ *   luck          extra rerolls of a natural 1 (Story difficulty grants these)
+ *   critRange     natural roll at or above this is a critical success (default 20)
+ * @returns {object} full, inspectable result — the UI shows the arithmetic
+ */
+function check(rng, {
+  modifier = 0, dc = 12, advantage = false, disadvantage = false,
+  luck = 0, critRange = 20, label = '',
+} = {}) {
+  // Advantage and disadvantage cancel exactly, as in the tabletop rules.
+  const adv = advantage && !disadvantage;
+  const dis = disadvantage && !advantage;
+
+  const rolls = [d(rng, 20)];
+  if (adv || dis) rolls.push(d(rng, 20));
+
+  let natural = adv ? Math.max(...rolls) : dis ? Math.min(...rolls) : rolls[0];
+
+  // Luck lets a fumble be re-rolled a limited number of times.
+  let lucked = 0;
+  while (natural === 1 && lucked < luck) {
+    natural = d(rng, 20);
+    rolls.push(natural);
+    lucked++;
+  }
+
+  const total = natural + modifier;
+  const criticalSuccess = natural >= critRange;
+  const criticalFailure = natural === 1;
+
+  // A natural 20 always succeeds; a natural 1 always fails. That is the
+  // whole point of having dice.
+  const success = criticalSuccess ? true : criticalFailure ? false : total >= dc;
+
+  return {
+    label, natural, rolls, modifier, total, dc,
+    success, criticalSuccess, criticalFailure,
+    margin: total - dc,
+    advantage: adv, disadvantage: dis, lucked,
+    // How comfortably it went, for prose and for partial successes.
+    degree: criticalFailure ? -2
+      : !success && total >= dc - 4 ? -1     // near miss
+      : !success ? -2
+      : criticalSuccess ? 2
+      : total >= dc + 5 ? 1
+      : 0,
+  };
+}
+
+/** Two parties roll against each other; ties go to the defender. */
+function contest(rng, attacker, defender) {
+  const a = check(rng, { ...attacker, dc: 0 });
+  const b = check(rng, { ...defender, dc: 0 });
+  return {
+    attacker: a, defender: b,
+    attackerWins: a.total > b.total,
+    margin: a.total - b.total,
+  };
+}
+
+/** A saving throw is a check against an externally-set DC. */
+function save(rng, opts) {
+  return check(rng, { ...opts, label: opts.label || 'saving throw' });
+}
+
+/** Format a roll for the log, showing the arithmetic so it can be trusted. */
+function formatCheck(result, skillName = '') {
+  const sign = result.modifier >= 0 ? '+' : '−';
+  const mod = Math.abs(result.modifier);
+  const dice = result.rolls.length > 1 ? `[${result.rolls.join(', ')}]` : `${result.natural}`;
+  const advNote = result.advantage ? ' adv' : result.disadvantage ? ' dis' : '';
+  const head = skillName ? `${skillName}: ` : '';
+  const verdict = result.criticalSuccess ? 'CRITICAL SUCCESS'
+    : result.criticalFailure ? 'CRITICAL FAILURE'
+    : result.success ? 'success' : 'failure';
+  return `${head}d20 ${dice}${advNote} ${sign} ${mod} = ${result.total} vs DC ${result.dc} — ${verdict}`;
+}
+
+/** Damage expression roller, e.g. "2d6+3". Used by away-team combat. */
+function rollDamage(rng, expression) {
+  const m = /^(\d+)d(\d+)\s*([+-]\s*\d+)?$/.exec(String(expression).replace(/\s/g, ''));
+  if (!m) return { total: 0, dice: [] };
+  const n = parseInt(m[1], 10);
+  const sides = parseInt(m[2], 10);
+  const mod = m[3] ? parseInt(m[3].replace(/\s/g, ''), 10) : 0;
+  return roll(rng, n, sides, mod);
+}
+
+__exports.roll = roll;
+__exports.d = d;
+__exports.abilityMod = abilityMod;
+__exports.proficiencyBonus = proficiencyBonus;
+__exports.DC = DC;
+__exports.DC_LABEL = DC_LABEL;
+__exports.describeDC = describeDC;
+__exports.check = check;
+__exports.contest = contest;
+__exports.save = save;
+__exports.formatCheck = formatCheck;
+__exports.rollDamage = rollDamage;
+
+});
+
+__define("src/sim/away.js", function (__exports, __require) {
+// Away teams, resolved on the d20.
+//
+// You pick who beams down. Checks roll against a DC, the captain's ability
+// modifiers apply, officers contribute their own expertise, and the result is
+// shown as arithmetic the player can audit. People can be hurt, and people can
+// die, and the ones who die are the ones you sent.
 
 const { emit } = __require("src/core/events.js");
+const { check, formatCheck, describeDC, DC } = __require("src/rules/dice.js");
 const HAZARD_LEVEL = {
-  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004 },
-  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02 },
-  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06 },
-  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14 },
+  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy },
+  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate },
+  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06, dc: DC.hard },
+  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14, dc: DC.formidable },
 };
 
-/** Which trait a check leans on. */
+/**
+ * Check types map to a captain ability and to the bridge stations whose
+ * officers are competent at them.
+ */
 const CHECK_TYPES = {
-  science: { label: 'Science', stations: ['science'], trait: 'expertise' },
-  medical: { label: 'Medical', stations: ['medical'], trait: 'expertise' },
-  engineering: { label: 'Engineering', stations: ['engineering'], trait: 'expertise' },
-  combat: { label: 'Security', stations: ['tactical'], trait: 'daring' },
-  diplomacy: { label: 'Diplomacy', stations: ['first_officer', 'comms'], trait: 'candor' },
-  stealth: { label: 'Stealth', stations: ['tactical', 'helm'], trait: 'daring' },
+  science: { label: 'Science', ability: 'science', stations: ['science'], trait: 'expertise' },
+  medical: { label: 'Medicine', ability: 'medicine', stations: ['medical'], trait: 'expertise' },
+  engineering: { label: 'Engineering', ability: 'engineering', stations: ['engineering'], trait: 'expertise' },
+  combat: { label: 'Security', ability: 'tactics', stations: ['tactical'], trait: 'daring' },
+  diplomacy: { label: 'Diplomacy', ability: 'diplomacy', stations: ['first_officer', 'comms'], trait: 'candor' },
+  stealth: { label: 'Stealth', ability: 'tactics', stations: ['tactical', 'helm'], trait: 'daring' },
+  command: { label: 'Command', ability: 'command', stations: ['first_officer'], trait: 'discipline' },
 };
 class AwayTeam {
   /**
    * @param {Officer[]} members
-   * @param {boolean} captainLeads
+   * @param {object} opts { captainLeads, character, difficulty, security }
    */
-  constructor(members, captainLeads = false) {
+  constructor(members, opts = {}) {
     this.members = members.filter((o) => o.available);
-    this.captainLeads = captainLeads;
-    this.security = 4; // redshirts; they die first, and it matters
+    this.captainLeads = !!opts.captainLeads;
+    this.character = opts.character ?? null;
+    this.difficulty = opts.difficulty ?? null;
+    this.security = opts.security ?? 4;   // they die first, and it matters
     this.casualties = [];
+    this.rolls = [];                      // full audit trail for the UI
   }
 
-  get size() { return this.members.length + this.security; }
+  get size() { return this.members.length + this.security + (this.captainLeads ? 1 : 0); }
 
   /** Best relevant officer for a check type. */
   bestFor(checkType) {
@@ -6392,57 +6983,139 @@ class AwayTeam {
   }
 
   /**
-   * Resolve a skill check.
-   * @param {RNG} rng
-   * @param {string} checkType
-   * @param {object} opts { difficulty 0..1, hazard, captainBonus }
-   * @returns {object} { success, margin, officer, injured, killed, text }
+   * Build the full modifier for a check, itemised so the UI can show where
+   * every point came from.
    */
-  check(rng, checkType, { difficulty = 0.5, hazard = 'elevated', captainBonus = 0 } = {}) {
+  modifierFor(checkType, situational = 0) {
     const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
     const officer = this.bestFor(checkType);
-    const skill = officer ? officer[spec.trait] / 100 : 0.4;
+    const parts = [];
 
-    // Captain's presence helps, and exposes them.
-    const bonus = captainBonus + (this.captainLeads ? 0.1 : 0);
-    const roll = rng.float();
-    const target = Math.max(0.05, Math.min(0.95, skill + bonus - difficulty + 0.35));
-    const success = roll < target;
-    const margin = target - roll;
+    let total = 0;
+    if (this.character) {
+      const abilityMod = this.character.mod(spec.ability);
+      total += abilityMod;
+      parts.push({ source: `${spec.label} ability`, value: abilityMod });
+      if (this.character.isProficient(spec.ability)) {
+        const prof = this.character.proficiencyBonus;
+        total += prof;
+        parts.push({ source: 'proficiency', value: prof });
+      }
+      if (this.captainLeads) {
+        total += 2;
+        parts.push({ source: 'captain leading', value: 2 });
+      }
+    }
 
+    if (officer) {
+      // An expert officer is worth up to +5 on their own speciality.
+      const officerBonus = Math.round((officer[spec.trait] - 50) / 12);
+      total += officerBonus;
+      parts.push({ source: officer.name, value: officerBonus });
+      if (officer.injured) {
+        total -= 2;
+        parts.push({ source: 'wounded', value: -2 });
+      }
+    }
+
+    // A larger security detail helps with anything physical.
+    if ((checkType === 'combat' || checkType === 'stealth') && this.security > 0) {
+      const detail = Math.min(3, Math.floor(this.security / 2));
+      total += detail;
+      parts.push({ source: 'security detail', value: detail });
+    }
+
+    if (situational) {
+      total += situational;
+      parts.push({ source: 'circumstance', value: situational });
+    }
+
+    return { total, parts, officer, spec };
+  }
+
+  /**
+   * Resolve one check.
+   * @returns {object} the roll, the consequences, and readable prose
+   */
+  check(rng, checkType, { dc = null, hazard = 'elevated', situational = 0, label = '' } = {}) {
     const level = HAZARD_LEVEL[hazard] ?? HAZARD_LEVEL.elevated;
-    // Failure is more dangerous than success, but success is not free.
-    const dangerScale = success ? 0.4 : 1.6;
+    const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
+    const { total: modifier, parts, officer } = this.modifierFor(checkType, situational);
 
-    const result = { success, margin, officer, injured: null, killed: null, securityLost: 0 };
+    let targetDC = dc ?? level.dc;
+    if (this.difficulty) targetDC = this.difficulty.dc(targetDC);
 
-    // Security personnel absorb the first casualties.
-    if (rng.chance(level.death * dangerScale) && this.security > 0) {
+    const advantage = this.character?.hasAdvantageOn(spec.ability) ?? false;
+    const roll = check(rng, {
+      modifier, dc: targetDC, advantage,
+      luck: this.difficulty?.luck ?? 0,
+      critRange: this.character?.hasFeat('tactical_genius') ? 19 : 20,
+      label: label || spec.label,
+    });
+
+    const record = { ...roll, checkType, parts, officer: officer?.name ?? null };
+    this.rolls.push(record);
+
+    const result = {
+      ...roll, checkType, spec, parts, officer,
+      injured: null, killed: null, securityLost: 0,
+      formatted: formatCheck(roll, spec.label),
+      difficultyLabel: describeDC(targetDC),
+    };
+
+    // Consequences scale with how badly it went, not merely whether it failed.
+    // A critical failure is dangerous; a comfortable success is nearly free.
+    const dangerScale = roll.criticalFailure ? 2.5
+      : !roll.success ? 1.6
+      : roll.criticalSuccess ? 0.1
+      : roll.degree >= 1 ? 0.25
+      : 0.5;
+
+    let deathChance = level.death * dangerScale;
+    let injuryChance = level.injury * dangerScale;
+
+    // Medicine aboard, and anything that reduces casualties, applies here.
+    const reduction = this.character?.mechanic('casualtyReduction') ?? 0;
+    deathChance *= (1 - reduction);
+    injuryChance *= (1 - reduction);
+    if (this.difficulty) {
+      const scale = this.difficulty.scale('crewLossScale');
+      deathChance *= scale;
+      injuryChance *= scale;
+    }
+    // Difficulties below Ensign do not kill named officers at all.
+    const lethal = this.difficulty ? this.difficulty.permadeath : true;
+
+    if (rng.chance(deathChance) && this.security > 0) {
       this.security--;
       result.securityLost = 1;
       this.casualties.push({ name: 'Security crewman', killed: true });
       emit('away:security-lost', { checkType });
     } else if (officer) {
-      if (rng.chance(level.death * dangerScale * 0.5)) {
+      if (lethal && rng.chance(deathChance * 0.5)) {
         officer.kill(`killed on an away mission (${spec.label.toLowerCase()})`);
         result.killed = officer;
         this.casualties.push({ name: officer.name, killed: true });
         this.members = this.members.filter((o) => o.alive);
-      } else if (rng.chance(level.injury * dangerScale)) {
+      } else if (rng.chance(injuryChance)) {
         officer.injure(rng.range(0.3, 0.9));
         result.injured = officer;
         this.casualties.push({ name: officer.name, injured: true });
       }
     }
 
-    // The captain is not exempt.
-    if (this.captainLeads && rng.chance(level.death * dangerScale * 0.35)) {
+    if (this.captainLeads && lethal && rng.chance(deathChance * 0.35)) {
       result.captainWounded = true;
     }
 
-    result.text = buildCheckText(spec, result, success);
+    result.text = buildCheckText(spec, result, roll);
     emit('away:check', result);
     return result;
+  }
+
+  /** Spend the species reroll, if the character has one left. */
+  canReroll() {
+    return (this.character?.rerollsRemaining ?? 0) > 0;
   }
 
   save() {
@@ -6455,19 +7128,33 @@ class AwayTeam {
   }
 }
 
-function buildCheckText(spec, result, success) {
+function buildCheckText(spec, result, roll) {
   const who = result.officer ? result.officer.name : 'The team';
+
+  if (roll.criticalSuccess) {
+    return `${who} does it perfectly — better than the plan called for.`;
+  }
+  if (roll.criticalFailure) {
+    if (result.killed) return `It goes wrong at once. ${result.killed.name} does not come back.`;
+    if (result.securityLost) return `It goes badly wrong. We are carrying someone out.`;
+    return `${who} makes it worse. Whatever the plan was, it is gone.`;
+  }
   if (result.killed) {
-    return `${who} is down. ${success ? 'The work is done, but' : 'It failed, and'} we are bringing a body back.`;
+    return `${who} is down. ${roll.success ? 'The work is done, but' : 'It failed, and'} we are bringing a body back.`;
   }
   if (result.injured) {
-    return `${who} is hurt — ${success ? 'they finished the job first' : 'and we got nothing for it'}.`;
+    return `${who} is hurt — ${roll.success ? 'they finished the job first' : 'and we got nothing for it'}.`;
   }
   if (result.securityLost) {
-    return `We lost a crewman. ${success ? 'The objective is secure.' : 'And we still failed.'}`;
+    return `We lost a crewman. ${roll.success ? 'The objective is secure.' : 'And we still failed.'}`;
   }
-  return success
-    ? `${who} handled it. ${spec.label} objective complete.`
+  if (roll.success) {
+    return roll.degree >= 1
+      ? `${who} handles it cleanly. ${spec.label} objective complete.`
+      : `${who} gets there, barely. ${spec.label} objective complete.`;
+  }
+  return roll.degree === -1
+    ? `${who} very nearly has it, and then does not.`
     : `${who} could not make it work. We are coming back empty.`;
 }
 
@@ -6476,31 +7163,39 @@ const AWAY_TEMPLATES = {
   derelict_search: {
     id: 'derelict_search', title: 'Board the derelict', hazard: 'dangerous',
     steps: [
-      { check: 'engineering', difficulty: 0.45, text: 'Restore enough power to read the logs.' },
-      { check: 'science', difficulty: 0.5, text: 'Determine what killed the crew.' },
-      { check: 'combat', difficulty: 0.55, text: 'Whatever it was is still aboard.' },
+      { check: 'engineering', dc: DC.moderate, text: 'Restore enough power to read the logs.' },
+      { check: 'science', dc: DC.hard, text: 'Determine what killed the crew.' },
+      { check: 'combat', dc: DC.hard, text: 'Whatever it was is still aboard.' },
     ],
   },
   colony_rescue: {
     id: 'colony_rescue', title: 'Evacuate the colony', hazard: 'elevated',
     steps: [
-      { check: 'medical', difficulty: 0.4, text: 'Triage the wounded before transport.' },
-      { check: 'engineering', difficulty: 0.5, text: 'Get the shelter’s shield generator running.' },
+      { check: 'medical', dc: DC.moderate, text: 'Triage the wounded before transport.' },
+      { check: 'engineering', dc: DC.hard, text: 'Get the shelter’s shield generator running.' },
     ],
   },
   diplomatic_landing: {
     id: 'diplomatic_landing', title: 'Beam down to the capital', hazard: 'routine',
     steps: [
-      { check: 'diplomacy', difficulty: 0.5, text: 'Open the discussion without insulting anyone.' },
-      { check: 'science', difficulty: 0.45, text: 'Verify their claims about the resource survey.' },
+      { check: 'diplomacy', dc: DC.hard, text: 'Open the discussion without insulting anyone.' },
+      { check: 'science', dc: DC.moderate, text: 'Verify their claims about the resource survey.' },
     ],
   },
   covert_landing: {
     id: 'covert_landing', title: 'Covert survey', hazard: 'dangerous',
     steps: [
-      { check: 'stealth', difficulty: 0.55, text: 'Reach the site without being observed.' },
-      { check: 'science', difficulty: 0.5, text: 'Take the readings.' },
-      { check: 'stealth', difficulty: 0.6, text: 'Get back to the beam-out point.' },
+      { check: 'stealth', dc: DC.hard, text: 'Reach the site without being observed.' },
+      { check: 'science', dc: DC.moderate, text: 'Take the readings.' },
+      { check: 'stealth', dc: DC.very_hard, text: 'Get back to the beam-out point.' },
+    ],
+  },
+  boarding_action: {
+    id: 'boarding_action', title: 'Board the hostile', hazard: 'extreme',
+    steps: [
+      { check: 'engineering', dc: DC.hard, text: 'Beam through their shields.' },
+      { check: 'combat', dc: DC.very_hard, text: 'Take the bridge.' },
+      { check: 'command', dc: DC.hard, text: 'Persuade the survivors to stand down.' },
     ],
   },
 };
@@ -6584,6 +7279,7 @@ function availableHails(factionId, context = {}) {
 function resolveHail(rng, optionId, {
   factionId, standing = 0, diplomacyBonus = 0,
   winning = false, playerHullPct = 1, enemyHullPct = 1, firstStrike = false,
+  forced = false,
 } = {}) {
   const faction = FACTIONS[factionId];
   const option = HAIL_OPTIONS.find((o) => o.id === optionId);
@@ -6615,6 +7311,9 @@ function resolveHail(rng, optionId, {
       break;
     case 'fanatic':
     case 'assimilate':
+      // A forced parley gets a hearing even here — it does not guarantee
+      // agreement, only that somebody answers.
+      if (forced) { chance += 0.35; break; }
       return {
         outcome: 'ignored',
         text: faction.doctrine === 'assimilate'
@@ -6970,15 +7669,15 @@ const { Ship } = __require("src/sim/ship.js");
 
 /** Which hostile hulls each faction fields. */
 const FLEETS = {
-  klingon: ['bird_of_prey', 'bird_of_prey', 'd7'],
-  romulan: ['scoutship', 'warbird'],
-  cardassian: ['galor'],
+  klingon: ['bird_of_prey', 'bird_of_prey', 'd7', 'ktinga', 'vorcha', 'neghvar'],
+  romulan: ['scoutship', 'scoutship', 'warbird'],
+  cardassian: ['galor', 'galor', 'keldon'],
   ferengi: ['marauder'],
   orion: ['orion_raider', 'orion_raider'],
   tholian: ['tholian_web_spinner'],
-  dominion: ['jem_hadar_attack'],
-  borg: ['borg_cube'],
-  independent: ['freighter'],
+  dominion: ['jem_hadar_attack', 'jem_hadar_attack', 'jem_hadar_battleship'],
+  borg: ['borg_cube', 'bioship'],
+  independent: ['freighter', 'transport'],
 };
 
 /** Which factions patrol which sectors, and how heavily. */
@@ -6998,6 +7697,10 @@ const SECTOR_PRESENCE = {
   tholia: { tholian: 8 },
   frontier: { independent: 2, klingon: 2, romulan: 2 },
   deepspace: { independent: 1, borg: 1 },
+  risa: { federation: 6, independent: 3, orion: 1 },
+  betazed: { federation: 7, independent: 2 },
+  ferenginar: { ferengi: 8, orion: 2 },
+  gamma: { dominion: 9, independent: 1 },
 };
 const ENCOUNTER_KINDS = [
   'patrol', 'distress', 'derelict', 'anomaly', 'ambush', 'convoy', 'first_contact', 'quiet',
@@ -7203,6 +7906,19 @@ function environmentalHazard(system, ship, rng, dt) {
       return null;
     case 'tholian_web':
       if (rng.chance(0.1 * dt)) return 'Energy filaments are forming off the port bow.';
+      return null;
+    case 'nebula':
+      // Static discharge blinds the sensor grid rather than damaging the hull.
+      if (rng.chance(0.3 * dt)) {
+        ship.damageSubsystem('sensors', 0.05);
+        return 'Static discharge across the sensor array. We are half blind in here.';
+      }
+      return null;
+    case 'metreon':
+      if (rng.chance(0.2 * dt)) {
+        ship.damageSubsystem('warpcore', 0.02);
+        return 'Metreon particles are collecting in the nacelles. Warp drive is unreliable here.';
+      }
       return null;
     default:
       return null;
@@ -7502,6 +8218,1209 @@ __exports.MissionBook = MissionBook;
 
 });
 
+__define("src/rules/character.js", function (__exports, __require) {
+// The captain as a character sheet.
+//
+// Six ability scores, a species, an origin, a background, personal traits, and
+// feats earned on promotion. Every one of these is load-bearing: scores feed
+// the d20 modifiers, species and origin shift the scores, traits alter checks
+// in named situations, and feats change what you are allowed to attempt.
+
+const { abilityMod, proficiencyBonus } = __require("src/rules/dice.js");
+
+// ---------------------------------------------------------------- abilities
+
+/**
+ * Trek-shaped abilities rather than the tabletop six. Each maps to things a
+ * captain actually does, and each is used by at least three systems.
+ */
+const ABILITIES = [
+  {
+    id: 'command', name: 'Command', abbr: 'CMD',
+    description: 'Presence, decisiveness, and the authority to be obeyed under fire.',
+    governs: 'Officer cooldowns, crew morale, rally effects, and contested wills.',
+  },
+  {
+    id: 'tactics', name: 'Tactics', abbr: 'TAC',
+    description: 'Reading an engagement and knowing where the other captain will be.',
+    governs: 'Weapon accuracy, critical chance, and boarding actions.',
+  },
+  {
+    id: 'engineering', name: 'Engineering', abbr: 'ENG',
+    description: 'Understanding the machine well enough to talk it out of failing.',
+    governs: 'Repair speed, power routing, warp efficiency, and jury-rigging.',
+  },
+  {
+    id: 'science', name: 'Science', abbr: 'SCI',
+    description: 'Analysis, anomalies, and noticing the detail that changes the problem.',
+    governs: 'Scans, anomaly research, cloak detection, and technical solutions.',
+  },
+  {
+    id: 'medicine', name: 'Medicine', abbr: 'MED',
+    description: 'Keeping people alive, which is most of what the job turns out to be.',
+    governs: 'Casualty rates, officer recovery, and away-team survival.',
+  },
+  {
+    id: 'diplomacy', name: 'Diplomacy', abbr: 'DIP',
+    description: 'Persuasion, protocol, and knowing which silence to leave alone.',
+    governs: 'Hails, negotiations, first contact, and reputation gains.',
+  },
+];
+const ABILITY_IDS = ABILITIES.map((a) => a.id);
+const ABILITY_BY_ID = Object.fromEntries(ABILITIES.map((a) => [a.id, a]));
+
+/** Point-buy costs, 8 through 15, as in the tabletop standard. */
+const POINT_BUY_COST = { 8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9 };
+const POINT_BUY_BUDGET = 27;
+const POINT_BUY_MIN = 8;
+const POINT_BUY_MAX = 15;
+const ABILITY_HARD_CAP = 20;
+function pointBuyCost(scores) {
+  return ABILITY_IDS.reduce((n, id) => n + (POINT_BUY_COST[scores[id]] ?? 0), 0);
+}
+
+/** The classic array, for players who would rather not do arithmetic. */
+const STANDARD_ARRAY = [15, 14, 13, 12, 10, 8];
+
+// ---------------------------------------------------------------- species
+const PLAYER_SPECIES = [
+  {
+    id: 'human', name: 'Human',
+    bonuses: { command: 1, diplomacy: 1, science: 1 },
+    trait: 'Adaptable',
+    traitText: 'Once per away mission, reroll a failed check.',
+    mechanic: { rerollPerMission: 1 },
+    description: 'Unremarkable at everything and unreasonably good at recovering from it.',
+  },
+  {
+    id: 'vulcan', name: 'Vulcan',
+    bonuses: { science: 2, engineering: 1 },
+    penalties: { diplomacy: -1 },
+    trait: 'Logical Discipline',
+    traitText: 'Advantage on Science checks. Immune to fear and morale effects.',
+    mechanic: { advantageOn: ['science'], fearImmune: true },
+    description: 'Superior strength, superior recall, and no patience for a hunch.',
+  },
+  {
+    id: 'andorian', name: 'Andorian',
+    bonuses: { tactics: 2, command: 1 },
+    penalties: { diplomacy: -1 },
+    trait: 'Keth Honour',
+    traitText: 'Advantage on Tactics checks. Critical hits deal an extra die.',
+    mechanic: { advantageOn: ['tactics'], critBonus: 0.15 },
+    description: 'Militarised for four thousand years and disinclined to pretend otherwise.',
+  },
+  {
+    id: 'tellarite', name: 'Tellarite',
+    bonuses: { engineering: 2, diplomacy: 1 },
+    penalties: { medicine: -1 },
+    trait: 'Argumentative',
+    traitText: 'Advantage on Diplomacy checks made by disagreeing. Officers object more.',
+    mechanic: { advantageOn: ['diplomacy'], officerFriction: 0.2 },
+    description: 'Negotiates by insult and considers agreement the end of a conversation.',
+  },
+  {
+    id: 'betazoid', name: 'Betazoid',
+    bonuses: { diplomacy: 2, medicine: 1 },
+    penalties: { tactics: -1 },
+    trait: 'Empathic',
+    traitText: 'You can sense a hail\'s true intent before answering it.',
+    mechanic: { senseIntent: true, advantageOn: ['diplomacy'] },
+    description: 'Knows what the other captain wants before they have finished saying otherwise.',
+  },
+  {
+    id: 'trill', name: 'Trill',
+    bonuses: { science: 1, diplomacy: 1, command: 1 },
+    trait: 'Joined',
+    traitText: 'Lifetimes of memory: gain one extra proficiency, and start one level higher in a chosen ability.',
+    mechanic: { extraProficiency: 1, hostMemories: true },
+    description: 'Several careers deep, with the disadvantage of remembering all of them.',
+  },
+  {
+    id: 'bajoran', name: 'Bajoran',
+    bonuses: { command: 1, tactics: 1, medicine: 1 },
+    trait: 'Resistance Veteran',
+    traitText: 'Advantage on checks made while your ship is below half hull.',
+    mechanic: { desperateAdvantage: true },
+    description: 'Learned command in a war nobody expected them to win.',
+  },
+  {
+    id: 'denobulan', name: 'Denobulan',
+    bonuses: { medicine: 2, science: 1 },
+    penalties: { tactics: -1 },
+    trait: 'Physician',
+    traitText: 'Casualties reduced by a quarter. Injured officers recover twice as fast.',
+    mechanic: { casualtyReduction: 0.25, recoveryRate: 2 },
+    description: 'Cheerful, sleepless for six days at a stretch, and very hard to alarm.',
+  },
+  {
+    id: 'bolian', name: 'Bolian',
+    bonuses: { engineering: 1, command: 1, medicine: 1 },
+    trait: 'Unflappable',
+    traitText: 'Never suffers disadvantage from being outnumbered.',
+    mechanic: { ignoreOutnumbered: true },
+    description: 'Talks through a hull breach the way other people talk through a queue.',
+  },
+  {
+    id: 'saurian', name: 'Saurian',
+    bonuses: { tactics: 1, engineering: 1, science: 1 },
+    trait: 'Wide Spectrum Vision',
+    traitText: 'Cloaked ships are detected at longer range. Advantage against ambushes.',
+    mechanic: { cloakDetect: 0.4, ambushAdvantage: true },
+    description: 'Sees further into the spectrum than the sensors do, and says so quietly.',
+  },
+  {
+    id: 'caitian', name: 'Caitian',
+    bonuses: { tactics: 1, medicine: 1, diplomacy: 1 },
+    trait: 'Predator\'s Instinct',
+    traitText: 'You always act first in an engagement, and can never be surprised.',
+    mechanic: { alwaysFirst: true, surpriseImmune: true },
+    description: 'Patient, then suddenly not.',
+  },
+  {
+    id: 'half_vulcan', name: 'Human/Vulcan',
+    bonuses: { science: 1, command: 1, diplomacy: 1 },
+    trait: 'Two Disciplines',
+    traitText: 'Choose Logic or Instinct before any check: advantage on Science, or on Command.',
+    mechanic: { switchableAdvantage: ['science', 'command'] },
+    description: 'Belonging to two worlds, at some cost to both.',
+  },
+];
+const SPECIES_BY_ID = Object.fromEntries(PLAYER_SPECIES.map((s) => [s.id, s]));
+
+// ---------------------------------------------------------------- origins
+
+/** Where you were raised. Shifts scores and opens dialogue. */
+const ORIGINS = [
+  {
+    id: 'core_world', name: 'Core World',
+    bonuses: { diplomacy: 1, science: 1 },
+    description: 'Earth, Vulcan, Andoria — the centre, with all the assumptions that come with it.',
+    perk: 'Federation standing recovers faster after a reprimand.',
+    mechanic: { federationRecovery: 1.5 },
+  },
+  {
+    id: 'frontier_colony', name: 'Frontier Colony',
+    bonuses: { engineering: 1, tactics: 1 },
+    description: 'A long way from resupply, where you fixed things because nobody else would.',
+    perk: 'Repairs made away from a starbase are 30% more effective.',
+    mechanic: { fieldRepair: 1.3 },
+  },
+  {
+    id: 'starship_born', name: 'Born Aboard',
+    bonuses: { engineering: 1, command: 1 },
+    description: 'Raised in corridors. You knew a bad warp signature before you could read.',
+    perk: 'You always know the ship\'s exact condition without a damage report.',
+    mechanic: { intuitiveShip: true },
+  },
+  {
+    id: 'occupied_world', name: 'Occupied World',
+    bonuses: { tactics: 1, medicine: 1 },
+    description: 'Bajor, Setlik, somewhere the Federation reached late.',
+    perk: 'Advantage on checks made while outnumbered.',
+    mechanic: { outnumberedAdvantage: true },
+  },
+  {
+    id: 'civilian_transport', name: 'Merchant Family',
+    bonuses: { diplomacy: 1, engineering: 1 },
+    description: 'Freighters and trade routes, and every port\'s customs officer by name.',
+    perk: 'Better prices, and Ferengi and Orion contacts open sooner.',
+    mechanic: { tradeBonus: 0.25, syndicateContacts: true },
+  },
+  {
+    id: 'academy_legacy', name: 'Starfleet Family',
+    bonuses: { command: 1, tactics: 1 },
+    description: 'A surname the admiralty already knows, for better and considerably for worse.',
+    perk: 'Start at a higher rank, with a correspondingly higher standard applied to you.',
+    mechanic: { startingRankBonus: 1, higherExpectations: true },
+  },
+  {
+    id: 'refugee', name: 'Displaced',
+    bonuses: { medicine: 1, science: 1 },
+    description: 'Your homeworld is a story you tell rather than a place you can return to.',
+    perk: 'Rescue and evacuation missions grant substantially more experience.',
+    mechanic: { rescueXP: 1.6 },
+  },
+];
+const ORIGIN_BY_ID = Object.fromEntries(ORIGINS.map((o) => [o.id, o]));
+
+// ---------------------------------------------------------------- careers
+
+/** Your track before the centre seat. Grants proficiencies and a signature ability. */
+const CAREERS = [
+  {
+    id: 'command', name: 'Command',
+    proficiencies: ['command', 'diplomacy'],
+    description: 'The bridge, from the bottom of it upward.',
+    signature: 'Take the Conn',
+    signatureText: 'Once per engagement, immediately reset every bridge officer cooldown.',
+  },
+  {
+    id: 'tactical', name: 'Tactical',
+    proficiencies: ['tactics', 'command'],
+    description: 'Weapons, security, and the arithmetic of a firing solution.',
+    signature: 'Called Shot',
+    signatureText: 'Once per engagement, your next attack automatically critically hits a chosen subsystem.',
+  },
+  {
+    id: 'engineering', name: 'Engineering',
+    proficiencies: ['engineering', 'science'],
+    description: 'Below decks, where the ship is actually kept in the sky.',
+    signature: 'Miracle Worker',
+    signatureText: 'Once per engagement, instantly restore 30% hull and extinguish every fire.',
+  },
+  {
+    id: 'science', name: 'Science',
+    proficiencies: ['science', 'medicine'],
+    description: 'Sensors, laboratories, and the reports nobody at Command reads.',
+    signature: 'Insight',
+    signatureText: 'Once per engagement, reveal every enemy weakness and gain advantage on all checks for 20 seconds.',
+  },
+  {
+    id: 'medical', name: 'Medical',
+    proficiencies: ['medicine', 'science'],
+    description: 'Sickbay, and the argument with the captain that follows every away mission.',
+    signature: 'Triage',
+    signatureText: 'Once per engagement, revive a fallen officer and halve casualties for 30 seconds.',
+  },
+  {
+    id: 'diplomatic', name: 'Diplomatic Corps',
+    proficiencies: ['diplomacy', 'command'],
+    description: 'Attached to Starfleet rather than of it, which everyone mentions.',
+    signature: 'Parley',
+    signatureText: 'Once per engagement, force a hostile captain to hear you out regardless of doctrine.',
+  },
+  {
+    id: 'intelligence', name: 'Starfleet Intelligence',
+    proficiencies: ['tactics', 'science'],
+    description: 'A service record with gaps in it that you are not cleared to discuss.',
+    signature: 'Prior Knowledge',
+    signatureText: 'Once per engagement, know an enemy\'s exact intentions and act before they do.',
+  },
+];
+const CAREER_BY_ID = Object.fromEntries(CAREERS.map((c) => [c.id, c]));
+
+// ---------------------------------------------------------------- traits
+
+/** Personal traits. Each is a genuine trade — a benefit paid for. */
+const TRAITS = [
+  {
+    id: 'by_the_book', name: 'By the Book', positive: true,
+    text: 'Regulations are there for a reason. +2 to Federation standing gains; officers never refuse your orders.',
+    mechanic: { federationGain: 2, noRefusal: true },
+    conflicts: ['maverick'],
+  },
+  {
+    id: 'maverick', name: 'Maverick', positive: true,
+    text: 'Advantage on any check the regulations forbid. Prime Directive violations cost double.',
+    mechanic: { improvisedAdvantage: true, directivePenalty: 2 },
+    conflicts: ['by_the_book'],
+  },
+  {
+    id: 'cool_under_fire', name: 'Cool Under Fire', positive: true,
+    text: 'No penalty from a breaching core, hull fires, or being outnumbered.',
+    mechanic: { ignorePressure: true },
+  },
+  {
+    id: 'tinkerer', name: 'Tinkerer', positive: true,
+    text: 'Salvage yields an extra console. Field repairs cost half the time.',
+    mechanic: { salvageBonus: 1, repairTime: 0.5 },
+  },
+  {
+    id: 'xenolinguist', name: 'Xenolinguist', positive: true,
+    text: 'First contact never fails outright, and unhailable factions may answer once.',
+    mechanic: { contactFloor: true, reachUnhailable: true },
+  },
+  {
+    id: 'tactician', name: 'Natural Tactician', positive: true,
+    text: 'You always know the enemy\'s weakest shield facing without scanning.',
+    mechanic: { autoWeakFacing: true },
+  },
+  {
+    id: 'beloved', name: 'Beloved by the Crew', positive: true,
+    text: 'Casualties reduced by 20%. Officers recover from injury twice as fast.',
+    mechanic: { casualtyReduction: 0.2, recoveryRate: 2 },
+  },
+  {
+    id: 'haunted', name: 'Haunted', positive: false,
+    text: 'You have lost a ship before. Disadvantage on Command checks below 25% hull — but +3 to all others.',
+    mechanic: { panicBelowQuarter: true, compensation: 3 },
+  },
+  {
+    id: 'reckless', name: 'Reckless', positive: false,
+    text: 'Advantage on every attack. Disadvantage on every saving throw.',
+    mechanic: { attackAdvantage: true, saveDisadvantage: true },
+  },
+  {
+    id: 'idealist', name: 'Idealist', positive: false,
+    text: 'Double reputation from peaceful outcomes. Destroying a ship costs double standing.',
+    mechanic: { peaceGain: 2, killPenalty: 2 },
+  },
+  {
+    id: 'notorious', name: 'Notorious', positive: false,
+    text: 'Hostiles break off sooner out of fear. Diplomacy checks are made at disadvantage.',
+    mechanic: { fearFactor: 0.15, diplomacyDisadvantage: true },
+  },
+  {
+    id: 'insubordinate', name: 'History of Insubordination', positive: false,
+    text: 'Start with a reprimand on file and slower promotion — but immune to a board of inquiry.',
+    mechanic: { startingReprimand: true, xpRate: 0.9, inquiryImmune: true },
+  },
+];
+const TRAIT_BY_ID = Object.fromEntries(TRAITS.map((t) => [t.id, t]));
+const MAX_TRAITS = 2;
+
+// ---------------------------------------------------------------- feats
+
+/** Chosen on promotion. Larger, rarer, and often unlocking new verbs. */
+const FEATS = [
+  { id: 'ability_score', name: 'Field Commission', repeatable: true,
+    text: 'Raise one ability score by 2, or two scores by 1 each.', minRank: 0 },
+  { id: 'tactical_genius', name: 'Tactical Genius', minRank: 2,
+    text: 'Critical hits on a natural 19 or 20. +10% critical severity.',
+    mechanic: { critRange: 19, critSeverity: 0.1 } },
+  { id: 'master_engineer', name: 'Master Engineer', minRank: 2,
+    text: 'The warp core can be ejected and later recovered. Power rebalances instantly.',
+    mechanic: { coreRecovery: true, instantPower: true } },
+  { id: 'diplomatic_immunity', name: 'Diplomatic Immunity', minRank: 3,
+    text: 'You may enter any faction\'s home system regardless of standing.',
+    mechanic: { universalPassage: true } },
+  { id: 'xenobiologist', name: 'Xenobiologist', minRank: 2,
+    text: 'Advantage on all Medicine and Science checks made planetside.',
+    mechanic: { advantageOn: ['medicine', 'science'] } },
+  { id: 'fleet_tactician', name: 'Fleet Tactician', minRank: 4,
+    text: 'Allied ships in your engagements gain your Tactics modifier.',
+    mechanic: { allyCommand: true } },
+  { id: 'unshakeable', name: 'Unshakeable', minRank: 3,
+    text: 'Once per engagement, automatically succeed on a failed saving throw.',
+    mechanic: { autoSave: 1 } },
+  { id: 'improviser', name: 'Improviser', minRank: 1,
+    text: 'You may attempt any check untrained without disadvantage.',
+    mechanic: { noUntrainedPenalty: true } },
+  { id: 'inspiring', name: 'Inspiring Presence', minRank: 3,
+    text: 'Bridge officer cooldowns recover 40% faster. Officers never object.',
+    mechanic: { officerCooldown: 0.4, noObjection: true } },
+  { id: 'survivor', name: 'Survivor', minRank: 4,
+    text: 'Once per commission, survive what would destroy the ship at 1% hull.',
+    mechanic: { deathSave: 1 } },
+  { id: 'polymath', name: 'Polymath', minRank: 2,
+    text: 'Gain proficiency in two additional abilities.',
+    mechanic: { extraProficiencies: 2 } },
+  { id: 'legend', name: 'Living Legend', minRank: 5,
+    text: 'Every faction\'s reputation gains are increased by half. Enemies hesitate.',
+    mechanic: { repGain: 1.5, enemyHesitation: true } },
+];
+const FEAT_BY_ID = Object.fromEntries(FEATS.map((f) => [f.id, f]));
+
+// ---------------------------------------------------------------- the sheet
+class Character {
+  constructor(data = {}) {
+    this.firstName = data.firstName ?? 'Alexander';
+    this.lastName = data.lastName ?? 'Reyes';
+    this.pronouns = data.pronouns ?? 'they/them';
+    this.speciesId = data.speciesId ?? 'human';
+    this.originId = data.originId ?? 'core_world';
+    this.careerId = data.careerId ?? 'command';
+    this.traits = data.traits ?? [];
+    this.feats = data.feats ?? [];
+    this.serialNumber = data.serialNumber ?? 'SC-937-0176-CEC';
+
+    // Base scores before species and origin are applied.
+    this.baseScores = data.baseScores ?? {
+      command: 14, tactics: 13, engineering: 12, science: 12, medicine: 10, diplomacy: 10,
+    };
+
+    this.proficiencies = data.proficiencies ?? [];
+    this.level = data.level ?? 1;
+    this.signatureUsed = false;
+    this.featUses = data.featUses ?? {};
+    this.rerollsRemaining = 0;
+
+    if (!this.proficiencies.length) this.applyCareerProficiencies();
+  }
+
+  get name() { return `${this.firstName} ${this.lastName}`.trim(); }
+  get species() { return SPECIES_BY_ID[this.speciesId] ?? SPECIES_BY_ID.human; }
+  get origin() { return ORIGIN_BY_ID[this.originId] ?? ORIGINS[0]; }
+  get career() { return CAREER_BY_ID[this.careerId] ?? CAREERS[0]; }
+
+  applyCareerProficiencies() {
+    this.proficiencies = [...new Set([
+      ...this.career.proficiencies,
+      ...(this.species.mechanic?.extraProficiency ? ['command'] : []),
+    ])];
+  }
+
+  /** Final score for an ability: base + species + origin + feat increases. */
+  score(abilityId) {
+    let n = this.baseScores[abilityId] ?? 10;
+    n += this.species.bonuses?.[abilityId] ?? 0;
+    n += this.species.penalties?.[abilityId] ?? 0;
+    n += this.origin.bonuses?.[abilityId] ?? 0;
+    n += this.featScoreBonus(abilityId);
+    return Math.min(ABILITY_HARD_CAP, Math.max(1, n));
+  }
+
+  featScoreBonus(abilityId) {
+    return (this.featUses.abilityIncreases ?? [])
+      .filter((x) => x === abilityId).length;
+  }
+
+  scores() {
+    return Object.fromEntries(ABILITY_IDS.map((id) => [id, this.score(id)]));
+  }
+
+  mod(abilityId) {
+    return abilityMod(this.score(abilityId));
+  }
+
+  get proficiencyBonus() {
+    return proficiencyBonus(this.level);
+  }
+
+  isProficient(abilityId) {
+    return this.proficiencies.includes(abilityId);
+  }
+
+  /**
+   * The number added to a d20 for a given ability check.
+   * Untrained abilities simply lack the proficiency bonus, unless a feat or
+   * the Improviser trait says otherwise.
+   */
+  checkModifier(abilityId, { situational = 0 } = {}) {
+    let total = this.mod(abilityId) + situational;
+    if (this.isProficient(abilityId)) total += this.proficiencyBonus;
+    if (this.hasTrait('haunted')) total += 3;
+    return total;
+  }
+
+  hasTrait(id) { return this.traits.includes(id); }
+  hasFeat(id) { return this.feats.includes(id); }
+
+  /** Collect a named mechanic value from species, origin, traits, and feats. */
+  mechanic(key) {
+    const sources = [
+      this.species.mechanic, this.origin.mechanic,
+      ...this.traits.map((t) => TRAIT_BY_ID[t]?.mechanic),
+      ...this.feats.map((f) => FEAT_BY_ID[f]?.mechanic),
+    ].filter(Boolean);
+    for (const src of sources) {
+      if (src[key] !== undefined) return src[key];
+    }
+    return undefined;
+  }
+
+  /** Does anything grant advantage on this ability? */
+  hasAdvantageOn(abilityId) {
+    const sources = [
+      this.species.mechanic, this.origin.mechanic,
+      ...this.traits.map((t) => TRAIT_BY_ID[t]?.mechanic),
+      ...this.feats.map((f) => FEAT_BY_ID[f]?.mechanic),
+    ].filter(Boolean);
+    return sources.some((m) => (m.advantageOn ?? []).includes(abilityId));
+  }
+
+  /** Ship modifiers contributed by the character sheet itself. */
+  shipMods() {
+    const mods = {};
+    const add = (k, v) => { mods[k] = (mods[k] ?? 1) * v; };
+    const bump = (k, v) => { mods[k] = (mods[k] ?? 0) + v; };
+
+    // Ability modifiers feed the ship directly — a captain with high Tactics
+    // makes the whole crew shoot better.
+    bump('critChance', Math.max(0, this.mod('tactics')) * 0.012);
+    add('accuracy', 1 + Math.max(0, this.mod('tactics')) * 0.02);
+    add('repairRate', 1 + Math.max(0, this.mod('engineering')) * 0.06);
+    add('shieldRegen', 1 + Math.max(0, this.mod('engineering')) * 0.03);
+    add('stealthDetect', 1 + Math.max(0, this.mod('science')) * 0.06);
+
+    if (this.hasFeat('tactical_genius')) bump('critSeverity', 0.1);
+    if (this.species.mechanic?.critBonus) bump('critChance', this.species.mechanic.critBonus * 0.1);
+    return mods;
+  }
+
+  /** Reset per-engagement resources. */
+  refresh() {
+    this.signatureUsed = false;
+    this.rerollsRemaining = this.species.mechanic?.rerollPerMission ?? 0;
+  }
+
+  levelUp() {
+    this.level++;
+    return { level: this.level, proficiencyBonus: this.proficiencyBonus };
+  }
+
+  takeFeat(featId, payload = null) {
+    const feat = FEAT_BY_ID[featId];
+    if (!feat) return false;
+    if (featId === 'ability_score') {
+      // Repeatable; payload is the list of abilities raised.
+      this.featUses.abilityIncreases = [
+        ...(this.featUses.abilityIncreases ?? []),
+        ...[].concat(payload ?? []),
+      ];
+      this.feats.push(featId);
+      return true;
+    }
+    if (this.feats.includes(featId)) return false;
+    this.feats.push(featId);
+    if (feat.mechanic?.extraProficiencies) {
+      const missing = ABILITY_IDS.filter((a) => !this.proficiencies.includes(a));
+      this.proficiencies.push(...missing.slice(0, feat.mechanic.extraProficiencies));
+    }
+    return true;
+  }
+
+  save() {
+    return {
+      firstName: this.firstName, lastName: this.lastName, pronouns: this.pronouns,
+      speciesId: this.speciesId, originId: this.originId, careerId: this.careerId,
+      traits: this.traits, feats: this.feats, baseScores: this.baseScores,
+      proficiencies: this.proficiencies, level: this.level,
+      featUses: this.featUses, serialNumber: this.serialNumber,
+    };
+  }
+
+  static load(data) { return new Character(data ?? {}); }
+}
+
+/** A randomly rolled captain, for players who want to get straight in. */
+function randomCharacter(rng) {
+  const species = rng.pick(PLAYER_SPECIES);
+  const origin = rng.pick(ORIGINS);
+  const career = rng.pick(CAREERS);
+  const array = rng.shuffle([...STANDARD_ARRAY]);
+  const baseScores = Object.fromEntries(ABILITY_IDS.map((id, i) => [id, array[i]]));
+
+  const positives = TRAITS.filter((t) => t.positive);
+  const negatives = TRAITS.filter((t) => !t.positive);
+  const traits = [rng.pick(positives).id, rng.pick(negatives).id];
+
+  return new Character({
+    firstName: rng.pick(['Ayla', 'Marcus', 'Ilyana', 'Toren', 'Sabine', 'Kessler', 'Naomi', 'Idris']),
+    lastName: rng.pick(['Reyes', 'Okafor', 'Sandoval', 'Novak', 'Barrow', 'Thorne', 'Zheng', 'Vance']),
+    speciesId: species.id, originId: origin.id, careerId: career.id,
+    baseScores, traits,
+  });
+}
+
+__exports.ABILITIES = ABILITIES;
+__exports.ABILITY_IDS = ABILITY_IDS;
+__exports.ABILITY_BY_ID = ABILITY_BY_ID;
+__exports.POINT_BUY_COST = POINT_BUY_COST;
+__exports.POINT_BUY_BUDGET = POINT_BUY_BUDGET;
+__exports.POINT_BUY_MIN = POINT_BUY_MIN;
+__exports.POINT_BUY_MAX = POINT_BUY_MAX;
+__exports.ABILITY_HARD_CAP = ABILITY_HARD_CAP;
+__exports.pointBuyCost = pointBuyCost;
+__exports.STANDARD_ARRAY = STANDARD_ARRAY;
+__exports.PLAYER_SPECIES = PLAYER_SPECIES;
+__exports.SPECIES_BY_ID = SPECIES_BY_ID;
+__exports.ORIGINS = ORIGINS;
+__exports.ORIGIN_BY_ID = ORIGIN_BY_ID;
+__exports.CAREERS = CAREERS;
+__exports.CAREER_BY_ID = CAREER_BY_ID;
+__exports.TRAITS = TRAITS;
+__exports.TRAIT_BY_ID = TRAIT_BY_ID;
+__exports.MAX_TRAITS = MAX_TRAITS;
+__exports.FEATS = FEATS;
+__exports.FEAT_BY_ID = FEAT_BY_ID;
+__exports.Character = Character;
+__exports.randomCharacter = randomCharacter;
+
+});
+
+__define("src/rules/reputation.js", function (__exports, __require) {
+// Reputation.
+//
+// Two separate axes, deliberately not merged:
+//
+//   Standing   — how a faction feels about you right now. Moves both ways,
+//                fast, and decides who shoots on sight. Lives in the ledger.
+//   Reputation — what you have *earned* with them over a career. Only ever
+//                goes up, gated behind tiers, and spends like currency on
+//                projects that grant real equipment and privileges.
+//
+// A captain can be deeply trusted by the Klingon Defence Force (high
+// reputation) and still be shot at this week for a border violation (low
+// standing). That distinction is the point.
+const REP_TIERS = [
+  { tier: 0, name: 'Unknown', xp: 0, marksToAdvance: 0 },
+  { tier: 1, name: 'Recognised', xp: 500, marksToAdvance: 40 },
+  { tier: 2, name: 'Acknowledged', xp: 1500, marksToAdvance: 80 },
+  { tier: 3, name: 'Trusted', xp: 3500, marksToAdvance: 140 },
+  { tier: 4, name: 'Honoured', xp: 7000, marksToAdvance: 220 },
+  { tier: 5, name: 'Exemplar', xp: 12000, marksToAdvance: 320 },
+];
+const MAX_TIER = REP_TIERS.length - 1;
+
+/** Each faction's reputation track, its currency, and what it sells. */
+const REP_TRACKS = {
+  federation: {
+    id: 'federation', name: 'Starfleet Command', currency: 'Commendations',
+    color: '#9cf',
+    description: 'Your own service record, as the admiralty reads it.',
+    projects: [
+      { id: 'fed_t1_console', tier: 1, cost: 30, name: 'Requisition: Field Emitter Array',
+        grant: { console: 'shield_emitters' }, text: 'A shield emitter set from fleet stores.' },
+      { id: 'fed_t1_torpedoes', tier: 1, cost: 25, name: 'Priority Torpedo Resupply',
+        grant: { torpedoes: 40 }, text: 'Forty photon torpedoes, no requisition forms.' },
+      { id: 'fed_t2_armor', tier: 2, cost: 60, name: 'Requisition: Ablative Armour',
+        grant: { console: 'ablative_armor' }, text: 'Experimental plating from the Corps of Engineers.' },
+      { id: 'fed_t2_medical', tier: 2, cost: 55, name: 'Fleet Medical Detachment',
+        grant: { perk: 'casualty_reduction' }, text: 'Permanent 15% reduction in crew casualties.' },
+      { id: 'fed_t3_refit', tier: 3, cost: 110, name: 'Priority Yard Access',
+        grant: { perk: 'free_refit' }, text: 'Refits and repairs at any starbase cost no time.' },
+      { id: 'fed_t3_console', tier: 3, cost: 100, name: 'Requisition: Multispectral Sensors',
+        grant: { console: 'sensor_array' }, text: 'The good sensor package, finally.' },
+      { id: 'fed_t4_escort', tier: 4, cost: 180, name: 'Standing Escort Authorisation',
+        grant: { perk: 'ally_escort' }, text: 'A Federation escort joins you in any engagement in Federation space.' },
+      { id: 'fed_t5_command', tier: 5, cost: 300, name: 'Flag Officer Authority',
+        grant: { perk: 'flag_authority', title: 'Fleet Captain' },
+        text: 'You may requisition any hull in the fleet, and Starfleet stops second-guessing you.' },
+    ],
+  },
+  klingon: {
+    id: 'klingon', name: 'Klingon Defence Force', currency: 'Marks of Honour',
+    color: '#e5533d',
+    description: 'Earned by fighting well, and by not running when running was sensible.',
+    description2: 'The Empire does not care whether you like them. It cares how you fight.',
+    projects: [
+      { id: 'kdf_t1_disruptor', tier: 1, cost: 30, name: 'Disruptor Calibration',
+        grant: { console: 'prefire_chamber' }, text: 'Their gunners show yours a thing or two.' },
+      { id: 'kdf_t2_boarding', tier: 2, cost: 60, name: 'Boarding Party Training',
+        grant: { perk: 'boarding_master' }, text: 'Your boarding parties are twice as effective.' },
+      { id: 'kdf_t3_bloodwine', tier: 3, cost: 100, name: 'Warrior\'s Standing',
+        grant: { perk: 'klingon_passage' }, text: 'Free passage through Klingon space, and a seat at the table.' },
+      { id: 'kdf_t4_cloak_detect', tier: 4, cost: 170, name: 'Battle Doctrine Exchange',
+        grant: { perk: 'first_strike' }, text: 'You always fire first in an engagement.' },
+      { id: 'kdf_t5_ally', tier: 5, cost: 290, name: 'Sworn Ally of the Empire',
+        grant: { perk: 'kdf_ally', title: 'Friend of the Empire' },
+        text: 'A Klingon battlecruiser answers your call once per voyage.' },
+    ],
+  },
+  romulan: {
+    id: 'romulan', name: 'Romulan Star Empire', currency: 'Tokens of Regard',
+    color: '#7ed957',
+    description: 'Earned slowly, by being predictable in the ways that matter and opaque in the rest.',
+    projects: [
+      { id: 'rom_t1_sensors', tier: 1, cost: 35, name: 'Tal Shiar Sensor Data',
+        grant: { console: 'sensor_array' }, text: 'Nobody says where the data came from.' },
+      { id: 'rom_t2_stealth', tier: 2, cost: 70, name: 'Signal Dampening',
+        grant: { perk: 'reduced_detection' }, text: 'Encounters trigger less often in hostile space.' },
+      { id: 'rom_t3_cloak', tier: 3, cost: 130, name: 'Cloaking Device (Loaned)',
+        grant: { perk: 'cloak' }, text: 'A functioning cloak, on terms nobody has written down.' },
+      { id: 'rom_t4_intel', tier: 4, cost: 200, name: 'Intelligence Sharing',
+        grant: { perk: 'see_all_encounters' }, text: 'You know what is waiting before you arrive.' },
+      { id: 'rom_t5_accord', tier: 5, cost: 320, name: 'Private Accord',
+        grant: { perk: 'romulan_accord', title: 'Trusted Outsider' },
+        text: 'The Neutral Zone opens to you. Officially, this never happened.' },
+    ],
+  },
+  cardassian: {
+    id: 'cardassian', name: 'Cardassian Union', currency: 'Writs of Accord',
+    color: '#d9a441',
+    description: 'Earned through precisely honoured agreements, and lost through a single missed clause.',
+    projects: [
+      { id: 'card_t1_console', tier: 1, cost: 30, name: 'Spiral-Wave Schematics',
+        grant: { console: 'phaser_relay' }, text: 'Their beam theory, adapted to your emitters.' },
+      { id: 'card_t2_repair', tier: 2, cost: 65, name: 'Union Shipyard Access',
+        grant: { perk: 'cardassian_dock' }, text: 'Repair rights at Cardassian facilities.' },
+      { id: 'card_t3_intel', tier: 3, cost: 120, name: 'Obsidian Order Courtesy',
+        grant: { perk: 'border_warning' }, text: 'You are warned before you cross a line that matters.' },
+      { id: 'card_t4_treaty', tier: 4, cost: 190, name: 'Standing Treaty Rider',
+        grant: { perk: 'dmz_passage' }, text: 'Free movement through the demilitarised zone.' },
+      { id: 'card_t5_alliance', tier: 5, cost: 310, name: 'Formal Alliance',
+        grant: { perk: 'cardassian_ally', title: 'Signatory' },
+        text: 'A Galor escorts you through Cardassian space, watching very carefully.' },
+    ],
+  },
+  ferengi: {
+    id: 'ferengi', name: 'Ferengi Alliance', currency: 'Bars of Latinum',
+    color: '#e9913c',
+    description: 'Earned exactly as you would expect.',
+    projects: [
+      { id: 'fer_t1_trade', tier: 1, cost: 25, name: 'Trade Licence',
+        grant: { perk: 'better_prices' }, text: 'Prices improve by a quarter, everywhere.' },
+      { id: 'fer_t2_salvage', tier: 2, cost: 55, name: 'Salvage Contacts',
+        grant: { perk: 'salvage_bonus' }, text: 'Derelicts yield an additional console.' },
+      { id: 'fer_t3_bribe', tier: 3, cost: 95, name: 'Line of Credit',
+        grant: { perk: 'always_bribe' }, text: 'Any bribeable captain will always hear an offer.' },
+      { id: 'fer_t4_ship', tier: 4, cost: 175, name: 'Marauder Contract',
+        grant: { perk: 'mercenary_escort' }, text: 'A hired Marauder joins one engagement per voyage.' },
+      { id: 'fer_t5_partner', tier: 5, cost: 280, name: 'Silent Partnership',
+        grant: { perk: 'ferengi_partner', title: 'Business Associate' },
+        text: 'Every mission reward is increased by half. They take their cut invisibly.' },
+    ],
+  },
+  independent: {
+    id: 'independent', name: 'Unaligned Worlds', currency: 'Letters of Thanks',
+    color: '#cccccc',
+    description: 'Earned by answering distress calls that nobody was required to answer.',
+    projects: [
+      { id: 'ind_t1_supply', tier: 1, cost: 20, name: 'Colonial Resupply',
+        grant: { antimatter: 100 }, text: 'Any colony will refuel you, gratis.' },
+      { id: 'ind_t2_crew', tier: 2, cost: 50, name: 'Volunteer Crew',
+        grant: { perk: 'crew_replacement' }, text: 'Crew losses replenish at any inhabited world.' },
+      { id: 'ind_t3_intel', tier: 3, cost: 90, name: 'Trader Network',
+        grant: { perk: 'route_intel' }, text: 'Hostile encounters in charted space are halved.' },
+      { id: 'ind_t4_haven', tier: 4, cost: 160, name: 'Safe Harbour',
+        grant: { perk: 'universal_dock' }, text: 'Every inhabited system will dock and repair you.' },
+      { id: 'ind_t5_legend', tier: 5, cost: 260, name: 'A Name They Know',
+        grant: { perk: 'folk_hero', title: 'The One Who Came' },
+        text: 'Distress calls reach you sooner, and civilians will risk themselves for you.' },
+    ],
+  },
+};
+const TRACK_LIST = Object.values(REP_TRACKS);
+
+/** How reputation is earned. Deliberately weighted toward what each side values. */
+const REP_AWARDS = {
+  // event -> { faction: [xp, marks] }
+  combat_victory: { klingon: [40, 4] },
+  fought_while_losing: { klingon: [120, 12] },
+  accepted_surrender: { federation: [60, 6], independent: [40, 4] },
+  refused_surrender: { klingon: [30, 3] },
+  distress_answered: { federation: [80, 8], independent: [140, 14] },
+  colony_saved: { federation: [250, 25], independent: [400, 40] },
+  first_contact: { federation: [400, 40] },
+  treaty_signed: { federation: [350, 35], cardassian: [200, 20] },
+  anomaly_catalogued: { federation: [60, 6] },
+  mission_complete: { federation: [150, 15] },
+  escort_completed: { ferengi: [90, 9], independent: [110, 11] },
+  trade_completed: { ferengi: [140, 14] },
+  bribe_paid: { ferengi: [60, 6] },
+  honourable_release: { romulan: [220, 22], klingon: [90, 9] },
+  agreement_honoured: { cardassian: [200, 20] },
+  border_respected: { romulan: [120, 12], cardassian: [80, 8] },
+  prisoner_returned: { klingon: [110, 11], romulan: [90, 9], cardassian: [90, 9] },
+};
+class ReputationTrack {
+  constructor(id) {
+    this.id = id;
+    this.xp = 0;
+    this.marks = 0;
+    this.tier = 0;
+    this.completed = [];       // project ids
+    this.titles = [];
+  }
+
+  get def() { return REP_TRACKS[this.id]; }
+  get tierName() { return REP_TIERS[this.tier]?.name ?? 'Unknown'; }
+  get nextTier() { return REP_TIERS[this.tier + 1] ?? null; }
+
+  /** Progress toward the next tier, 0..1. */
+  get progress() {
+    const next = this.nextTier;
+    if (!next) return 1;
+    const floor = REP_TIERS[this.tier].xp;
+    return Math.max(0, Math.min(1, (this.xp - floor) / (next.xp - floor)));
+  }
+
+  /**
+   * Award reputation. Tiers advance on experience alone; marks are the
+   * currency spent on projects.
+   * @returns {object|null} tier-up info
+   */
+  award(xp, marks, multiplier = 1) {
+    this.xp += Math.round(xp * multiplier);
+    this.marks += Math.round(marks * multiplier);
+    const next = this.nextTier;
+    if (next && this.xp >= next.xp) {
+      this.tier++;
+      return { track: this.id, tier: this.tier, name: this.tierName };
+    }
+    return null;
+  }
+
+  availableProjects() {
+    return (this.def?.projects ?? []).filter(
+      (p) => p.tier <= this.tier && !this.completed.includes(p.id),
+    );
+  }
+
+  lockedProjects() {
+    return (this.def?.projects ?? []).filter(
+      (p) => p.tier > this.tier && !this.completed.includes(p.id),
+    );
+  }
+
+  canAfford(project) {
+    return this.marks >= project.cost;
+  }
+
+  complete(projectId) {
+    const project = (this.def?.projects ?? []).find((p) => p.id === projectId);
+    if (!project) return null;
+    if (this.completed.includes(projectId)) return null;
+    if (!this.canAfford(project)) return null;
+    if (project.tier > this.tier) return null;
+    this.marks -= project.cost;
+    this.completed.push(projectId);
+    if (project.grant?.title) this.titles.push(project.grant.title);
+    return project;
+  }
+
+  save() {
+    return { id: this.id, xp: this.xp, marks: this.marks, tier: this.tier,
+      completed: this.completed, titles: this.titles };
+  }
+}
+
+/** All tracks together, plus the perk set they have unlocked. */
+class Reputation {
+  constructor() {
+    this.tracks = Object.fromEntries(
+      Object.keys(REP_TRACKS).map((id) => [id, new ReputationTrack(id)]),
+    );
+    this.perks = new Set();
+  }
+
+  track(id) { return this.tracks[id]; }
+
+  /**
+   * Apply a named world event to every track that cares about it.
+   * @returns {object[]} tier-ups that occurred
+   */
+  recordEvent(event, multiplier = 1) {
+    const table = REP_AWARDS[event];
+    if (!table) return [];
+    const tierUps = [];
+    for (const [factionId, [xp, marks]] of Object.entries(table)) {
+      const t = this.tracks[factionId];
+      if (!t) continue;
+      const up = t.award(xp, marks, multiplier);
+      if (up) tierUps.push(up);
+    }
+    return tierUps;
+  }
+
+  /** Spend marks on a project and record the perk it grants. */
+  buy(factionId, projectId) {
+    const track = this.tracks[factionId];
+    if (!track) return null;
+    const project = track.complete(projectId);
+    if (project?.grant?.perk) this.perks.add(project.grant.perk);
+    return project;
+  }
+
+  has(perk) { return this.perks.has(perk); }
+
+  get allTitles() {
+    return Object.values(this.tracks).flatMap((t) => t.titles);
+  }
+
+  /** Highest tier reached anywhere — used for the ending summary. */
+  get peakTier() {
+    return Math.max(0, ...Object.values(this.tracks).map((t) => t.tier));
+  }
+
+  save() {
+    return {
+      tracks: Object.fromEntries(
+        Object.entries(this.tracks).map(([id, t]) => [id, t.save()]),
+      ),
+      perks: [...this.perks],
+    };
+  }
+
+  static load(data) {
+    const r = new Reputation();
+    if (!data) return r;
+    for (const [id, t] of Object.entries(data.tracks ?? {})) {
+      if (!r.tracks[id]) continue;
+      Object.assign(r.tracks[id], {
+        xp: t.xp ?? 0, marks: t.marks ?? 0, tier: t.tier ?? 0,
+        completed: t.completed ?? [], titles: t.titles ?? [],
+      });
+    }
+    r.perks = new Set(data.perks ?? []);
+    return r;
+  }
+}
+
+__exports.REP_TIERS = REP_TIERS;
+__exports.MAX_TIER = MAX_TIER;
+__exports.REP_TRACKS = REP_TRACKS;
+__exports.TRACK_LIST = TRACK_LIST;
+__exports.REP_AWARDS = REP_AWARDS;
+__exports.ReputationTrack = ReputationTrack;
+__exports.Reputation = Reputation;
+
+});
+
+__define("src/rules/difficulty.js", function (__exports, __require) {
+// Difficulty, named up the Starfleet command ladder.
+//
+// These are not damage-slider presets. Each rung changes what the game is
+// willing to do to you: whether officers can die permanently, whether saves
+// can be reloaded, how hard the dice are, and how much the galaxy pushes back.
+//
+// Naming note: this is the real commissioned-officer progression — Cadet,
+// Ensign, Lieutenant, Lieutenant Commander, Commander, Captain, Commodore,
+// Rear Admiral, Vice Admiral, Admiral, Fleet Admiral. Story sits below all of
+// it for players who want the episodes without the arithmetic. The difficulty
+// name is separate from your character's rank; the UI keeps them distinct.
+const DIFFICULTIES = [
+  {
+    id: 'story', name: 'Story', order: 0,
+    insignia: '—',
+    tagline: 'The episodes, without the arithmetic.',
+    description:
+      'Nothing is permanently lost. Officers who fall are back next episode, the ship cannot be destroyed, '
+      + 'and the dice are weighted your way. Play it for the voyage.',
+    // --- combat ---
+    enemyDamage: 0.45, enemyHull: 0.65, enemyCount: 0.7, enemyAccuracy: 0.75,
+    playerDamage: 1.35, shieldRegen: 1.6, repairRate: 1.8,
+    // --- dice ---
+    dcShift: -3, luck: 2, advantageOnFirstFail: true,
+    // --- stakes ---
+    permadeath: false, shipLoss: false, crewLossScale: 0.3,
+    // --- economy ---
+    xpRate: 1.25, fuelUse: 0.6, resourceRate: 1.5,
+    // --- systems ---
+    autoSave: true, allowReload: true, hazardScale: 0.4,
+  },
+  {
+    id: 'cadet', name: 'Cadet', order: 1,
+    insignia: '○',
+    tagline: 'The Academy simulator. Mistakes are survivable.',
+    description:
+      'Officers can be wounded but not killed. The ship can be crippled but not lost. '
+      + 'A good place to learn what the power grid actually does.',
+    enemyDamage: 0.62, enemyHull: 0.78, enemyCount: 0.85, enemyAccuracy: 0.85,
+    playerDamage: 1.2, shieldRegen: 1.3, repairRate: 1.4,
+    dcShift: -2, luck: 1, advantageOnFirstFail: false,
+    permadeath: false, shipLoss: false, crewLossScale: 0.5,
+    xpRate: 1.15, fuelUse: 0.75, resourceRate: 1.3,
+    autoSave: true, allowReload: true, hazardScale: 0.6,
+  },
+  {
+    id: 'ensign', name: 'Ensign', order: 2,
+    insignia: '●',
+    tagline: 'Your first posting. The universe starts keeping score.',
+    description:
+      'Officers can die. The ship can be lost. Everything is still tilted slightly in your favour, '
+      + 'because you are new and everyone knows it.',
+    enemyDamage: 0.8, enemyHull: 0.9, enemyCount: 1.0, enemyAccuracy: 0.93,
+    playerDamage: 1.08, shieldRegen: 1.1, repairRate: 1.15,
+    dcShift: -1, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 0.8,
+    xpRate: 1.05, fuelUse: 0.9, resourceRate: 1.1,
+    autoSave: true, allowReload: true, hazardScale: 0.85,
+  },
+  {
+    id: 'lieutenant', name: 'Lieutenant', order: 3,
+    insignia: '●●',
+    tagline: 'The intended experience.',
+    description:
+      'No thumb on the scale in either direction. This is the game as designed: '
+      + 'fair dice, real losses, and a galaxy that does not care how your week is going.',
+    enemyDamage: 1.0, enemyHull: 1.0, enemyCount: 1.0, enemyAccuracy: 1.0,
+    playerDamage: 1.0, shieldRegen: 1.0, repairRate: 1.0,
+    dcShift: 0, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 1.0,
+    xpRate: 1.0, fuelUse: 1.0, resourceRate: 1.0,
+    autoSave: true, allowReload: true, hazardScale: 1.0,
+  },
+  {
+    id: 'lt_commander', name: 'Lieutenant Commander', order: 4,
+    insignia: '●●◐',
+    tagline: 'Second officer. You are expected to know better.',
+    description:
+      'Enemies field more hulls and shoot straighter. Antimatter runs down faster, '
+      + 'and the difference between a good power routing and a lazy one starts to show.',
+    enemyDamage: 1.04, enemyHull: 1.03, enemyCount: 1.05, enemyAccuracy: 1.02,
+    playerDamage: 1.0, shieldRegen: 0.9, repairRate: 0.9,
+    dcShift: 1, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 1.15,
+    xpRate: 1.1, fuelUse: 1.15, resourceRate: 0.9,
+    autoSave: true, allowReload: true, hazardScale: 1.15,
+  },
+  {
+    id: 'commander', name: 'Commander', order: 5,
+    insignia: '●●●',
+    tagline: 'Executive officer. The margins get thin.',
+    description:
+      'Wolf packs instead of single raiders. Repairs take longer than the next engagement gives you. '
+      + 'Away missions start costing people.',
+    enemyDamage: 1.08, enemyHull: 1.06, enemyCount: 1.15, enemyAccuracy: 1.04,
+    playerDamage: 0.99, shieldRegen: 0.85, repairRate: 0.8,
+    dcShift: 2, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 1.3,
+    xpRate: 1.2, fuelUse: 1.25, resourceRate: 0.8,
+    autoSave: true, allowReload: true, hazardScale: 1.3,
+  },
+  {
+    id: 'captain', name: 'Captain', order: 6,
+    insignia: '●●●●',
+    tagline: 'The chair. Every decision is yours and so is every casualty.',
+    description:
+      'The galaxy fights properly. Enemy captains use their doctrines well, hazards bite, '
+      + 'and there is no comfortable route through a contested sector.',
+    enemyDamage: 1.12, enemyHull: 1.09, enemyCount: 1.25, enemyAccuracy: 1.06,
+    playerDamage: 0.99, shieldRegen: 0.8, repairRate: 0.72,
+    dcShift: 3, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 1.5,
+    xpRate: 1.35, fuelUse: 1.35, resourceRate: 0.72,
+    autoSave: true, allowReload: true, hazardScale: 1.5,
+  },
+  {
+    id: 'commodore', name: 'Commodore', order: 7,
+    insignia: '★',
+    tagline: 'Flag rank. Losses are now statistics you signed for.',
+    description:
+      'Autosave only — the record stands as written. Enemy formations are heavier than your hull '
+      + 'was designed for, and resupply is a luxury.',
+    enemyDamage: 1.16, enemyHull: 1.12, enemyCount: 1.4, enemyAccuracy: 1.08,
+    playerDamage: 0.98, shieldRegen: 0.72, repairRate: 0.62,
+    dcShift: 4, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 1.7,
+    xpRate: 1.5, fuelUse: 1.5, resourceRate: 0.62,
+    autoSave: true, allowReload: false, hazardScale: 1.7,
+  },
+  {
+    id: 'rear_admiral', name: 'Rear Admiral', order: 8,
+    insignia: '★★',
+    tagline: 'You are the reinforcements. Nobody is coming for you.',
+    description:
+      'One ship against numbers written for a task force. Any single opponent is still beatable; '
+      + 'they simply stop arriving one at a time.',
+    enemyDamage: 1.2, enemyHull: 1.15, enemyCount: 1.55, enemyAccuracy: 1.1,
+    playerDamage: 0.98, shieldRegen: 0.65, repairRate: 0.55,
+    dcShift: 5, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 1.9,
+    xpRate: 1.7, fuelUse: 1.65, resourceRate: 0.55,
+    autoSave: true, allowReload: false, hazardScale: 1.9,
+  },
+  {
+    id: 'vice_admiral', name: 'Vice Admiral', order: 9,
+    insignia: '★★★',
+    tagline: 'Attrition. The only question is what you accomplish first.',
+    description:
+      'Hostiles arrive in packs, coordinate, and do not break off. Repairs barely keep pace with the last '
+      + 'engagement. Plan the war, not the battle.',
+    enemyDamage: 1.24, enemyHull: 1.18, enemyCount: 1.7, enemyAccuracy: 1.12,
+    playerDamage: 0.97, shieldRegen: 0.58, repairRate: 0.48,
+    dcShift: 6, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 2.1,
+    xpRate: 1.9, fuelUse: 1.8, resourceRate: 0.48,
+    autoSave: true, allowReload: false, hazardScale: 2.1,
+    enemyRelentless: true,
+  },
+  {
+    id: 'admiral', name: 'Admiral', order: 10,
+    insignia: '★★★★',
+    tagline: 'The no-win scenario, offered sincerely.',
+    description:
+      'You are always outnumbered and usually outgunned. Every away mission can take someone. '
+      + 'The record is what survives, not the ship.',
+    enemyDamage: 1.28, enemyHull: 1.21, enemyCount: 1.85, enemyAccuracy: 1.14,
+    playerDamage: 0.97, shieldRegen: 0.5, repairRate: 0.4,
+    dcShift: 7, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 2.4,
+    xpRate: 2.2, fuelUse: 2.0, resourceRate: 0.4,
+    autoSave: true, allowReload: false, hazardScale: 2.4,
+    enemyRelentless: true,
+  },
+  {
+    id: 'fleet_admiral', name: 'Fleet Admiral', order: 11,
+    insignia: '★★★★★',
+    tagline: 'One command. One record. No second chances.',
+    description:
+      'Ironman. If the ship is lost, the commission is over and the record closes where it closes. '
+      + 'There is no reload, because there is nothing to reload to.',
+    enemyDamage: 1.32, enemyHull: 1.24, enemyCount: 2.0, enemyAccuracy: 1.16,
+    playerDamage: 0.96, shieldRegen: 0.45, repairRate: 0.35,
+    dcShift: 8, luck: 0, advantageOnFirstFail: false,
+    permadeath: true, shipLoss: true, crewLossScale: 2.7,
+    xpRate: 2.6, fuelUse: 2.2, resourceRate: 0.35,
+    autoSave: true, allowReload: false, hazardScale: 2.7,
+    enemyRelentless: true, ironman: true,
+  },
+];
+const DIFFICULTY_BY_ID = Object.fromEntries(DIFFICULTIES.map((d) => [d.id, d]));
+const DEFAULT_DIFFICULTY = 'lieutenant';
+function getDifficulty(id) {
+  return DIFFICULTY_BY_ID[id] ?? DIFFICULTY_BY_ID[DEFAULT_DIFFICULTY];
+}
+
+/**
+ * Difficulty is read constantly by combat, dice, and the economy, so it is
+ * wrapped rather than passed around as a bare object.
+ */
+class DifficultySettings {
+  constructor(id = DEFAULT_DIFFICULTY) {
+    this.id = id;
+    this.def = getDifficulty(id);
+  }
+
+  get name() { return this.def.name; }
+  get insignia() { return this.def.insignia; }
+  get order() { return this.def.order; }
+  get ironman() { return !!this.def.ironman; }
+  get permadeath() { return !!this.def.permadeath; }
+  get allowReload() { return !!this.def.allowReload; }
+
+  /** Multiplier lookup with a safe default, so a missing key never yields NaN. */
+  scale(key, fallback = 1) {
+    const v = this.def[key];
+    return typeof v === 'number' ? v : fallback;
+  }
+
+  /** Adjust a DC for the current difficulty. Story makes checks easier. */
+  dc(base) {
+    return Math.max(3, base + (this.def.dcShift ?? 0));
+  }
+
+  /** Free rerolls of a natural 1, granted only at the lowest rungs. */
+  get luck() { return this.def.luck ?? 0; }
+
+  /** Modifiers handed to a newly built enemy ship. */
+  enemyMods() {
+    return {
+      damage: this.scale('enemyDamage'),
+      hullMax: this.scale('enemyHull'),
+      accuracy: this.scale('enemyAccuracy'),
+    };
+  }
+
+  /** Modifiers handed to the player's ship on top of skills and consoles. */
+  playerMods() {
+    return {
+      damage: this.scale('playerDamage'),
+      shieldRegen: this.scale('shieldRegen'),
+      repairRate: this.scale('repairRate'),
+    };
+  }
+
+  /**
+   * How many hostiles to field where the encounter asks for `n`.
+   *
+   * Floored rather than rounded, with a small bias: the intent is that
+   * *patrols* get bigger up the ladder, not that every lone raider arrives
+   * with a friend. A single contact stays single until the very top, while a
+   * three-ship patrol grows steadily.
+   */
+  enemyCount(n) {
+    return Math.max(1, Math.floor(n * this.scale('enemyCount') + 0.35));
+  }
+
+  save() { return { id: this.id }; }
+
+  static load(data) {
+    return new DifficultySettings(data?.id ?? DEFAULT_DIFFICULTY);
+  }
+}
+
+__exports.DIFFICULTIES = DIFFICULTIES;
+__exports.DIFFICULTY_BY_ID = DIFFICULTY_BY_ID;
+__exports.DEFAULT_DIFFICULTY = DEFAULT_DIFFICULTY;
+__exports.getDifficulty = getDifficulty;
+__exports.DifficultySettings = DifficultySettings;
+
+});
+
 __define("src/core/state.js", function (__exports, __require) {
 // The Game object: everything the simulation owns, in one place.
 
@@ -7526,6 +9445,28 @@ const { SYSTEM_BY_ID } = __require("src/world/systems.data.js");
 
 const { MissionBook } = __require("src/missions/engine.js");
 const { EPISODES } = __require("src/missions/episodes/index.js");
+
+const { Character } = __require("src/rules/character.js");
+const { Reputation, REP_TRACKS } = __require("src/rules/reputation.js");
+const { DifficultySettings, DEFAULT_DIFFICULTY } = __require("src/rules/difficulty.js");
+
+/**
+ * Ceiling on hostiles in one engagement. Beyond this the tactical display
+ * stops being readable on a phone, whatever the difficulty asks for.
+ */
+const MAX_HOSTILES = 6;
+
+/** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
+const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
+
+const ROMAN = ['', '', 'II', 'III', 'IV', 'V', 'VI'];
+const romanNumeral = (n) => ROMAN[n] ?? String(n);
+
+/** Events the Idealist trait doubles reputation for. */
+const PEACEFUL_EVENTS = new Set([
+  'distress_answered', 'colony_saved', 'first_contact', 'treaty_signed',
+  'accepted_surrender', 'honourable_release', 'agreement_honoured',
+]);
 const MODES = {
   BRIDGE: 'bridge',       // at a location, taking orders
   TRANSIT: 'transit',     // at warp between systems
@@ -7538,15 +9479,30 @@ class Game {
     this.seed = options.seed ?? hashSeed(String(Date.now()));
     this.rng = new RNG(this.seed);
 
+    // ---- difficulty ----
+    // Read by combat, the dice, and the economy, so it is established first.
+    this.difficulty = new DifficultySettings(options.difficulty ?? DEFAULT_DIFFICULTY);
+
     // ---- captain ----
+    this.character = options.character instanceof Character
+      ? options.character
+      : new Character(options.character ?? {
+        firstName: options.captainFirstName ?? 'Alexander',
+        lastName: options.captainName ?? 'Reyes',
+        pronouns: options.pronouns ?? 'they/them',
+        careerId: options.background ?? 'command',
+      });
+    this.character.refresh();
+    // Kept as a flat view for the log, the topbar, and older save files.
     this.captain = {
-      name: options.captainName ?? 'Kirk',
-      firstName: options.captainFirstName ?? 'James',
-      species: options.species ?? 'Human',
-      pronouns: options.pronouns ?? 'they/them',
-      background: options.background ?? 'command',
-      serialNumber: options.serialNumber ?? 'SC-937-0176-CEC',
+      name: this.character.lastName,
+      firstName: this.character.firstName,
+      species: this.character.species.name,
+      pronouns: this.character.pronouns,
+      background: this.character.careerId,
+      serialNumber: this.character.serialNumber,
     };
+    this.reputation = new Reputation();
 
     // ---- crew ----
     this.crewMode = options.crewMode ?? 'canon';
@@ -7599,12 +9555,40 @@ class Game {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0,
     };
     this.ship.applyMods(this.progress.shipMods());
     this.ship.applyMods(this.loadout.shipMods());
+    // The captain's own abilities are part of the ship's performance.
+    if (this.character) this.ship.applyMods(this.character.shipMods());
+    if (this.difficulty) this.ship.applyMods(this.difficulty.playerMods());
+
+    // The biofunction monitor and a physician captain both reduce casualties
+    // from hull hits, not merely on away missions.
+    const crewProtect = this.loadout.special('crewProtect')
+      + (this.character?.mechanic('casualtyReduction') ?? 0);
+    if (crewProtect) this.ship.applyMods({ crewProtect });
+
     const eps = this.loadout.special('powerTransfer');
     if (eps) this.ship.power.transferRate = 55 + eps;
+    if (this.character?.hasFeat('master_engineer')) this.ship.power.transferRate = 400;
+  }
+
+  /**
+   * Reputation is earned by named world events rather than sprinkled
+   * everywhere, so the awards stay auditable in one place.
+   */
+  earnReputation(event) {
+    if (!this.reputation) return;
+    const mult = (this.character?.mechanic('repGain') ?? 1)
+      * (this.character?.hasTrait('idealist') && PEACEFUL_EVENTS.has(event) ? 2 : 1);
+    for (const up of this.reputation.recordEvent(event, mult)) {
+      this.pushLog(
+        `${REP_TRACKS[up.track]?.name ?? up.track} standing advanced to ${up.name}.`,
+        'captain',
+      );
+      emit('reputation:tier', up);
+    }
   }
 
   get location() { return this.galaxy.get(this.locationId); }
@@ -7726,6 +9710,7 @@ class Game {
         this.ledger.record('lives_saved', { count: lives, system: enc.system.id });
         this.progress.addXP(300 + lives / 6, { ledger: this.ledger });
         this.ledger.adjustStanding('federation', STANDING_EFFECTS.answered_distress, 'Answered a distress call');
+        this.earnReputation('distress_answered');
         this.clock.advanceStardate(0.6);
         out.messages.push(`Assistance rendered. ${lives} lives saved.`);
         if (enc.hostile && enc.ships?.length) {
@@ -7773,14 +9758,18 @@ class Game {
         });
         this.progress.addXP(260 * (enc.anomaly?.value ?? 1), { ledger: this.ledger });
         this.galaxy.markSurveyed(enc.system.id, enc.anomaly?.name);
+        this.earnReputation('anomaly_catalogued');
         out.messages.push('Close survey complete. Science has what they need.');
         break;
       }
 
       case 'board': {
         const team = this.buildAwayTeam();
-        const r1 = team.check(this.rng, 'engineering', { difficulty: enc.risk ?? 0.4, hazard: 'dangerous' });
-        out.messages.push(r1.text);
+        // DC scales with how dangerous the specific derelict looked.
+        const r1 = team.check(this.rng, 'engineering', {
+          dc: 10 + Math.round((enc.risk ?? 0.4) * 14), hazard: 'dangerous',
+        });
+        out.messages.push(r1);
         if (r1.killed) this.ledger.loseOfficer(r1.killed, { system: enc.system.id });
         if (r1.success && enc.salvage) {
           this.loadout.acquire(enc.salvage);
@@ -7792,7 +9781,8 @@ class Game {
 
       case 'escort': {
         this.ledger.adjustStanding(enc.factionId ?? 'independent', STANDING_EFFECTS.completed_escort, 'Escort completed');
-        this.latinum += enc.escortReward ?? 300;
+        this.latinum += Math.round((enc.escortReward ?? 300) * (this.reputation.has('better_prices') ? 1.25 : 1));
+        this.earnReputation('escort_completed');
         this.progress.addXP(280, { ledger: this.ledger });
         this.clock.advanceStardate(0.8);
         out.messages.push(`Escort complete. ${enc.escortReward ?? 300} credits transferred.`);
@@ -7807,6 +9797,7 @@ class Game {
           });
           this.progress.addXP(900, { ledger: this.ledger });
           this.ledger.adjustStanding('federation', 12, 'First contact');
+          this.earnReputation('first_contact');
           out.messages.push(`Contact established with the ${enc.speciesName}. They are... cautious, but talking.`);
         } else {
           out.messages.push('They break off without answering. The database gets a new entry and nothing else.');
@@ -7848,6 +9839,9 @@ class Game {
 
     const result = resolveHail(this.rng, optionId, {
       factionId,
+      // The Diplomatic Corps signature forces a hearing from a faction whose
+      // doctrine would otherwise refuse the channel outright.
+      forced: this.parleyForced === true,
       standing: this.ledger.standingOf(factionId),
       diplomacyBonus: this.progress.diplomacyBonus,
       winning: eng ? this.ship.hullPct > enemyHull : false,
@@ -7856,6 +9850,7 @@ class Game {
       firstStrike: this.firstStrike,
     });
 
+    this.parleyForced = false;
     this.pushLog(result.text, 'comms');
     if (result.standingDelta) {
       this.ledger.adjustStanding(factionId, result.standingDelta, 'Hail');
@@ -7864,6 +9859,7 @@ class Game {
 
     if (result.surrender) {
       this.ledger.record('surrender_accepted', { text: 'Accepted a surrender', faction: factionId });
+      this.earnReputation('accepted_surrender');
     }
 
     if (result.endsCombat) {
@@ -7887,12 +9883,53 @@ class Game {
 
   // ------------------------------------------------------------------ combat
 
+  /**
+   * Difficulty's main lever above Lieutenant is how many hulls arrive, not how
+   * much each one absorbs. Reinforcements are cloned from the classes already
+   * present, so an encounter never has to know the difficulty setting.
+   *
+   * Capital ships are exempt: two Borg cubes is not a harder fight, it is a
+   * different genre. Anything at tier 7 or above arrives alone.
+   */
+  scaleHostileFleet(hostiles) {
+    const wanted = this.difficulty.enemyCount(hostiles.length);
+    if (wanted <= hostiles.length) return hostiles;
+
+    const capital = hostiles.some((s) => (s.cls.tier ?? 1) >= 7);
+    if (capital) return hostiles;
+
+    // Never field more than the tactical display can stay readable with.
+    const target = Math.min(wanted, MAX_HOSTILES);
+    const fleet = [...hostiles];
+    for (let i = fleet.length; i < target; i++) {
+      const source = hostiles[i % hostiles.length];
+      fleet.push(new Ship(source.classId, {
+        name: `${stripSuffix(source.name)} ${romanNumeral(Math.floor(i / hostiles.length) + 1)}`,
+        faction: source.faction,
+      }));
+    }
+    return fleet;
+  }
+
+  /**
+   * Every fight in the game passes through here — encounters, mission-scripted
+   * combat, and anything added later — so difficulty is applied to the enemy
+   * at this one point rather than at each generator.
+   */
   startCombat(hostiles, opts = {}) {
     if (!hostiles.length) return null;
+
+    const fleet = this.scaleHostileFleet(hostiles);
+    const enemyMods = this.difficulty.enemyMods();
+    for (const s of fleet) s.applyMods(enemyMods);
+
+    // Signature powers are once per engagement, so a new one restores them.
+    this.character?.refresh();
+
     this.setAlert('red');
-    this.engagement = new Engagement(this.ship, hostiles, this.rng, opts);
+    this.engagement = new Engagement(this.ship, fleet, this.rng, opts);
     this.mode = MODES.COMBAT;
-    this.engagement.pushLog(`${hostiles.length} hostile contact${hostiles.length > 1 ? 's' : ''}.`, 'tactical');
+    this.engagement.pushLog(`${fleet.length} hostile contact${fleet.length > 1 ? 's' : ''}.`, 'tactical');
     emit('combat:begin', this.engagement);
     return this.engagement;
   }
@@ -7913,7 +9950,10 @@ class Game {
     }
 
     if (outcome === 'victory' || outcome === 'routed') {
-      const xp = combatXP(eng.hostiles);
+      const xp = combatXP(eng.hostiles) * this.difficulty.scale('xpRate');
+      // The Empire respects a captain who kept fighting while losing.
+      if (this.ship.hullPct < 0.35) this.earnReputation('fought_while_losing');
+      this.earnReputation('combat_victory');
       const promo = this.progress.addXP(xp, { ledger: this.ledger });
       this.pushLog(`Engagement concluded. +${Math.round(xp)} experience.`, 'captain');
       if (promo?.promoted) emit('captain:promoted', promo);
@@ -7968,6 +10008,7 @@ class Game {
     }
 
     if (result.complete) {
+      this.earnReputation('mission_complete');
       this.missions.finishActive();
       this.mode = MODES.BRIDGE;
     }
@@ -7978,7 +10019,11 @@ class Game {
 
   buildAwayTeam(stations = ['science', 'medical', 'tactical'], captainLeads = false) {
     const members = stations.map((s) => this.crew.at(s)).filter(Boolean);
-    this.awayTeam = new AwayTeam(members, captainLeads);
+    this.awayTeam = new AwayTeam(members, {
+      captainLeads,
+      character: this.character,
+      difficulty: this.difficulty,
+    });
     return this.awayTeam;
   }
 
@@ -8070,10 +10115,13 @@ class Game {
 
   save() {
     return {
-      version: 1,
+      version: 2,
       seed: this.seed.toString(),
       rng: this.rng.save(),
       captain: this.captain,
+      character: this.character.save(),
+      reputation: this.reputation.save(),
+      difficulty: this.difficulty.save(),
       crewMode: this.crewMode,
       era: this.era,
       crew: this.crew.save(),
@@ -8097,6 +10145,10 @@ class Game {
       captainName: data.captain?.name,
       crewMode: data.crewMode,
       era: data.era,
+      // Version 1 saves predate the character sheet; Character's own
+      // defaults fill the gaps rather than failing the load.
+      character: data.character ?? undefined,
+      difficulty: data.difficulty?.id,
     });
     g.rng = RNG.load(data.rng);
     g.captain = { ...g.captain, ...data.captain };
@@ -8105,6 +10157,8 @@ class Game {
     g.progress = CaptainProgress.load(data.progress);
     g.loadout = Loadout.load(data.loadout, g.ship.cls.slots);
     g.ledger = Ledger.load(data.ledger);
+    g.reputation = Reputation.load(data.reputation);
+    g.difficulty = DifficultySettings.load(data.difficulty);
     g.galaxy.load(data.galaxy);
     g.missions.load(data.missions, g);
     g.locationId = data.locationId ?? 'sol';
@@ -8368,6 +10422,9 @@ function tacticalScreen(app) {
   // --- Power ---
   side.append(powerPanel(app));
 
+  // --- Career signature power ---
+  side.append(signaturePanel(app));
+
   // --- Bridge officer abilities ---
   side.append(abilitiesPanel(app));
 
@@ -8401,6 +10458,23 @@ function tacticalScreen(app) {
 
   side.append(panel('Tactical Log', eng.log.slice(-8).reverse().map(logLine)));
   return root;
+}
+
+
+/** The captain's own once-per-engagement power. */
+function signaturePanel(app) {
+  const g = app.game;
+  const c = g.character;
+  if (!c) return el('div');
+  const career = c.career;
+  const used = c.signatureUsed;
+  return panel('Captain', [
+    button(career.signature, used ? null : tap(() => app.useSignature(), 'ui_confirm'), {
+      color: used ? 'ghost' : 'peach',
+      sub: used ? 'Already used this engagement.' : career.signatureText,
+      disabled: used,
+    }),
+  ], used ? '' : 'warn');
 }
 
 function powerPanel(app) {
@@ -9053,6 +11127,564 @@ __exports.gameOverScreen = gameOverScreen;
 
 });
 
+__define("src/ui/charscreens.js", function (__exports, __require) {
+// Character creation, the character sheet, and the reputation screen.
+//
+// Kept apart from screens.js because character creation is a multi-step flow
+// with its own state, rather than a panel rendered from the game object.
+
+const { el, clear, panel, button, readout, pill, field, textInput, select } = __require("src/ui/lcars.js");
+const { haptic } = __require("src/ui/touch.js");
+const { audio } = __require("src/audio/engine.js");
+
+const { ABILITIES, ABILITY_IDS, PLAYER_SPECIES, ORIGINS, CAREERS, TRAITS, FEATS, FEAT_BY_ID, MAX_TRAITS, POINT_BUY_COST, POINT_BUY_BUDGET, POINT_BUY_MIN, POINT_BUY_MAX, STANDARD_ARRAY, pointBuyCost, Character, randomCharacter } = __require("src/rules/character.js");
+const { DIFFICULTIES } = __require("src/rules/difficulty.js");
+const { REP_TIERS, TRACK_LIST } = __require("src/rules/reputation.js");
+const { abilityMod } = __require("src/rules/dice.js");
+const { ERA_LIST } = __require("src/world/crews.data.js");
+
+const tap = (fn, cue = 'ui_tap') => (...args) => {
+  audio.play(cue);
+  haptic('tap');
+  return fn(...args);
+};
+
+const signed = (n) => (n >= 0 ? `+${n}` : `${n}`);
+
+// ================================================================ creation
+
+const STEPS = [
+  { id: 'difficulty', label: 'Difficulty' },
+  { id: 'identity', label: 'Identity' },
+  { id: 'species', label: 'Species' },
+  { id: 'origin', label: 'Origin' },
+  { id: 'career', label: 'Career' },
+  { id: 'abilities', label: 'Abilities' },
+  { id: 'traits', label: 'Traits' },
+  { id: 'crew', label: 'Crew & Ship' },
+  { id: 'review', label: 'Review' },
+];
+
+/**
+ * Multi-step captain creation. Holds its own draft and re-renders in place,
+ * so nothing is committed until the last step.
+ */
+class CharacterCreator {
+  constructor(app, onComplete) {
+    this.app = app;
+    this.onComplete = onComplete;
+    this.stepIndex = 0;
+    this.draft = {
+      difficulty: 'lieutenant',
+      firstName: 'Alexander',
+      lastName: 'Reyes',
+      pronouns: 'they/them',
+      speciesId: 'human',
+      originId: 'core_world',
+      careerId: 'command',
+      traits: [],
+      baseScores: Object.fromEntries(ABILITY_IDS.map((id) => [id, 10])),
+      crewMode: 'canon',
+      era: 'tos',
+      shipName: 'Enterprise',
+      registry: 'NCC-1701',
+      seed: '',
+    };
+    // Start from the standard array rather than a flat ten.
+    ABILITY_IDS.forEach((id, i) => { this.draft.baseScores[id] = STANDARD_ARRAY[i] ?? 10; });
+
+    this.root = el('div', { class: 'screen' });
+    this.body = el('div', { class: 'scroll' });
+    this.footer = el('div', { class: 'creator-footer' });
+    this.root.append(this.body, this.footer);
+    this.render();
+  }
+
+  get step() { return STEPS[this.stepIndex]; }
+
+  /** A live Character built from the draft, for previewing final numbers. */
+  preview() {
+    return new Character(this.draft);
+  }
+
+  go(delta) {
+    this.stepIndex = Math.max(0, Math.min(STEPS.length - 1, this.stepIndex + delta));
+    this.render();
+    this.body.scrollTop = 0;
+  }
+
+  render() {
+    clear(this.body);
+    clear(this.footer);
+
+    // Progress rail across the top.
+    this.body.append(el('div', { class: 'steprail' }, STEPS.map((s, i) => el('div', {
+      class: `steppip ${i === this.stepIndex ? 'on' : i < this.stepIndex ? 'done' : ''}`.trim(),
+      title: s.label,
+      onclick: i <= this.stepIndex ? tap(() => { this.stepIndex = i; this.render(); }) : null,
+    }))));
+    this.body.append(el('div', { class: 'speaker', text: `Step ${this.stepIndex + 1} of ${STEPS.length} — ${this.step.label}` }));
+
+    this[`step_${this.step.id}`]();
+
+    // Footer navigation.
+    const last = this.stepIndex === STEPS.length - 1;
+    this.footer.append(el('div', { class: 'btn-row' }, [
+      this.stepIndex > 0
+        ? button('Back', tap(() => this.go(-1), 'ui_back'), { color: 'ghost' })
+        : button('Random captain', tap(() => this.randomise(), 'ui_select'), { color: 'ghost' }),
+      last
+        ? button('Assume command', tap(() => this.finish(), 'ui_confirm'), { color: 'green' })
+        : button('Continue', tap(() => this.go(1), 'ui_select'), { color: 'orange' }),
+    ]));
+  }
+
+  randomise() {
+    const c = randomCharacter(this.app.rngForCreation());
+    Object.assign(this.draft, {
+      firstName: c.firstName, lastName: c.lastName, speciesId: c.speciesId,
+      originId: c.originId, careerId: c.careerId, traits: c.traits,
+      baseScores: c.baseScores,
+    });
+    this.render();
+  }
+
+  finish() {
+    this.onComplete(this.draft);
+  }
+
+  // ---------------------------------------------------------------- steps
+
+  step_difficulty() {
+    this.body.append(panel('How hard should this be?', [
+      el('p', { class: 'hint', text: 'Named up the command ladder. This is the difficulty of the game, not your character’s rank — you start as a Captain either way.' }),
+    ], 'accent'));
+
+    for (const d of DIFFICULTIES) {
+      const chosen = this.draft.difficulty === d.id;
+      this.body.append(el('div', {
+        class: `diffcard ${chosen ? 'on' : ''}`.trim(),
+        onclick: tap(() => { this.draft.difficulty = d.id; this.render(); }, 'ui_select'),
+      }, [
+        el('div', { class: 'diffhead' }, [
+          el('b', { text: d.name }),
+          el('span', { class: 'insignia', text: d.insignia }),
+        ]),
+        el('div', { class: 'difftag', text: d.tagline }),
+        chosen ? el('p', { class: 'hint', text: d.description }) : null,
+        chosen ? el('div', {}, [
+          d.permadeath ? pill('permadeath', 'red') : pill('no permanent loss', 'green'),
+          d.shipLoss ? pill('ship can be lost', 'red') : pill('ship cannot be lost', 'green'),
+          d.ironman ? pill('ironman', 'red') : null,
+          pill(`DC ${signed(d.dcShift)}`),
+          pill(`XP ×${d.xpRate}`),
+        ]) : null,
+      ]));
+    }
+  }
+
+  step_identity() {
+    this.body.append(panel('Starfleet Personnel File', [
+      field('Given name', textInput(this.draft.firstName, (v) => { this.draft.firstName = v; })),
+      field('Surname', textInput(this.draft.lastName, (v) => { this.draft.lastName = v; })),
+      field('Pronouns', select([
+        { value: 'they/them', label: 'they / them' },
+        { value: 'she/her', label: 'she / her' },
+        { value: 'he/him', label: 'he / him' },
+        { value: 'xe/xem', label: 'xe / xem' },
+      ], this.draft.pronouns, (v) => { this.draft.pronouns = v; })),
+      el('p', { class: 'hint', text: 'Your officers will address you as Captain. This is what goes on the record.' }),
+    ], 'accent'));
+  }
+
+  step_species() {
+    this.body.append(panel('Species', [
+      el('p', { class: 'hint', text: 'Species shifts your ability scores and grants a trait that is always in effect.' }),
+    ]));
+    for (const s of PLAYER_SPECIES) {
+      const chosen = this.draft.speciesId === s.id;
+      this.body.append(el('div', {
+        class: `optcard ${chosen ? 'on' : ''}`.trim(),
+        onclick: tap(() => { this.draft.speciesId = s.id; this.render(); }, 'ui_select'),
+      }, [
+        el('div', { class: 'opthead' }, [
+          el('b', { text: s.name }),
+          el('span', { class: 'bonuslist', text: this.bonusText(s) }),
+        ]),
+        el('div', { class: 'muted small', text: s.description }),
+        chosen ? el('p', { class: 'hint' }, [
+          el('b', { text: `${s.trait}: ` }), s.traitText,
+        ]) : null,
+      ]));
+    }
+  }
+
+  bonusText(entry) {
+    const parts = [];
+    for (const [k, v] of Object.entries(entry.bonuses ?? {})) {
+      parts.push(`${ABILITIES.find((a) => a.id === k)?.abbr ?? k} ${signed(v)}`);
+    }
+    for (const [k, v] of Object.entries(entry.penalties ?? {})) {
+      parts.push(`${ABILITIES.find((a) => a.id === k)?.abbr ?? k} ${signed(v)}`);
+    }
+    return parts.join('  ');
+  }
+
+  step_origin() {
+    this.body.append(panel('Where you grew up', [
+      el('p', { class: 'hint', text: 'Origin adds smaller ability bonuses and one lasting perk.' }),
+    ]));
+    for (const o of ORIGINS) {
+      const chosen = this.draft.originId === o.id;
+      this.body.append(el('div', {
+        class: `optcard ${chosen ? 'on' : ''}`.trim(),
+        onclick: tap(() => { this.draft.originId = o.id; this.render(); }, 'ui_select'),
+      }, [
+        el('div', { class: 'opthead' }, [
+          el('b', { text: o.name }),
+          el('span', { class: 'bonuslist', text: this.bonusText(o) }),
+        ]),
+        el('div', { class: 'muted small', text: o.description }),
+        chosen ? el('p', { class: 'hint' }, [el('b', { text: 'Perk: ' }), o.perk]) : null,
+      ]));
+    }
+  }
+
+  step_career() {
+    this.body.append(panel('Your track before the chair', [
+      el('p', { class: 'hint', text: 'Career grants proficiency in two abilities — a flat bonus on every check with them — and one signature power usable once per engagement.' }),
+    ]));
+    for (const c of CAREERS) {
+      const chosen = this.draft.careerId === c.id;
+      this.body.append(el('div', {
+        class: `optcard ${chosen ? 'on' : ''}`.trim(),
+        onclick: tap(() => { this.draft.careerId = c.id; this.render(); }, 'ui_select'),
+      }, [
+        el('div', { class: 'opthead' }, [
+          el('b', { text: c.name }),
+          el('span', { class: 'bonuslist', text: c.proficiencies
+            .map((p) => ABILITIES.find((a) => a.id === p)?.abbr ?? p).join(' · ') }),
+        ]),
+        el('div', { class: 'muted small', text: c.description }),
+        chosen ? el('p', { class: 'hint' }, [
+          el('b', { text: `${c.signature}: ` }), c.signatureText,
+        ]) : null,
+      ]));
+    }
+  }
+
+  step_abilities() {
+    const spent = pointBuyCost(this.draft.baseScores);
+    const remaining = POINT_BUY_BUDGET - spent;
+    const preview = this.preview();
+
+    this.body.append(panel(`Ability scores — ${remaining} point${remaining === 1 ? '' : 's'} remaining`, [
+      el('p', { class: 'hint', text: 'Point buy, 8 to 15. Species and origin bonuses are added on top; the right-hand column is your final score and the modifier every d20 check uses.' }),
+      ...ABILITIES.map((a) => {
+        const base = this.draft.baseScores[a.id];
+        const final = preview.score(a.id);
+        const mod = abilityMod(final);
+        const canRaise = base < POINT_BUY_MAX
+          && (POINT_BUY_COST[base + 1] - POINT_BUY_COST[base]) <= remaining;
+        const canLower = base > POINT_BUY_MIN;
+        return el('div', { class: 'abilityrow' }, [
+          el('div', { class: 'abilityname' }, [
+            el('b', { text: a.name }),
+            el('small', { text: a.governs }),
+          ]),
+          el('div', { class: 'abilitycontrols' }, [
+            el('button', {
+              class: 'stepbtn', disabled: !canLower,
+              onclick: canLower ? tap(() => {
+                this.draft.baseScores[a.id]--; this.render();
+              }) : null, text: '−',
+            }),
+            el('div', { class: 'abilityval' }, [
+              el('b', { text: String(final) }),
+              el('small', { text: signed(mod) }),
+            ]),
+            el('button', {
+              class: 'stepbtn', disabled: !canRaise,
+              onclick: canRaise ? tap(() => {
+                this.draft.baseScores[a.id]++; this.render();
+              }) : null, text: '+',
+            }),
+          ]),
+        ]);
+      }),
+      el('div', { class: 'btn-row' }, [
+        button('Standard array', tap(() => {
+          ABILITY_IDS.forEach((id, i) => { this.draft.baseScores[id] = STANDARD_ARRAY[i]; });
+          this.render();
+        }), { color: 'ghost' }),
+        button('Reset to 8s', tap(() => {
+          ABILITY_IDS.forEach((id) => { this.draft.baseScores[id] = POINT_BUY_MIN; });
+          this.render();
+        }), { color: 'ghost' }),
+      ]),
+    ], remaining === 0 ? 'good' : 'accent'));
+  }
+
+  step_traits() {
+    const chosenCount = this.draft.traits.length;
+    this.body.append(panel(`Personal traits — ${chosenCount} of ${MAX_TRAITS} chosen`, [
+      el('p', { class: 'hint', text: 'Optional. Each is a real trade rather than a bonus: take the advantage and take what it costs. Some traits cannot be held together.' }),
+    ]));
+
+    for (const group of [true, false]) {
+      this.body.append(el('h3', { class: 'traitgroup', text: group ? 'Advantages' : 'Complications' }));
+      for (const t of TRAITS.filter((x) => x.positive === group)) {
+        const chosen = this.draft.traits.includes(t.id);
+        const conflict = (t.conflicts ?? []).some((c) => this.draft.traits.includes(c));
+        const full = chosenCount >= MAX_TRAITS && !chosen;
+        this.body.append(el('div', {
+          class: `optcard ${chosen ? 'on' : ''} ${(conflict || full) && !chosen ? 'disabled' : ''}`.trim(),
+          onclick: (conflict || full) && !chosen ? null : tap(() => {
+            this.draft.traits = chosen
+              ? this.draft.traits.filter((x) => x !== t.id)
+              : [...this.draft.traits, t.id];
+            this.render();
+          }, 'ui_select'),
+        }, [
+          el('div', { class: 'opthead' }, [
+            el('b', { text: t.name }),
+            el('span', { class: 'bonuslist', text: t.positive ? 'advantage' : 'complication' }),
+          ]),
+          el('div', { class: 'muted small', text: t.text }),
+          conflict && !chosen
+            ? el('div', { class: 'hint', text: 'Incompatible with a trait you have taken.' })
+            : null,
+        ]));
+      }
+    }
+  }
+
+  step_crew() {
+    const d = this.draft;
+    this.body.append(panel('Crew', [
+      el('div', { class: 'grid-2' }, [
+        button('Canonical crew', tap(() => { d.crewMode = 'canon'; this.render(); }),
+          { color: d.crewMode === 'canon' ? 'green' : 'blue' }),
+        button('Original crew', tap(() => { d.crewMode = 'original'; this.render(); }),
+          { color: d.crewMode === 'original' ? 'green' : 'blue' }),
+      ]),
+      ...(d.crewMode === 'canon'
+        ? ERA_LIST.map((e) => button(e.name, tap(() => { d.era = e.id; this.render(); }), {
+          color: d.era === e.id ? 'amber' : 'ghost',
+          sub: e.description,
+        }))
+        : [el('p', { class: 'hint', text: 'A senior staff will be generated from your world seed — species, traits, and abilities rolled fresh. They are yours, and they can be lost.' })]),
+    ]));
+
+    this.body.append(panel('Ship', [
+      field('Ship name', textInput(d.shipName, (v) => { d.shipName = v; })),
+      field('Registry', textInput(d.registry, (v) => { d.registry = v; })),
+    ]));
+
+    this.body.append(panel('Galaxy', [
+      field('World seed (optional)', textInput('', (v) => { d.seed = v; }, 'leave blank for a new galaxy')),
+      el('p', { class: 'hint', text: 'The same seed always builds the same galaxy, the same encounters, and the same dice.' }),
+    ]));
+  }
+
+  step_review() {
+    const c = this.preview();
+    const diff = DIFFICULTIES.find((x) => x.id === this.draft.difficulty);
+
+    this.body.append(panel('Service Record', [
+      el('p', { class: 'big-stat', text: c.name }),
+      el('p', { class: 'muted', text: `${c.species.name} · ${c.origin.name} · ${c.career.name}` }),
+      el('div', {}, [
+        pill(`Difficulty: ${diff.name}`, diff.order >= 7 ? 'red' : diff.order <= 1 ? 'green' : ''),
+        pill(this.draft.crewMode === 'canon' ? `${this.draft.era.toUpperCase()} crew` : 'Original crew'),
+        pill(`${this.draft.shipName} ${this.draft.registry}`),
+      ]),
+    ], 'accent'));
+
+    this.body.append(panel('Abilities', ABILITIES.map((a) => {
+      const score = c.score(a.id);
+      const mod = abilityMod(score);
+      return el('div', { class: 'readout' }, [
+        el('div', { class: 'label', text: a.abbr }),
+        el('div', { class: 'bar' }, [el('i', {
+          class: score >= 16 ? '' : score >= 12 ? 'mid' : 'low',
+          style: { width: `${(score / 20) * 100}%` },
+        })]),
+        el('div', { class: 'val', text: `${score} (${signed(mod)})` }),
+      ]);
+    })));
+
+    this.body.append(panel('Always in effect', [
+      el('p', { class: 'hint' }, [el('b', { text: `${c.species.trait}: ` }), c.species.traitText]),
+      el('p', { class: 'hint' }, [el('b', { text: 'Origin: ' }), c.origin.perk]),
+      el('p', { class: 'hint' }, [el('b', { text: `${c.career.signature}: ` }), c.career.signatureText]),
+      el('p', { class: 'hint' }, [
+        el('b', { text: 'Proficient in: ' }),
+        c.proficiencies.map((p) => ABILITIES.find((a) => a.id === p)?.name ?? p).join(', '),
+        ` (${signed(c.proficiencyBonus)} on those checks)`,
+      ]),
+      ...c.traits.map((t) => {
+        const trait = TRAITS.find((x) => x.id === t);
+        return el('p', { class: 'hint' }, [el('b', { text: `${trait.name}: ` }), trait.text]);
+      }),
+    ], 'good'));
+  }
+}
+
+// ================================================================ sheet
+function characterSheetScreen(app) {
+  const g = app.game;
+  const c = g.character;
+  const root = el('div', { class: 'scroll' });
+
+  root.append(panel('Character', [
+    el('p', { class: 'big-stat', text: `${g.progress.rankName} ${c.name}` }),
+    el('p', { class: 'muted', text: `${c.species.name} · ${c.origin.name} · ${c.career.name} · ${c.pronouns}` }),
+    el('div', {}, [
+      pill(`Level ${c.level}`),
+      pill(`Proficiency ${signed(c.proficiencyBonus)}`),
+      pill(`Difficulty: ${g.difficulty.name}`, g.difficulty.order >= 7 ? 'red' : ''),
+      ...g.reputation.allTitles.map((t) => pill(t, 'green')),
+    ]),
+  ], 'accent'));
+
+  root.append(panel('Abilities', ABILITIES.map((a) => {
+    const score = c.score(a.id);
+    const mod = abilityMod(score);
+    const prof = c.isProficient(a.id);
+    return el('div', { class: 'abilityrow static' }, [
+      el('div', { class: 'abilityname' }, [
+        el('b', {}, [a.name, prof ? el('span', { class: 'profdot', text: '●' }) : null]),
+        el('small', { text: a.governs }),
+      ]),
+      el('div', { class: 'abilityval' }, [
+        el('b', { text: String(score) }),
+        el('small', { text: `${signed(mod)}${prof ? ` / ${signed(mod + c.proficiencyBonus)}` : ''}` }),
+      ]),
+    ]);
+  }).concat([
+    el('p', { class: 'hint', text: '● marks a proficient ability. The second number is the total added to a d20 for those checks.' }),
+  ])));
+
+  root.append(panel('Always in effect', [
+    el('p', { class: 'hint' }, [el('b', { text: `${c.species.trait}: ` }), c.species.traitText]),
+    el('p', { class: 'hint' }, [el('b', { text: `${c.origin.name}: ` }), c.origin.perk]),
+    el('p', { class: 'hint' }, [
+      el('b', { text: `${c.career.signature}: ` }), c.career.signatureText,
+      c.signatureUsed ? ' — used this engagement.' : ' — available.',
+    ]),
+    ...c.traits.map((t) => {
+      const trait = TRAITS.find((x) => x.id === t);
+      return trait ? el('p', { class: 'hint' }, [el('b', { text: `${trait.name}: ` }), trait.text]) : null;
+    }),
+  ]));
+
+  // Feats, with anything currently selectable offered.
+  const pending = g.pendingFeats ?? 0;
+  const taken = c.feats.map((f) => FEAT_BY_ID[f]).filter(Boolean);
+  root.append(panel(`Feats${pending ? ` — ${pending} to choose` : ''}`, [
+    ...(taken.length
+      ? taken.map((f) => el('p', { class: 'hint' }, [el('b', { text: `${f.name}: ` }), f.text]))
+      : [el('p', { class: 'muted', text: 'None yet. Feats are chosen on promotion.' })]),
+    ...(pending > 0
+      ? FEATS
+        .filter((f) => f.repeatable || !c.hasFeat(f.id))
+        .filter((f) => (f.minRank ?? 0) <= g.progress.rank.tier)
+        .map((f) => button(f.name, tap(() => app.chooseFeat(f.id), 'ui_confirm'), {
+          color: 'amber', sub: f.text,
+        }))
+      : []),
+  ], pending > 0 ? 'warn' : ''));
+
+  // Recent dice, so the player can audit what the game did to them.
+  const rolls = app.recentRolls ?? [];
+  if (rolls.length) {
+    root.append(panel('Recent Rolls', rolls.slice(-10).reverse().map((r) =>
+      el('p', {
+        class: `hint roll ${r.criticalSuccess ? 'crit' : r.criticalFailure ? 'fumble' : ''}`.trim(),
+        text: r.formatted ?? '',
+      }))));
+  }
+
+  return root;
+}
+
+// ================================================================ reputation
+function reputationScreen(app) {
+  const g = app.game;
+  const root = el('div', { class: 'scroll' });
+
+  root.append(panel('Reputation', [
+    el('p', { class: 'hint', text: 'Reputation is what you have earned with a power over a career. It only ever rises. Standing — whether they are shooting at you this week — is tracked separately on the Record screen.' }),
+  ], 'accent'));
+
+  for (const track of TRACK_LIST) {
+    const t = g.reputation.track(track.id);
+    if (!t) continue;
+    const next = t.nextTier;
+
+    const nodes = [
+      el('div', {}, [
+        pill(t.tierName, t.tier >= 4 ? 'green' : t.tier >= 2 ? 'amber' : ''),
+        pill(`${t.marks} ${track.currency}`),
+      ]),
+      el('div', { class: 'readout' }, [
+        el('div', { class: 'label', text: next ? `to ${next.name}` : 'max' }),
+        el('div', { class: 'bar' }, [el('i', { style: { width: `${t.progress * 100}%` } })]),
+        el('div', { class: 'val', text: next ? `${t.xp}/${next.xp}` : '—' }),
+      ]),
+      el('p', { class: 'muted small', text: track.description }),
+    ];
+
+    const available = t.availableProjects();
+    for (const p of available) {
+      const afford = t.canAfford(p);
+      nodes.push(button(p.name, afford ? tap(() => {
+        const bought = g.reputation.buy(track.id, p.id);
+        if (bought) {
+          app.applyReputationGrant(track.id, bought);
+          audio.play('ui_confirm');
+        }
+        app.render();
+      }, 'ui_confirm') : null, {
+        color: afford ? 'amber' : 'ghost',
+        sub: `${p.cost} ${track.currency} — ${p.text}`,
+        disabled: !afford,
+      }));
+    }
+
+    const locked = t.lockedProjects();
+    if (locked.length) {
+      nodes.push(el('p', { class: 'hint', text: `Locked: ${locked.map((p) => `${p.name} (${REP_TIERS[p.tier].name})`).join(' · ')}` }));
+    }
+    if (t.completed.length) {
+      nodes.push(el('div', {}, t.completed.map((id) => {
+        const p = track.projects.find((x) => x.id === id);
+        return p ? pill(p.name, 'green') : null;
+      })));
+    }
+
+    const card = panel(track.name, nodes, t.tier >= 3 ? 'good' : '');
+    card.style.borderLeftColor = track.color;
+    root.append(card);
+  }
+
+  return root;
+}
+
+// ================================================================ difficulty
+function difficultyBadge(g) {
+  const d = g.difficulty;
+  return pill(`${d.insignia} ${d.name}`, d.order >= 7 ? 'red' : d.order <= 1 ? 'green' : '');
+}
+
+__exports.CharacterCreator = CharacterCreator;
+__exports.characterSheetScreen = characterSheetScreen;
+__exports.reputationScreen = reputationScreen;
+__exports.difficultyBadge = difficultyBadge;
+
+});
+
 __define("src/core/save.js", function (__exports, __require) {
 // Persistence. localStorage for autosave and slots, plus export/import so a
 // captain's record can be moved off the phone.
@@ -9552,6 +12184,7 @@ const { audio } = __require("src/audio/engine.js");
 const { TacticalView } = __require("src/ui/tactical.js");
 const { GalaxyMap } = __require("src/ui/galaxymap.js");
 const screens = __require("src/ui/screens.js");
+const { CharacterCreator, characterSheetScreen, reputationScreen } = __require("src/ui/charscreens.js");
 
 const { Game, MODES } = __require("src/core/state.js");
 const { on } = __require("src/core/events.js");
@@ -9563,6 +12196,9 @@ const { ABILITIES } = __require("src/sim/officers.js");
 const { Ship, FACINGS } = __require("src/sim/ship.js");
 const { parseOrder } = __require("src/ui/orders.js");
 const { SKILLS } = __require("src/sim/skills.js");
+const { RNG } = __require("src/core/rng.js");
+const { FEAT_BY_ID, ABILITIES: ABILITY_LIST } = __require("src/rules/character.js");
+const { CONSOLES } = __require("src/sim/loadout.js");
 
 const NAV = [
   { id: 'bridge', label: 'Bridge', ico: '⌂' },
@@ -9570,6 +12206,8 @@ const NAV = [
   { id: 'galaxy', label: 'Map', ico: '✦' },
   { id: 'ship', label: 'Ship', ico: '⬡' },
   { id: 'crew', label: 'Crew', ico: '☰' },
+  { id: 'sheet', label: 'Captain', ico: '✧' },
+  { id: 'reputation', label: 'Rep', ico: '◈' },
   { id: 'captain', label: 'Record', ico: '★' },
 ];
 
@@ -9577,6 +12215,21 @@ const BACKGROUND_SKILL = {
   command: 'leadership', tactical: 'beam_weapons',
   engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
 };
+
+
+/** Render a d20 result as an auditable card: the die, the breakdown, the verdict. */
+function rollCard(r) {
+  const cls = r.criticalSuccess ? 'crit' : r.criticalFailure ? 'fumble' : '';
+  const breakdown = (r.parts ?? [])
+    .filter((p) => p.value !== 0)
+    .map((p) => `${p.source} ${p.value >= 0 ? '+' : ''}${p.value}`)
+    .join('  ·  ');
+  return el('div', { class: `rollcard ${cls}`.trim() }, [
+    el('div', { class: 'dieline', text: r.formatted ?? '' }),
+    breakdown ? el('div', { class: 'breakdown', text: breakdown }) : null,
+    r.text ? el('div', { class: 'breakdown', text: r.text }) : null,
+  ]);
+}
 
 class App {
   constructor(root) {
@@ -9720,11 +12373,37 @@ class App {
       audio.play('promotion');
       audio.play('boatswain');
       haptic('confirm');
+      const g = this.game;
+      if (g) {
+        g.character.levelUp();
+        g.pendingFeats = (g.pendingFeats ?? 0) + 1;
+        g.applyAllMods();
+      }
       this.showMessage('Promotion', [
         `You are promoted to ${promo.rank.name}.`,
-        `${promo.points} skill points awarded.`,
-        'Starfleet notes that heavier hulls are now available to you at any shipyard.',
+        `${promo.points} skill points awarded, and a feat to choose on the Captain screen.`,
+        `Character level ${g?.character.level ?? 1}. Proficiency is now ${g ? `+${g.character.proficiencyBonus}` : ''}.`,
       ]);
+    });
+
+    // Reputation tier-ups are a real unlock, so they are announced.
+    on('reputation:tier', (up) => {
+      audio.play('promotion');
+      haptic('confirm');
+      this.showMessage('Reputation', [
+        `Your standing with them has advanced to ${up.name}.`,
+        'New projects are available on the Reputation screen.',
+      ]);
+    });
+
+    // Every d20 roll is captured so the player can audit the arithmetic.
+    on('away:check', (result) => {
+      this.recentRolls ??= [];
+      this.recentRolls.push(result);
+      if (this.recentRolls.length > 60) this.recentRolls.shift();
+      if (result.criticalSuccess) { audio.play('ui_confirm'); haptic('confirm'); }
+      else if (result.criticalFailure) { audio.play('ui_deny'); haptic('deny'); }
+      else audio.play('ui_tap');
     });
 
     on('ledger:inquiry', () => {
@@ -9791,6 +12470,8 @@ class App {
       case 'tactical': node = screens.tacticalScreen(this); break;
       case 'galaxy': node = screens.galaxyScreen(this); break;
       case 'crew': node = el('div', { class: 'screen' }, [screens.crewScreen(this)]); break;
+      case 'sheet': node = el('div', { class: 'screen' }, [characterSheetScreen(this)]); break;
+      case 'reputation': node = el('div', { class: 'screen' }, [reputationScreen(this)]); break;
       case 'captain': node = el('div', { class: 'screen' }, [screens.captainScreen(this)]); break;
       case 'ship': node = el('div', { class: 'screen' }, [screens.shipScreen(this)]); break;
       case 'options': node = el('div', { class: 'screen' }, [screens.optionsScreen(this)]); break;
@@ -9842,8 +12523,12 @@ class App {
 
   showMessage(title, lines, actions = null) {
     this.closeModal();
-    this.modalHandle = modal(title,
-      [].concat(lines).map((l) => el('p', { text: l })),
+    // Anything that is a roll result is rendered as an auditable die card
+    // rather than a sentence, so the arithmetic is always visible.
+    const body = [].concat(lines).map((l) => (
+      typeof l === 'object' && l?.natural !== undefined ? rollCard(l) : el('p', { text: String(l) })
+    ));
+    this.modalHandle = modal(title, body,
       actions ?? [button('Acknowledged', () => { audio.play('computer_ack'); this.closeModal(); }, { color: 'blue' })]);
     audio.play('computer_query');
     return this.modalHandle;
@@ -9980,6 +12665,110 @@ class App {
     g.pushLog(`${officer.name}: ${ability.say ?? line}`, officer.station);
     if (this.settings.voice) audio.speak(ability.say ?? line);
     haptic('confirm');
+  }
+
+  /**
+   * Career signature powers: one big effect, once per engagement.
+   *
+   * Each reuses machinery that already exists — buffs, repair, cooldowns —
+   * rather than inventing a parallel system.
+   */
+  useSignature() {
+    const g = this.game;
+    const c = g?.character;
+    const eng = g?.engagement;
+    if (!c || c.signatureUsed) { audio.play('ui_deny'); return false; }
+
+    const career = c.career;
+    let line = '';
+
+    switch (c.careerId) {
+      case 'command': {
+        // Take the Conn — every bridge officer is ready again.
+        for (const o of g.crew.officers) o.cooldowns = {};
+        line = 'Every station reports ready.';
+        break;
+      }
+      case 'tactical': {
+        // Called Shot — the next hit that lands is a guaranteed critical.
+        if (!eng) { audio.play('ui_deny'); return false; }
+        eng.guaranteedCrits += 1;
+        if (!eng.targetedSubsystem) eng.targetSubsystem('weapons');
+        line = `Called shot on their ${eng.targetedSubsystem}. Standing by.`;
+        break;
+      }
+      case 'engineering': {
+        const before = g.ship.hullPct;
+        g.ship.repair(g.ship.maxHull * 0.3);
+        g.ship.fires = 0;
+        line = `Hull integrity ${Math.round(before * 100)}% to ${Math.round(g.ship.hullPct * 100)}%. Fires are out.`;
+        break;
+      }
+      case 'science': {
+        // Insight — see everything, and roll better for twenty seconds.
+        g.ship.addBuff({
+          id: 'insight', label: 'Insight', until: 20,
+          mods: { accuracy: 1.25, critChance: 0.15 },
+        });
+        c.insightUntil = 20;
+        if (eng?.target) {
+          const t = eng.target;
+          const weakest = FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore');
+          line = `${t.name}: weakest facing is ${weakest}, hull at ${Math.round(t.hullPct * 100)}%.`;
+        } else {
+          line = 'Full spectrum analysis running.';
+        }
+        break;
+      }
+      case 'medical': {
+        // Triage — one officer back on their feet, and fewer losses after.
+        const wounded = g.crew.officers.find((o) => o.alive && o.injured);
+        if (wounded) { wounded.injured = false; wounded.injurySeverity = 0; }
+        g.ship.addBuff({
+          id: 'triage', label: 'Triage', until: 30, mods: { crewProtect: 0.5 },
+        });
+        line = wounded
+          ? `${wounded.name} is back on duty. Sickbay is holding.`
+          : 'Sickbay is prepped. Casualties will be lighter.';
+        break;
+      }
+      case 'diplomatic': {
+        // Parley — they will hear you out whatever their doctrine says.
+        if (!eng) { audio.play('ui_deny'); return false; }
+        g.parleyForced = true;
+        line = 'Channel forced open. They are listening whether they meant to or not.';
+        this.openHail(eng.hostiles[0]?.faction);
+        break;
+      }
+      case 'intelligence': {
+        // Prior Knowledge — you move first, and they lose a beat.
+        if (eng) {
+          for (const s of eng.liveHostiles) {
+            for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, 6);
+            if (s.cloaked) s.decloak();
+          }
+        }
+        g.ship.addBuff({
+          id: 'prior_knowledge', label: 'Prior Knowledge', until: 15,
+          mods: { accuracy: 1.2, defense: 1.4 },
+        });
+        line = 'We know what they are about to do. Six seconds of it.';
+        break;
+      }
+      default:
+        audio.play('ui_deny');
+        return false;
+    }
+
+    c.signatureUsed = true;
+    g.pushLog(`${career.signature}: ${line}`, 'captain');
+    if (this.settings.voice) audio.speak(line);
+    audio.play('ui_confirm');
+    audio.play('computer_ack');
+    haptic('confirm');
+    this.showMessage(career.signature, [line]);
+    this.render();
+    return true;
   }
 
   useDevice(id) {
@@ -10235,6 +13024,84 @@ class App {
     this.render();
   }
 
+  // ------------------------------------------------------------ character
+
+  /**
+   * Promotion grants a feat choice. The sheet screen offers the list; this
+   * applies the pick and, for the repeatable ability feat, asks which scores.
+   */
+  chooseFeat(featId) {
+    const g = this.game;
+    if (!g || !(g.pendingFeats > 0)) return;
+    const feat = FEAT_BY_ID[featId];
+    if (!feat) return;
+
+    if (featId === 'ability_score') {
+      // Two +1s, chosen one at a time, so the UI stays a simple list.
+      this.pickAbilityIncrease(2, []);
+      return;
+    }
+    if (g.character.takeFeat(featId)) {
+      g.pendingFeats--;
+      g.applyAllMods();
+      g.pushLog(`Qualified: ${feat.name}.`, 'captain');
+      audio.play('ui_confirm');
+      this.showMessage(feat.name, [feat.text]);
+      this.render();
+    }
+  }
+
+  pickAbilityIncrease(remaining, picked) {
+    const g = this.game;
+    this.closeModal();
+    this.modalHandle = modal(`Field Commission — ${remaining} to assign`, [
+      el('p', { class: 'hint', text: 'Raise an ability score by one. Scores are capped at 20.' }),
+      ...ABILITY_LIST.map((a) => {
+        const score = g.character.score(a.id);
+        return button(`${a.name} — ${score} → ${Math.min(20, score + 1)}`, () => {
+          const next = [...picked, a.id];
+          if (remaining > 1) {
+            this.pickAbilityIncrease(remaining - 1, next);
+          } else {
+            g.character.takeFeat('ability_score', next);
+            g.pendingFeats--;
+            g.applyAllMods();
+            g.pushLog('Field commission: ability scores raised.', 'captain');
+            this.closeModal();
+            audio.play('ui_confirm');
+            this.render();
+          }
+        }, { color: score >= 20 ? 'ghost' : 'blue', disabled: score >= 20 });
+      }),
+    ], [button('Cancel', () => this.closeModal(), { color: 'ghost' })]);
+  }
+
+  /** Apply what a completed reputation project actually gives you. */
+  applyReputationGrant(trackId, project) {
+    const g = this.game;
+    const grant = project.grant ?? {};
+
+    if (grant.console) {
+      g.loadout.acquire(grant.console);
+      g.pushLog(`${CONSOLES[grant.console]?.name ?? grant.console} received from ${trackId}.`, 'engineering');
+    }
+    if (grant.torpedoes) {
+      g.ship.torpedoes = Math.min(g.ship.maxTorpedoes, g.ship.torpedoes + grant.torpedoes);
+    }
+    if (grant.antimatter) {
+      g.ship.antimatter = Math.min(100, g.ship.antimatter + grant.antimatter);
+    }
+    if (grant.perk === 'cloak') {
+      g.ship.cloakCapable = true;
+      g.pushLog('A cloaking device has been installed. Nobody has signed for it.', 'engineering');
+    }
+    if (grant.title) {
+      g.pushLog(`You are now styled "${grant.title}".`, 'captain');
+    }
+    g.applyAllMods();
+    this.showMessage(project.name, [project.text]);
+  }
+
   // ------------------------------------------------------------ persistence
 
   save() { return saveGame(this.game, 'auto'); }
@@ -10269,47 +13136,78 @@ class App {
 
   showNewGame() {
     this.game = null;
-    const node = el('div', { class: 'screen' }, [
-      screens.newGameScreen(this, (draft) => this.startGame(draft)),
-    ]);
-    this.screenEl.replaceWith(node);
-    this.screenEl = node;
+    this.creator = new CharacterCreator(this, (draft) => this.startGame(draft));
+    this.screenEl.replaceWith(this.creator.root);
+    this.screenEl = this.creator.root;
     this.orderBar.style.display = 'none';
+    this.navEl.style.display = 'none';
     this.shipNameEl.textContent = 'Starfleet Command';
-    this.stardateEl.textContent = '';
+    this.stardateEl.textContent = 'New Commission';
+  }
+
+  /** Character creation needs randomness before a Game (and its RNG) exists. */
+  rngForCreation() {
+    this.creationRng ??= new RNG(hashSeed(`creation:${Date.now()}:${Math.random()}`));
+    return this.creationRng;
   }
 
   startGame(draft) {
-    const seed = draft.seed?.trim() ? hashSeed(draft.seed.trim()) : hashSeed(`${Date.now()}:${Math.random()}`);
+    const seed = draft.seed?.trim()
+      ? hashSeed(draft.seed.trim())
+      : hashSeed(`${Date.now()}:${Math.random()}`);
+
     this.game = new Game({
       seed,
-      captainName: draft.name || 'Reyes',
-      captainFirstName: draft.firstName,
-      species: draft.species,
-      pronouns: draft.pronouns,
-      background: draft.background,
+      character: {
+        firstName: draft.firstName || 'Alexander',
+        lastName: draft.lastName || 'Reyes',
+        pronouns: draft.pronouns,
+        speciesId: draft.speciesId,
+        originId: draft.originId,
+        careerId: draft.careerId,
+        traits: draft.traits,
+        baseScores: draft.baseScores,
+      },
+      difficulty: draft.difficulty,
       crewMode: draft.crewMode,
       era: draft.era,
       shipName: draft.shipName || 'Enterprise',
       registry: draft.registry || 'NCC-1701',
     });
 
-    // Background grants a free skill rank.
-    const skillId = BACKGROUND_SKILL[draft.background];
+    // The career track grants a matching starting skill rank.
+    const skillId = BACKGROUND_SKILL[draft.careerId];
     if (skillId && SKILLS[skillId]) {
       this.game.progress.unspent++;
       this.game.progress.spend(skillId);
-      this.game.applyAllMods();
     }
+    // Starfleet families start with an extra pip and the scrutiny to match.
+    if (this.game.character.mechanic('startingRankBonus')) {
+      this.game.progress.rankIndex = Math.min(
+        this.game.progress.rankIndex + 1,
+        10,
+      );
+    }
+    if (this.game.character.mechanic('startingReprimand')) {
+      this.game.ledger.record('order_disobeyed', {
+        text: 'Prior reprimand on file at time of commission',
+      });
+    }
+    this.game.applyAllMods();
+    this.recentRolls = [];
 
     this.orderBar.style.display = '';
+    this.navEl.style.display = '';
+    this.creator = null;
     this.go('bridge');
     audio.unlock();
     audio.play('boatswain');
+
+    const c = this.game.character;
     this.showMessage(`Stardate ${this.game.stardate}`, [
-      `${this.game.progress.rankName} ${draft.firstName} ${draft.name}, you have the ${this.game.ship.name}.`,
-      'Orders are on the screen at Sol. The galaxy is charted; most of it is not surveyed.',
-      'Type an order at any time — "helm, set course for Vulcan, warp eight" — or use the panels.',
+      `${this.game.progress.rankName} ${c.name}, you have the ${this.game.ship.name}.`,
+      `${c.species.name}, ${c.career.name} track, serving at ${this.game.difficulty.name} difficulty.`,
+      'Orders are on the screen at Sol. Type an order at any time — "helm, set course for Vulcan, warp eight" — or use the panels.',
     ]);
     this.save();
   }

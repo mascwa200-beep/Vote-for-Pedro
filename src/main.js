@@ -9,6 +9,7 @@ import { audio } from './audio/engine.js';
 import { TacticalView } from './ui/tactical.js';
 import { GalaxyMap } from './ui/galaxymap.js';
 import * as screens from './ui/screens.js';
+import { CharacterCreator, characterSheetScreen, reputationScreen } from './ui/charscreens.js';
 
 import { Game, MODES } from './core/state.js';
 import { on } from './core/events.js';
@@ -23,6 +24,9 @@ import { ABILITIES } from './sim/officers.js';
 import { Ship, FACINGS } from './sim/ship.js';
 import { parseOrder } from './ui/orders.js';
 import { SKILLS } from './sim/skills.js';
+import { RNG } from './core/rng.js';
+import { FEAT_BY_ID, ABILITIES as ABILITY_LIST } from './rules/character.js';
+import { CONSOLES } from './sim/loadout.js';
 
 const NAV = [
   { id: 'bridge', label: 'Bridge', ico: '⌂' },
@@ -30,6 +34,8 @@ const NAV = [
   { id: 'galaxy', label: 'Map', ico: '✦' },
   { id: 'ship', label: 'Ship', ico: '⬡' },
   { id: 'crew', label: 'Crew', ico: '☰' },
+  { id: 'sheet', label: 'Captain', ico: '✧' },
+  { id: 'reputation', label: 'Rep', ico: '◈' },
   { id: 'captain', label: 'Record', ico: '★' },
 ];
 
@@ -37,6 +43,21 @@ const BACKGROUND_SKILL = {
   command: 'leadership', tactical: 'beam_weapons',
   engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
 };
+
+
+/** Render a d20 result as an auditable card: the die, the breakdown, the verdict. */
+function rollCard(r) {
+  const cls = r.criticalSuccess ? 'crit' : r.criticalFailure ? 'fumble' : '';
+  const breakdown = (r.parts ?? [])
+    .filter((p) => p.value !== 0)
+    .map((p) => `${p.source} ${p.value >= 0 ? '+' : ''}${p.value}`)
+    .join('  ·  ');
+  return el('div', { class: `rollcard ${cls}`.trim() }, [
+    el('div', { class: 'dieline', text: r.formatted ?? '' }),
+    breakdown ? el('div', { class: 'breakdown', text: breakdown }) : null,
+    r.text ? el('div', { class: 'breakdown', text: r.text }) : null,
+  ]);
+}
 
 class App {
   constructor(root) {
@@ -180,11 +201,37 @@ class App {
       audio.play('promotion');
       audio.play('boatswain');
       haptic('confirm');
+      const g = this.game;
+      if (g) {
+        g.character.levelUp();
+        g.pendingFeats = (g.pendingFeats ?? 0) + 1;
+        g.applyAllMods();
+      }
       this.showMessage('Promotion', [
         `You are promoted to ${promo.rank.name}.`,
-        `${promo.points} skill points awarded.`,
-        'Starfleet notes that heavier hulls are now available to you at any shipyard.',
+        `${promo.points} skill points awarded, and a feat to choose on the Captain screen.`,
+        `Character level ${g?.character.level ?? 1}. Proficiency is now ${g ? `+${g.character.proficiencyBonus}` : ''}.`,
       ]);
+    });
+
+    // Reputation tier-ups are a real unlock, so they are announced.
+    on('reputation:tier', (up) => {
+      audio.play('promotion');
+      haptic('confirm');
+      this.showMessage('Reputation', [
+        `Your standing with them has advanced to ${up.name}.`,
+        'New projects are available on the Reputation screen.',
+      ]);
+    });
+
+    // Every d20 roll is captured so the player can audit the arithmetic.
+    on('away:check', (result) => {
+      this.recentRolls ??= [];
+      this.recentRolls.push(result);
+      if (this.recentRolls.length > 60) this.recentRolls.shift();
+      if (result.criticalSuccess) { audio.play('ui_confirm'); haptic('confirm'); }
+      else if (result.criticalFailure) { audio.play('ui_deny'); haptic('deny'); }
+      else audio.play('ui_tap');
     });
 
     on('ledger:inquiry', () => {
@@ -251,6 +298,8 @@ class App {
       case 'tactical': node = screens.tacticalScreen(this); break;
       case 'galaxy': node = screens.galaxyScreen(this); break;
       case 'crew': node = el('div', { class: 'screen' }, [screens.crewScreen(this)]); break;
+      case 'sheet': node = el('div', { class: 'screen' }, [characterSheetScreen(this)]); break;
+      case 'reputation': node = el('div', { class: 'screen' }, [reputationScreen(this)]); break;
       case 'captain': node = el('div', { class: 'screen' }, [screens.captainScreen(this)]); break;
       case 'ship': node = el('div', { class: 'screen' }, [screens.shipScreen(this)]); break;
       case 'options': node = el('div', { class: 'screen' }, [screens.optionsScreen(this)]); break;
@@ -302,8 +351,12 @@ class App {
 
   showMessage(title, lines, actions = null) {
     this.closeModal();
-    this.modalHandle = modal(title,
-      [].concat(lines).map((l) => el('p', { text: l })),
+    // Anything that is a roll result is rendered as an auditable die card
+    // rather than a sentence, so the arithmetic is always visible.
+    const body = [].concat(lines).map((l) => (
+      typeof l === 'object' && l?.natural !== undefined ? rollCard(l) : el('p', { text: String(l) })
+    ));
+    this.modalHandle = modal(title, body,
       actions ?? [button('Acknowledged', () => { audio.play('computer_ack'); this.closeModal(); }, { color: 'blue' })]);
     audio.play('computer_query');
     return this.modalHandle;
@@ -440,6 +493,110 @@ class App {
     g.pushLog(`${officer.name}: ${ability.say ?? line}`, officer.station);
     if (this.settings.voice) audio.speak(ability.say ?? line);
     haptic('confirm');
+  }
+
+  /**
+   * Career signature powers: one big effect, once per engagement.
+   *
+   * Each reuses machinery that already exists — buffs, repair, cooldowns —
+   * rather than inventing a parallel system.
+   */
+  useSignature() {
+    const g = this.game;
+    const c = g?.character;
+    const eng = g?.engagement;
+    if (!c || c.signatureUsed) { audio.play('ui_deny'); return false; }
+
+    const career = c.career;
+    let line = '';
+
+    switch (c.careerId) {
+      case 'command': {
+        // Take the Conn — every bridge officer is ready again.
+        for (const o of g.crew.officers) o.cooldowns = {};
+        line = 'Every station reports ready.';
+        break;
+      }
+      case 'tactical': {
+        // Called Shot — the next hit that lands is a guaranteed critical.
+        if (!eng) { audio.play('ui_deny'); return false; }
+        eng.guaranteedCrits += 1;
+        if (!eng.targetedSubsystem) eng.targetSubsystem('weapons');
+        line = `Called shot on their ${eng.targetedSubsystem}. Standing by.`;
+        break;
+      }
+      case 'engineering': {
+        const before = g.ship.hullPct;
+        g.ship.repair(g.ship.maxHull * 0.3);
+        g.ship.fires = 0;
+        line = `Hull integrity ${Math.round(before * 100)}% to ${Math.round(g.ship.hullPct * 100)}%. Fires are out.`;
+        break;
+      }
+      case 'science': {
+        // Insight — see everything, and roll better for twenty seconds.
+        g.ship.addBuff({
+          id: 'insight', label: 'Insight', until: 20,
+          mods: { accuracy: 1.25, critChance: 0.15 },
+        });
+        c.insightUntil = 20;
+        if (eng?.target) {
+          const t = eng.target;
+          const weakest = FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore');
+          line = `${t.name}: weakest facing is ${weakest}, hull at ${Math.round(t.hullPct * 100)}%.`;
+        } else {
+          line = 'Full spectrum analysis running.';
+        }
+        break;
+      }
+      case 'medical': {
+        // Triage — one officer back on their feet, and fewer losses after.
+        const wounded = g.crew.officers.find((o) => o.alive && o.injured);
+        if (wounded) { wounded.injured = false; wounded.injurySeverity = 0; }
+        g.ship.addBuff({
+          id: 'triage', label: 'Triage', until: 30, mods: { crewProtect: 0.5 },
+        });
+        line = wounded
+          ? `${wounded.name} is back on duty. Sickbay is holding.`
+          : 'Sickbay is prepped. Casualties will be lighter.';
+        break;
+      }
+      case 'diplomatic': {
+        // Parley — they will hear you out whatever their doctrine says.
+        if (!eng) { audio.play('ui_deny'); return false; }
+        g.parleyForced = true;
+        line = 'Channel forced open. They are listening whether they meant to or not.';
+        this.openHail(eng.hostiles[0]?.faction);
+        break;
+      }
+      case 'intelligence': {
+        // Prior Knowledge — you move first, and they lose a beat.
+        if (eng) {
+          for (const s of eng.liveHostiles) {
+            for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, 6);
+            if (s.cloaked) s.decloak();
+          }
+        }
+        g.ship.addBuff({
+          id: 'prior_knowledge', label: 'Prior Knowledge', until: 15,
+          mods: { accuracy: 1.2, defense: 1.4 },
+        });
+        line = 'We know what they are about to do. Six seconds of it.';
+        break;
+      }
+      default:
+        audio.play('ui_deny');
+        return false;
+    }
+
+    c.signatureUsed = true;
+    g.pushLog(`${career.signature}: ${line}`, 'captain');
+    if (this.settings.voice) audio.speak(line);
+    audio.play('ui_confirm');
+    audio.play('computer_ack');
+    haptic('confirm');
+    this.showMessage(career.signature, [line]);
+    this.render();
+    return true;
   }
 
   useDevice(id) {
@@ -695,6 +852,84 @@ class App {
     this.render();
   }
 
+  // ------------------------------------------------------------ character
+
+  /**
+   * Promotion grants a feat choice. The sheet screen offers the list; this
+   * applies the pick and, for the repeatable ability feat, asks which scores.
+   */
+  chooseFeat(featId) {
+    const g = this.game;
+    if (!g || !(g.pendingFeats > 0)) return;
+    const feat = FEAT_BY_ID[featId];
+    if (!feat) return;
+
+    if (featId === 'ability_score') {
+      // Two +1s, chosen one at a time, so the UI stays a simple list.
+      this.pickAbilityIncrease(2, []);
+      return;
+    }
+    if (g.character.takeFeat(featId)) {
+      g.pendingFeats--;
+      g.applyAllMods();
+      g.pushLog(`Qualified: ${feat.name}.`, 'captain');
+      audio.play('ui_confirm');
+      this.showMessage(feat.name, [feat.text]);
+      this.render();
+    }
+  }
+
+  pickAbilityIncrease(remaining, picked) {
+    const g = this.game;
+    this.closeModal();
+    this.modalHandle = modal(`Field Commission — ${remaining} to assign`, [
+      el('p', { class: 'hint', text: 'Raise an ability score by one. Scores are capped at 20.' }),
+      ...ABILITY_LIST.map((a) => {
+        const score = g.character.score(a.id);
+        return button(`${a.name} — ${score} → ${Math.min(20, score + 1)}`, () => {
+          const next = [...picked, a.id];
+          if (remaining > 1) {
+            this.pickAbilityIncrease(remaining - 1, next);
+          } else {
+            g.character.takeFeat('ability_score', next);
+            g.pendingFeats--;
+            g.applyAllMods();
+            g.pushLog('Field commission: ability scores raised.', 'captain');
+            this.closeModal();
+            audio.play('ui_confirm');
+            this.render();
+          }
+        }, { color: score >= 20 ? 'ghost' : 'blue', disabled: score >= 20 });
+      }),
+    ], [button('Cancel', () => this.closeModal(), { color: 'ghost' })]);
+  }
+
+  /** Apply what a completed reputation project actually gives you. */
+  applyReputationGrant(trackId, project) {
+    const g = this.game;
+    const grant = project.grant ?? {};
+
+    if (grant.console) {
+      g.loadout.acquire(grant.console);
+      g.pushLog(`${CONSOLES[grant.console]?.name ?? grant.console} received from ${trackId}.`, 'engineering');
+    }
+    if (grant.torpedoes) {
+      g.ship.torpedoes = Math.min(g.ship.maxTorpedoes, g.ship.torpedoes + grant.torpedoes);
+    }
+    if (grant.antimatter) {
+      g.ship.antimatter = Math.min(100, g.ship.antimatter + grant.antimatter);
+    }
+    if (grant.perk === 'cloak') {
+      g.ship.cloakCapable = true;
+      g.pushLog('A cloaking device has been installed. Nobody has signed for it.', 'engineering');
+    }
+    if (grant.title) {
+      g.pushLog(`You are now styled "${grant.title}".`, 'captain');
+    }
+    g.applyAllMods();
+    this.showMessage(project.name, [project.text]);
+  }
+
   // ------------------------------------------------------------ persistence
 
   save() { return saveGame(this.game, 'auto'); }
@@ -729,47 +964,78 @@ class App {
 
   showNewGame() {
     this.game = null;
-    const node = el('div', { class: 'screen' }, [
-      screens.newGameScreen(this, (draft) => this.startGame(draft)),
-    ]);
-    this.screenEl.replaceWith(node);
-    this.screenEl = node;
+    this.creator = new CharacterCreator(this, (draft) => this.startGame(draft));
+    this.screenEl.replaceWith(this.creator.root);
+    this.screenEl = this.creator.root;
     this.orderBar.style.display = 'none';
+    this.navEl.style.display = 'none';
     this.shipNameEl.textContent = 'Starfleet Command';
-    this.stardateEl.textContent = '';
+    this.stardateEl.textContent = 'New Commission';
+  }
+
+  /** Character creation needs randomness before a Game (and its RNG) exists. */
+  rngForCreation() {
+    this.creationRng ??= new RNG(hashSeed(`creation:${Date.now()}:${Math.random()}`));
+    return this.creationRng;
   }
 
   startGame(draft) {
-    const seed = draft.seed?.trim() ? hashSeed(draft.seed.trim()) : hashSeed(`${Date.now()}:${Math.random()}`);
+    const seed = draft.seed?.trim()
+      ? hashSeed(draft.seed.trim())
+      : hashSeed(`${Date.now()}:${Math.random()}`);
+
     this.game = new Game({
       seed,
-      captainName: draft.name || 'Reyes',
-      captainFirstName: draft.firstName,
-      species: draft.species,
-      pronouns: draft.pronouns,
-      background: draft.background,
+      character: {
+        firstName: draft.firstName || 'Alexander',
+        lastName: draft.lastName || 'Reyes',
+        pronouns: draft.pronouns,
+        speciesId: draft.speciesId,
+        originId: draft.originId,
+        careerId: draft.careerId,
+        traits: draft.traits,
+        baseScores: draft.baseScores,
+      },
+      difficulty: draft.difficulty,
       crewMode: draft.crewMode,
       era: draft.era,
       shipName: draft.shipName || 'Enterprise',
       registry: draft.registry || 'NCC-1701',
     });
 
-    // Background grants a free skill rank.
-    const skillId = BACKGROUND_SKILL[draft.background];
+    // The career track grants a matching starting skill rank.
+    const skillId = BACKGROUND_SKILL[draft.careerId];
     if (skillId && SKILLS[skillId]) {
       this.game.progress.unspent++;
       this.game.progress.spend(skillId);
-      this.game.applyAllMods();
     }
+    // Starfleet families start with an extra pip and the scrutiny to match.
+    if (this.game.character.mechanic('startingRankBonus')) {
+      this.game.progress.rankIndex = Math.min(
+        this.game.progress.rankIndex + 1,
+        10,
+      );
+    }
+    if (this.game.character.mechanic('startingReprimand')) {
+      this.game.ledger.record('order_disobeyed', {
+        text: 'Prior reprimand on file at time of commission',
+      });
+    }
+    this.game.applyAllMods();
+    this.recentRolls = [];
 
     this.orderBar.style.display = '';
+    this.navEl.style.display = '';
+    this.creator = null;
     this.go('bridge');
     audio.unlock();
     audio.play('boatswain');
+
+    const c = this.game.character;
     this.showMessage(`Stardate ${this.game.stardate}`, [
-      `${this.game.progress.rankName} ${draft.firstName} ${draft.name}, you have the ${this.game.ship.name}.`,
-      'Orders are on the screen at Sol. The galaxy is charted; most of it is not surveyed.',
-      'Type an order at any time — "helm, set course for Vulcan, warp eight" — or use the panels.',
+      `${this.game.progress.rankName} ${c.name}, you have the ${this.game.ship.name}.`,
+      `${c.species.name}, ${c.career.name} track, serving at ${this.game.difficulty.name} difficulty.`,
+      'Orders are on the screen at Sol. Type an order at any time — "helm, set course for Vulcan, warp eight" — or use the panels.',
     ]);
     this.save();
   }

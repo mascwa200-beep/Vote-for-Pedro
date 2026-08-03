@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lcars_black">#FF000000</color>
+    <color name="lcars_orange">#FFFF9C00</color>
+</resources>

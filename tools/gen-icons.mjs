@@ -134,3 +134,22 @@ for (const size of [192, 512]) {
 }
 
 console.log(`Icons written to ${OUT}`);
+
+// ---------------------------------------------------------------- Android
+
+// Launcher icons for the APK. Legacy square icons per density, plus an
+// adaptive foreground whose art sits inside the 66% safe circle so the
+// launcher can mask it to whatever shape the device uses.
+const ANDROID_RES = join(dirname(fileURLToPath(import.meta.url)), '..', 'android', 'res');
+const DENSITIES = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 };
+
+for (const [density, size] of Object.entries(DENSITIES)) {
+  const dir = join(ANDROID_RES, `mipmap-${density}`);
+  mkdirSync(dir, { recursive: true });
+  writePNG(join(dir, 'ic_launcher.png'), size, drawIcon(0.06));
+  // Adaptive foregrounds are 108dp with only the middle 72dp guaranteed
+  // visible, so the mark is inset further than the legacy icon.
+  writePNG(join(dir, 'ic_launcher_foreground.png'), Math.round(size * 1.5), drawIcon(0.26));
+}
+
+console.log(`Android launcher icons written to ${ANDROID_RES}`);
