@@ -20,9 +20,9 @@ import { fold } from './normalize.js';
 /** Departments an order can be aimed at, used to break ties. */
 export const STATION_AFFINITY = {
   helm: ['set_course', 'warp_factor', 'throttle', 'come_about', 'heading',
-    'evasive', 'warp_out', 'dock', 'all_stop'],
+    'evasive', 'warp_out', 'dock', 'all_stop', 'pitch', 'turn'],
   tactical: ['fire', 'cease_fire', 'target_nearest', 'cycle_target',
-    'target_subsystem', 'shields', 'reinforce', 'alert'],
+    'target_subsystem', 'shields', 'reinforce', 'alert', 'cloak'],
   engineering: ['power', 'preset', 'eject_core', 'reinforce'],
   science: ['scan'],
   comms: ['hail', 'demand_surrender'],
@@ -156,6 +156,93 @@ export const INTENTS = [
     build: (c) => (c.bearing
       ? { action: 'heading', value: c.bearing.bearing, mark: c.bearing.mark }
       : { action: 'come_about' }),
+  },
+  {
+    id: 'pitch',
+    help: 'Take us up / dive / level off / climb 30 degrees',
+    // The third axis, as an order. The enemy AI has always used elevation
+    // tactically — chooseElevation() comes at you from above or below whichever
+    // face you are not presenting — and there was no way for the captain to say
+    // it. `setPitch` existed and nothing in the game called it.
+    phrases: [
+      'take us up', 'take us down', 'bring us up', 'bring us down',
+      'get us above them', 'get us under them', 'get above them', 'get below them',
+      'climb', 'dive', 'ascend', 'descend', 'nose up', 'nose down',
+      'pitch up', 'pitch down', 'pull up', 'push her down',
+      'gain altitude', 'lose altitude', 'go high', 'go low',
+      'come at them from above', 'come at them from below',
+      'take us over them', 'take us under them', 'drop below them',
+      'bring us above them', 'get on top of them', 'go over the top',
+      'level off', 'level out', 'level the ship', 'even keel', 'straighten us out',
+    ],
+    keywords: {
+      climb: 3, dive: 3, ascend: 3, descend: 3, altitude: 2.5,
+      elevation: 2.5, above: 1.5, below: 1.5, level: 1.5, pitch: 2,
+      // "up" and "down" are everywhere — "shields up", "power down" — and are
+      // only safe as keywords because mustHave has already ruled this intent
+      // out for any sentence the elevation extractor did not recognise. They
+      // are what gets a doubly-typo'd "tkae us up" over the scorer's floor,
+      // which it has to clear before an entity slot can corroborate anything.
+      up: 0.9, down: 0.9,
+    },
+    // Without this, "speed up" and "slow down" read as elevation changes.
+    veto: ['speed', 'impulse', 'throttle', 'warp'],
+    // Hard precondition: without an actual elevation in the text these words
+    // are not an elevation order at all. It is corroborating evidence as well
+    // as a gate — a typo'd "tkae us up" matches no phrase and no keyword, and
+    // the extracted elevation is the only thing that identifies it.
+    mustHave: ['elevation'],
+    requires: ['elevation'],
+    build: (c) => ({ action: 'pitch', value: c.elevation ?? 0 }),
+  },
+  {
+    id: 'turn',
+    help: 'Hard to port / come right / steady as she goes',
+    // Relative helm, as opposed to `come_about` (absolute bearing) and
+    // `pitch` (elevation). This is how a bridge actually talks, and it was the
+    // one register the parser had no answer for at all.
+    phrases: [
+      'hard to port', 'hard to starboard', 'hard aport', 'hard astarboard',
+      'hard a port', 'hard a starboard', 'come left', 'come right',
+      'turn to port', 'turn to starboard', 'bear left', 'bear right',
+      'left rudder', 'right rudder', 'ease to port', 'ease to starboard',
+      'steady as she goes', 'steady on', 'steady as you go',
+      'hold this heading', 'maintain heading', 'maintain this heading',
+      'hold our heading', 'keep her steady', 'stay on this heading',
+    ],
+    keywords: { rudder: 3, aport: 3, astarboard: 3, steady: 2.5, hard: 1.2 },
+    // "hard to port" is a turn; "reinforce the port shield" is not.
+    veto: ['shield', 'reinforce', 'facing'],
+    build: (c) => {
+      const t = c.text;
+      if (/\b(?:steady|maintain|hold|keep|stay)\b/.test(t)) return { action: 'turn', value: 0 };
+      const hard = /\bhard\b/.test(t);
+      const left = /\b(?:port|aport|a port|left)\b/.test(t);
+      return { action: 'turn', value: (left ? -1 : 1) * (hard ? 90 : 45) };
+    },
+  },
+  {
+    id: 'cloak',
+    help: 'Cloak / drop the cloak',
+    // No Federation hull in the game carries a cloaking device, so on the
+    // Enterprise this order is always refused — but it is refused *in world*,
+    // by an officer who says why. "I do not understand" to an order every
+    // captain in this setting knows the words to is the wrong failure.
+    phrases: [
+      'cloak', 'cloak the ship', 'cloak us', 'engage the cloak',
+      'engage the cloaking device', 'activate the cloak', 'go cloaked',
+      'raise the cloak', 'cloaking device on',
+      'decloak', 'uncloak', 'drop the cloak', 'drop cloak', 'disengage the cloak',
+      'deactivate the cloak', 'cloaking device off', 'come out of cloak',
+      'take us out of cloak',
+    ],
+    keywords: { cloak: 3, cloaked: 3, cloaking: 3, uncloak: 3, decloak: 3 },
+    // A cloak *detection* order is a sensor order, not this.
+    veto: ['detect', 'find', 'scan', 'tachyon'],
+    build: (c) => ({
+      action: 'cloak',
+      on: !/\b(?:de ?cloak|uncloak|drop|disengage|deactivate|off|out of)\b/.test(c.text),
+    }),
   },
   {
     id: 'evasive',
@@ -381,8 +468,17 @@ export const INTENTS = [
       'do not fire', 'stop shooting', 'stand down weapons', 'guns cold',
       'no more shooting', 'stop the attack', 'hold your fire', 'weapons safe',
       'guns cold', 'belay that order to fire',
+      // "Belay that" with nothing else in the sentence is the bridge's way of
+      // saying stop what you are doing, and in a fight what you are doing is
+      // shooting. "Belay the evasive manoeuvres" is not this — it is the
+      // evasive intent, negated — so anything that names another order vetoes
+      // this one and the negation handling takes it instead.
+      'belay that', 'belay that order', 'belay my last', 'belay',
+      'cancel that', 'cancel that order', 'cancel my last', 'disregard that',
     ],
-    keywords: { cease: 3.5, hold: 1.5, check: 1.5 },
+    keywords: { cease: 3.5, hold: 1.5, check: 1.5, belay: 2.5 },
+    veto: ['evasive', 'evading', 'course', 'warp', 'shield', 'shields',
+      'power', 'cloak', 'alert', 'scan', 'hail', 'dock', 'climb', 'dive'],
     build: () => ({ action: 'cease_fire' }),
   },
 

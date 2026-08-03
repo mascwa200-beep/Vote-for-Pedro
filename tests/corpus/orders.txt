@@ -610,3 +610,76 @@ viewscreen | let me see
 alert | blue alert
 alert | condition blue
 alert | secure for docking
+
+# --- The third axis. The 3D simulation's headline feature had no order at all.
+pitch | take us up
+pitch | take us down
+pitch | bring us up
+pitch | bring us down
+pitch | climb
+pitch | dive
+pitch | ascend
+pitch | descend
+pitch | nose up
+pitch | nose down
+pitch | pitch up
+pitch | pitch down
+pitch | pull up
+pitch | gain altitude
+pitch | lose altitude
+pitch | climb 30 degrees
+pitch | dive 40 degrees
+pitch | get us above them
+pitch | get us under them
+pitch | take us over them
+pitch | drop below them
+pitch | come at them from above
+pitch | come at them from below
+pitch | get on top of them
+pitch | helm take us up
+pitch | helm, take us down
+pitch | level off
+pitch | level out
+pitch | even keel
+pitch | straighten us out
+pitch | level the ship
+pitch | climd
+pitch | tkae us up
+
+# --- Relative helm. How a bridge actually talks.
+turn | hard to port
+turn | hard to starboard
+turn | hard aport
+turn | hard astarboard
+turn | come left
+turn | come right
+turn | turn to port
+turn | turn to starboard
+turn | bear left
+turn | bear right
+turn | left rudder
+turn | right rudder
+turn | steady as she goes
+turn | steady on
+turn | hold this heading
+turn | maintain heading
+turn | keep her steady
+turn | helm, hard to port
+turn | hard to prot
+
+# --- Belaying an order.
+cease_fire | belay that
+cease_fire | belay my last
+cease_fire | belay that order
+cease_fire | cancel that
+cease_fire | disregard that
+
+# --- The cloak. Refused on a Federation hull, but refused in world.
+cloak | cloak
+cloak | cloak the ship
+cloak | engage the cloaking device
+cloak | activate the cloak
+cloak | decloak
+cloak | uncloak
+cloak | drop the cloak
+cloak | take us out of cloak

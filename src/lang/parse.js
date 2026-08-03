@@ -22,7 +22,7 @@ import { similarity } from './fuzzy.js';
 import { soundsLike } from './phonetic.js';
 import {
   findPlace, findFacing, findPowerChannel, findTargetSystem,
-  findFaction, findWarpFactor, findPercent, findBearing, findRecipe,
+  findFaction, findWarpFactor, findPercent, findBearing, findRecipe, findElevation,
 } from './gazetteer.js';
 import { INTENTS, STATION_AFFINITY } from './lexicon.js';
 
@@ -64,6 +64,7 @@ function extract(norm) {
     warp: findWarpFactor(text),
     percent: findPercent(text),
     bearing: findBearing(text),
+    elevation: findElevation(text, tokens),
     recipe: findRecipe(text),
   };
 }

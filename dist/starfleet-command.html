@@ -14756,6 +14756,21 @@ function tacticalScreen(app) {
       }), { color: g.ship.evasive ? 'green' : 'blue' }),
     ]),
     powerSlider('Throttle', g.ship.throttle * 100, (v) => { g.ship.throttle = v / 100; }),
+    // Elevation. The third axis is what the 3D simulation is for, and the
+    // enemy AI has always used it — chooseElevation() deliberately attacks the
+    // face you are not presenting. Until this row existed the player's only
+    // elevation control was "Come about", which merely points at the target.
+    el('div', { class: 'grid-3' }, [
+      button('Climb', tap(() => {
+        eng.setPitch(g.ship.desiredPitch + 20); app.render();
+      }), { color: 'blue' }),
+      button('Level', tap(() => { eng.setPitch(0); app.render(); }), { color: 'blue' }),
+      button('Dive', tap(() => {
+        eng.setPitch(g.ship.desiredPitch - 20); app.render();
+      }), { color: 'blue' }),
+    ]),
+    readout('Elevation', (g.ship.pitch + 70) / 140,
+      `${g.ship.pitch >= 0 ? '+' : ''}${Math.round(g.ship.pitch)}\u00B0`),
     button('Disengage — go to warp', tap(() => {
       if (!eng.beginWarpOut()) audio.play('ui_deny');
       app.render();
@@ -17034,6 +17049,92 @@ function findBearing(text) {
   };
 }
 
+/**
+ * How far up or down, in degrees, from a spoken elevation order.
+ *
+ * The third axis is what the 3D simulation is for — the enemy AI comes at you
+ * from above or below whichever face you are not presenting — and until this
+ * existed there was no way to type an order that used it.
+ *
+ * Returns null when the text is not an elevation order at all, so a caller can
+ * tell "not about elevation" from "level off", which is a real order meaning
+ * zero.
+ */
+/** Vertical verbs — words that are themselves an elevation order. */
+const CLIMB_VERBS = ['climb', 'ascend', 'ascent', 'soar'];
+const DIVE_VERBS = ['dive', 'descend', 'descent', 'plunge'];
+
+/** Words that only mean elevation when a movement verb is with them. */
+const UP_WORDS = ['up', 'above', 'over', 'top', 'higher', 'upward', 'upwards', 'altitude'];
+const DOWN_WORDS = ['down', 'below', 'under', 'underneath', 'beneath', 'downward', 'downwards', 'lower'];
+
+/** Verbs that turn a bare direction into a manoeuvre. */
+const MOVE_VERBS = ['take', 'bring', 'get', 'put', 'come', 'go', 'drop', 'push',
+  'pull', 'nose', 'pitch', 'gain', 'lose', 'move', 'swing'];
+
+/** Level-off phrasings, which mean an elevation of exactly zero. */
+const LEVEL_RE = /\b(?:level (?:off|out|us|the ship|her|it)?|even keel|straighten (?:up|out|us|her))\b/;
+
+/** Does any token match `word` exactly, by close spelling, or by sound? */
+function tokenHits(tokens, word) {
+  for (const tok of tokens) {
+    if (tok === word) return true;
+    // Same thresholds as the other extractors here: loose enough for a real
+    // typo, strict enough that "up" does not swallow every two-letter token.
+    if (tok.length >= 4 && word.length >= 4
+      && (similarity(tok, word) > 0.75 || soundsLike(tok, word))) return true;
+  }
+  return false;
+}
+
+/**
+ * How far up or down, in degrees, from a spoken elevation order.
+ *
+ * The third axis is what the 3D simulation is for — the enemy AI comes at you
+ * from above or below whichever face you are not presenting — and until this
+ * existed there was no way to type an order that used it.
+ *
+ * Token-based and fuzzy rather than a flat regex, to match how every other
+ * extractor in this file works: "climd" and "tkae us up" are exactly the kind
+ * of input the rest of the pipeline already absorbs, and an order layer that
+ * handles a typo in "shields" but not in "climb" is inconsistent in a way a
+ * player would feel.
+ *
+ * Returns null when the text is not about elevation at all, so a caller can
+ * tell "not an elevation order" from "level off", which is a real order
+ * meaning zero.
+ */
+function findElevation(text, tokens = text.split(/\s+/).filter(Boolean)) {
+  if (LEVEL_RE.test(text)) return 0;
+
+  // A vertical verb stands alone: "climb" needs no preposition.
+  let up = CLIMB_VERBS.some((v) => tokenHits(tokens, v));
+  let down = DIVE_VERBS.some((v) => tokenHits(tokens, v));
+
+  // A bare direction needs a movement verb with it, or "shields up" and
+  // "power down" become manoeuvres.
+  if (!up && !down) {
+    const moving = MOVE_VERBS.some((v) => tokenHits(tokens, v));
+    if (moving) {
+      up = UP_WORDS.some((w) => tokenHits(tokens, w));
+      down = DOWN_WORDS.some((w) => tokenHits(tokens, w));
+    }
+  }
+
+  // "on top of them" / "from above" name a position rather than a movement.
+  if (!up && !down) {
+    if (/\b(?:on top of|from above|up and over|over the top)\b/.test(text)) up = true;
+    else if (/\b(?:from below|from underneath|underneath them|from under)\b/.test(text)) down = true;
+  }
+
+  if (up === down) return null;   // neither, or a contradictory both
+
+  // "climb 30 degrees" is exact; a bare "climb" is a decisive but sane angle.
+  const m = text.match(/\b(-?\d{1,2})\s*(?:deg|degrees?)?\b/);
+  const magnitude = m ? Math.min(70, Math.abs(parseInt(m[1], 10))) : 35;
+  return (up ? 1 : -1) * magnitude;
+}
+
 /** Everything the parser can name, for the help sheet and for tests. */
 function gazetteerSummary() {
   return {
@@ -17060,6 +17161,7 @@ __exports.findFaction = findFaction;
 __exports.findWarpFactor = findWarpFactor;
 __exports.findPercent = findPercent;
 __exports.findBearing = findBearing;
+__exports.findElevation = findElevation;
 __exports.gazetteerSummary = gazetteerSummary;
 
 });
@@ -17087,9 +17189,9 @@ const { fold } = __require("src/lang/normalize.js");
 /** Departments an order can be aimed at, used to break ties. */
 const STATION_AFFINITY = {
   helm: ['set_course', 'warp_factor', 'throttle', 'come_about', 'heading',
-    'evasive', 'warp_out', 'dock', 'all_stop'],
+    'evasive', 'warp_out', 'dock', 'all_stop', 'pitch', 'turn'],
   tactical: ['fire', 'cease_fire', 'target_nearest', 'cycle_target',
-    'target_subsystem', 'shields', 'reinforce', 'alert'],
+    'target_subsystem', 'shields', 'reinforce', 'alert', 'cloak'],
   engineering: ['power', 'preset', 'eject_core', 'reinforce'],
   science: ['scan'],
   comms: ['hail', 'demand_surrender'],
@@ -17223,6 +17325,93 @@ const INTENTS = [
     build: (c) => (c.bearing
       ? { action: 'heading', value: c.bearing.bearing, mark: c.bearing.mark }
       : { action: 'come_about' }),
+  },
+  {
+    id: 'pitch',
+    help: 'Take us up / dive / level off / climb 30 degrees',
+    // The third axis, as an order. The enemy AI has always used elevation
+    // tactically — chooseElevation() comes at you from above or below whichever
+    // face you are not presenting — and there was no way for the captain to say
+    // it. `setPitch` existed and nothing in the game called it.
+    phrases: [
+      'take us up', 'take us down', 'bring us up', 'bring us down',
+      'get us above them', 'get us under them', 'get above them', 'get below them',
+      'climb', 'dive', 'ascend', 'descend', 'nose up', 'nose down',
+      'pitch up', 'pitch down', 'pull up', 'push her down',
+      'gain altitude', 'lose altitude', 'go high', 'go low',
+      'come at them from above', 'come at them from below',
+      'take us over them', 'take us under them', 'drop below them',
+      'bring us above them', 'get on top of them', 'go over the top',
+      'level off', 'level out', 'level the ship', 'even keel', 'straighten us out',
+    ],
+    keywords: {
+      climb: 3, dive: 3, ascend: 3, descend: 3, altitude: 2.5,
+      elevation: 2.5, above: 1.5, below: 1.5, level: 1.5, pitch: 2,
+      // "up" and "down" are everywhere — "shields up", "power down" — and are
+      // only safe as keywords because mustHave has already ruled this intent
+      // out for any sentence the elevation extractor did not recognise. They
+      // are what gets a doubly-typo'd "tkae us up" over the scorer's floor,
+      // which it has to clear before an entity slot can corroborate anything.
+      up: 0.9, down: 0.9,
+    },
+    // Without this, "speed up" and "slow down" read as elevation changes.
+    veto: ['speed', 'impulse', 'throttle', 'warp'],
+    // Hard precondition: without an actual elevation in the text these words
+    // are not an elevation order at all. It is corroborating evidence as well
+    // as a gate — a typo'd "tkae us up" matches no phrase and no keyword, and
+    // the extracted elevation is the only thing that identifies it.
+    mustHave: ['elevation'],
+    requires: ['elevation'],
+    build: (c) => ({ action: 'pitch', value: c.elevation ?? 0 }),
+  },
+  {
+    id: 'turn',
+    help: 'Hard to port / come right / steady as she goes',
+    // Relative helm, as opposed to `come_about` (absolute bearing) and
+    // `pitch` (elevation). This is how a bridge actually talks, and it was the
+    // one register the parser had no answer for at all.
+    phrases: [
+      'hard to port', 'hard to starboard', 'hard aport', 'hard astarboard',
+      'hard a port', 'hard a starboard', 'come left', 'come right',
+      'turn to port', 'turn to starboard', 'bear left', 'bear right',
+      'left rudder', 'right rudder', 'ease to port', 'ease to starboard',
+      'steady as she goes', 'steady on', 'steady as you go',
+      'hold this heading', 'maintain heading', 'maintain this heading',
+      'hold our heading', 'keep her steady', 'stay on this heading',
+    ],
+    keywords: { rudder: 3, aport: 3, astarboard: 3, steady: 2.5, hard: 1.2 },
+    // "hard to port" is a turn; "reinforce the port shield" is not.
+    veto: ['shield', 'reinforce', 'facing'],
+    build: (c) => {
+      const t = c.text;
+      if (/\b(?:steady|maintain|hold|keep|stay)\b/.test(t)) return { action: 'turn', value: 0 };
+      const hard = /\bhard\b/.test(t);
+      const left = /\b(?:port|aport|a port|left)\b/.test(t);
+      return { action: 'turn', value: (left ? -1 : 1) * (hard ? 90 : 45) };
+    },
+  },
+  {
+    id: 'cloak',
+    help: 'Cloak / drop the cloak',
+    // No Federation hull in the game carries a cloaking device, so on the
+    // Enterprise this order is always refused — but it is refused *in world*,
+    // by an officer who says why. "I do not understand" to an order every
+    // captain in this setting knows the words to is the wrong failure.
+    phrases: [
+      'cloak', 'cloak the ship', 'cloak us', 'engage the cloak',
+      'engage the cloaking device', 'activate the cloak', 'go cloaked',
+      'raise the cloak', 'cloaking device on',
+      'decloak', 'uncloak', 'drop the cloak', 'drop cloak', 'disengage the cloak',
+      'deactivate the cloak', 'cloaking device off', 'come out of cloak',
+      'take us out of cloak',
+    ],
+    keywords: { cloak: 3, cloaked: 3, cloaking: 3, uncloak: 3, decloak: 3 },
+    // A cloak *detection* order is a sensor order, not this.
+    veto: ['detect', 'find', 'scan', 'tachyon'],
+    build: (c) => ({
+      action: 'cloak',
+      on: !/\b(?:de ?cloak|uncloak|drop|disengage|deactivate|off|out of)\b/.test(c.text),
+    }),
   },
   {
     id: 'evasive',
@@ -17448,8 +17637,17 @@ const INTENTS = [
       'do not fire', 'stop shooting', 'stand down weapons', 'guns cold',
       'no more shooting', 'stop the attack', 'hold your fire', 'weapons safe',
       'guns cold', 'belay that order to fire',
+      // "Belay that" with nothing else in the sentence is the bridge's way of
+      // saying stop what you are doing, and in a fight what you are doing is
+      // shooting. "Belay the evasive manoeuvres" is not this — it is the
+      // evasive intent, negated — so anything that names another order vetoes
+      // this one and the negation handling takes it instead.
+      'belay that', 'belay that order', 'belay my last', 'belay',
+      'cancel that', 'cancel that order', 'cancel my last', 'disregard that',
     ],
-    keywords: { cease: 3.5, hold: 1.5, check: 1.5 },
+    keywords: { cease: 3.5, hold: 1.5, check: 1.5, belay: 2.5 },
+    veto: ['evasive', 'evading', 'course', 'warp', 'shield', 'shields',
+      'power', 'cloak', 'alert', 'scan', 'hail', 'dock', 'climb', 'dive'],
     build: () => ({ action: 'cease_fire' }),
   },
 
@@ -17786,7 +17984,7 @@ __define("src/lang/parse.js", function (__exports, __require) {
 const { normalize } = __require("src/lang/normalize.js");
 const { similarity } = __require("src/lang/fuzzy.js");
 const { soundsLike } = __require("src/lang/phonetic.js");
-const { findPlace, findFacing, findPowerChannel, findTargetSystem, findFaction, findWarpFactor, findPercent, findBearing, findRecipe } = __require("src/lang/gazetteer.js");
+const { findPlace, findFacing, findPowerChannel, findTargetSystem, findFaction, findWarpFactor, findPercent, findBearing, findRecipe, findElevation } = __require("src/lang/gazetteer.js");
 const { INTENTS, STATION_AFFINITY } = __require("src/lang/lexicon.js");
 
 /** Above this, act. Below the lower bound, admit you did not understand. */
@@ -17827,6 +18025,7 @@ function extract(norm) {
     warp: findWarpFactor(text),
     percent: findPercent(text),
     bearing: findBearing(text),
+    elevation: findElevation(text, tokens),
     recipe: findRecipe(text),
   };
 }
@@ -19333,8 +19532,55 @@ class App {
         break;
       case 'heading':
         eng?.setHeading(order.value);
-        ack('helm', `Coming to bearing ${order.value}.`);
+        // "Bearing 210 mark 15" always parsed its mark, carried it in the order
+        // object, and had it dropped here. The mark is the elevation, and it is
+        // the only reason the third axis is in the sentence.
+        if (order.mark) eng?.setPitch(order.mark);
+        ack('helm', order.mark
+          ? `Coming to bearing ${order.value} mark ${order.mark}.`
+          : `Coming to bearing ${order.value}.`);
         break;
+      case 'turn': {
+        if (!eng) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        if (order.value === 0) {
+          eng.setHeading(g.ship.heading);
+          ack('helm', 'Steady as she goes.');
+          break;
+        }
+        eng.setHeading(g.ship.heading + order.value);
+        ack('helm', order.value < 0 ? 'Coming to port.' : 'Coming to starboard.');
+        break;
+      }
+      case 'cloak': {
+        // No Federation hull in this game carries one. The refusal is the
+        // point: an officer says why, rather than the parser shrugging at an
+        // order every captain in this setting knows the words to.
+        if (!g.ship.cloakCapable) {
+          audio.play('ui_deny');
+          ack('engineering', 'We have no cloaking device, Captain. Treaty of Algeron.');
+          break;
+        }
+        const worked = order.on ? g.ship.cloak() : g.ship.decloak();
+        if (!worked) {
+          audio.play('ui_deny');
+          ack('engineering', order.on
+            ? 'The cloak is still cycling, Captain.'
+            : 'We are not cloaked.');
+          break;
+        }
+        audio.play('power_reroute');
+        ack('tactical', order.on ? 'Cloaking device engaged.' : 'Decloaking.');
+        break;
+      }
+      case 'pitch': {
+        if (!eng) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        eng.setPitch(order.value);
+        const said = order.value === 0 ? 'Levelling off.'
+          : order.value > 0 ? `Coming up ${Math.round(order.value)} degrees.`
+            : `Taking her down ${Math.round(-order.value)} degrees.`;
+        ack('helm', said);
+        break;
+      }
       case 'come_about':
         eng?.comeAboutTo(eng.target);
         ack('helm', 'Coming about.');

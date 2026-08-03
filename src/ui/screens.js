@@ -276,6 +276,21 @@ export function tacticalScreen(app) {
       }), { color: g.ship.evasive ? 'green' : 'blue' }),
     ]),
     powerSlider('Throttle', g.ship.throttle * 100, (v) => { g.ship.throttle = v / 100; }),
+    // Elevation. The third axis is what the 3D simulation is for, and the
+    // enemy AI has always used it — chooseElevation() deliberately attacks the
+    // face you are not presenting. Until this row existed the player's only
+    // elevation control was "Come about", which merely points at the target.
+    el('div', { class: 'grid-3' }, [
+      button('Climb', tap(() => {
+        eng.setPitch(g.ship.desiredPitch + 20); app.render();
+      }), { color: 'blue' }),
+      button('Level', tap(() => { eng.setPitch(0); app.render(); }), { color: 'blue' }),
+      button('Dive', tap(() => {
+        eng.setPitch(g.ship.desiredPitch - 20); app.render();
+      }), { color: 'blue' }),
+    ]),
+    readout('Elevation', (g.ship.pitch + 70) / 140,
+      `${g.ship.pitch >= 0 ? '+' : ''}${Math.round(g.ship.pitch)}\u00B0`),
     button('Disengage — go to warp', tap(() => {
       if (!eng.beginWarpOut()) audio.play('ui_deny');
       app.render();
