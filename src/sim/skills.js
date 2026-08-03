@@ -4,6 +4,7 @@
 // Beam Weapons is a real number in the damage formula, not a cosmetic tier.
 
 import { ADDITIVE_MODS } from './ship.js';
+import { finite } from '../core/num.js';
 
 export const RANKS = [
   { id: 'ensign', name: 'Ensign', tier: 1, xp: 0, skillPoints: 2 },
@@ -106,7 +107,11 @@ export class CaptainProgress {
    * @returns {object|null} promotion info
    */
   addXP(amount, { ledger = null } = {}) {
-    this.xp += Math.max(0, Math.round(amount));
+    // Guarded for the same reason the helm orders are: `Math.round(NaN)` is
+    // NaN, `xp` is saved, and a poisoned experience total takes the rank
+    // ladder and the whole skill economy with it, permanently.
+    const gain = Math.max(0, Math.round(finite(amount, 0)));
+    this.xp = Math.min(Number.MAX_SAFE_INTEGER, this.xp + gain);
     const next = this.nextRank;
     if (!next || this.xp < next.xp) return null;
     if (ledger?.inquiryOpen) return { blocked: true, reason: 'board of inquiry' };
@@ -181,5 +186,8 @@ export class CaptainProgress {
 
 /** XP for a combat victory, scaled by what you actually beat. */
 export function combatXP(hostiles) {
-  return hostiles.reduce((n, s) => n + (s.cls.tier ?? 1) * 140 + (s.maxHull / 20), 0);
+  return hostiles.reduce(
+    (n, s) => n + finite(s.cls?.tier, 1) * 140 + Math.max(0, finite(s.maxHull, 0)) / 20,
+    0,
+  );
 }

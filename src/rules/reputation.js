@@ -12,6 +12,8 @@
 // reputation) and still be shot at this week for a border violation (low
 // standing). That distinction is the point.
 
+import { clamp, finite } from '../core/num.js';
+
 export const REP_TIERS = [
   { tier: 0, name: 'Unknown', xp: 0, marksToAdvance: 0 },
   { tier: 1, name: 'Recognised', xp: 500, marksToAdvance: 40 },
@@ -194,11 +196,20 @@ export class ReputationTrack {
    * @returns {object|null} tier-up info
    */
   award(xp, marks, multiplier = 1) {
-    this.xp += Math.round(xp * multiplier);
-    this.marks += Math.round(marks * multiplier);
+    // Guarded, and the tier is capped. Marks are currency and both fields are
+    // saved, so one bad multiplier would poison a track for the rest of the
+    // commission — and a tier past the top of the table has no name, no
+    // projects, and nothing to show on the reputation screen.
+    // The multiplier needs a ceiling, not just a finiteness check: 1e308 is a
+    // finite number that overflows to Infinity the moment it is multiplied.
+    // Nothing in play exceeds 2 — a repGain trait times the Idealist doubling.
+    const mult = clamp(multiplier, 0, 100);
+    const cap = Number.MAX_SAFE_INTEGER;
+    this.xp = Math.min(cap, Math.max(0, this.xp + Math.round(finite(xp, 0) * mult)));
+    this.marks = Math.min(cap, Math.max(0, this.marks + Math.round(finite(marks, 0) * mult)));
     const next = this.nextTier;
     if (next && this.xp >= next.xp) {
-      this.tier++;
+      this.tier = Math.min(MAX_TIER, this.tier + 1);
       return { track: this.id, tier: this.tier, name: this.tierName };
     }
     return null;
