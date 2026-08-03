@@ -161,15 +161,22 @@ export function tacticalScreen(app) {
   const eng = g.engagement;
   const root = el('div', { class: 'screen tactical-screen' });
 
-  const wrap = el('div', { class: 'tactical-wrap' });
-  const canvas = el('canvas', { id: 'tactical' });
-  wrap.append(canvas);
-
-  const overlay = el('div', { class: 'tactical-overlay' });
-  wrap.append(overlay);
+  // The viewport is built once and *moved* into each new screen node rather
+  // than rebuilt. It has to be: a WebGL context is expensive to create,
+  // browsers cap how many can exist at once, and making a fresh one on every UI
+  // render silently drops the oldest until the display goes black. Appending an
+  // existing node relocates it and keeps the context alive.
+  let wrap = app.tacticalHost;
+  if (!wrap) {
+    wrap = el('div', { class: 'tactical-wrap' }, [
+      el('canvas', { id: 'tactical' }),
+      el('div', { class: 'tactical-overlay' }),
+    ]);
+    app.tacticalHost = wrap;
+  }
+  app.tacticalCanvas = wrap.querySelector('#tactical');
+  app.tacticalOverlay = wrap.querySelector('.tactical-overlay');
   root.append(wrap);
-  app.tacticalCanvas = canvas;
-  app.tacticalOverlay = overlay;
 
   const side = el('div', { class: 'tactical-side scroll' });
   root.append(side);

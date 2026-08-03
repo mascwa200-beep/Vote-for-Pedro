@@ -17,7 +17,7 @@ Three ways, all fully offline once installed:
 
 - **`dist/starfleet-command.apk`** — a real Android package. One permission,
   `VIBRATE`. **No `INTERNET` permission at all**, so it physically cannot
-  reach the network. ~190 KB, minSdk 26.
+  reach the network. ~210 KB, minSdk 26.
 - **PWA** — open the page once and tap **Add to Home screen**.
 - **`dist/starfleet-command.html`** — the whole game as one self-contained
   file. Drop it on the phone and open it from Files. No server, no install.
@@ -102,6 +102,22 @@ actually had; of all the buttons on the prop, exactly three were ever assigned a
 function on screen. Every control emits the same order object the parser
 produces, so there is one execution path and not two.
 
+**Three dimensions.** The tactical display is a hand-written WebGL renderer —
+no engine, no model files, no textures. Every hull is generated from a
+parametric blueprint: thirty-one classes are thirty-one short records of
+proportions taken from the reference dossier, turned into flat-shaded geometry
+by five primitives. A Constitution's saucer and nacelles, a Bird-of-Prey's
+swept wings and a Borg cube all come out of the same 400 lines.
+
+A reference grid and a drop line from every hull to it are what make the third
+axis readable rather than decorative — without them, two ships overlapping on
+screen tell you nothing about which is above the other. One finger orbits, two
+pinch, a tap targets.
+
+If WebGL is unavailable the 2D display this game shipped with takes over,
+complete and unchanged. "No WebGL" means a different picture, not a broken
+game.
+
 **Combat.** Four independent shield facings. Subsystem targeting. STO-style
 power distribution across weapons, shields, engines, and auxiliary, with an
 EPS grid that takes real seconds to rebalance. Firing arcs, range falloff,
@@ -166,6 +182,7 @@ engagement resolves identically on a 60 Hz and a 120 Hz panel.
 
 ```
 src/core/     rng, clock, event bus, consequence ledger, game state, saves
+src/gfx/      vector maths, WebGL, procedural meshes, hull blueprints, scene
 src/lang/     normalisation, phonetics, edit distance, gazetteer, intent lexicon
 src/rules/    d20 dice, character sheet, reputation tracks, difficulty ladder
 src/sim/      ship, power, combat, AI, officers, skills, loadout, away teams, diplomacy
@@ -178,13 +195,14 @@ android/      WebView shell, manifest, resources for the APK
 
 **Content:** 40 star systems, 31 ship classes, 16 authored episodes, 12
 species, 12 difficulties, 6 reputation tracks, 37 synthesized sound cues, and
-a command lexicon of 530 phrasings tested against a 545-order corpus.
+a command lexicon of 530 phrasings tested against a 545-order corpus,
+and 31 procedurally generated hulls averaging 230 triangles each.
 
 ## Development
 
 ```sh
 npm start      # serve at http://localhost:8099
-npm test       # 190 tests — RNG determinism, combat maths, dice, saves, balance
+npm test       # 227 tests — RNG determinism, combat maths, dice, saves, balance
 npm run build  # regenerate dist/starfleet-command.html
 
 ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh   # build the APK

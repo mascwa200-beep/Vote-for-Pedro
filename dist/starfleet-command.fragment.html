@@ -307,6 +307,18 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .screen.tactical-screen .tactical-side { flex: 1 1 auto; min-height: 0; }
 canvas#tactical { display: block; width: 100%; height: 100%; touch-action: none; }
 
+/* The 3D view draws LCARS text on a second canvas stacked over the GL one.
+   Text in a 3D scene needs a glyph atlas, which is an asset, and this project
+   ships none. The overlay takes the pointer events for both. */
+canvas.tactical-labels {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
 .tactical-overlay {
   position: absolute; inset: 0; pointer-events: none;
   display: flex; flex-direction: column; justify-content: space-between;
@@ -3295,6 +3307,1828 @@ class TacticalView {
 }
 
 __exports.TacticalView = TacticalView;
+
+});
+
+__define("src/gfx/math.js", function (__exports, __require) {
+// Vector and matrix maths for the 3D renderer.
+//
+// Float64 throughout, matching the rest of the simulation. The extra precision
+// is not needed for a projection matrix, but it is needed for ship positions —
+// a tactical volume is 3,000 units across and the sim runs for hours, and
+// mixing float32 state into a float64 simulation is how determinism quietly
+// stops holding.
+//
+// Matrices are column-major 16-element arrays, the layout WebGL expects, so
+// they go to the GPU without transposing. Every function that returns a matrix
+// takes an optional output array, because the render loop should not allocate.
+const DEG = Math.PI / 180;
+
+// ---------------------------------------------------------------- vectors
+const vec3 = (x = 0, y = 0, z = 0) => new Float64Array([x, y, z]);
+function add(a, b, out = vec3()) {
+  out[0] = a[0] + b[0]; out[1] = a[1] + b[1]; out[2] = a[2] + b[2];
+  return out;
+}
+function sub(a, b, out = vec3()) {
+  out[0] = a[0] - b[0]; out[1] = a[1] - b[1]; out[2] = a[2] - b[2];
+  return out;
+}
+function scale(a, s, out = vec3()) {
+  out[0] = a[0] * s; out[1] = a[1] * s; out[2] = a[2] * s;
+  return out;
+}
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+function cross(a, b, out = vec3()) {
+  const x = a[1] * b[2] - a[2] * b[1];
+  const y = a[2] * b[0] - a[0] * b[2];
+  const z = a[0] * b[1] - a[1] * b[0];
+  out[0] = x; out[1] = y; out[2] = z;
+  return out;
+}
+const length = (a) => Math.hypot(a[0], a[1], a[2]);
+function normalize(a, out = vec3()) {
+  const len = length(a);
+  if (len === 0) { out[0] = 0; out[1] = 0; out[2] = 0; return out; }
+  out[0] = a[0] / len; out[1] = a[1] / len; out[2] = a[2] / len;
+  return out;
+}
+const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+function lerp(a, b, t, out = vec3()) {
+  out[0] = a[0] + (b[0] - a[0]) * t;
+  out[1] = a[1] + (b[1] - a[1]) * t;
+  out[2] = a[2] + (b[2] - a[2]) * t;
+  return out;
+}
+
+/** Rotate a vector by a quaternion. */
+function transformQuat(v, q, out = vec3()) {
+  const [x, y, z] = v;
+  const [qx, qy, qz, qw] = q;
+  // t = 2 * cross(q.xyz, v); out = v + qw * t + cross(q.xyz, t)
+  const tx = 2 * (qy * z - qz * y);
+  const ty = 2 * (qz * x - qx * z);
+  const tz = 2 * (qx * y - qy * x);
+  out[0] = x + qw * tx + qy * tz - qz * ty;
+  out[1] = y + qw * ty + qz * tx - qx * tz;
+  out[2] = z + qw * tz + qx * ty - qy * tx;
+  return out;
+}
+
+// ------------------------------------------------------------ quaternions
+const quat = (x = 0, y = 0, z = 0, w = 1) => new Float64Array([x, y, z, w]);
+function quatIdentity(out = quat()) {
+  out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1;
+  return out;
+}
+
+/** Rotation of `rad` about an arbitrary axis. */
+function quatAxisAngle(axis, rad, out = quat()) {
+  const n = normalize(axis);
+  const h = rad / 2;
+  const s = Math.sin(h);
+  out[0] = n[0] * s; out[1] = n[1] * s; out[2] = n[2] * s; out[3] = Math.cos(h);
+  return out;
+}
+function quatMultiply(a, b, out = quat()) {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+  out[0] = aw * bx + ax * bw + ay * bz - az * by;
+  out[1] = aw * by - ax * bz + ay * bw + az * bx;
+  out[2] = aw * bz + ax * by - ay * bx + az * bw;
+  out[3] = aw * bw - ax * bx - ay * by - az * bz;
+  return out;
+}
+function quatNormalize(q, out = quat()) {
+  const len = Math.hypot(q[0], q[1], q[2], q[3]);
+  if (len === 0) return quatIdentity(out);
+  out[0] = q[0] / len; out[1] = q[1] / len; out[2] = q[2] / len; out[3] = q[3] / len;
+  return out;
+}
+
+/**
+ * Shortest-arc rotation that takes `from` to `to`.
+ * Used to point a hull along its velocity without accumulating drift.
+ */
+function quatFromTo(from, to, out = quat()) {
+  const a = normalize(from);
+  const b = normalize(to);
+  const d = dot(a, b);
+  if (d >= 0.999999) return quatIdentity(out);
+  if (d <= -0.999999) {
+    // Opposed: any perpendicular axis will do, so pick a stable one.
+    let axis = cross(vec3(1, 0, 0), a);
+    if (length(axis) < 1e-6) axis = cross(vec3(0, 1, 0), a);
+    return quatAxisAngle(axis, Math.PI, out);
+  }
+  const c = cross(a, b);
+  out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; out[3] = 1 + d;
+  return quatNormalize(out, out);
+}
+
+/** Spherical interpolation, for a camera that does not snap. */
+function quatSlerp(a, b, t, out = quat()) {
+  let [bx, by, bz, bw] = b;
+  let cosom = a[0] * bx + a[1] * by + a[2] * bz + a[3] * bw;
+  if (cosom < 0) { cosom = -cosom; bx = -bx; by = -by; bz = -bz; bw = -bw; }
+
+  let s0 = 1 - t;
+  let s1 = t;
+  if (1 - cosom > 1e-6) {
+    const omega = Math.acos(cosom);
+    const sinom = Math.sin(omega);
+    s0 = Math.sin((1 - t) * omega) / sinom;
+    s1 = Math.sin(t * omega) / sinom;
+  }
+  out[0] = s0 * a[0] + s1 * bx;
+  out[1] = s0 * a[1] + s1 * by;
+  out[2] = s0 * a[2] + s1 * bz;
+  out[3] = s0 * a[3] + s1 * bw;
+  return out;
+}
+
+/** Pitch, yaw and roll (radians) applied in that order, as a quaternion. */
+function quatFromEuler(pitch, yaw, roll, out = quat()) {
+  const cp = Math.cos(pitch / 2); const sp = Math.sin(pitch / 2);
+  const cy = Math.cos(yaw / 2); const sy = Math.sin(yaw / 2);
+  const cr = Math.cos(roll / 2); const sr = Math.sin(roll / 2);
+  out[0] = sp * cy * cr - cp * sy * sr;
+  out[1] = cp * sy * cr + sp * cy * sr;
+  out[2] = cp * cy * sr - sp * sy * cr;
+  out[3] = cp * cy * cr + sp * sy * sr;
+  return out;
+}
+
+// --------------------------------------------------------------- matrices
+const mat4 = () => new Float64Array(16);
+function identity(out = mat4()) {
+  out.fill(0);
+  out[0] = 1; out[5] = 1; out[10] = 1; out[15] = 1;
+  return out;
+}
+function multiply(a, b, out = mat4()) {
+  const o = out === a || out === b ? mat4() : out;
+  for (let c = 0; c < 4; c++) {
+    const b0 = b[c * 4]; const b1 = b[c * 4 + 1];
+    const b2 = b[c * 4 + 2]; const b3 = b[c * 4 + 3];
+    for (let r = 0; r < 4; r++) {
+      o[c * 4 + r] = a[r] * b0 + a[4 + r] * b1 + a[8 + r] * b2 + a[12 + r] * b3;
+    }
+  }
+  if (o !== out) out.set(o);
+  return out;
+}
+
+/** Right-handed perspective, depth in [-1, 1] as WebGL 1 expects. */
+function perspective(fovyRad, aspect, near, far, out = mat4()) {
+  const f = 1 / Math.tan(fovyRad / 2);
+  out.fill(0);
+  out[0] = f / aspect;
+  out[5] = f;
+  out[10] = (far + near) / (near - far);
+  out[11] = -1;
+  out[14] = (2 * far * near) / (near - far);
+  return out;
+}
+
+/** Right-handed look-at. `up` need not be perpendicular to the view direction. */
+function lookAt(eye, target, up, out = mat4()) {
+  const z = normalize(sub(eye, target));
+  let x = cross(up, z);
+  if (length(x) < 1e-6) {
+    // Looking straight along `up`; nudge so the basis stays well-formed.
+    x = cross(vec3(up[1], up[2], up[0]), z);
+  }
+  normalize(x, x);
+  const y = cross(z, x);
+
+  out[0] = x[0]; out[1] = y[0]; out[2] = z[0]; out[3] = 0;
+  out[4] = x[1]; out[5] = y[1]; out[6] = z[1]; out[7] = 0;
+  out[8] = x[2]; out[9] = y[2]; out[10] = z[2]; out[11] = 0;
+  out[12] = -dot(x, eye); out[13] = -dot(y, eye); out[14] = -dot(z, eye); out[15] = 1;
+  return out;
+}
+
+/** Model matrix from position, orientation quaternion and uniform scale. */
+function compose(position, orientation, s = 1, out = mat4()) {
+  const [x, y, z, w] = orientation;
+  const x2 = x + x; const y2 = y + y; const z2 = z + z;
+  const xx = x * x2; const xy = x * y2; const xz = x * z2;
+  const yy = y * y2; const yz = y * z2; const zz = z * z2;
+  const wx = w * x2; const wy = w * y2; const wz = w * z2;
+
+  out[0] = (1 - (yy + zz)) * s;
+  out[1] = (xy + wz) * s;
+  out[2] = (xz - wy) * s;
+  out[3] = 0;
+  out[4] = (xy - wz) * s;
+  out[5] = (1 - (xx + zz)) * s;
+  out[6] = (yz + wx) * s;
+  out[7] = 0;
+  out[8] = (xz + wy) * s;
+  out[9] = (yz - wx) * s;
+  out[10] = (1 - (xx + yy)) * s;
+  out[11] = 0;
+  out[12] = position[0]; out[13] = position[1]; out[14] = position[2];
+  out[15] = 1;
+  return out;
+}
+
+/**
+ * Inverse-transpose of the upper 3×3, for transforming normals.
+ * With uniform scale the rotation alone would do, but ships get scaled
+ * non-uniformly when a hull is stretched, and lighting must not shear with it.
+ */
+function normalMatrix(m, out = new Float64Array(9)) {
+  const a00 = m[0]; const a01 = m[1]; const a02 = m[2];
+  const a10 = m[4]; const a11 = m[5]; const a12 = m[6];
+  const a20 = m[8]; const a21 = m[9]; const a22 = m[10];
+
+  const b01 = a22 * a11 - a12 * a21;
+  const b11 = -a22 * a10 + a12 * a20;
+  const b21 = a21 * a10 - a11 * a20;
+
+  let det = a00 * b01 + a01 * b11 + a02 * b21;
+  if (!det) { out.fill(0); out[0] = 1; out[4] = 1; out[8] = 1; return out; }
+  det = 1 / det;
+
+  out[0] = b01 * det;
+  out[1] = (-a22 * a01 + a02 * a21) * det;
+  out[2] = (a12 * a01 - a02 * a11) * det;
+  out[3] = b11 * det;
+  out[4] = (a22 * a00 - a02 * a20) * det;
+  out[5] = (-a12 * a00 + a02 * a10) * det;
+  out[6] = b21 * det;
+  out[7] = (-a21 * a00 + a01 * a20) * det;
+  out[8] = (a11 * a00 - a01 * a10) * det;
+  return out;
+}
+
+/** Project a world point to normalised device coordinates. Returns null if behind the camera. */
+function project(point, viewProj) {
+  const [x, y, z] = point;
+  const w = viewProj[3] * x + viewProj[7] * y + viewProj[11] * z + viewProj[15];
+  if (w <= 1e-6) return null;
+  return {
+    x: (viewProj[0] * x + viewProj[4] * y + viewProj[8] * z + viewProj[12]) / w,
+    y: (viewProj[1] * x + viewProj[5] * y + viewProj[9] * z + viewProj[13]) / w,
+    z: (viewProj[2] * x + viewProj[6] * y + viewProj[10] * z + viewProj[14]) / w,
+  };
+}
+
+__exports.DEG = DEG;
+__exports.vec3 = vec3;
+__exports.add = add;
+__exports.sub = sub;
+__exports.scale = scale;
+__exports.dot = dot;
+__exports.cross = cross;
+__exports.length = length;
+__exports.normalize = normalize;
+__exports.distance = distance;
+__exports.lerp = lerp;
+__exports.transformQuat = transformQuat;
+__exports.quat = quat;
+__exports.quatIdentity = quatIdentity;
+__exports.quatAxisAngle = quatAxisAngle;
+__exports.quatMultiply = quatMultiply;
+__exports.quatNormalize = quatNormalize;
+__exports.quatFromTo = quatFromTo;
+__exports.quatSlerp = quatSlerp;
+__exports.quatFromEuler = quatFromEuler;
+__exports.mat4 = mat4;
+__exports.identity = identity;
+__exports.multiply = multiply;
+__exports.perspective = perspective;
+__exports.lookAt = lookAt;
+__exports.compose = compose;
+__exports.normalMatrix = normalMatrix;
+__exports.project = project;
+
+});
+
+__define("src/gfx/gl.js", function (__exports, __require) {
+// A very small WebGL wrapper.
+//
+// WebGL 1, deliberately: it is available everywhere, including on the WebView
+// inside the APK, and nothing here needs WebGL 2. There is no fallback path to
+// maintain and no feature detection beyond "did the context come back".
+//
+// Three things this does that a naive wrapper does not:
+//
+//   It survives context loss. A phone that backgrounds the tab, or a driver
+//   that resets, takes the context away and every buffer with it. The game must
+//   come back rather than showing a black rectangle for the rest of the session.
+//
+//   It reports failure honestly. If the context cannot be created — a very old
+//   device, a headless runner with no GPU, WebGL disabled — `Renderer.create`
+//   returns null and the caller falls back to the 2D display, which still works.
+//
+//   It never allocates in the draw path.
+
+const VERT = `
+precision mediump float;
+
+attribute vec3 aPosition;
+attribute vec3 aNormal;
+attribute vec3 aColor;
+
+uniform mat4 uModel;
+uniform mat4 uViewProj;
+uniform mat3 uNormalMatrix;
+
+varying vec3 vNormal;
+varying vec3 vColor;
+varying float vDepth;
+
+void main() {
+  vec4 world = uModel * vec4(aPosition, 1.0);
+  gl_Position = uViewProj * world;
+  vNormal = normalize(uNormalMatrix * aNormal);
+  vColor = aColor;
+  vDepth = gl_Position.w;
+}
+`;
+
+// Two lights and a rim term, all constant. There is no light in space, but
+// there is no ship in space either, and a hull lit from exactly one direction
+// loses half its faces to solid black.
+const FRAG = `
+precision mediump float;
+
+varying vec3 vNormal;
+varying vec3 vColor;
+varying float vDepth;
+
+uniform vec3 uKey;        // key light direction
+uniform vec3 uFill;       // fill light direction
+uniform vec3 uTint;       // faction/status tint multiplied into the hull
+uniform float uAlpha;
+uniform float uEmissive;  // 1.0 makes the surface ignore lighting entirely
+
+void main() {
+  vec3 n = normalize(vNormal);
+  float key = max(dot(n, normalize(uKey)), 0.0);
+  float fill = max(dot(n, normalize(uFill)), 0.0) * 0.35;
+  float ambient = 0.22;
+
+  vec3 lit = vColor * uTint * (ambient + key * 0.85 + fill);
+  lit = mix(lit, vColor * uTint, uEmissive);
+
+  // Fog toward the far plane, so a distant hull recedes rather than hanging
+  // at full contrast against the starfield.
+  float fog = clamp(1.0 - vDepth / 9000.0, 0.35, 1.0);
+  gl_FragColor = vec4(lit * fog, uAlpha);
+}
+`;
+
+function compile(gl, type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(shader);
+    gl.deleteShader(shader);
+    throw new Error(`shader failed to compile: ${log}`);
+  }
+  return shader;
+}
+
+function link(gl, vertSrc, fragSrc) {
+  const program = gl.createProgram();
+  const vs = compile(gl, gl.VERTEX_SHADER, vertSrc);
+  const fs = compile(gl, gl.FRAGMENT_SHADER, fragSrc);
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(program);
+    gl.deleteProgram(program);
+    throw new Error(`program failed to link: ${log}`);
+  }
+  return program;
+}
+class Renderer {
+  /**
+   * @returns {Renderer|null} null when WebGL is unavailable, which is a
+   *   supported outcome and not an error — the caller draws in 2D instead.
+   */
+  static create(canvas) {
+    let gl = null;
+    try {
+      const opts = {
+        alpha: false,
+        antialias: true,
+        depth: true,
+        powerPreference: 'high-performance',
+        preserveDrawingBuffer: false,
+        failIfMajorPerformanceCaveat: false,
+      };
+      gl = canvas.getContext('webgl', opts) ?? canvas.getContext('experimental-webgl', opts);
+    } catch { gl = null; }
+    if (!gl) return null;
+
+    try {
+      return new Renderer(canvas, gl);
+    } catch {
+      return null;
+    }
+  }
+
+  constructor(canvas, gl) {
+    this.canvas = canvas;
+    this.gl = gl;
+    this.lost = false;
+    this.drawCalls = 0;
+    this.triangles = 0;
+    this.buffers = new Map();
+
+    this.program = link(gl, VERT, FRAG);
+    this.attrib = {
+      position: gl.getAttribLocation(this.program, 'aPosition'),
+      normal: gl.getAttribLocation(this.program, 'aNormal'),
+      color: gl.getAttribLocation(this.program, 'aColor'),
+    };
+    this.uniform = {
+      model: gl.getUniformLocation(this.program, 'uModel'),
+      viewProj: gl.getUniformLocation(this.program, 'uViewProj'),
+      normalMatrix: gl.getUniformLocation(this.program, 'uNormalMatrix'),
+      key: gl.getUniformLocation(this.program, 'uKey'),
+      fill: gl.getUniformLocation(this.program, 'uFill'),
+      tint: gl.getUniformLocation(this.program, 'uTint'),
+      alpha: gl.getUniformLocation(this.program, 'uAlpha'),
+      emissive: gl.getUniformLocation(this.program, 'uEmissive'),
+    };
+
+    // Scratch float32 views. Matrices are float64 in the simulation and must be
+    // narrowed on the way to the GPU; doing it into a reused array keeps the
+    // draw path allocation-free.
+    this._m4a = new Float32Array(16);
+    this._m4b = new Float32Array(16);
+    this._m3 = new Float32Array(9);
+
+    this._onLost = (e) => { e.preventDefault(); this.lost = true; this.buffers.clear(); };
+    this._onRestored = () => { this.lost = false; this.restore(); };
+    canvas.addEventListener('webglcontextlost', this._onLost, false);
+    canvas.addEventListener('webglcontextrestored', this._onRestored, false);
+
+    this.configure();
+  }
+
+  configure() {
+    const { gl } = this;
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.frontFace(gl.CCW);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.clearColor(0.016, 0.02, 0.04, 1);
+  }
+
+  /** Rebuild everything the lost context took with it. */
+  restore() {
+    try {
+      this.program = link(this.gl, VERT, FRAG);
+      this.attrib = {
+        position: this.gl.getAttribLocation(this.program, 'aPosition'),
+        normal: this.gl.getAttribLocation(this.program, 'aNormal'),
+        color: this.gl.getAttribLocation(this.program, 'aColor'),
+      };
+      for (const [k, v] of Object.entries(this.uniform)) {
+        this.uniform[k] = this.gl.getUniformLocation(this.program, `u${k[0].toUpperCase()}${k.slice(1)}`);
+        void v;
+      }
+      this.configure();
+    } catch {
+      this.lost = true;
+    }
+  }
+
+  /** Size the drawing buffer to the element, capped so a 3× phone stays fast. */
+  resize(cssWidth, cssHeight, dpr = 1) {
+    const scale = Math.min(dpr, 2);
+    const w = Math.max(1, Math.round(cssWidth * scale));
+    const h = Math.max(1, Math.round(cssHeight * scale));
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+    }
+    this.gl.viewport(0, 0, w, h);
+    return { width: w, height: h, aspect: w / Math.max(1, h) };
+  }
+
+  beginFrame() {
+    if (this.lost) return false;
+    const { gl } = this;
+    this.drawCalls = 0;
+    this.triangles = 0;
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(this.program);
+    gl.uniform3f(this.uniform.key, 0.55, 0.72, 0.42);
+    gl.uniform3f(this.uniform.fill, -0.6, -0.2, -0.5);
+    return true;
+  }
+
+  setCamera(viewProj) {
+    this._m4a.set(viewProj);
+    this.gl.uniformMatrix4fv(this.uniform.viewProj, false, this._m4a);
+  }
+
+  /** Upload a mesh once and keep the buffer under `key`. */
+  upload(key, mesh) {
+    if (this.lost) return null;
+    let entry = this.buffers.get(key);
+    if (entry) return entry;
+    const { gl } = this;
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.data, gl.STATIC_DRAW);
+    entry = { buffer, vertexCount: mesh.vertexCount, stride: mesh.stride };
+    this.buffers.set(key, entry);
+    return entry;
+  }
+
+  /**
+   * Draw an uploaded mesh.
+   * @param {object} opts { model, normalMatrix, tint, alpha, emissive }
+   */
+  draw(key, mesh, { model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0 }) {
+    if (this.lost) return;
+    const entry = this.upload(key, mesh);
+    if (!entry) return;
+    const { gl } = this;
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, entry.buffer);
+    const { position, normal, color } = this.attrib;
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 3, gl.FLOAT, false, entry.stride, 0);
+    gl.enableVertexAttribArray(normal);
+    gl.vertexAttribPointer(normal, 3, gl.FLOAT, false, entry.stride, 12);
+    gl.enableVertexAttribArray(color);
+    gl.vertexAttribPointer(color, 3, gl.FLOAT, false, entry.stride, 24);
+
+    this._m4b.set(model);
+    gl.uniformMatrix4fv(this.uniform.model, false, this._m4b);
+    this._m3.set(normalMatrix);
+    gl.uniformMatrix3fv(this.uniform.normalMatrix, false, this._m3);
+    gl.uniform3f(this.uniform.tint, tint[0], tint[1], tint[2]);
+    gl.uniform1f(this.uniform.alpha, alpha);
+    gl.uniform1f(this.uniform.emissive, emissive);
+
+    gl.drawArrays(gl.TRIANGLES, 0, entry.vertexCount);
+    this.drawCalls++;
+    this.triangles += entry.vertexCount / 3;
+  }
+
+  /** Release everything. Called when the tactical view is torn down. */
+  dispose() {
+    this.canvas.removeEventListener('webglcontextlost', this._onLost);
+    this.canvas.removeEventListener('webglcontextrestored', this._onRestored);
+    if (this.lost) return;
+    for (const { buffer } of this.buffers.values()) this.gl.deleteBuffer(buffer);
+    this.buffers.clear();
+    this.gl.deleteProgram(this.program);
+  }
+}
+
+__exports.Renderer = Renderer;
+
+});
+
+__define("src/gfx/mesh.js", function (__exports, __require) {
+// Procedural mesh construction.
+//
+// Everything visible in the tactical view is generated here from a handful of
+// parameters. There are no model files, for the same reason there are no audio
+// files: this project ships no art it did not make, and a mesh that is a few
+// numbers in a table costs nothing to precache.
+//
+// Flat shading throughout. Each triangle gets its own three vertices and the
+// face normal, which triples the vertex count and is worth it — faceted hulls
+// read as solid geometry at phone size in a way smooth shading does not, and it
+// removes any need for normal averaging, smoothing groups or UVs.
+//
+// Coordinate convention, matching the simulation: +x is the bow, +y is dorsal,
+// +z is starboard.
+
+const { vec3, sub, cross, normalize } = __require("src/gfx/math.js");
+
+/** Accumulates triangles and hands back typed arrays. */
+class MeshBuilder {
+  constructor() {
+    this.positions = [];
+    this.normals = [];
+    this.colors = [];
+  }
+
+  /** One triangle, wound counter-clockwise when seen from outside. */
+  tri(a, b, c, color) {
+    const n = normalize(cross(sub(b, a), sub(c, a)));
+    for (const v of [a, b, c]) {
+      this.positions.push(v[0], v[1], v[2]);
+      this.normals.push(n[0], n[1], n[2]);
+      this.colors.push(color[0], color[1], color[2]);
+    }
+    return this;
+  }
+
+  /** A quad, as two triangles. */
+  quad(a, b, c, d, color) {
+    return this.tri(a, b, c, color).tri(a, c, d, color);
+  }
+
+  get triangleCount() { return this.positions.length / 9; }
+
+  /** Interleaved position/normal/colour, ready for one buffer and one draw call. */
+  build() {
+    const count = this.positions.length / 3;
+    const data = new Float32Array(count * 9);
+    for (let i = 0; i < count; i++) {
+      data[i * 9 + 0] = this.positions[i * 3 + 0];
+      data[i * 9 + 1] = this.positions[i * 3 + 1];
+      data[i * 9 + 2] = this.positions[i * 3 + 2];
+      data[i * 9 + 3] = this.normals[i * 3 + 0];
+      data[i * 9 + 4] = this.normals[i * 3 + 1];
+      data[i * 9 + 5] = this.normals[i * 3 + 2];
+      data[i * 9 + 6] = this.colors[i * 3 + 0];
+      data[i * 9 + 7] = this.colors[i * 3 + 1];
+      data[i * 9 + 8] = this.colors[i * 3 + 2];
+    }
+    return { data, vertexCount: count, stride: 9 * 4 };
+  }
+}
+
+const at = (o, x, y, z) => vec3(o[0] + x, o[1] + y, o[2] + z);
+
+/**
+ * A saucer: two shallow cones meeting at a rim.
+ *
+ * This is the primitive that makes a ship read as Federation, so it gets the
+ * most segments. `domeRatio` is how much of the radius the raised centre covers
+ * — a Constitution's bridge dome is a small cap on a broad plate, which is what
+ * separates its silhouette from a Miranda's flatter one.
+ */
+function saucer(mb, {
+  origin = vec3(), radius = 1, thickness = 0.18, segments = 24,
+  domeRatio = 0.35, domeHeight = 0.12, color = [0.72, 0.76, 0.82],
+  rimColor = [0.5, 0.55, 0.62],
+} = {}) {
+  const half = thickness / 2;
+  const domeR = radius * domeRatio;
+  const top = at(origin, 0, half + domeHeight, 0);
+  const bottom = at(origin, 0, -half - domeHeight * 0.4, 0);
+
+  for (let i = 0; i < segments; i++) {
+    const a0 = (i / segments) * Math.PI * 2;
+    const a1 = ((i + 1) / segments) * Math.PI * 2;
+    const c0 = Math.cos(a0); const s0 = Math.sin(a0);
+    const c1 = Math.cos(a1); const s1 = Math.sin(a1);
+
+    const rimA = at(origin, c0 * radius, 0, s0 * radius);
+    const rimB = at(origin, c1 * radius, 0, s1 * radius);
+    const domA = at(origin, c0 * domeR, half, s0 * domeR);
+    const domB = at(origin, c1 * domeR, half, s1 * domeR);
+
+    // Upper plate, dome cap, and the underside.
+    mb.quad(rimA, rimB, domB, domA, color);
+    mb.tri(domA, domB, top, color);
+    mb.tri(rimB, rimA, bottom, rimColor);
+  }
+  return mb;
+}
+
+/**
+ * A tapered cylinder along +x: engineering hulls, nacelles, pylun spars.
+ * `r0` is the aft radius and `r1` the fore radius, so a nacelle tapers forward
+ * and a secondary hull tapers aft.
+ */
+function tube(mb, {
+  origin = vec3(), length: len = 1, r0 = 0.2, r1 = 0.2, segments = 12,
+  color = [0.66, 0.7, 0.76], capFore = true, capAft = true,
+} = {}) {
+  const foreC = at(origin, len, 0, 0);
+  for (let i = 0; i < segments; i++) {
+    const a0 = (i / segments) * Math.PI * 2;
+    const a1 = ((i + 1) / segments) * Math.PI * 2;
+    const c0 = Math.cos(a0); const s0 = Math.sin(a0);
+    const c1 = Math.cos(a1); const s1 = Math.sin(a1);
+
+    const aftA = at(origin, 0, c0 * r0, s0 * r0);
+    const aftB = at(origin, 0, c1 * r0, s1 * r0);
+    const forA = at(origin, len, c0 * r1, s0 * r1);
+    const forB = at(origin, len, c1 * r1, s1 * r1);
+
+    mb.quad(aftA, aftB, forB, forA, color);
+    if (capFore) mb.tri(forA, forB, foreC, color);
+    if (capAft) mb.tri(aftB, aftA, origin, color);
+  }
+  return mb;
+}
+
+/**
+ * A box, given its centre and half-extents. Pylons, wings and hull plating.
+ * `sweep` shears the far end backwards along -x, which is what turns a
+ * rectangular slab into a swept wing without a second primitive.
+ */
+function box(mb, {
+  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0,
+  color = [0.6, 0.64, 0.7],
+} = {}) {
+  const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
+  const [cx, cy, cz] = center;
+  // Eight corners; +z corners are displaced by the sweep.
+  const p = (sx, sy, sz) => vec3(
+    cx + sx * hx - (sz > 0 ? sweep : 0),
+    cy + sy * hy,
+    cz + sz * hz,
+  );
+
+  const v000 = p(-1, -1, -1); const v100 = p(1, -1, -1);
+  const v110 = p(1, 1, -1); const v010 = p(-1, 1, -1);
+  const v001 = p(-1, -1, 1); const v101 = p(1, -1, 1);
+  const v111 = p(1, 1, 1); const v011 = p(-1, 1, 1);
+
+  mb.quad(v001, v101, v111, v011, color);   // +z
+  mb.quad(v100, v000, v010, v110, color);   // -z
+  mb.quad(v010, v011, v111, v110, color);   // +y
+  mb.quad(v000, v100, v101, v001, color);   // -y
+  mb.quad(v101, v100, v110, v111, color);   // +x
+  mb.quad(v000, v001, v011, v010, color);   // -x
+  return mb;
+}
+
+/** A low-poly sphere, for planets, sensor pods and command modules. */
+function sphere(mb, {
+  origin = vec3(), radius = 1, segments = 16, rings = 10,
+  color = [0.6, 0.6, 0.7], banding = 0,
+} = {}) {
+  for (let r = 0; r < rings; r++) {
+    const t0 = (r / rings) * Math.PI;
+    const t1 = ((r + 1) / rings) * Math.PI;
+    const y0 = Math.cos(t0) * radius; const rad0 = Math.sin(t0) * radius;
+    const y1 = Math.cos(t1) * radius; const rad1 = Math.sin(t1) * radius;
+
+    // A little per-ring variation reads as terrain or cloud banding without a
+    // texture, which this renderer has no way to load.
+    const shade = banding
+      ? 1 - banding * 0.5 + banding * ((r * 2654435761 % 97) / 97)
+      : 1;
+    const c = [color[0] * shade, color[1] * shade, color[2] * shade];
+
+    for (let i = 0; i < segments; i++) {
+      const a0 = (i / segments) * Math.PI * 2;
+      const a1 = ((i + 1) / segments) * Math.PI * 2;
+      const A = at(origin, Math.cos(a0) * rad0, y0, Math.sin(a0) * rad0);
+      const B = at(origin, Math.cos(a1) * rad0, y0, Math.sin(a1) * rad0);
+      const C = at(origin, Math.cos(a1) * rad1, y1, Math.sin(a1) * rad1);
+      const D = at(origin, Math.cos(a0) * rad1, y1, Math.sin(a0) * rad1);
+      if (r === 0) mb.tri(A, C, D, c);
+      else if (r === rings - 1) mb.tri(A, B, C, c);
+      else mb.quad(A, B, C, D, c);
+    }
+  }
+  return mb;
+}
+
+/** Mirror everything added by `fn` across the z axis, for port/starboard pairs. */
+function mirrored(mb, fn) {
+  const start = mb.positions.length;
+  fn(mb);
+  const end = mb.positions.length;
+
+  // Mirroring flips handedness, so each triangle's winding is reversed as it is
+  // copied — otherwise every mirrored face points inwards and back-face culling
+  // makes the port nacelle invisible.
+  for (let i = start; i < end; i += 9) {
+    for (const [a, b] of [[0, 6], [3, 3], [6, 0]]) {
+      mb.positions.push(mb.positions[i + b], mb.positions[i + b + 1], -mb.positions[i + b + 2]);
+      mb.normals.push(mb.normals[i + b], mb.normals[i + b + 1], -mb.normals[i + b + 2]);
+      mb.colors.push(mb.colors[i + b], mb.colors[i + b + 1], mb.colors[i + b + 2]);
+      void a;
+    }
+  }
+  return mb;
+}
+
+__exports.MeshBuilder = MeshBuilder;
+__exports.saucer = saucer;
+__exports.tube = tube;
+__exports.box = box;
+__exports.sphere = sphere;
+__exports.mirrored = mirrored;
+
+});
+
+__define("src/gfx/blueprint.js", function (__exports, __require) {
+// Ship geometry, as data.
+//
+// Thirty-one classes, thirty-one short records. Nobody modelled a hull here;
+// each entry is a set of proportions that the primitives in mesh.js turn into a
+// mesh, which is the only way one person builds a fleet without an art team.
+//
+// The proportions come from docs/RESEARCH.md, and the numbers there produced
+// two decisions that shape this whole file:
+//
+//   Beam-to-length ratio is the species signature. Federation saucer ships run
+//   0.35–0.73. A Klingon Bird-of-Prey is *wider than it is long* with its wings
+//   down, which is why `wings` exists as a primitive and Federation hulls have
+//   no use for it.
+//
+//   Height is 0.1–0.25 of length on every class in the table. Ships are discs
+//   and wedges. Nothing here is as tall as it is wide, and a blueprint that
+//   tries to be will look wrong before you can say why.
+//
+// Lengths below are in metres and are used for relative scale only; the
+// renderer normalises so the largest live hull frames sensibly.
+
+const { vec3 } = __require("src/gfx/math.js");
+const { MeshBuilder, saucer, tube, box, sphere, mirrored } = __require("src/gfx/mesh.js");
+
+/** Hull plating by faction. Flat shading means these are the whole look. */
+const PALETTE = {
+  federation: { hull: [0.74, 0.77, 0.82], trim: [0.52, 0.58, 0.66], glow: [0.45, 0.72, 1.0] },
+  klingon: { hull: [0.42, 0.48, 0.44], trim: [0.28, 0.33, 0.30], glow: [0.95, 0.35, 0.25] },
+  romulan: { hull: [0.44, 0.50, 0.44], trim: [0.30, 0.40, 0.32], glow: [0.55, 0.95, 0.60] },
+  cardassian: { hull: [0.68, 0.62, 0.44], trim: [0.48, 0.43, 0.30], glow: [0.95, 0.75, 0.35] },
+  ferengi: { hull: [0.66, 0.48, 0.26], trim: [0.45, 0.32, 0.18], glow: [0.98, 0.66, 0.24] },
+  orion: { hull: [0.40, 0.52, 0.36], trim: [0.26, 0.36, 0.24], glow: [0.60, 0.95, 0.40] },
+  tholian: { hull: [0.78, 0.42, 0.58], trim: [0.55, 0.28, 0.42], glow: [1.0, 0.45, 0.70] },
+  dominion: { hull: [0.48, 0.44, 0.52], trim: [0.32, 0.30, 0.38], glow: [0.72, 0.60, 1.0] },
+  borg: { hull: [0.32, 0.34, 0.33], trim: [0.20, 0.22, 0.21], glow: [0.40, 1.0, 0.45] },
+  independent: { hull: [0.60, 0.58, 0.55], trim: [0.40, 0.39, 0.37], glow: [0.85, 0.85, 0.80] },
+};
+const paletteFor = (faction) => PALETTE[faction] ?? PALETTE.independent;
+
+/**
+ * Hull archetypes. `build` receives a MeshBuilder, the palette, and the
+ * blueprint's own parameters.
+ */
+const FORMS = {
+  /**
+   * Saucer, secondary hull, and two nacelles on pylons. The Federation
+   * silhouette, and the reason the saucer primitive gets the most segments.
+   */
+  starfleet(mb, p, b) {
+    const sr = b.saucerRadius ?? 0.44;
+    const sx = b.saucerX ?? 0.34;
+    saucer(mb, {
+      origin: vec3(sx, b.saucerY ?? 0.02, 0),
+      radius: sr,
+      thickness: b.saucerThickness ?? 0.1,
+      domeRatio: b.domeRatio ?? 0.34,
+      domeHeight: b.domeHeight ?? 0.05,
+      segments: b.segments ?? 22,
+      color: p.hull,
+      rimColor: p.trim,
+    });
+
+    if (b.neck !== false) {
+      box(mb, {
+        center: vec3(sx - sr * 0.55, -0.1, 0),
+        size: vec3(sr * 0.5, 0.22, 0.09),
+        color: p.trim,
+      });
+    }
+
+    // The secondary hull, tapering aft.
+    tube(mb, {
+      origin: vec3(-0.5, b.hullY ?? -0.17, 0),
+      length: b.hullLength ?? 0.82,
+      r0: b.hullR0 ?? 0.1,
+      r1: b.hullR1 ?? 0.14,
+      segments: 12,
+      color: p.hull,
+    });
+
+    // Nacelles, one built and one mirrored.
+    const nz = b.nacelleZ ?? 0.36;
+    const ny = b.nacelleY ?? 0.14;
+    const nx = b.nacelleX ?? -0.46;
+    const nl = b.nacelleLength ?? 0.86;
+    const nr = b.nacelleRadius ?? 0.075;
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(nx + nl * 0.28, (ny + (b.hullY ?? -0.17)) / 2, nz * 0.55),
+        size: vec3(0.1, 0.34, nz * 0.9),
+        sweep: b.pylonSweep ?? 0.14,
+        color: p.trim,
+      });
+      tube(m, {
+        origin: vec3(nx, ny, nz),
+        length: nl,
+        r0: nr,
+        r1: nr * 0.82,
+        segments: 10,
+        color: p.hull,
+      });
+      // The bussard cap: the one emissive detail on the whole hull.
+      sphere(m, {
+        origin: vec3(nx + nl, ny, nz),
+        radius: nr * 1.05,
+        segments: 8,
+        rings: 5,
+        color: p.glow,
+      });
+    });
+  },
+
+  /**
+   * A wide, low predator: forward command pod on a neck, swept wings.
+   * Wider than long with the wings down, per the research.
+   */
+  raptor(mb, p, b) {
+    tube(mb, {
+      origin: vec3(-0.35, 0, 0),
+      length: b.bodyLength ?? 0.6,
+      r0: b.bodyR0 ?? 0.2,
+      r1: b.bodyR1 ?? 0.12,
+      segments: 10,
+      color: p.hull,
+    });
+    // Neck forward to the command head.
+    box(mb, {
+      center: vec3(0.4, -0.02, 0),
+      size: vec3(0.5, 0.08, 0.11),
+      color: p.trim,
+    });
+    box(mb, {
+      center: vec3(0.72, -0.02, 0),
+      size: vec3(0.22, 0.14, 0.24),
+      color: p.hull,
+    });
+
+    const span = b.wingSpan ?? 0.72;
+    const droop = b.wingDroop ?? -0.16;
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(-0.18, droop * 0.5, span * 0.5),
+        size: vec3(0.62, 0.05, span),
+        sweep: b.wingSweep ?? 0.42,
+        color: p.hull,
+      });
+      // Wing-tip disruptor housing.
+      box(m, {
+        center: vec3(-0.02, droop, span),
+        size: vec3(0.3, 0.07, 0.08),
+        color: p.glow,
+      });
+    });
+  },
+
+  /** Two great curved arms meeting fore and aft around an open centre. */
+  warbird(mb, p, b) {
+    const span = b.wingSpan ?? 0.58;
+    tube(mb, {
+      origin: vec3(-0.15, 0, 0),
+      length: 0.42,
+      r0: 0.13,
+      r1: 0.1,
+      segments: 10,
+      color: p.trim,
+    });
+    mirrored(mb, (m) => {
+      // Upper and lower arms, sweeping out and back in.
+      box(m, {
+        center: vec3(0.22, 0.16, span * 0.55),
+        size: vec3(0.9, 0.09, span * 0.5),
+        sweep: 0.3,
+        color: p.hull,
+      });
+      box(m, {
+        center: vec3(-0.32, -0.16, span * 0.55),
+        size: vec3(0.9, 0.09, span * 0.5),
+        sweep: -0.3,
+        color: p.hull,
+      });
+      box(m, {
+        center: vec3(0.5, 0, span * 0.86),
+        size: vec3(0.34, 0.4, 0.1),
+        color: p.trim,
+      });
+    });
+    sphere(mb, { origin: vec3(0.62, 0, 0), radius: 0.11, segments: 10, rings: 6, color: p.glow });
+  },
+
+  /** A blunt armoured wedge — Cardassian and Dominion hulls. */
+  wedge(mb, p, b) {
+    box(mb, {
+      center: vec3(0, 0, 0),
+      size: vec3(b.length ?? 1.3, b.height ?? 0.16, b.width ?? 0.34),
+      sweep: b.sweep ?? 0.3,
+      color: p.hull,
+    });
+    box(mb, {
+      center: vec3(-0.28, 0.1, 0),
+      size: vec3(0.5, 0.16, 0.5),
+      sweep: 0.24,
+      color: p.trim,
+    });
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(-0.1, -0.02, (b.width ?? 0.34) * 0.9),
+        size: vec3(0.7, 0.07, 0.24),
+        sweep: 0.34,
+        color: p.hull,
+      });
+    });
+    sphere(mb, { origin: vec3(0.55, 0.02, 0), radius: 0.1, segments: 8, rings: 5, color: p.glow });
+  },
+
+  /** Literally a cube. There is nothing else to say about it. */
+  cube(mb, p, b) {
+    const s = b.size ?? 1.1;
+    box(mb, { center: vec3(), size: vec3(s, s, s), color: p.hull });
+    // Surface clutter, so it does not read as a flat-shaded box at a distance.
+    for (let i = 0; i < 14; i++) {
+      const t = i / 14;
+      const a = t * Math.PI * 2 * 3.7;
+      box(mb, {
+        center: vec3(Math.cos(a) * s * 0.36, Math.sin(a * 1.7) * s * 0.36, Math.sin(a) * s * 0.5),
+        size: vec3(s * 0.2, s * 0.18, s * 0.12),
+        color: i % 4 === 0 ? p.glow : p.trim,
+      });
+    }
+  },
+
+  /** A working hull: cylinder, bridge block, cargo spine. */
+  hauler(mb, p, b) {
+    tube(mb, {
+      origin: vec3(-0.5, 0, 0),
+      length: b.length ?? 1.0,
+      r0: b.r0 ?? 0.16,
+      r1: b.r1 ?? 0.13,
+      segments: 10,
+      color: p.hull,
+    });
+    box(mb, { center: vec3(0.42, 0.14, 0), size: vec3(0.24, 0.14, 0.2), color: p.trim });
+    mirrored(mb, (m) => {
+      box(m, { center: vec3(-0.18, 0, 0.2), size: vec3(0.5, 0.12, 0.12), color: p.trim });
+    });
+  },
+};
+
+/**
+ * The fleet. `form` picks an archetype; everything else tunes it.
+ * `length` is metres and is used only for relative scale between hulls.
+ */
+const BLUEPRINTS = {
+  // ---- Starfleet ----
+  constitution: { form: 'starfleet', length: 289, saucerRadius: 0.46, nacelleLength: 0.9 },
+  constitution_refit: { form: 'starfleet', length: 305, saucerRadius: 0.45, nacelleRadius: 0.085, pylonSweep: 0.1 },
+  miranda: { form: 'starfleet', length: 278, saucerRadius: 0.52, neck: false, hullLength: 0.5, nacelleX: -0.34, nacelleY: -0.02, nacelleLength: 0.62 },
+  oberth: { form: 'starfleet', length: 120, saucerRadius: 0.38, hullY: -0.36, hullLength: 0.66, nacelleY: -0.3, nacelleLength: 0.6 },
+  excelsior: { form: 'starfleet', length: 467, saucerRadius: 0.47, hullLength: 1.0, nacelleLength: 1.0, nacelleZ: 0.4 },
+  constellation: { form: 'starfleet', length: 260, saucerRadius: 0.42, nacelleLength: 0.72, nacelleZ: 0.44, pylonSweep: 0.04 },
+  ambassador: { form: 'starfleet', length: 526, saucerRadius: 0.5, nacelleLength: 0.86 },
+  galaxy: { form: 'starfleet', length: 641, saucerRadius: 0.62, saucerThickness: 0.13, hullLength: 0.9, nacelleZ: 0.44, nacelleLength: 0.88 },
+  nebula: { form: 'starfleet', length: 442, saucerRadius: 0.58, hullLength: 0.6, nacelleX: -0.3, nacelleZ: 0.42, nacelleLength: 0.7 },
+  intrepid: { form: 'starfleet', length: 345, saucerRadius: 0.44, saucerThickness: 0.09, hullLength: 0.6, nacelleLength: 0.66, pylonSweep: 0.2 },
+  defiant: { form: 'starfleet', length: 171, saucerRadius: 0.4, saucerThickness: 0.14, domeRatio: 0.6, neck: false, hullLength: 0.4, hullY: -0.08, nacelleX: -0.2, nacelleY: 0, nacelleZ: 0.3, nacelleLength: 0.5, pylonSweep: 0.02 },
+  sovereign: { form: 'starfleet', length: 685, saucerRadius: 0.54, saucerThickness: 0.1, hullLength: 1.0, nacelleLength: 0.94, pylonSweep: 0.24 },
+  runabout: { form: 'starfleet', length: 23, saucerRadius: 0.3, saucerThickness: 0.16, domeRatio: 0.55, neck: false, hullLength: 0.34, hullY: -0.04, nacelleX: -0.12, nacelleY: 0.02, nacelleZ: 0.24, nacelleLength: 0.36, segments: 12 },
+
+  // ---- Klingon ----
+  bird_of_prey: { form: 'raptor', length: 158, wingSpan: 0.76, wingSweep: 0.46, wingDroop: -0.2 },
+  d7: { form: 'raptor', length: 228, wingSpan: 0.66, wingSweep: 0.3, wingDroop: -0.04, bodyLength: 0.7 },
+  ktinga: { form: 'raptor', length: 235, wingSpan: 0.68, wingSweep: 0.32, wingDroop: -0.05, bodyLength: 0.72 },
+  vorcha: { form: 'raptor', length: 481, wingSpan: 0.62, wingSweep: 0.5, wingDroop: -0.02, bodyLength: 0.9, bodyR0: 0.16 },
+  neghvar: { form: 'raptor', length: 682, wingSpan: 0.7, wingSweep: 0.54, wingDroop: 0.02, bodyLength: 1.0, bodyR0: 0.22 },
+
+  // ---- Romulan ----
+  warbird: { form: 'warbird', length: 1041, wingSpan: 0.62 },
+  scoutship: { form: 'raptor', length: 68, wingSpan: 0.68, wingSweep: 0.2, wingDroop: -0.06, bodyLength: 0.42, bodyR0: 0.14 },
+
+  // ---- Cardassian ----
+  galor: { form: 'wedge', length: 372, length_: 1.25, width: 0.36, sweep: 0.34 },
+  keldon: { form: 'wedge', length: 400, width: 0.4, height: 0.18, sweep: 0.36 },
+
+  // ---- Everyone else ----
+  marauder: { form: 'warbird', length: 366, wingSpan: 0.5 },
+  orion_raider: { form: 'raptor', length: 110, wingSpan: 0.54, wingSweep: 0.24, bodyLength: 0.5 },
+  tholian_web_spinner: { form: 'wedge', length: 130, length_: 0.8, width: 0.44, height: 0.1, sweep: 0.1 },
+  jem_hadar_attack: { form: 'wedge', length: 178, length_: 0.9, width: 0.42, height: 0.12, sweep: 0.4 },
+  jem_hadar_battleship: { form: 'wedge', length: 800, width: 0.5, height: 0.2, sweep: 0.44 },
+  borg_cube: { form: 'cube', length: 3040, size: 1.15 },
+  bioship: { form: 'cube', length: 600, size: 0.85 },
+  transport: { form: 'hauler', length: 120 },
+  freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.2 },
+};
+
+/** Meshes are built once per class and reused by every ship of that class. */
+const cache = new Map();
+
+/**
+ * Build (or fetch) the mesh for a ship class.
+ * @param {string} classId
+ * @param {string} faction  chooses the palette
+ */
+function hullMesh(classId, faction = 'independent') {
+  const key = `${classId}|${faction}`;
+  if (cache.has(key)) return cache.get(key);
+
+  const bp = BLUEPRINTS[classId] ?? BLUEPRINTS.transport;
+  const form = FORMS[bp.form] ?? FORMS.hauler;
+  const mb = new MeshBuilder();
+  form(mb, paletteFor(faction), bp);
+
+  const built = mb.build();
+  built.triangles = mb.triangleCount;
+  built.blueprint = bp;
+  cache.set(key, built);
+  return built;
+}
+
+/**
+ * On-screen size for a hull, in world units.
+ *
+ * Two compressions, both deliberate, because this is a tactical display and not
+ * a photograph.
+ *
+ * The fleet spans 23 m to 3,040 m — a runabout to a Borg cube — and linear
+ * scaling would make the runabout a single pixel beside the cube. So the ratio
+ * is compressed logarithmically: a cube still towers over a Constitution, and
+ * the Constitution is still visibly a ship.
+ *
+ * And hulls are drawn far larger than scale against the distances between them.
+ * Engagements run at 300–1,200 units and a truthfully scaled Constitution would
+ * be a speck you could not target, let alone identify. These numbers are chosen
+ * so a hull reads at roughly a tenth of the distance to the next one.
+ */
+function hullScale(classId) {
+  const metres = BLUEPRINTS[classId]?.length ?? 200;
+  return 108 * (0.5 + 0.5 * Math.log10(metres / 20) / Math.log10(150));
+}
+
+__exports.FORMS = FORMS;
+
+__exports.PALETTE = PALETTE;
+__exports.paletteFor = paletteFor;
+__exports.BLUEPRINTS = BLUEPRINTS;
+__exports.hullMesh = hullMesh;
+__exports.hullScale = hullScale;
+
+});
+
+__define("src/gfx/scene.js", function (__exports, __require) {
+// Everything in the tactical volume that is not a ship.
+//
+// The starfield, the local star and planets, the LCARS reference grid, weapon
+// traces, torpedoes, impacts and shield shells. All of it is generated
+// geometry, all of it is flat-shaded, and all of it is built once and reused —
+// there is nothing to load here either.
+//
+// The grid deserves a note. Nothing in space tells you where anything is
+// relative to anything else, and a 3D tactical display without a reference
+// plane is unreadable: two ships at the same screen position may be a hundred
+// units apart or three thousand. The grid, and the vertical drop lines from
+// each hull down to it, are what make the third axis legible rather than
+// decorative.
+
+const { vec3 } = __require("src/gfx/math.js");
+const { MeshBuilder, sphere, box, tube } = __require("src/gfx/mesh.js");
+
+/** The tactical volume is a cube this many units on a side. */
+const VOLUME = 3000;
+
+const cache = new Map();
+const memo = (key, build) => {
+  if (!cache.has(key)) cache.set(key, build().build());
+  return cache.get(key);
+};
+
+/**
+ * The starfield: a shell of small quads far enough out to read as fixed.
+ *
+ * Deterministic from a fixed integer hash rather than Math.random, so the sky
+ * is the same on every launch and in every screenshot. The simulation's own RNG
+ * is not used — the stars are cosmetic and must not consume draws from the
+ * stream the save file depends on.
+ */
+function starfield(count = 260) {
+  return memo(`stars:${count}`, () => {
+    const mb = new MeshBuilder();
+    let h = 0x9e3779b9;
+    const rnd = () => {
+      h ^= h << 13; h ^= h >>> 17; h ^= h << 5; h |= 0;
+      return (h >>> 0) / 4294967296;
+    };
+    const R = VOLUME * 4;
+    for (let i = 0; i < count; i++) {
+      // Even-ish distribution on a sphere.
+      const u = rnd() * 2 - 1;
+      const a = rnd() * Math.PI * 2;
+      const r = Math.sqrt(1 - u * u);
+      const c = vec3(Math.cos(a) * r * R, u * R, Math.sin(a) * r * R);
+      const size = R * (0.0016 + rnd() * 0.0032);
+      const warm = rnd();
+      const col = [0.7 + warm * 0.3, 0.72 + warm * 0.2, 0.9 - warm * 0.25];
+      box(mb, { center: c, size: vec3(size, size, size), color: col });
+    }
+    return mb;
+  });
+}
+
+/** A star or planet. `kind` picks the palette; `seed` varies the banding. */
+function bodyMesh(kind = 'planet', seed = 0) {
+  return memo(`body:${kind}:${seed & 7}`, () => {
+    const mb = new MeshBuilder();
+    const palettes = {
+      star: [1.0, 0.86, 0.5],
+      planet: [0.34, 0.48, 0.66],
+      desert: [0.7, 0.56, 0.36],
+      ice: [0.74, 0.84, 0.92],
+      gas: [0.66, 0.56, 0.42],
+      moon: [0.5, 0.5, 0.52],
+    };
+    sphere(mb, {
+      radius: 1,
+      segments: 20,
+      rings: 12,
+      color: palettes[kind] ?? palettes.planet,
+      banding: kind === 'star' ? 0 : 0.35,
+    });
+    return mb;
+  });
+}
+
+/**
+ * The reference grid: a plane of lines at y = 0, drawn as very thin boxes so it
+ * goes through the same shader as everything else.
+ */
+function gridMesh(divisions = 12) {
+  return memo(`grid:${divisions}`, () => {
+    const mb = new MeshBuilder();
+    const half = VOLUME / 2;
+    const step = VOLUME / divisions;
+    const thin = VOLUME * 0.0012;
+    for (let i = 0; i <= divisions; i++) {
+      const p = -half + i * step;
+      const axis = i === divisions / 2;
+      const color = axis ? [0.36, 0.52, 0.72] : [0.16, 0.22, 0.34];
+      box(mb, { center: vec3(p, 0, 0), size: vec3(thin, thin, VOLUME), color });
+      box(mb, { center: vec3(0, 0, p), size: vec3(VOLUME, thin, thin), color });
+    }
+    return mb;
+  });
+}
+
+/**
+ * A unit-length beam along +x, scaled and oriented per shot.
+ * One mesh serves every phaser in the game.
+ */
+function beamMesh() {
+  return memo('beam', () => {
+    const mb = new MeshBuilder();
+    tube(mb, {
+      origin: vec3(0, 0, 0),
+      length: 1,
+      r0: 0.5,
+      r1: 0.5,
+      segments: 5,
+      color: [1, 1, 1],
+      capFore: false,
+      capAft: false,
+    });
+    return mb;
+  });
+}
+
+/** A torpedo: a small glowing lozenge. */
+function torpedoMesh() {
+  return memo('torpedo', () => {
+    const mb = new MeshBuilder();
+    sphere(mb, { radius: 1, segments: 8, rings: 5, color: [1, 0.85, 0.55] });
+    return mb;
+  });
+}
+
+/**
+ * The shield shell: a sphere drawn slightly larger than the hull, additively,
+ * when a facing takes a hit. Faceted on purpose — a smooth shell reads as a
+ * bubble, a faceted one reads as a field made of overlapping emitters.
+ */
+function shieldMesh() {
+  return memo('shield', () => {
+    const mb = new MeshBuilder();
+    sphere(mb, { radius: 1, segments: 14, rings: 9, color: [0.5, 0.78, 1] });
+    return mb;
+  });
+}
+
+/** An expanding debris burst. */
+function explosionMesh() {
+  return memo('explosion', () => {
+    const mb = new MeshBuilder();
+    let h = 0x85ebca6b;
+    const rnd = () => {
+      h ^= h << 13; h ^= h >>> 17; h ^= h << 5; h |= 0;
+      return (h >>> 0) / 4294967296;
+    };
+    for (let i = 0; i < 18; i++) {
+      const u = rnd() * 2 - 1;
+      const a = rnd() * Math.PI * 2;
+      const r = Math.sqrt(1 - u * u);
+      const d = 0.4 + rnd() * 0.6;
+      box(mb, {
+        center: vec3(Math.cos(a) * r * d, u * d, Math.sin(a) * r * d),
+        size: vec3(0.16, 0.16, 0.16),
+        color: i % 3 === 0 ? [1, 0.9, 0.6] : [1, 0.55, 0.2],
+      });
+    }
+    return mb;
+  });
+}
+
+/** A vertical line from a hull down to the grid plane, so altitude is readable. */
+function dropLineMesh() {
+  return memo('dropline', () => {
+    const mb = new MeshBuilder();
+    box(mb, {
+      center: vec3(0, 0.5, 0),
+      size: vec3(0.02, 1, 0.02),
+      color: [0.35, 0.5, 0.7],
+    });
+    return mb;
+  });
+}
+
+/** Every mesh the scene can draw, for the harness and the triangle budget. */
+function sceneMeshes() {
+  return {
+    starfield: starfield(),
+    grid: gridMesh(),
+    beam: beamMesh(),
+    torpedo: torpedoMesh(),
+    shield: shieldMesh(),
+    explosion: explosionMesh(),
+    dropLine: dropLineMesh(),
+    planet: bodyMesh('planet'),
+    star: bodyMesh('star'),
+  };
+}
+
+__exports.VOLUME = VOLUME;
+__exports.starfield = starfield;
+__exports.bodyMesh = bodyMesh;
+__exports.gridMesh = gridMesh;
+__exports.beamMesh = beamMesh;
+__exports.torpedoMesh = torpedoMesh;
+__exports.shieldMesh = shieldMesh;
+__exports.explosionMesh = explosionMesh;
+__exports.dropLineMesh = dropLineMesh;
+__exports.sceneMeshes = sceneMeshes;
+
+});
+
+__define("src/ui/tactical3d.js", function (__exports, __require) {
+// The tactical display, in three dimensions.
+//
+// Drop-in for TacticalView: same constructor, same `render(engagement, alpha)`,
+// same `onSelect` hook. If WebGL is unavailable — an old device, a headless
+// runner, a driver that said no — `TacticalView3D.create` returns null and the
+// caller keeps the 2D display, which is still a complete, playable view.
+//
+// Two things make a 3D tactical display readable rather than merely impressive:
+//
+//   A reference plane. Nothing in space tells you where things are relative to
+//   each other. The grid at y=0 and a drop line from every hull to it are what
+//   turn "those two ships overlap on screen" into "that one is above me".
+//
+//   A camera that stays behind and above your own ship rather than floating
+//   free. You are commanding from a bridge, not directing a film.
+//
+// Labels, reticles and range rings stay in 2D on an overlay canvas. Text in a
+// 3D scene needs a glyph atlas, which is an asset, and this project does not
+// ship assets.
+
+const { vec3, mat4, quat, identity, multiply, perspective, lookAt, compose, normalMatrix, quatFromEuler, project, sub, length: vlength, normalize, cross } = __require("src/gfx/math.js");
+const { Renderer } = __require("src/gfx/gl.js");
+const { hullMesh, hullScale, paletteFor } = __require("src/gfx/blueprint.js");
+const { starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh, dropLineMesh, VOLUME } = __require("src/gfx/scene.js");
+const { fitCanvas } = __require("src/ui/touch.js");
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * Simulation space is currently a plane: ships carry x, y and a heading in
+ * degrees. Render space is 3D with +y up. Mapping here rather than at every
+ * call site means the day ships gain a real altitude, only `z` has to start
+ * arriving and nothing else in this file changes.
+ */
+function worldOf(ship, out = vec3()) {
+  out[0] = ship.x;
+  out[1] = ship.z ?? 0;
+  out[2] = ship.y;
+  return out;
+}
+
+function orientationOf(ship, out = quat()) {
+  // Heading is a compass bearing in the xz plane; pitch and roll are optional
+  // and default to level, which is what a 2D engagement produces.
+  return quatFromEuler(
+    -(ship.pitch ?? 0) * Math.PI / 180,
+    -(ship.heading ?? 0) * Math.PI / 180,
+    (ship.roll ?? 0) * Math.PI / 180,
+    out,
+  );
+}
+class TacticalView3D {
+  /** @returns {TacticalView3D|null} null when WebGL is unavailable. */
+  static create(canvas) {
+    // The GL canvas sits behind an overlay canvas for LCARS text. The caller
+    // gives us one element, so the second is created here and inserted beside
+    // it, inheriting its box.
+    const renderer = Renderer.create(canvas);
+    if (!renderer) return null;
+    return new TacticalView3D(canvas, renderer);
+  }
+
+  constructor(canvas, renderer) {
+    this.canvas = canvas;
+    this.renderer = renderer;
+    this.onSelect = null;
+    this.lastShips = [];
+
+    this.overlay = document.createElement('canvas');
+    this.overlay.className = 'tactical-labels';
+    canvas.parentNode?.insertBefore(this.overlay, canvas.nextSibling);
+
+    // Camera: an orbit around a focus point that eases toward the fleet.
+    this.cam = {
+      focus: vec3(0, 0, 0),
+      yaw: -0.6,
+      pitch: 0.62,
+      distance: 1700,
+      wantDistance: 1700,
+    };
+
+    this.stats = { drawCalls: 0, triangles: 0, frames: 0, lastMs: 0 };
+
+    // Reused matrices — the draw path allocates nothing.
+    this._proj = mat4();
+    this._view = mat4();
+    this._viewProj = mat4();
+    this._model = mat4();
+    this._pos = vec3();
+    this._quat = quat();
+
+    this.attachGestures();
+  }
+
+  // ------------------------------------------------------------- gestures
+
+  attachGestures() {
+    const c = this.overlay;
+    let pointers = new Map();
+    let lastPinch = 0;
+    let moved = 0;
+
+    const onDown = (e) => {
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      moved = 0;
+      c.setPointerCapture?.(e.pointerId);
+    };
+
+    const onMove = (e) => {
+      const prev = pointers.get(e.pointerId);
+      if (!prev) return;
+      const dx = e.clientX - prev.x;
+      const dy = e.clientY - prev.y;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      moved += Math.abs(dx) + Math.abs(dy);
+
+      if (pointers.size === 1) {
+        // One finger orbits. Pitch is clamped well short of the poles so the
+        // grid never degenerates into a line and the up vector stays valid.
+        this.cam.yaw -= dx * 0.006;
+        this.cam.pitch = clamp(this.cam.pitch + dy * 0.005, 0.08, 1.45);
+      } else if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (lastPinch) {
+          this.cam.wantDistance = clamp(this.cam.wantDistance * (lastPinch / d), 320, VOLUME * 1.6);
+          this.userZoom = true;
+        }
+        lastPinch = d;
+      }
+    };
+
+    const onUp = (e) => {
+      const p = pointers.get(e.pointerId);
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) lastPinch = 0;
+      // A tap, not a drag, selects a target.
+      if (p && moved < 10 && this.onSelect) this.pick(e.clientX, e.clientY);
+    };
+
+    c.addEventListener('pointerdown', onDown);
+    c.addEventListener('pointermove', onMove);
+    c.addEventListener('pointerup', onUp);
+    c.addEventListener('pointercancel', onUp);
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.cam.wantDistance = clamp(this.cam.wantDistance * (1 + Math.sign(e.deltaY) * 0.12), 320, VOLUME * 1.6);
+      this.userZoom = true;
+    }, { passive: false });
+
+    this._detach = () => {
+      c.removeEventListener('pointerdown', onDown);
+      c.removeEventListener('pointermove', onMove);
+      c.removeEventListener('pointerup', onUp);
+      c.removeEventListener('pointercancel', onUp);
+    };
+  }
+
+  /** Nearest hostile to the tap, in screen space. */
+  pick(clientX, clientY) {
+    const rect = this.overlay.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    let best = null;
+    let bestD = 70;
+    for (const s of this.lastShips) {
+      if (s.destroyed || s.isPlayer) continue;
+      const p = project(worldOf(s, this._pos), this._viewProj);
+      if (!p) continue;
+      const sx = (p.x * 0.5 + 0.5) * rect.width;
+      const sy = (1 - (p.y * 0.5 + 0.5)) * rect.height;
+      const d = Math.hypot(sx - px, sy - py);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    if (best) this.onSelect(best);
+  }
+
+  // --------------------------------------------------------------- camera
+
+  /**
+   * Ease the focus onto the fleet centroid and the distance onto whatever
+   * frames every live hull. Never snaps — a camera that jumps when a ship
+   * explodes is worse than one that is briefly badly framed.
+   */
+  frame(engagement) {
+    const ships = [engagement.player, ...engagement.liveHostiles, ...engagement.allies]
+      .filter((s) => s && !s.destroyed);
+    if (!ships.length) return;
+
+    let cx = 0; let cy = 0; let cz = 0;
+    let span = 400;
+    for (const s of ships) {
+      cx += s.x; cy += (s.z ?? 0); cz += s.y;
+    }
+    cx /= ships.length; cy /= ships.length; cz /= ships.length;
+    for (const s of ships) {
+      span = Math.max(span, Math.hypot(s.x - cx, (s.z ?? 0) - cy, s.y - cz) * 2.4);
+    }
+
+    this.cam.focus[0] += (cx - this.cam.focus[0]) * 0.06;
+    this.cam.focus[1] += (cy - this.cam.focus[1]) * 0.06;
+    this.cam.focus[2] += (cz - this.cam.focus[2]) * 0.06;
+
+    if (!this.userZoom) {
+      this.cam.wantDistance = clamp(span * 1.15, 500, VOLUME * 1.2);
+    }
+    this.cam.distance += (this.cam.wantDistance - this.cam.distance) * 0.07;
+  }
+
+  eye(out = vec3()) {
+    const { focus, yaw, pitch, distance } = this.cam;
+    const cp = Math.cos(pitch);
+    out[0] = focus[0] + Math.cos(yaw) * cp * distance;
+    out[1] = focus[1] + Math.sin(pitch) * distance;
+    out[2] = focus[2] + Math.sin(yaw) * cp * distance;
+    return out;
+  }
+
+  // ---------------------------------------------------------------- draw
+
+  render(engagement, alpha = 0) {
+    void alpha;
+    const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = globalThis.devicePixelRatio ?? 1;
+    const { aspect } = this.renderer.resize(rect.width || 320, rect.height || 320, dpr);
+
+    if (!this.renderer.beginFrame()) return;
+    if (!engagement) return;
+
+    this.frame(engagement);
+    this.lastShips = [engagement.player, ...engagement.hostiles, ...engagement.allies]
+      .filter(Boolean);
+
+    perspective(52 * Math.PI / 180, aspect, 5, 40000, this._proj);
+    lookAt(this.eye(), this.cam.focus, vec3(0, 1, 0), this._view);
+    multiply(this._proj, this._view, this._viewProj);
+    this.renderer.setCamera(this._viewProj);
+
+    this.drawEnvironment();
+    for (const ship of this.lastShips) {
+      if (!ship.destroyed) this.drawShip(ship, ship === engagement.target);
+    }
+    this.drawEffects(engagement);
+
+    this.stats.drawCalls = this.renderer.drawCalls;
+    this.stats.triangles = this.renderer.triangles;
+    this.stats.frames++;
+    this.stats.lastMs = (typeof performance !== 'undefined' ? performance.now() : 0) - t0;
+
+    this.drawOverlay(engagement, rect);
+  }
+
+  drawEnvironment() {
+    // The starfield rides with the camera so it never comes into reach.
+    const stars = starfield();
+    compose(this.eye(), quat(), 1, this._model);
+    this.renderer.draw('stars', stars, {
+      model: this._model,
+      normalMatrix: normalMatrix(this._model),
+      emissive: 1,
+      tint: [1, 1, 1],
+    });
+
+    identity(this._model);
+    this.renderer.draw('grid', gridMesh(), {
+      model: this._model,
+      normalMatrix: normalMatrix(this._model),
+      emissive: 1,
+      alpha: 0.55,
+      tint: [1, 1, 1],
+    });
+  }
+
+  drawShip(ship, isTarget) {
+    const mesh = hullMesh(ship.classId, ship.faction);
+    const scale = hullScale(ship.classId);
+    compose(worldOf(ship, this._pos), orientationOf(ship, this._quat), scale, this._model);
+
+    // Damage darkens the plating; the current target is lifted toward its
+    // faction's own accent so it is obvious which hull the guns are on.
+    const hurt = 0.55 + 0.45 * (ship.hullPct ?? 1);
+    const tint = isTarget
+      ? [hurt * 1.25, hurt * 1.1, hurt * 0.9]
+      : [hurt, hurt, hurt];
+
+    this.renderer.draw(`hull:${ship.classId}:${ship.faction}`, mesh, {
+      model: this._model,
+      normalMatrix: normalMatrix(this._model),
+      tint,
+      alpha: ship.cloaked ? 0.22 : 1,
+    });
+
+    // Drop line to the grid: this is what makes altitude legible.
+    const alt = ship.z ?? 0;
+    if (Math.abs(alt) > 1) {
+      this._pos[1] = Math.min(0, alt);
+      compose(this._pos, quat(), 1, this._model);
+      this._model[5] = Math.abs(alt);      // stretch the unit line to the drop
+      this.renderer.draw('dropline', dropLineMesh(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        alpha: 0.4,
+        tint: [1, 1, 1],
+      });
+    }
+
+    // Shield shell, only while a facing is actually holding charge.
+    if (ship.shieldsUp && (ship.shieldPct ?? 0) > 0.02) {
+      // Close to the hull and very faint. A large bright bubble dominates the
+      // frame and hides the ship it is protecting, which is the wrong way round
+      // for a display whose job is telling you what you are looking at.
+      compose(worldOf(ship, this._pos), quat(), scale * 1.25, this._model);
+      const p = paletteFor(ship.faction);
+      this.renderer.draw('shield', shieldMesh(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        alpha: 0.04 + 0.07 * (ship.shieldPct ?? 0),
+        tint: p.glow,
+      });
+    }
+  }
+
+  drawEffects(engagement) {
+    // Beams: a unit tube along +x, rotated onto the shot and stretched to it.
+    for (const e of engagement.effects) {
+      if (e.kind !== 'beam' && e.kind !== 'cannon') continue;
+      const from = vec3(e.from.x, e.from.z ?? 0, e.from.y);
+      const to = vec3(e.to.x, e.to.z ?? 0, e.to.y);
+      const dir = sub(to, from);
+      const len = vlength(dir);
+      if (len < 1) continue;
+
+      this.orientAlong(dir, from, len, e.kind === 'cannon' ? 5 : 3);
+      const p = paletteFor(e.faction);
+      this.renderer.draw('beam', beamMesh(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        alpha: clamp(e.life * 2.4, 0, 0.9),
+        tint: p.glow,
+      });
+    }
+
+    for (const p of engagement.projectiles) {
+      compose(vec3(p.x, p.z ?? 0, p.y), quat(), 9, this._model);
+      this.renderer.draw('torpedo', torpedoMesh(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        tint: [1, 1, 1],
+      });
+    }
+
+    for (const e of engagement.effects) {
+      if (e.kind !== 'explosion') continue;
+      const age = clamp(1 - e.life / 1.6, 0, 1);
+      compose(vec3(e.x, e.z ?? 0, e.y), quat(), 30 + age * 130, this._model);
+      this.renderer.draw('explosion', explosionMesh(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        alpha: 1 - age,
+        tint: [1, 1, 1],
+      });
+    }
+  }
+
+  /** Build a model matrix that lays a unit +x mesh along `dir`, `thickness` wide. */
+  orientAlong(dir, from, len, thickness) {
+    const x = normalize(dir);
+    let up = vec3(0, 1, 0);
+    if (Math.abs(x[1]) > 0.98) up = vec3(1, 0, 0);
+    const z = normalize(cross(x, up));
+    const y = cross(z, x);
+
+    const m = this._model;
+    m[0] = x[0] * len; m[1] = x[1] * len; m[2] = x[2] * len; m[3] = 0;
+    m[4] = y[0] * thickness; m[5] = y[1] * thickness; m[6] = y[2] * thickness; m[7] = 0;
+    m[8] = z[0] * thickness; m[9] = z[1] * thickness; m[10] = z[2] * thickness; m[11] = 0;
+    m[12] = from[0]; m[13] = from[1]; m[14] = from[2]; m[15] = 1;
+    return m;
+  }
+
+  // -------------------------------------------------------------- overlay
+
+  /** LCARS chrome: names, hull bars, the target reticle. Plain 2D, on top. */
+  drawOverlay(engagement, rect) {
+    this.overlay.style.width = `${rect.width}px`;
+    this.overlay.style.height = `${rect.height}px`;
+    const { ctx, width, height } = fitCanvas(this.overlay);
+    ctx.clearRect(0, 0, width, height);
+
+    for (const ship of this.lastShips) {
+      if (ship.destroyed) continue;
+      const p = project(worldOf(ship, this._pos), this._viewProj);
+      if (!p || p.z > 1) continue;
+      const sx = (p.x * 0.5 + 0.5) * width;
+      const sy = (1 - (p.y * 0.5 + 0.5)) * height;
+      if (sx < -80 || sx > width + 80 || sy < -60 || sy > height + 60) continue;
+
+      const isTarget = ship === engagement.target;
+      const isPlayer = ship.isPlayer;
+      const accent = isPlayer ? '#9cf' : isTarget ? '#ff9a3c' : '#e5533d';
+
+      if (isTarget) {
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 2;
+        const r = 26;
+        ctx.beginPath();
+        for (let i = 0; i < 4; i++) {
+          const a = i * Math.PI / 2 + Math.PI / 4;
+          const cx = sx + Math.cos(a) * r;
+          const cy = sy + Math.sin(a) * r;
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(cx + Math.cos(a) * 8, cy + Math.sin(a) * 8);
+        }
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = accent;
+      ctx.font = '600 11px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(ship.name, sx, sy - 32);
+
+      // Hull bar.
+      const w = 34;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(sx - w / 2, sy - 28, w, 3);
+      ctx.fillStyle = ship.hullPct > 0.5 ? '#7ed957' : ship.hullPct > 0.25 ? '#d9a441' : '#e5533d';
+      ctx.fillRect(sx - w / 2, sy - 28, w * clamp(ship.hullPct, 0, 1), 3);
+    }
+  }
+
+  dispose() {
+    this._detach?.();
+    this.renderer.dispose();
+    this.overlay.remove();
+  }
+}
+
+__exports.TacticalView3D = TacticalView3D;
 
 });
 
@@ -10626,15 +12460,22 @@ function tacticalScreen(app) {
   const eng = g.engagement;
   const root = el('div', { class: 'screen tactical-screen' });
 
-  const wrap = el('div', { class: 'tactical-wrap' });
-  const canvas = el('canvas', { id: 'tactical' });
-  wrap.append(canvas);
-
-  const overlay = el('div', { class: 'tactical-overlay' });
-  wrap.append(overlay);
+  // The viewport is built once and *moved* into each new screen node rather
+  // than rebuilt. It has to be: a WebGL context is expensive to create,
+  // browsers cap how many can exist at once, and making a fresh one on every UI
+  // render silently drops the oldest until the display goes black. Appending an
+  // existing node relocates it and keeps the context alive.
+  let wrap = app.tacticalHost;
+  if (!wrap) {
+    wrap = el('div', { class: 'tactical-wrap' }, [
+      el('canvas', { id: 'tactical' }),
+      el('div', { class: 'tactical-overlay' }),
+    ]);
+    app.tacticalHost = wrap;
+  }
+  app.tacticalCanvas = wrap.querySelector('#tactical');
+  app.tacticalOverlay = wrap.querySelector('.tactical-overlay');
   root.append(wrap);
-  app.tacticalCanvas = canvas;
-  app.tacticalOverlay = overlay;
 
   const side = el('div', { class: 'tactical-side scroll' });
   root.append(side);
@@ -14307,6 +16148,7 @@ const { el, clear, button, modal } = __require("src/ui/lcars.js");
 const { haptic, configureTouch, requestWakeLock, releaseWakeLock, trackViewportInsets } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { TacticalView } = __require("src/ui/tactical.js");
+const { TacticalView3D } = __require("src/ui/tactical3d.js");
 const { GalaxyMap } = __require("src/ui/galaxymap.js");
 const screens = __require("src/ui/screens.js");
 const { CharacterCreator, characterSheetScreen, reputationScreen } = __require("src/ui/charscreens.js");
@@ -14614,12 +16456,22 @@ class App {
 
     // Canvas-backed screens need their renderers rebuilt after a DOM swap.
     if (screen === 'tactical' && this.tacticalCanvas) {
-      this.tactical = new TacticalView(this.tacticalCanvas);
-      this.tactical.onSelect = (ship) => {
-        g.engagement?.setTarget(ship);
-        audio.play('ui_select');
-        this.render();
-      };
+      // Three dimensions when the device can, two when it cannot. The 2D view
+      // is not a stub — it is the display this game shipped with, and it stays
+      // complete, because "no WebGL" must mean a different picture and not a
+      // broken game.
+      if (!this.tactical || this.tacticalViewCanvas !== this.tacticalCanvas) {
+        this.tactical?.dispose?.();
+        this.tactical = (this.settings.render3d === false ? null : TacticalView3D.create(this.tacticalCanvas))
+          ?? new TacticalView(this.tacticalCanvas);
+        this.tacticalViewCanvas = this.tacticalCanvas;
+        this.renderMode = this.tactical instanceof TacticalView3D ? '3d' : '2d';
+        this.tactical.onSelect = (ship) => {
+          g.engagement?.setTarget(ship);
+          audio.play('ui_select');
+          this.render();
+        };
+      }
     }
     if (screen === 'galaxy' && this.galaxyCanvas) {
       this.map = new GalaxyMap(this.galaxyCanvas);

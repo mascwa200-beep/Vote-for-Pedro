@@ -11,7 +11,7 @@
 // because a hand-maintained list of forty-odd paths will otherwise drift, and
 // drifted silently the first time a directory was added.
 
-const VERSION = 'sfc-v3';
+const VERSION = 'sfc-v4';
 const PRECACHE = [
   './',
   './index.html',
@@ -69,6 +69,12 @@ const PRECACHE = [
   './src/lang/lexicon.js',
   './src/lang/parse.js',
   './src/ui/chair.js',
+  './src/ui/tactical3d.js',
+  './src/gfx/math.js',
+  './src/gfx/mesh.js',
+  './src/gfx/gl.js',
+  './src/gfx/blueprint.js',
+  './src/gfx/scene.js',
 ];
 
 self.addEventListener('install', (event) => {
