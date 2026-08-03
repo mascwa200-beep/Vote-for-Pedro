@@ -21,6 +21,9 @@ import { CONSOLES } from '../src/sim/loadout.js';
 import { RECIPES, advanceFabrication } from '../src/sim/fabrication.js';
 import { TRAPS } from '../src/world/encounters.js';
 import { EPISODES } from '../src/missions/episodes/index.js';
+import { CaptainProgress, SKILL_LIST, combatXP } from '../src/sim/skills.js';
+import { Reputation, REP_TIERS, MAX_TIER, TRACK_LIST } from '../src/rules/reputation.js';
+import { Ledger } from '../src/core/ledger.js';
 
 const gameWith = (opts = {}) => new Game({
   seed: 1n, crewMode: 'original', ...opts,
@@ -724,5 +727,83 @@ describe('every episode graph is sound', () => {
       }
     }
     assert.deepEqual(failures, [], 'episodes that stranded the player');
+  });
+});
+
+// ====================================================== progression numbers
+
+// The same NaN class as the helm orders and the travel arithmetic, in the two
+// places it would be least visible and most permanent: experience and
+// reputation. `Math.round(NaN)` is NaN, and both `xp` and `marks` are saved —
+// so one bad award poisons the rank ladder, the skill economy and every
+// reputation tier for the rest of the commission.
+//
+// Not reachable from play: combatXP sums real ship stats, xpRate comes from a
+// data table, and mission awards are literals. This is defence in depth for a
+// value that can never be recovered once it is written to disk.
+describe('progression survives numbers it should never see', () => {
+  const HOSTILE = [NaN, Infinity, -Infinity, 1e308, -1e9, undefined, null];
+
+  test('experience stays a finite, non-negative, non-decreasing number', () => {
+    for (const bad of HOSTILE) {
+      const p = new CaptainProgress();
+      const ledger = new Ledger();
+      const before = p.xp;
+      p.addXP(bad, { ledger });
+      assert.ok(Number.isFinite(p.xp), `addXP(${bad}) left xp = ${p.xp}`);
+      assert.ok(p.xp >= before, `addXP(${bad}) reduced xp to ${p.xp}`);
+      assert.ok(Number.isFinite(p.unspent), `addXP(${bad}) left unspent = ${p.unspent}`);
+    }
+  });
+
+  test('a poisoned award cannot break the skill economy', () => {
+    const p = new CaptainProgress();
+    const ledger = new Ledger();
+    p.addXP(NaN, { ledger });
+    p.addXP(500000, { ledger });      // a real award after a bad one
+    const budget = p.unspent;
+    assert.ok(Number.isFinite(budget) && budget > 0,
+      `unspent points are ${budget} after a NaN award followed by a real one`);
+
+    let spent = 0;
+    for (let i = 0; i < 400; i++) if (p.spend(SKILL_LIST[i % SKILL_LIST.length].id)) spent++;
+    assert.ok(spent <= budget, `spent ${spent} points from a budget of ${budget}`);
+    assert.ok(p.unspent >= 0, `skill points went to ${p.unspent}`);
+  });
+
+  test('combat experience is finite even for a broken hull', () => {
+    const xp = combatXP([
+      { cls: { tier: NaN }, maxHull: Infinity },
+      { cls: {}, maxHull: NaN },
+      { cls: { tier: 3 }, maxHull: 2000 },
+    ]);
+    assert.ok(Number.isFinite(xp), `combatXP returned ${xp}`);
+    assert.ok(xp >= 0, `combatXP returned ${xp}`);
+  });
+
+  test('reputation marks stay finite and tiers only rise', () => {
+    for (const bad of HOSTILE) {
+      const rep = new Reputation();
+      rep.recordEvent('combat_victory', bad);
+      for (const track of TRACK_LIST) {
+        const t = rep.tracks[track.id];
+        if (!t) continue;
+        assert.ok(Number.isFinite(t.marks), `${track.id} marks = ${t.marks} for multiplier ${bad}`);
+        assert.ok(t.marks >= 0, `${track.id} marks = ${t.marks}`);
+        assert.ok(Number.isFinite(t.xp), `${track.id} xp = ${t.xp}`);
+        assert.ok(t.tier >= 0 && t.tier <= MAX_TIER, `${track.id} tier = ${t.tier}`);
+      }
+    }
+  });
+
+  test('no amount of awards pushes a track past the top tier', () => {
+    const rep = new Reputation();
+    for (let i = 0; i < 2000; i++) rep.recordEvent('combat_victory', 50);
+    for (const track of TRACK_LIST) {
+      const t = rep.tracks[track.id];
+      if (!t) continue;
+      assert.ok(t.tier <= MAX_TIER, `${track.id} reached tier ${t.tier}, past ${MAX_TIER}`);
+      assert.ok(REP_TIERS[t.tier], `${track.id} is at a tier with no definition`);
+    }
   });
 });

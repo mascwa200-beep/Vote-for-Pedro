@@ -7688,6 +7688,8 @@ __define("src/rules/reputation.js", function (__exports, __require) {
 // A captain can be deeply trusted by the Klingon Defence Force (high
 // reputation) and still be shot at this week for a border violation (low
 // standing). That distinction is the point.
+
+const { clamp, finite } = __require("src/core/num.js");
 const REP_TIERS = [
   { tier: 0, name: 'Unknown', xp: 0, marksToAdvance: 0 },
   { tier: 1, name: 'Recognised', xp: 500, marksToAdvance: 40 },
@@ -7867,11 +7869,20 @@ class ReputationTrack {
    * @returns {object|null} tier-up info
    */
   award(xp, marks, multiplier = 1) {
-    this.xp += Math.round(xp * multiplier);
-    this.marks += Math.round(marks * multiplier);
+    // Guarded, and the tier is capped. Marks are currency and both fields are
+    // saved, so one bad multiplier would poison a track for the rest of the
+    // commission — and a tier past the top of the table has no name, no
+    // projects, and nothing to show on the reputation screen.
+    // The multiplier needs a ceiling, not just a finiteness check: 1e308 is a
+    // finite number that overflows to Infinity the moment it is multiplied.
+    // Nothing in play exceeds 2 — a repGain trait times the Idealist doubling.
+    const mult = clamp(multiplier, 0, 100);
+    const cap = Number.MAX_SAFE_INTEGER;
+    this.xp = Math.min(cap, Math.max(0, this.xp + Math.round(finite(xp, 0) * mult)));
+    this.marks = Math.min(cap, Math.max(0, this.marks + Math.round(finite(marks, 0) * mult)));
     const next = this.nextTier;
     if (next && this.xp >= next.xp) {
-      this.tier++;
+      this.tier = Math.min(MAX_TIER, this.tier + 1);
       return { track: this.id, tier: this.tier, name: this.tierName };
     }
     return null;
@@ -9302,6 +9313,7 @@ __define("src/sim/skills.js", function (__exports, __require) {
 // Beam Weapons is a real number in the damage formula, not a cosmetic tier.
 
 const { ADDITIVE_MODS } = __require("src/sim/ship.js");
+const { finite } = __require("src/core/num.js");
 const RANKS = [
   { id: 'ensign', name: 'Ensign', tier: 1, xp: 0, skillPoints: 2 },
   { id: 'lieutenant_jg', name: 'Lieutenant JG', tier: 1, xp: 800, skillPoints: 2 },
@@ -9400,7 +9412,11 @@ class CaptainProgress {
    * @returns {object|null} promotion info
    */
   addXP(amount, { ledger = null } = {}) {
-    this.xp += Math.max(0, Math.round(amount));
+    // Guarded for the same reason the helm orders are: `Math.round(NaN)` is
+    // NaN, `xp` is saved, and a poisoned experience total takes the rank
+    // ladder and the whole skill economy with it, permanently.
+    const gain = Math.max(0, Math.round(finite(amount, 0)));
+    this.xp = Math.min(Number.MAX_SAFE_INTEGER, this.xp + gain);
     const next = this.nextRank;
     if (!next || this.xp < next.xp) return null;
     if (ledger?.inquiryOpen) return { blocked: true, reason: 'board of inquiry' };
@@ -9475,7 +9491,10 @@ class CaptainProgress {
 
 /** XP for a combat victory, scaled by what you actually beat. */
 function combatXP(hostiles) {
-  return hostiles.reduce((n, s) => n + (s.cls.tier ?? 1) * 140 + (s.maxHull / 20), 0);
+  return hostiles.reduce(
+    (n, s) => n + finite(s.cls?.tier, 1) * 140 + Math.max(0, finite(s.maxHull, 0)) / 20,
+    0,
+  );
 }
 
 __exports.RANKS = RANKS;
