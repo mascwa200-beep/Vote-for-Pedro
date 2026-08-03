@@ -1,0 +1,137 @@
+// Power distribution — the STO model.
+//
+// Four subsystems draw from a fixed pool. Each level above/below the 50 nominal
+// scales that subsystem's output. Presets are one tap; the sliders underneath
+// are the real control, and they're what a captain actually orders.
+
+export const SUBSYSTEMS = ['weapons', 'shields', 'engines', 'auxiliary'];
+
+export const SUBSYSTEM_LABEL = {
+  weapons: 'Weapons',
+  shields: 'Shields',
+  engines: 'Engines',
+  auxiliary: 'Auxiliary',
+};
+
+export const PRESETS = {
+  balanced: { id: 'balanced', label: 'Balanced', order: 'Standard distribution',
+    levels: { weapons: 50, shields: 50, engines: 50, auxiliary: 50 } },
+  attack: { id: 'attack', label: 'Attack', order: 'Power to weapons',
+    levels: { weapons: 100, shields: 40, engines: 35, auxiliary: 25 } },
+  defense: { id: 'defense', label: 'Defense', order: 'Power to shields',
+    levels: { weapons: 40, shields: 100, engines: 35, auxiliary: 25 } },
+  speed: { id: 'speed', label: 'Speed', order: 'Power to engines',
+    levels: { weapons: 35, shields: 40, engines: 100, auxiliary: 25 } },
+  science: { id: 'science', label: 'Science', order: 'Power to auxiliary',
+    levels: { weapons: 30, shields: 45, engines: 25, auxiliary: 100 } },
+};
+
+export const PRESET_LIST = Object.values(PRESETS);
+
+/** A subsystem at `level` performs at this multiple of nominal. */
+export function effectiveness(level) {
+  // 50 -> 1.0, 100 -> 1.5, 25 -> 0.75, 0 -> 0.4 (never fully dead from power alone)
+  if (level >= 50) return 1 + (level - 50) * 0.01;
+  return Math.max(0.4, 1 - (50 - level) * 0.012);
+}
+
+export class PowerGrid {
+  /**
+   * @param {number} cap total distributable power (ship's powerCap)
+   */
+  constructor(cap = 200) {
+    this.cap = cap;
+    this.levels = { ...PRESETS.balanced.levels };
+    this.preset = 'balanced';
+    // Rebalancing is not instant — the EPS grid takes a moment to settle.
+    this.target = { ...this.levels };
+    this.transferRate = 55; // power units per second
+  }
+
+  get total() {
+    return SUBSYSTEMS.reduce((n, s) => n + this.target[s], 0);
+  }
+
+  /** Apply a named preset. */
+  applyPreset(id) {
+    const p = PRESETS[id];
+    if (!p) return false;
+    this.target = { ...p.levels };
+    this.preset = id;
+    this.normalize();
+    return true;
+  }
+
+  /**
+   * Set one subsystem, stealing from or giving back to the others so the
+   * total stays within cap. This is what "divert power to shields" does.
+   */
+  set(subsystem, value) {
+    if (!SUBSYSTEMS.includes(subsystem)) return false;
+    this.target[subsystem] = Math.max(0, Math.min(100, Math.round(value)));
+    this.preset = 'custom';
+    this.normalize(subsystem);
+    return true;
+  }
+
+  /** Shift `amount` into a subsystem, drawn evenly from the rest. */
+  divert(subsystem, amount = 25) {
+    return this.set(subsystem, this.target[subsystem] + amount);
+  }
+
+  /** Keep the sum at or under cap by draining the others proportionally. */
+  normalize(protectedSub = null) {
+    const budget = this.cap;
+    let total = this.total;
+    if (total <= budget) return;
+
+    let excess = total - budget;
+    const donors = SUBSYSTEMS.filter((s) => s !== protectedSub && this.target[s] > 0);
+    // Drain proportional to how much each donor has above zero.
+    for (let pass = 0; pass < 4 && excess > 0.01; pass++) {
+      const pool = donors.reduce((n, s) => n + this.target[s], 0);
+      if (pool <= 0) break;
+      for (const s of donors) {
+        const share = (this.target[s] / pool) * excess;
+        const taken = Math.min(this.target[s], share);
+        this.target[s] -= taken;
+      }
+      excess = this.total - budget;
+    }
+    for (const s of SUBSYSTEMS) this.target[s] = Math.max(0, Math.round(this.target[s]));
+  }
+
+  /** Ease actual levels toward target. Called every sim step. */
+  update(dt) {
+    for (const s of SUBSYSTEMS) {
+      const diff = this.target[s] - this.levels[s];
+      if (Math.abs(diff) < 0.01) { this.levels[s] = this.target[s]; continue; }
+      const step = Math.sign(diff) * Math.min(Math.abs(diff), this.transferRate * dt);
+      this.levels[s] += step;
+    }
+  }
+
+  /** Effectiveness multiplier for a subsystem right now. */
+  factor(subsystem) {
+    return effectiveness(this.levels[subsystem] ?? 50);
+  }
+
+  /** True once actual levels have caught up with the order. */
+  get settled() {
+    return SUBSYSTEMS.every((s) => Math.abs(this.target[s] - this.levels[s]) < 0.5);
+  }
+
+  save() {
+    return { cap: this.cap, levels: this.levels, target: this.target, preset: this.preset };
+  }
+
+  static load(data, cap = 200) {
+    const g = new PowerGrid(data?.cap ?? cap);
+    if (data) {
+      g.levels = { ...g.levels, ...data.levels };
+      g.target = { ...g.target, ...data.target };
+      g.preset = data.preset ?? 'custom';
+    }
+    return g;
+  }
+}

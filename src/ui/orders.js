@@ -1,0 +1,355 @@
+// Natural-language order parsing.
+//
+// "Helm, set course for Vulcan, warp eight" has to work, and so does
+// "warp 8 vulcan". The grammar is intentionally forgiving: match the verb,
+// then hunt the rest of the line for the arguments that verb needs.
+
+import { SYSTEMS } from '../world/systems.data.js';
+import { SUBSYSTEMS } from '../sim/power.js';
+import { FACINGS } from '../sim/ship.js';
+import { ABILITIES } from '../sim/officers.js';
+
+const NUMBER_WORDS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+  nine: 9, ten: 10, half: 0.5, full: 1, maximum: 1, max: 1, all: 1, none: 0, zero: 0,
+};
+
+/** Strip the officer being addressed — "helm," "mister sulu," "tactical," etc. */
+const ADDRESS = /^\s*(?:mister|mr\.?|miss|ms\.?|commander|lieutenant|ensign|doctor|chief|number one|helm|tactical|engineering|science|comms?|communications|bridge|computer)\s*,?\s*/i;
+
+function normalize(text) {
+  return String(text)
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripAddress(text) {
+  let out = text;
+  // Officers can be addressed by name too.
+  for (let i = 0; i < 2; i++) out = out.replace(ADDRESS, '');
+  return out.trim();
+}
+
+function parseNumber(text, fallback = null) {
+  const digits = text.match(/\b(\d+(?:\.\d+)?)\b/);
+  if (digits) return parseFloat(digits[1]);
+  for (const [word, value] of Object.entries(NUMBER_WORDS)) {
+    if (new RegExp(`\\b${word}\\b`).test(text)) return value;
+  }
+  return fallback;
+}
+
+/** Fuzzy-match a destination by name or id. */
+function findSystem(text) {
+  const t = normalize(text);
+  let best = null;
+  let bestLen = 0;
+  for (const s of SYSTEMS) {
+    const candidates = [s.name.toLowerCase(), s.id.replace(/_/g, ' ')];
+    for (const c of candidates) {
+      if (t.includes(c) && c.length > bestLen) { best = s; bestLen = c.length; }
+    }
+    // "DS9", "the badlands", loose forms
+    const short = s.name.toLowerCase().replace(/^(the|uss|starbase)\s+/, '');
+    if (short.length > 3 && t.includes(short) && short.length > bestLen) {
+      best = s; bestLen = short.length;
+    }
+  }
+  return best;
+}
+
+function findFacing(text) {
+  if (/\b(forward|fore|front|bow)\b/.test(text)) return 'fore';
+  if (/\b(aft|rear|stern|behind)\b/.test(text)) return 'aft';
+  if (/\bport\b/.test(text)) return 'port';
+  if (/\b(starboard|stbd)\b/.test(text)) return 'starboard';
+  return null;
+}
+
+function findSubsystem(text) {
+  if (/\b(weapon|weapons|phaser|phasers|guns)\b/.test(text)) return 'weapons';
+  if (/\b(shield|shields|deflector)\b/.test(text)) return 'shields';
+  if (/\b(engine|engines|impulse|propulsion)\b/.test(text)) return 'engines';
+  if (/\b(aux|auxiliary|sensors|science)\b/.test(text)) return 'auxiliary';
+  return null;
+}
+
+function findTargetSubsystem(text) {
+  if (/\b(weapon|weapons|disruptor|phaser)\b/.test(text)) return 'weapons';
+  if (/\b(shield|shields)\b/.test(text)) return 'shields';
+  if (/\b(engine|engines|nacelle|nacelles|impulse)\b/.test(text)) return 'engines';
+  if (/\b(warp core|core|reactor)\b/.test(text)) return 'warpcore';
+  if (/\b(sensor|sensors)\b/.test(text)) return 'sensors';
+  if (/\b(life support|lifesupport)\b/.test(text)) return 'lifesupport';
+  return null;
+}
+
+/**
+ * The order table. Each entry: { id, test, build }.
+ * `build` returns the command object the game executes.
+ */
+const ORDERS = [
+  // ---- Navigation ----
+  {
+    id: 'set_course',
+    help: 'Helm, set course for <system>, warp <n>',
+    test: (t) => /\b(set (a )?course|lay in a course|plot a course|course for|take us to|head for|make for|proceed to|go to|warp to)\b/.test(t)
+      || (/\bwarp\s*\d/.test(t) && findSystem(t)),
+    build: (t) => {
+      const system = findSystem(t);
+      if (!system) return { error: 'Which system, Captain?' };
+      const warpMatch = t.match(/warp\s*(?:factor\s*)?(\d+(?:\.\d+)?)/);
+      const warp = warpMatch ? parseFloat(warpMatch[1]) : (parseNumber(t.replace(/\d+\s*(percent|%)/, ''), null) ?? 6);
+      return { action: 'course', system: system.id, warp: Math.max(1, Math.min(9.9, warp)) };
+    },
+  },
+  {
+    id: 'warp_factor',
+    help: 'Warp <n>',
+    test: (t) => /^warp\s*(factor\s*)?\d/.test(t),
+    build: (t) => ({ action: 'warp_factor', warp: parseNumber(t, 6) }),
+  },
+  {
+    id: 'all_stop',
+    help: 'All stop',
+    test: (t) => /\ball stop\b|\bfull stop\b|\bhold position\b|\bstation keeping\b/.test(t),
+    build: () => ({ action: 'throttle', value: 0 }),
+  },
+  {
+    id: 'ahead',
+    help: 'Ahead full / ahead one third',
+    test: (t) => /\bahead\b|\bimpulse\b|\bthrottle\b/.test(t),
+    build: (t) => {
+      let v = 1;
+      if (/one third|1\/3/.test(t)) v = 0.33;
+      else if (/two thirds|2\/3/.test(t)) v = 0.66;
+      else if (/half/.test(t)) v = 0.5;
+      else if (/slow|dead slow/.test(t)) v = 0.2;
+      else {
+        const pct = t.match(/(\d+)\s*(?:percent|%)/);
+        if (pct) v = Math.min(1, parseInt(pct[1], 10) / 100);
+      }
+      return { action: 'throttle', value: v };
+    },
+  },
+  {
+    id: 'come_about',
+    help: 'Come about / bring us around',
+    test: (t) => /\bcome about\b|\bbring us (a)?round\b|\bturn (in)?to them\b|\bface them\b|\bcome to bearing\b/.test(t),
+    build: (t) => {
+      const deg = t.match(/bearing\s*(\d+)/);
+      return deg ? { action: 'heading', value: parseInt(deg[1], 10) } : { action: 'come_about' };
+    },
+  },
+  {
+    id: 'evasive',
+    help: 'Evasive manoeuvres',
+    test: (t) => /\bevasive\b/.test(t),
+    build: (t) => ({ action: 'evasive', value: !/\b(cancel|belay|stop|end|resume)\b/.test(t) }),
+  },
+  {
+    id: 'warp_out',
+    help: 'Get us out of here',
+    test: (t) => /\b(get us out|break off|disengage|retreat|withdraw|run|flee)\b/.test(t),
+    build: () => ({ action: 'warp_out' }),
+  },
+  {
+    id: 'dock',
+    help: 'Request docking',
+    test: (t) => /\bdock\b|\brequest docking\b|\bput in for repairs\b|\bresupply\b/.test(t),
+    build: () => ({ action: 'dock' }),
+  },
+
+  // ---- Alert & shields ----
+  {
+    id: 'alert',
+    help: 'Red alert / yellow alert / stand down',
+    test: (t) => /\b(red alert|yellow alert|battle stations|stand down|condition green)\b/.test(t),
+    build: (t) => ({
+      action: 'alert',
+      level: /red alert|battle stations/.test(t) ? 'red'
+        : /yellow/.test(t) ? 'yellow' : 'normal',
+    }),
+  },
+  {
+    id: 'shields',
+    help: 'Shields up / shields down',
+    test: (t) => /\bshields?\s*(up|down|raise|lower)\b|\braise shields?\b|\blower shields?\b|\bdrop shields?\b/.test(t),
+    build: (t) => ({ action: 'shields', up: !/\b(down|lower|drop)\b/.test(t) }),
+  },
+  {
+    id: 'reinforce',
+    help: 'Reinforce forward shields',
+    test: (t) => /\b(reinforce|strengthen|bolster|all power to the)\b.*\bshield/.test(t)
+      || (/\bshield/.test(t) && findFacing(t) && /\breinforce|transfer\b/.test(t)),
+    build: (t) => {
+      const facing = findFacing(t);
+      return facing ? { action: 'reinforce', facing } : { error: 'Which facing, Captain?' };
+    },
+  },
+
+  // ---- Power ----
+  {
+    id: 'power',
+    help: 'Divert power to shields / weapons / engines',
+    test: (t) => /\b(divert|reroute|transfer|shift|shunt|route)\b.*\bpower\b/.test(t)
+      || /\bpower to\b/.test(t) || /\ball (available )?power to\b/.test(t),
+    build: (t) => {
+      const sub = findSubsystem(t);
+      if (!sub) return { error: 'Power to which system, Captain?' };
+      const pct = t.match(/(\d+)\s*(?:percent|%)/);
+      const amount = /\ball\b|\bmaximum\b|\beverything\b/.test(t) ? 100
+        : pct ? parseInt(pct[1], 10) : 25;
+      return { action: 'power', subsystem: sub, amount };
+    },
+  },
+  {
+    id: 'power_preset',
+    help: 'Attack pattern power / defensive posture / balanced power',
+    test: (t) => /\b(attack|defensive|defence|defense|speed|science|balanced|standard)\s*(power|posture|configuration|distribution|preset)\b/.test(t),
+    build: (t) => ({
+      action: 'preset',
+      preset: /attack/.test(t) ? 'attack'
+        : /defen[cs]/.test(t) ? 'defense'
+        : /speed/.test(t) ? 'speed'
+        : /science/.test(t) ? 'science' : 'balanced',
+    }),
+  },
+
+  // ---- Weapons ----
+  {
+    id: 'target_subsystem',
+    help: 'Target their engines / weapons / shields',
+    test: (t) => /\btarget(ing)?\b/.test(t) && findTargetSubsystem(t),
+    build: (t) => ({ action: 'target_subsystem', subsystem: findTargetSubsystem(t) }),
+  },
+  {
+    id: 'target',
+    help: 'Target the lead ship / next target',
+    test: (t) => /\btarget\b|\block (weapons )?on\b|\bnext target\b|\bswitch targets?\b/.test(t),
+    build: (t) => /\bnext|switch|cycle\b/.test(t)
+      ? { action: 'cycle_target' }
+      : { action: 'target_nearest' },
+  },
+  {
+    id: 'fire',
+    help: 'Fire / fire phasers / fire torpedoes',
+    test: (t) => /\bfire\b|\bopen fire\b|\bshoot\b|\bengage them\b|\bweapons free\b/.test(t),
+    build: (t) => ({
+      action: 'fire',
+      weaponType: /torpedo|photon/.test(t) ? 'torpedo'
+        : /phaser|beam|disruptor/.test(t) ? 'beam' : 'all',
+    }),
+  },
+  {
+    id: 'cease_fire',
+    help: 'Cease fire / hold fire',
+    test: (t) => /\bcease fire\b|\bhold fire\b|\bstop firing\b|\bweapons hold\b/.test(t),
+    build: () => ({ action: 'cease_fire' }),
+  },
+
+  // ---- Comms ----
+  {
+    id: 'hail',
+    help: 'Open a channel / hail them',
+    test: (t) => /\bhail\b|\bopen a channel\b|\bopen channel\b|\bon screen\b|\bput them on\b/.test(t),
+    build: () => ({ action: 'hail' }),
+  },
+  {
+    id: 'surrender_demand',
+    help: 'Demand their surrender',
+    test: (t) => /\bdemand (their )?surrender\b|\btell them to surrender\b/.test(t),
+    build: () => ({ action: 'hail_option', option: 'demand_surrender' }),
+  },
+
+  // ---- Ship's systems ----
+  {
+    id: 'scan',
+    help: 'Scan them / full sensor sweep',
+    test: (t) => /\bscan\b|\bsensor sweep\b|\banaly[sz]e\b|\breadings\b/.test(t),
+    build: () => ({ action: 'scan' }),
+  },
+  {
+    id: 'status',
+    help: 'Damage report / status report',
+    test: (t) => /\b(damage report|status report|report|status|how are we)\b/.test(t),
+    build: () => ({ action: 'status' }),
+  },
+  {
+    id: 'eject_core',
+    help: 'Eject the warp core',
+    test: (t) => /\beject (the )?(warp )?core\b/.test(t),
+    build: () => ({ action: 'eject_core' }),
+  },
+  {
+    id: 'brace',
+    help: 'All hands brace for impact',
+    test: (t) => /\bbrace\b/.test(t),
+    build: () => ({ action: 'ability', ability: 'brace_for_impact' }),
+  },
+  {
+    id: 'away_team',
+    help: 'Assemble an away team',
+    test: (t) => /\baway team\b|\bbeam down\b|\blanding party\b/.test(t),
+    build: (t) => ({ action: 'away_team', captainLeads: /\bi'?ll lead\b|\bwith me\b|\bi'?m going\b/.test(t) }),
+  },
+  {
+    id: 'transporter',
+    help: 'Energize',
+    test: (t) => /\benergi[sz]e\b|\bbeam (them|him|her|it) (up|aboard)\b/.test(t),
+    build: () => ({ action: 'transport' }),
+  },
+];
+
+/** Abilities are addressable by their order phrase, e.g. "attack pattern alpha". */
+function matchAbility(t) {
+  for (const a of Object.values(ABILITIES)) {
+    const phrase = normalize(a.order);
+    if (t.includes(phrase)) return a.id;
+    // Also match the ability's short name.
+    if (t.includes(normalize(a.name))) return a.id;
+  }
+  return null;
+}
+
+/**
+ * Parse a typed order.
+ * @returns {object} { action, ... } | { error } | { unknown: true }
+ */
+export function parseOrder(raw) {
+  if (!raw || !raw.trim()) return { unknown: true };
+  const full = normalize(raw);
+  const t = stripAddress(full);
+
+  const plain = matchPlainOrder(t, raw);
+
+  // Abilities are the more specific reading — "evasive manoeuvres" is a bridge
+  // officer power, not just a helm instruction. But several ability phrases are
+  // also ordinary orders, so carry the plain reading as a fallback for when
+  // nobody aboard can execute the ability.
+  const ability = matchAbility(t);
+  if (ability) return { action: 'ability', ability, raw, fallback: plain?.unknown ? null : plain };
+
+  return plain ?? { unknown: true, raw };
+}
+
+function matchPlainOrder(t, raw) {
+  for (const order of ORDERS) {
+    if (order.test(t)) {
+      const built = order.build(t);
+      return { ...built, orderId: order.id, raw };
+    }
+  }
+  return { unknown: true, raw };
+}
+
+/** Everything the parser understands, for the manual and the help sheet. */
+export function orderHelp() {
+  const base = ORDERS.map((o) => o.help);
+  const abilities = Object.values(ABILITIES).map((a) => a.order);
+  return { orders: base, abilities: [...new Set(abilities)] };
+}
+
+export { findSystem, SUBSYSTEMS, FACINGS };

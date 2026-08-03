@@ -1,0 +1,314 @@
+// Bridge officers: abilities on cooldowns, and opinions about your orders.
+//
+// The officer layer is where a crew stops being a stat block. An officer with
+// low discipline and high candor will tell you an order is wrong, and a
+// sufficiently bad order can be refused outright.
+
+import { emit } from '../core/events.js';
+import { STATIONS } from '../world/crews.data.js';
+
+/**
+ * Abilities are STO bridge officer powers in miniature: activated, on a
+ * cooldown, with a duration and a set of modifiers.
+ */
+export const ABILITIES = {
+  // --- Tactical ---
+  attack_pattern_alpha: {
+    id: 'attack_pattern_alpha', dept: 'tactical', rank: 2, name: 'Attack Pattern Alpha',
+    order: 'Attack pattern alpha', cooldown: 45, duration: 20,
+    mods: { damage: 1.35, critChance: 0.1, critSeverity: 0.25 },
+    say: 'Attack pattern alpha, aye.',
+  },
+  fire_at_will: {
+    id: 'fire_at_will', dept: 'tactical', rank: 1, name: 'Fire at Will',
+    order: 'Fire at will', cooldown: 30, duration: 15,
+    mods: { damage: 0.8 }, special: 'multitarget',
+    say: 'Firing at will.',
+  },
+  torpedo_spread: {
+    id: 'torpedo_spread', dept: 'tactical', rank: 2, name: 'Torpedo Spread',
+    order: 'Full spread', cooldown: 30, duration: 0, special: 'spread',
+    say: 'Full spread, ready.',
+  },
+  high_yield: {
+    id: 'high_yield', dept: 'tactical', rank: 3, name: 'High Yield Torpedoes',
+    order: 'High yield', cooldown: 40, duration: 12,
+    mods: { torpedoDamage: 2.0 },
+    say: 'High yield loaded.',
+  },
+  target_subsystems: {
+    id: 'target_subsystems', dept: 'tactical', rank: 1, name: 'Target Subsystems',
+    order: 'Target their subsystems', cooldown: 20, duration: 0, special: 'subsystem',
+    say: 'Targeting scanners locked on their systems.',
+  },
+
+  // --- Engineering ---
+  emergency_power_shields: {
+    id: 'emergency_power_shields', dept: 'engineering', rank: 1, name: 'Emergency Power to Shields',
+    order: 'Emergency power to shields', cooldown: 45, duration: 20,
+    mods: { shieldRegen: 3.0, damageResist: 0.15 },
+    say: 'Rerouting everything I can to the shields!',
+  },
+  emergency_power_weapons: {
+    id: 'emergency_power_weapons', dept: 'engineering', rank: 1, name: 'Emergency Power to Weapons',
+    order: 'Emergency power to weapons', cooldown: 45, duration: 20,
+    mods: { damage: 1.3 },
+    say: 'Weapons are drawing straight off the core.',
+  },
+  damage_control: {
+    id: 'damage_control', dept: 'engineering', rank: 2, name: 'Damage Control Teams',
+    order: 'Damage control teams', cooldown: 50, duration: 18,
+    mods: { repairRate: 4.0 }, special: 'extinguish',
+    say: 'Damage control parties away.',
+  },
+  ramming_speed: {
+    id: 'ramming_speed', dept: 'engineering', rank: 3, name: 'Overload Impulse',
+    order: 'All available power to engines', cooldown: 60, duration: 15,
+    mods: { impulse: 1.6, turn: 1.3 },
+    say: 'She’ll take it — for fifteen seconds.',
+  },
+  eject_core: {
+    id: 'eject_core', dept: 'engineering', rank: 3, name: 'Eject Warp Core',
+    order: 'Eject the core', cooldown: 0, duration: 0, special: 'eject',
+    say: 'Ejecting the core!',
+  },
+
+  // --- Science ---
+  scan_target: {
+    id: 'scan_target', dept: 'science', rank: 1, name: 'Full Sensor Sweep',
+    order: 'Scan them', cooldown: 15, duration: 0, special: 'scan',
+    say: 'Running a full sweep.',
+  },
+  tachyon_sweep: {
+    id: 'tachyon_sweep', dept: 'science', rank: 2, name: 'Tachyon Sweep',
+    order: 'Tachyon sweep', cooldown: 40, duration: 0, special: 'detect_cloak',
+    say: 'Flooding the area with tachyons.',
+  },
+  shield_harmonics: {
+    id: 'shield_harmonics', dept: 'science', rank: 2, name: 'Rotate Shield Harmonics',
+    order: 'Rotate shield harmonics', cooldown: 45, duration: 25,
+    mods: { damageResist: 0.22 }, special: 'reset_adaptation',
+    say: 'Rotating harmonics — that should confuse them.',
+  },
+  jam_sensors: {
+    id: 'jam_sensors', dept: 'science', rank: 3, name: 'Jam Targeting Sensors',
+    order: 'Jam their sensors', cooldown: 50, duration: 14, special: 'jam',
+    say: 'Jamming their targeting scanners.',
+  },
+  polarize_hull: {
+    id: 'polarize_hull', dept: 'science', rank: 1, name: 'Polarize Hull Plating',
+    order: 'Polarize the hull', cooldown: 40, duration: 16,
+    mods: { damageResist: 0.3 },
+    say: 'Polarising hull plating.',
+  },
+
+  // --- Command / helm ---
+  evasive_maneuvers: {
+    id: 'evasive_maneuvers', dept: 'command', rank: 1, name: 'Evasive Manoeuvres',
+    order: 'Evasive manoeuvres', cooldown: 30, duration: 15,
+    mods: { defense: 1.8, turn: 1.4 }, special: 'evasive',
+    say: 'Evasive, aye.',
+  },
+  brace_for_impact: {
+    id: 'brace_for_impact', dept: 'command', rank: 1, name: 'Brace for Impact',
+    order: 'All hands brace for impact', cooldown: 40, duration: 12,
+    mods: { damageResist: 0.25 }, special: 'brace',
+    say: 'All hands, brace for impact!',
+  },
+  rally_crew: {
+    id: 'rally_crew', dept: 'command', rank: 2, name: 'Rally the Crew',
+    order: 'Rally the crew', cooldown: 90, duration: 30,
+    mods: { damage: 1.15, repairRate: 1.5, accuracy: 1.1 },
+    say: 'You heard the captain!',
+  },
+};
+
+export const ABILITY_LIST = Object.values(ABILITIES);
+
+/** Abilities an officer at a station could ever learn. */
+export function abilityPool(dept) {
+  const d = dept === 'operations' || dept === 'medical' ? 'command' : dept;
+  return ABILITY_LIST.filter((a) => a.dept === d);
+}
+
+export class Officer {
+  constructor(data) {
+    Object.assign(this, {
+      station: 'tactical', name: 'Officer', species: 'Human', rank: 'Lieutenant',
+      discipline: 80, daring: 70, candor: 70, expertise: 80,
+      canon: false,
+    }, data);
+
+    this.alive = true;
+    this.injured = false;
+    this.injurySeverity = 0;
+    this.xp = 0;
+    this.level = 1;
+    this.abilities = [];
+    this.cooldowns = {};
+    this.relationship = 0;    // -100..100, how they feel about serving under you
+    this.learnStartingAbilities();
+  }
+
+  get dept() {
+    return STATIONS.find((s) => s.id === this.station)?.dept ?? 'command';
+  }
+
+  get available() {
+    return this.alive && !this.injured;
+  }
+
+  learnStartingAbilities() {
+    const pool = abilityPool(this.dept)
+      .filter((a) => a.rank <= 1 + Math.floor(this.expertise / 40));
+    this.abilities = pool.slice(0, 3).map((a) => a.id);
+  }
+
+  learn(abilityId) {
+    if (this.abilities.includes(abilityId)) return false;
+    const ability = ABILITIES[abilityId];
+    if (!ability) return false;
+    if (ability.dept !== this.dept) return false;
+    this.abilities.push(abilityId);
+    return true;
+  }
+
+  ready(abilityId) {
+    return this.available && this.abilities.includes(abilityId) && (this.cooldowns[abilityId] ?? 0) <= 0;
+  }
+
+  startCooldown(abilityId) {
+    const ability = ABILITIES[abilityId];
+    if (!ability) return;
+    // Expertise shaves cooldowns.
+    this.cooldowns[abilityId] = ability.cooldown * (1 - (this.expertise - 50) * 0.003);
+  }
+
+  update(dt) {
+    for (const k of Object.keys(this.cooldowns)) {
+      if (this.cooldowns[k] > 0) this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
+    }
+    if (this.injured && this.injurySeverity > 0) {
+      this.injurySeverity = Math.max(0, this.injurySeverity - dt * 0.02);
+      if (this.injurySeverity <= 0) this.injured = false;
+    }
+  }
+
+  /**
+   * How this officer responds to an order they consider questionable.
+   * @returns {'comply'|'object'|'refuse'}
+   */
+  reactTo(order) {
+    const risk = order.risk ?? 0;             // 0..1
+    const ethics = order.ethicalWeight ?? 0;  // 0..1, e.g. Prime Directive
+    if (ethics > 0.5 && this.discipline < 70 && this.candor > 75) return 'refuse';
+    if (risk > 0.7 && this.daring < 45) return 'object';
+    if (ethics > 0.3 && this.candor > 70) return 'object';
+    if (risk > 0.5 && this.candor > 80) return 'object';
+    return 'comply';
+  }
+
+  /** A line in this officer's voice. Generated from traits, not quoted. */
+  acknowledge(kind = 'order') {
+    const formal = this.discipline > 88;
+    const blunt = this.candor > 85;
+    const bold = this.daring > 85;
+    if (kind === 'object') {
+      if (blunt) return `Captain, I have to tell you that is a mistake.`;
+      if (formal) return `Acknowledged, though I am obliged to log my reservation.`;
+      return `Sir, are you certain about that?`;
+    }
+    if (kind === 'refuse') {
+      return `Captain, I will not carry out that order. Log it however you must.`;
+    }
+    if (kind === 'risky') {
+      if (bold) return `Finally. Aye, Captain.`;
+      return `Aye — plotting it now.`;
+    }
+    if (formal) return `Acknowledged, Captain.`;
+    if (bold) return `Aye, sir!`;
+    return `Aye, Captain.`;
+  }
+
+  injure(severity = 0.5) {
+    this.injured = true;
+    this.injurySeverity = Math.max(this.injurySeverity, severity);
+    emit('officer:injured', this);
+  }
+
+  kill(cause = 'killed in action') {
+    if (!this.alive) return;
+    this.alive = false;
+    this.cause = cause;
+    emit('officer:killed', { officer: this, cause });
+  }
+
+  save() {
+    return {
+      station: this.station, name: this.name, species: this.species, rank: this.rank,
+      discipline: this.discipline, daring: this.daring, candor: this.candor,
+      expertise: this.expertise, canon: this.canon,
+      alive: this.alive, injured: this.injured, injurySeverity: this.injurySeverity,
+      xp: this.xp, level: this.level, abilities: this.abilities, relationship: this.relationship,
+    };
+  }
+
+  static load(data) {
+    const o = new Officer(data);
+    o.alive = data.alive ?? true;
+    o.injured = data.injured ?? false;
+    o.injurySeverity = data.injurySeverity ?? 0;
+    o.abilities = data.abilities ?? o.abilities;
+    o.xp = data.xp ?? 0;
+    o.level = data.level ?? 1;
+    o.relationship = data.relationship ?? 0;
+    return o;
+  }
+}
+
+/** The senior staff as a unit. */
+export class Crew {
+  constructor(officers = []) {
+    this.officers = officers.map((o) => (o instanceof Officer ? o : new Officer(o)));
+  }
+
+  at(station) {
+    return this.officers.find((o) => o.station === station && o.alive);
+  }
+
+  get living() {
+    return this.officers.filter((o) => o.alive);
+  }
+
+  get available() {
+    return this.officers.filter((o) => o.available);
+  }
+
+  update(dt) {
+    for (const o of this.officers) o.update(dt);
+  }
+
+  /** Every ability the standing crew can currently use. */
+  readyAbilities() {
+    const out = [];
+    for (const o of this.available) {
+      for (const id of o.abilities) {
+        if (o.ready(id)) out.push({ officer: o, ability: ABILITIES[id] });
+      }
+    }
+    return out;
+  }
+
+  /** Find who would execute a named ability. */
+  officerFor(abilityId) {
+    return this.available.find((o) => o.abilities.includes(abilityId));
+  }
+
+  save() {
+    return this.officers.map((o) => o.save());
+  }
+
+  static load(data) {
+    return new Crew((data ?? []).map((d) => Officer.load(d)));
+  }
+}

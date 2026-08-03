@@ -1,0 +1,873 @@
+// Boot, the frame loop, and the shell that owns every screen.
+//
+// There is no loading step. The galaxy is generated from its seed, the audio
+// graph is built on the first tap, and the first frame is the game.
+
+import { el, clear, button, modal } from './ui/lcars.js';
+import { haptic, configureTouch, requestWakeLock, releaseWakeLock, trackViewportInsets } from './ui/touch.js';
+import { audio } from './audio/engine.js';
+import { TacticalView } from './ui/tactical.js';
+import { GalaxyMap } from './ui/galaxymap.js';
+import * as screens from './ui/screens.js';
+
+import { Game, MODES } from './core/state.js';
+import { on } from './core/events.js';
+import { SIM_STEP } from './core/time.js';
+import { hashSeed } from './core/rng.js';
+import {
+  saveGame, loadSave, hasSave, loadSettings, saveSettings as persistSettings,
+  exportSave, downloadSave, importSave,
+} from './core/save.js';
+
+import { ABILITIES } from './sim/officers.js';
+import { Ship, FACINGS } from './sim/ship.js';
+import { parseOrder } from './ui/orders.js';
+import { SKILLS } from './sim/skills.js';
+
+const NAV = [
+  { id: 'bridge', label: 'Bridge', ico: '⌂' },
+  { id: 'tactical', label: 'Tactical', ico: '⊕' },
+  { id: 'galaxy', label: 'Map', ico: '✦' },
+  { id: 'ship', label: 'Ship', ico: '⬡' },
+  { id: 'crew', label: 'Crew', ico: '☰' },
+  { id: 'captain', label: 'Record', ico: '★' },
+];
+
+const BACKGROUND_SKILL = {
+  command: 'leadership', tactical: 'beam_weapons',
+  engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
+};
+
+class App {
+  constructor(root) {
+    this.root = root;
+    this.settings = loadSettings();
+    this.game = null;
+    this.screen = 'bridge';
+    this.selectedSystemId = null;
+    this.modalHandle = null;
+    this.tactical = null;
+    this.map = null;
+    this.needsRender = true;
+    this.lastAutosave = 0;
+
+    this.buildShell();
+    this.applySettings();
+    this.wireEvents();
+    trackViewportInsets();
+  }
+
+  // ------------------------------------------------------------ shell
+
+  buildShell() {
+    clear(this.root);
+
+    this.shipNameEl = el('span', { class: 'shipname', text: 'Starfleet' });
+    this.stardateEl = el('span', { class: 'stardate', text: '' });
+    this.root.append(el('div', { class: 'topbar' }, [
+      el('div', { class: 'cap' }),
+      el('div', { class: 'title' }, [this.shipNameEl, this.stardateEl]),
+    ]));
+
+    this.root.append(el('div', { class: 'alertbar' }));
+
+    this.screenEl = el('div', { class: 'screen' });
+    this.root.append(this.screenEl);
+
+    // Order line — typed orders, parsed by ui/orders.js.
+    this.orderInput = el('input', {
+      type: 'text', placeholder: 'Give an order…',
+      autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false',
+      onkeydown: (e) => { if (e.key === 'Enter') this.submitOrder(); },
+    });
+    this.orderBar = el('div', { class: 'orderbar' }, [
+      this.orderInput,
+      el('button', { text: 'Order', onclick: () => this.submitOrder() }),
+    ]);
+    this.root.append(this.orderBar);
+
+    this.navEl = el('div', { class: 'nav' });
+    this.root.append(this.navEl);
+    this.buildNav();
+  }
+
+  buildNav() {
+    clear(this.navEl);
+    // A contact waiting on the bridge is flagged, so stepping away to check
+    // the map never loses track of the thing that needs an answer.
+    const pending = this.game?.mode === MODES.ENCOUNTER;
+    for (const item of NAV) {
+      this.navEl.append(el('button', {
+        class: this.screen === item.id ? 'active' : '',
+        onclick: () => { audio.play('ui_select'); haptic('select'); this.go(item.id); },
+      }, [
+        el('div', { class: 'ico', text: item.ico }),
+        el('div', { text: item.label }),
+        item.id === 'bridge' && pending && this.screen !== 'bridge'
+          ? el('div', { class: 'badge', text: '!' })
+          : null,
+      ]));
+    }
+    this.navEl.append(el('button', {
+      class: this.screen === 'options' ? 'active' : '',
+      onclick: () => { audio.play('ui_select'); haptic('select'); this.go('options'); },
+    }, [el('div', { class: 'ico', text: '⚙' }), el('div', { text: 'Setup' })]));
+  }
+
+  applySettings() {
+    const s = this.settings;
+    document.documentElement.dataset.text = s.textSize ?? 'normal';
+    document.documentElement.dataset.motion = s.reduceMotion ? 'reduced' : 'normal';
+    configureTouch({ haptics: s.haptics, wakeLock: s.wakeLock });
+    audio.voiceEnabled = s.voice;
+    for (const key of ['master', 'sfx', 'ui', 'alert', 'ambience']) {
+      audio.setVolume(key, s[key] ?? 0.8);
+    }
+    if (s.wakeLock) requestWakeLock(); else releaseWakeLock();
+    this.saveSettings();
+  }
+
+  saveSettings() { persistSettings(this.settings); }
+
+  // ------------------------------------------------------------ events
+
+  wireEvents() {
+    on('alert', (level) => {
+      document.documentElement.dataset.alert = level;
+      audio.setAlertLevel(level === 'red' ? 'red' : level === 'yellow' ? 'yellow' : 'normal');
+      if (level === 'red') { audio.play('red_alert'); haptic('alert'); }
+      else if (level === 'yellow') audio.play('yellow_alert');
+      else audio.play('alert_clear');
+      this.needsRender = true;
+    });
+
+    on('combat:begin', () => { this.go('tactical'); });
+    on('combat:end', ({ outcome }) => {
+      this.game.finishCombat(outcome);
+      this.showCombatResult(outcome);
+    });
+
+    on('combat:fire', ({ attacker, weapon, type }) => {
+      if (type === 'torpedo') audio.play('torpedo_launch', { throttle: 120 });
+      else if (attacker.faction === 'federation') audio.play('phaser', { throttle: 110 });
+      else audio.play('disruptor', { throttle: 110 });
+    });
+
+    on('combat:torpedo-impact', () => audio.play('torpedo_impact', { throttle: 90 }));
+
+    on('combat:player-hit', ({ severity, penetrated }) => {
+      if (penetrated) {
+        audio.play('hull_impact', { severity, throttle: 110 });
+        haptic(severity > 0.5 ? 'hit_heavy' : 'hit_light');
+        if (severity > 0.7) audio.play('console_explode', { throttle: 900 });
+      } else {
+        audio.play('shield_impact', { severity, throttle: 110 });
+        haptic('hit_light');
+      }
+    });
+
+    on('combat:destroyed', ({ ship }) => {
+      audio.play('explosion');
+      if (ship === this.game?.ship) haptic('explosion');
+    });
+
+    on('officer:killed', ({ officer }) => {
+      this.game?.pushLog(`${officer.rank} ${officer.name} was killed.`, 'medical');
+      haptic('deny');
+    });
+
+    on('captain:promoted', (promo) => {
+      audio.play('promotion');
+      audio.play('boatswain');
+      haptic('confirm');
+      this.showMessage('Promotion', [
+        `You are promoted to ${promo.rank.name}.`,
+        `${promo.points} skill points awarded.`,
+        'Starfleet notes that heavier hulls are now available to you at any shipyard.',
+      ]);
+    });
+
+    on('ledger:inquiry', () => {
+      this.game?.ledger.setFlag('inquiry_summoned');
+      this.showMessage('Signal from Starfleet Command', [
+        'You are ordered to Starbase 11 to appear before a board of inquiry.',
+        'Promotion is suspended until the board reports.',
+      ]);
+    });
+
+    on('transit:begin', () => { this.go('bridge'); });
+    on('arrived', () => { audio.play('warp_drop'); audio.setAlertLevel('normal'); this.needsRender = true; });
+    on('encounter:begin', () => { this.go('encounter'); haptic('select'); });
+    on('mission:start', () => { this.go('mission'); });
+    on('mission:stage', () => { this.needsRender = true; });
+    on('game:over', () => { this.go('gameover'); });
+    on('log', () => { this.needsRender = true; });
+
+    // Unlock audio on the first touch anywhere — mobile policy requires a gesture.
+    const unlock = () => {
+      audio.unlock();
+      document.removeEventListener('pointerdown', unlock);
+      document.removeEventListener('keydown', unlock);
+    };
+    document.addEventListener('pointerdown', unlock);
+    document.addEventListener('keydown', unlock);
+
+    globalThis.addEventListener('beforeunload', () => { if (this.game) this.save(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && this.game) this.save();
+    });
+  }
+
+  // ------------------------------------------------------------ navigation
+
+  go(screen) {
+    this.screen = screen;
+    this.tactical = null;
+    this.map = null;
+    this.buildNav();
+    this.render();
+  }
+
+  render() {
+    if (!this.game) return;
+    const g = this.game;
+
+    this.shipNameEl.textContent = `${g.ship.name} ${g.ship.registry}`;
+    this.stardateEl.textContent = `SD ${g.stardate}`;
+
+    // Combat and missions take the screen outright — you do not get to browse
+    // the crew roster mid-broadside. An encounter or a transit only replaces
+    // the bridge, so the map, ship, and record stay reachable while you decide.
+    let screen = this.screen;
+    if (g.over) screen = 'gameover';
+    else if (g.mode === MODES.COMBAT) screen = 'tactical';
+    else if (g.mode === MODES.MISSION) screen = 'mission';
+    else if (g.mode === MODES.ENCOUNTER && screen === 'bridge') screen = 'encounter';
+    else if (g.mode === MODES.TRANSIT && screen === 'bridge') screen = 'transit';
+
+    const old = this.screenEl;
+    let node;
+    switch (screen) {
+      case 'tactical': node = screens.tacticalScreen(this); break;
+      case 'galaxy': node = screens.galaxyScreen(this); break;
+      case 'crew': node = el('div', { class: 'screen' }, [screens.crewScreen(this)]); break;
+      case 'captain': node = el('div', { class: 'screen' }, [screens.captainScreen(this)]); break;
+      case 'ship': node = el('div', { class: 'screen' }, [screens.shipScreen(this)]); break;
+      case 'options': node = el('div', { class: 'screen' }, [screens.optionsScreen(this)]); break;
+      case 'encounter': node = el('div', { class: 'screen' }, [screens.encounterScreen(this)]); break;
+      case 'mission': node = el('div', { class: 'screen' }, [screens.missionScreen(this)]); break;
+      case 'transit': node = el('div', { class: 'screen' }, [screens.transitScreen(this)]); break;
+      case 'gameover': node = el('div', { class: 'screen' }, [screens.gameOverScreen(this)]); break;
+      case 'log': node = el('div', { class: 'screen' }, [screens.logScreen(this)]); break;
+      case 'bridge':
+      default: node = el('div', { class: 'screen' }, [screens.bridgeScreen(this)]); break;
+    }
+
+    old.replaceWith(node);
+    this.screenEl = node;
+
+    // Canvas-backed screens need their renderers rebuilt after a DOM swap.
+    if (screen === 'tactical' && this.tacticalCanvas) {
+      this.tactical = new TacticalView(this.tacticalCanvas);
+      this.tactical.onSelect = (ship) => {
+        g.engagement?.setTarget(ship);
+        audio.play('ui_select');
+        this.render();
+      };
+    }
+    if (screen === 'galaxy' && this.galaxyCanvas) {
+      this.map = new GalaxyMap(this.galaxyCanvas);
+      this.map.selectedId = this.selectedSystemId ?? g.locationId;
+      this.map.game = g;
+      this.map.focus(this.selectedSystemId ?? g.locationId);
+      this.map.onSelect = (sys) => {
+        this.selectedSystemId = sys.id;
+        audio.play('ui_tap');
+        haptic('tap');
+        this.renderSystemDetail(sys);
+      };
+    }
+
+    this.orderBar.style.display = (screen === 'gameover' || screen === 'options') ? 'none' : '';
+    this.needsRender = false;
+  }
+
+  renderSystemDetail(sys) {
+    if (!this.galaxyDetail) return;
+    clear(this.galaxyDetail);
+    this.galaxyDetail.append(screens.systemDetail(this, sys));
+  }
+
+  // ------------------------------------------------------------ modals
+
+  showMessage(title, lines, actions = null) {
+    this.closeModal();
+    this.modalHandle = modal(title,
+      [].concat(lines).map((l) => el('p', { text: l })),
+      actions ?? [button('Acknowledged', () => { audio.play('computer_ack'); this.closeModal(); }, { color: 'blue' })]);
+    audio.play('computer_query');
+    return this.modalHandle;
+  }
+
+  closeModal() {
+    this.modalHandle?.close();
+    this.modalHandle = null;
+  }
+
+  showOfficer(officer) {
+    this.closeModal();
+    this.modalHandle = modal(officer.name,
+      screens.officerDetail(this, officer),
+      [button('Close', () => this.closeModal(), { color: 'ghost' })]);
+  }
+
+  openHail(factionId) {
+    this.closeModal();
+    this.modalHandle = modal('Open Channel',
+      screens.hailOptions(this, factionId, (optionId) => {
+        const result = this.game.hail(optionId);
+        this.closeModal();
+        this.showMessage('Response', [result.text]);
+        this.render();
+      }),
+      [button('Close the channel', () => this.closeModal(), { color: 'ghost' })]);
+    audio.play('hail_incoming');
+  }
+
+  showCombatResult(outcome) {
+    const g = this.game;
+    const lines = {
+      victory: ['All hostile contacts destroyed.'],
+      routed: ['They have broken off and gone to warp.'],
+      escaped: ['We are clear and at warp.'],
+      destroyed: ['The ship is lost.'],
+    }[outcome] ?? ['The engagement has ended.'];
+    if (outcome !== 'destroyed') {
+      const lost = g.ship.maxCrew - g.ship.crew;
+      if (lost > 0) lines.push(`${lost} crew did not survive it.`);
+      lines.push(`Hull at ${Math.round(g.ship.hullPct * 100)}%.`);
+    }
+    this.showMessage('Engagement Concluded', lines);
+  }
+
+  confirmNewGame(skipConfirm = false) {
+    const start = () => { this.closeModal(); this.showNewGame(); };
+    if (skipConfirm) return start();
+    this.closeModal();
+    this.modalHandle = modal('Abandon Command', [
+      el('p', { text: 'This ends the current commission. The record cannot be recovered unless you exported it.' }),
+    ], [
+      button('Abandon command', () => start(), { color: 'red' }),
+      button('Cancel', () => this.closeModal(), { color: 'ghost' }),
+    ]);
+    return null;
+  }
+
+  // ------------------------------------------------------------ game actions
+
+  scanSystem() {
+    const g = this.game;
+    const sys = g.location;
+    const lines = [`${sys.name}. ${sys.description}`];
+    const neighbors = g.galaxy.neighbors(sys.id);
+    lines.push(`Charted lanes from here: ${neighbors.map((n) => n.name).join(', ') || 'none'}.`);
+    if (sys.hazard) lines.push(`Hazard: ${sys.hazard.replace(/_/g, ' ')}. Recommend we do not linger.`);
+    const missions = g.availableMissions();
+    if (missions.length) lines.push(`Standing orders available here: ${missions.map((m) => m.title).join(', ')}.`);
+    g.clock.advanceStardate(0.1);
+    audio.play('scan_complete');
+    return lines;
+  }
+
+  useAbility(officer, ability) {
+    const g = this.game;
+    if (!officer.ready(ability.id)) { audio.play('ui_deny'); return; }
+
+    // The officer gets a say.
+    const reaction = officer.reactTo({ risk: ability.id === 'eject_core' ? 0.9 : 0.2 });
+    officer.startCooldown(ability.id);
+
+    if (ability.mods) {
+      g.ship.addBuff({ id: ability.id, label: ability.name, until: ability.duration || 12, mods: ability.mods });
+    }
+    switch (ability.special) {
+      case 'evasive': g.engagement?.evasive(true); break;
+      case 'extinguish': g.ship.fires = 0; break;
+      case 'eject': g.ship.ejectCore(); audio.play('explosion'); break;
+      case 'reset_adaptation': {
+        for (const s of g.engagement?.hostiles ?? []) s.adaptation = {};
+        break;
+      }
+      case 'detect_cloak': {
+        for (const s of g.engagement?.liveHostiles ?? []) if (s.cloaked) s.decloak();
+        audio.play('scan');
+        break;
+      }
+      case 'jam': {
+        for (const s of g.engagement?.liveHostiles ?? []) {
+          s.addBuff({ id: 'jammed', label: 'Sensors jammed', until: ability.duration, mods: { accuracy: 0.55 } });
+        }
+        break;
+      }
+      case 'subsystem': g.engagement?.targetSubsystem('weapons'); break;
+      case 'scan': {
+        const t = g.engagement?.target;
+        if (t) {
+          this.showMessage(`Scan — ${t.name}`, [
+            `${t.cls.name}. ${t.cls.description}`,
+            `Hull ${Math.round(t.hullPct * 100)}%, shields ${Math.round(t.shieldPct * 100)}%.`,
+            `Weakest facing: ${FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore')}.`,
+          ]);
+        }
+        break;
+      }
+      case 'spread': {
+        // Fire every torpedo tube at once, ignoring arcs for this volley.
+        const target = g.engagement?.target;
+        if (target) {
+          for (const w of g.ship.weapons.filter((x) => x.type === 'torpedo')) {
+            w.cooldown = 0;
+            g.engagement.fireWeapon(g.ship, w, target);
+          }
+          audio.play('torpedo_launch');
+        }
+        break;
+      }
+      default: break;
+    }
+
+    const line = officer.acknowledge(reaction === 'comply' ? 'order' : reaction);
+    g.pushLog(`${officer.name}: ${ability.say ?? line}`, officer.station);
+    if (this.settings.voice) audio.speak(ability.say ?? line);
+    haptic('confirm');
+  }
+
+  useDevice(id) {
+    const g = this.game;
+    if (!g.loadout.useDevice(id)) { audio.play('ui_deny'); return; }
+    switch (id) {
+      case 'shield_battery':
+        for (const f of FACINGS) {
+          g.ship.shields[f] = Math.min(g.ship.maxShield, g.ship.shields[f] + g.ship.maxShield * 0.4);
+        }
+        g.pushLog('Shield battery discharged. Facings reinforced.', 'engineering');
+        break;
+      case 'weapons_battery':
+        g.ship.addBuff({ id: 'weapons_battery', label: 'Weapons battery', until: 20, mods: { damage: 1.4 } });
+        break;
+      case 'engine_battery':
+        g.ship.addBuff({ id: 'engine_battery', label: 'Engine battery', until: 20, mods: { impulse: 1.5, turn: 1.3 } });
+        break;
+      case 'hull_patch':
+        g.ship.repair(g.ship.maxHull * 0.2);
+        g.ship.fires = 0;
+        g.pushLog('Emergency hull patch applied. Fires out.', 'engineering');
+        break;
+      default: break;
+    }
+    audio.play('power_reroute');
+    haptic('confirm');
+  }
+
+  resolveEncounter(choiceId) {
+    if (choiceId === 'hail') {
+      this.openHail(this.game.encounter?.factionId);
+      return;
+    }
+    const result = this.game.resolveEncounter(choiceId);
+    if (result.messages?.length) this.showMessage('Report', result.messages);
+    this.render();
+  }
+
+  startMission(id) {
+    this.game.startMission(id);
+    this.render();
+  }
+
+  chooseMission(choiceId) {
+    const result = this.game.chooseMission(choiceId);
+    if (!result) { audio.play('ui_deny'); return; }
+    if (result.complete && result.ending) {
+      this.showMessage(result.ending.label ?? 'Mission complete', [result.ending.text]);
+    }
+    this.render();
+  }
+
+  changeShip(classId) {
+    const g = this.game;
+    const oldName = g.ship.name;
+    const oldRegistry = g.ship.registry;
+    g.ship = new Ship(classId, { name: oldName, registry: oldRegistry, faction: 'federation', isPlayer: true });
+    g.loadout.refitTo(g.ship.cls.slots);
+    g.applyAllMods();
+    g.clock.advanceStardate(4);
+    g.pushLog(`Transferred command to a ${g.ship.cls.name}.`, 'captain');
+    audio.play('dock');
+    this.showMessage('Change of Command', [
+      `${oldName} is now a ${g.ship.cls.name}.`,
+      'Four days in the yard. Any consoles that no longer fit are in storage.',
+    ]);
+    this.render();
+  }
+
+  // ------------------------------------------------------------ orders
+
+  submitOrder() {
+    const text = this.orderInput.value.trim();
+    if (!text) return;
+    this.orderInput.value = '';
+    const order = parseOrder(text);
+    this.executeOrder(order, text);
+  }
+
+  executeOrder(order, raw) {
+    const g = this.game;
+    const eng = g.engagement;
+
+    if (order.unknown) {
+      audio.play('ui_deny');
+      g.pushLog(`"${raw}" — the computer does not recognise that order.`, 'computer');
+      this.render();
+      return;
+    }
+    if (order.error) {
+      audio.play('ui_deny');
+      g.pushLog(order.error, 'helm');
+      this.render();
+      return;
+    }
+
+    const ack = (station, text) => {
+      const officer = g.officerSays(station, text);
+      if (this.settings.voice && officer) audio.speak(text);
+      audio.play('computer_ack');
+      haptic('confirm');
+    };
+
+    switch (order.action) {
+      case 'course': {
+        const r = g.setCourse(order.system, order.warp);
+        if (r.ok) { audio.play('warp_engage'); haptic('warp'); audio.setAlertLevel('warp'); }
+        else audio.play('ui_deny');
+        break;
+      }
+      case 'warp_factor':
+        ack('helm', `Warp ${order.warp} standing by.`);
+        break;
+      case 'throttle':
+        g.ship.throttle = order.value;
+        ack('helm', order.value === 0 ? 'All stop.' : `Ahead ${Math.round(order.value * 100)} percent.`);
+        break;
+      case 'heading':
+        eng?.setHeading(order.value);
+        ack('helm', `Coming to bearing ${order.value}.`);
+        break;
+      case 'come_about':
+        eng?.comeAboutTo(eng.target);
+        ack('helm', 'Coming about.');
+        break;
+      case 'evasive':
+        eng?.evasive(order.value);
+        g.ship.evasive = order.value;
+        ack('helm', order.value ? 'Evasive manoeuvres, aye.' : 'Resuming standard flight.');
+        break;
+      case 'warp_out':
+        if (eng) { if (!eng.beginWarpOut()) audio.play('ui_deny'); }
+        else ack('helm', 'Nothing to run from, Captain.');
+        break;
+      case 'dock': {
+        const r = g.dock();
+        if (r.ok) audio.play('dock'); else { audio.play('ui_deny'); g.pushLog(r.error, 'helm'); }
+        break;
+      }
+      case 'alert':
+        g.setAlert(order.level);
+        break;
+      case 'shields':
+        g.ship.shieldsUp = order.up;
+        ack('tactical', order.up ? 'Shields up.' : 'Shields down.');
+        break;
+      case 'reinforce':
+        g.ship.reinforceShield(order.facing);
+        audio.play('power_reroute');
+        ack('engineering', `Transferring power to the ${order.facing} shield.`);
+        break;
+      case 'power':
+        g.ship.power.set(order.subsystem, order.amount >= 100 ? 100 : g.ship.power.target[order.subsystem] + order.amount);
+        audio.play('power_reroute');
+        ack('engineering', `Rerouting power to ${order.subsystem}.`);
+        break;
+      case 'preset':
+        g.ship.power.applyPreset(order.preset);
+        audio.play('power_reroute');
+        ack('engineering', `${order.preset} configuration, aye.`);
+        break;
+      case 'target_subsystem':
+        eng?.targetSubsystem(order.subsystem);
+        ack('tactical', `Targeting their ${order.subsystem}.`);
+        break;
+      case 'cycle_target':
+        eng?.cycleTarget();
+        break;
+      case 'target_nearest': {
+        if (eng) {
+          const nearest = eng.liveHostiles
+            .reduce((best, s) => (!best || g.ship.distanceTo(s) < g.ship.distanceTo(best) ? s : best), null);
+          if (nearest) eng.setTarget(nearest);
+        }
+        break;
+      }
+      case 'fire': {
+        if (!eng) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
+        const n = eng.fireAll();
+        if (!n) audio.play('ui_deny');
+        break;
+      }
+      case 'cease_fire':
+        if (eng) eng.autoFire = false;
+        ack('tactical', 'Holding fire.');
+        break;
+      case 'hail':
+        this.openHail(eng?.hostiles[0]?.faction ?? g.encounter?.factionId);
+        break;
+      case 'hail_option':
+        this.showMessage('Response', [g.hail(order.option).text]);
+        break;
+      case 'scan': {
+        if (eng?.target) {
+          const t = eng.target;
+          this.showMessage(`Scan — ${t.name}`, [
+            `${t.cls.name}. ${t.cls.description}`,
+            `Hull ${Math.round(t.hullPct * 100)}%, shields ${Math.round(t.shieldPct * 100)}%.`,
+          ]);
+        } else {
+          this.showMessage('Sensor Sweep', this.scanSystem());
+        }
+        audio.play('scan');
+        break;
+      }
+      case 'status': {
+        const s = eng ? eng.statusReport() : {
+          hull: Math.round(g.ship.hullPct * 100),
+          shields: FACINGS.map((f) => `${f} ${Math.round(g.ship.shieldPctOf(f) * 100)}%`).join(', '),
+          crew: g.ship.crew, casualties: g.ship.maxCrew - g.ship.crew, condition: g.ship.condition,
+        };
+        this.showMessage('Damage Report', [
+          `Hull integrity ${s.hull} percent. Condition ${s.condition}.`,
+          `Shields: ${s.shields}.`,
+          `Crew ${s.crew}${s.casualties ? `, ${s.casualties} casualties` : ''}.`,
+          g.ship.fires ? `${g.ship.fires} fires burning.` : 'No fires reported.',
+        ]);
+        break;
+      }
+      case 'eject_core':
+        if (g.ship.ejectCore()) { audio.play('explosion'); haptic('explosion'); ack('engineering', 'Core away!'); }
+        else audio.play('ui_deny');
+        break;
+      case 'ability': {
+        const ability = ABILITIES[order.ability];
+        const officer = ability ? g.crew.officerFor(ability.id) : null;
+        if (officer && ability) {
+          this.useAbility(officer, ability);
+        } else if (order.fallback) {
+          // No trained officer, but the phrase is also a plain order.
+          this.executeOrder(order.fallback, raw);
+          return;
+        } else {
+          audio.play('ui_deny');
+          g.pushLog('Nobody aboard is trained for that.', 'computer');
+        }
+        break;
+      }
+      case 'away_team': {
+        g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
+        ack('comms', 'Away team assembled and standing by in the transporter room.');
+        break;
+      }
+      case 'transport':
+        audio.play('transporter');
+        ack('comms', 'Energising.');
+        break;
+      default:
+        audio.play('ui_deny');
+        break;
+    }
+    this.render();
+  }
+
+  // ------------------------------------------------------------ persistence
+
+  save() { return saveGame(this.game, 'auto'); }
+
+  exportSave() {
+    try {
+      downloadSave(this.game);
+    } catch {
+      // Some mobile browsers block programmatic downloads; fall back to text.
+      this.showMessage('Command Record', [exportSave(this.game).slice(0, 4000)]);
+    }
+  }
+
+  importSave() {
+    const input = el('input', { type: 'file', accept: '.json,application/json' });
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const data = importSave(await file.text());
+        this.game = Game.load(data);
+        this.go('bridge');
+        this.showMessage('Record Restored', [`Resumed command at stardate ${this.game.stardate}.`]);
+      } catch (err) {
+        this.showMessage('Import Failed', [String(err.message ?? err)]);
+      }
+    });
+    input.click();
+  }
+
+  // ------------------------------------------------------------ start
+
+  showNewGame() {
+    this.game = null;
+    const node = el('div', { class: 'screen' }, [
+      screens.newGameScreen(this, (draft) => this.startGame(draft)),
+    ]);
+    this.screenEl.replaceWith(node);
+    this.screenEl = node;
+    this.orderBar.style.display = 'none';
+    this.shipNameEl.textContent = 'Starfleet Command';
+    this.stardateEl.textContent = '';
+  }
+
+  startGame(draft) {
+    const seed = draft.seed?.trim() ? hashSeed(draft.seed.trim()) : hashSeed(`${Date.now()}:${Math.random()}`);
+    this.game = new Game({
+      seed,
+      captainName: draft.name || 'Reyes',
+      captainFirstName: draft.firstName,
+      species: draft.species,
+      pronouns: draft.pronouns,
+      background: draft.background,
+      crewMode: draft.crewMode,
+      era: draft.era,
+      shipName: draft.shipName || 'Enterprise',
+      registry: draft.registry || 'NCC-1701',
+    });
+
+    // Background grants a free skill rank.
+    const skillId = BACKGROUND_SKILL[draft.background];
+    if (skillId && SKILLS[skillId]) {
+      this.game.progress.unspent++;
+      this.game.progress.spend(skillId);
+      this.game.applyAllMods();
+    }
+
+    this.orderBar.style.display = '';
+    this.go('bridge');
+    audio.unlock();
+    audio.play('boatswain');
+    this.showMessage(`Stardate ${this.game.stardate}`, [
+      `${this.game.progress.rankName} ${draft.firstName} ${draft.name}, you have the ${this.game.ship.name}.`,
+      'Orders are on the screen at Sol. The galaxy is charted; most of it is not surveyed.',
+      'Type an order at any time — "helm, set course for Vulcan, warp eight" — or use the panels.',
+    ]);
+    this.save();
+  }
+
+  resumeOrStart() {
+    if (hasSave('auto')) {
+      const data = loadSave('auto');
+      this.modalHandle = modal('Resume Command', [
+        el('p', { text: data.label ?? 'A command record was found.' }),
+      ], [
+        button('Resume', () => {
+          this.closeModal();
+          try {
+            this.game = Game.load(data);
+            this.orderBar.style.display = '';
+            this.go('bridge');
+          } catch {
+            this.showNewGame();
+          }
+        }, { color: 'green' }),
+        button('New command', () => { this.closeModal(); this.showNewGame(); }, { color: 'ghost' }),
+      ]);
+    } else {
+      this.showNewGame();
+    }
+  }
+
+  // ------------------------------------------------------------ loop
+
+  frame(timestamp) {
+    const g = this.game;
+    if (g && !g.over) {
+      const steps = g.clock.frame(timestamp);
+      for (let i = 0; i < steps; i++) g.update(SIM_STEP);
+
+      // Canvas views redraw every frame; DOM only when something changed.
+      if (this.tactical && g.engagement) this.tactical.render(g.engagement, g.clock.alpha);
+      if (this.map) this.map.render(g);
+      this.updateOverlay();
+
+      // Combat and transit change numbers continuously.
+      if (steps > 0 && (g.mode === MODES.COMBAT || g.mode === MODES.TRANSIT)) {
+        this.tickCounter = (this.tickCounter ?? 0) + steps;
+        if (this.tickCounter > 8) { this.tickCounter = 0; this.needsRender = true; }
+      }
+      if (this.needsRender) this.render();
+
+      // Autosave every 30 seconds of wall clock.
+      if (timestamp - this.lastAutosave > 30000) {
+        this.lastAutosave = timestamp;
+        this.save();
+      }
+    }
+    requestAnimationFrame((t) => this.frame(t));
+  }
+
+  /** The chips over the tactical canvas update every frame, cheaply. */
+  updateOverlay() {
+    const g = this.game;
+    const overlay = this.tacticalOverlay;
+    if (!overlay || !g?.engagement) return;
+    const eng = g.engagement;
+    const p = g.ship;
+    clear(overlay);
+    overlay.append(
+      el('div', { class: 'row' }, [
+        el('div', { class: `chip ${p.hullPct < 0.35 ? 'danger' : p.hullPct < 0.7 ? 'warn' : ''}`, text: `Hull ${Math.round(p.hullPct * 100)}%` }),
+        el('div', { class: 'chip', text: `Shields ${Math.round(p.shieldPct * 100)}%` }),
+        el('div', { class: 'chip', text: `${eng.liveHostiles.length} hostile` }),
+      ]),
+      el('div', { class: 'row' }, [
+        el('div', { class: 'chip', text: `Speed ${Math.round(p.throttle * 100)}%` }),
+        p.breaching ? el('div', { class: 'chip danger', text: `BREACH ${p.breachTimer.toFixed(0)}s` }) : null,
+        eng.warpOutTimer > 0 ? el('div', { class: 'chip warn', text: `Warp in ${eng.warpOutTimer.toFixed(0)}s` }) : null,
+        el('div', { class: 'chip', text: `Crew ${p.crew}` }),
+      ].filter(Boolean)),
+    );
+  }
+}
+
+// ---------------------------------------------------------------- boot
+
+function boot() {
+  const root = document.getElementById('app');
+  const app = new App(root);
+  globalThis.__app = app;   // handy for the test harness
+  app.resumeOrStart();
+  requestAnimationFrame((t) => app.frame(t));
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => { /* file:// or unsupported */ });
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
+
+export { App };
