@@ -8,6 +8,7 @@
 import { SYSTEMS } from '../world/systems.data.js';
 import { FACTION_LIST } from '../world/factions.data.js';
 import { SUBSYSTEMS } from '../sim/power.js';
+import { RECIPES } from '../sim/fabrication.js';
 import { FACINGS } from '../sim/ship.js';
 import { similarity } from './fuzzy.js';
 import { soundsLike } from './phonetic.js';
@@ -192,6 +193,35 @@ export function findTargetSystem(text, tokens) {
     }
   }
   return null;
+}
+
+/**
+ * Which thing in the recipe book an order is about.
+ *
+ * Built from the book itself, so the shop can learn to make something new
+ * without this function changing — the same reason every other extractor here
+ * reads the game's data rather than restating it.
+ */
+const RECIPE_WORDS = RECIPES.map((r) => ({
+  id: r.id,
+  words: `${r.name} ${r.id.replace(/_/g, ' ')}`
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .filter((w) => w.length > 3),
+}));
+
+export function findRecipe(text) {
+  let best = null;
+  let bestScore = 0;
+  for (const r of RECIPE_WORDS) {
+    let score = 0;
+    for (const w of r.words) {
+      if (text.includes(w)) score += w.length;
+      else if (text.includes(w.replace(/s$/, ''))) score += w.length - 1;
+    }
+    if (score > bestScore) { bestScore = score; best = r.id; }
+  }
+  return best;
 }
 
 /** Which faction is being talked about. */

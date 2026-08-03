@@ -39,6 +39,8 @@ const EXECUTABLE = new Set([
   // The captain's chair. Each is reachable from a control and from a typed
   // order, through this same list.
   'intercom', 'log_entry', 'jettison_pod', 'viewscreen',
+  // The machine shop.
+  'fabricate', 'work_shop', 'salvage',
 ]);
 
 describe('normalisation', () => {

@@ -364,7 +364,8 @@ export const INTENTS = [
       'light them up', 'all batteries', 'commence firing', 'shoot',
     ],
     keywords: { fire: 3, shoot: 3, attack: 1.5, launch: 1.5, torpedo: 1.5, phaser: 1.5 },
-    veto: ['cease', 'hold', 'stop', 'cancel', 'check', 'safe'],
+    veto: ['cease', 'hold', 'stop', 'cancel', 'check', 'safe',
+      'build', 'fabricate', 'replicate', 'improvise', 'machine', 'salvage'],
     build: (c) => ({
       action: 'fire',
       weaponType: /\b(?:torpedo|photon|spread|launch)\b/.test(c.text) ? 'torpedo'
@@ -537,6 +538,54 @@ export const INTENTS = [
     keywords: { viewscreen: 3, display: 2, viewer: 2.5, see: 1.5 },
     veto: ['hail', 'channel', 'them'],
     build: () => ({ action: 'viewscreen' }),
+  },
+  // ------------------------------------------------------------------
+  // The machine shop. Being trapped is a situation you build your way out
+  // of, and these are the orders that do it.
+  // ------------------------------------------------------------------
+  {
+    id: 'fabricate',
+    help: 'Build a hull patch / make torpedoes / rig a bypass',
+    phrases: [
+      'can you build', 'can you make', 'can you rig', 'can we build', 'can we make',
+      'build me', 'make me', 'fabricate', 'replicate', 'machine',
+      'get to work on', 'start work on', 'put together', 'knock together',
+      'rig up', 'jury rig', 'improvise', 'cobble together', 'run me off',
+      'i want you to build', 'get the shop working on',
+      'make torpedo', 'build torpedo', 'more torpedo', 'load more torpedo',
+      'patch the hull', 'make a patch', 'new sensor', 'fix the sensor',
+      'put out the fires', 'coolant purge',
+    ],
+    keywords: { build: 2.5, fabricate: 3, make: 1.2, rig: 2, improvise: 3, replicate: 3 },
+    veto: ['course', 'destination'],
+    // No specification, no work. "Make me a sandwich" is understood perfectly
+    // well as a build order; what it lacks is something the shop can build,
+    // and saying so is a better answer than pretending not to have heard.
+    requires: ['recipe'],
+    build: (c) => ({ action: 'fabricate', recipe: c.recipe }),
+  },
+  {
+    id: 'work_shop',
+    help: 'Get on with it / how long',
+    phrases: [
+      'get on with it', 'keep working', 'stay on it', 'work through the night',
+      'how long', 'how much longer', 'where are we on', 'status of the work',
+      'put the hours in', 'i will wait',
+    ],
+    keywords: { longer: 2 },
+    veto: ['course', 'warp', 'fire'],
+    build: () => ({ action: 'work_shop' }),
+  },
+  {
+    id: 'salvage',
+    help: 'Strip the wreck',
+    phrases: [
+      'strip the wreck', 'salvage the wreck', 'salvage what you can',
+      'recover what you can', 'scavenge', 'take what we can use',
+      'strip it for parts', 'salvage teams', 'board the hulk',
+    ],
+    keywords: { salvage: 3, scavenge: 3, wreck: 2, hulk: 2 },
+    build: () => ({ action: 'salvage' }),
   },
   {
     id: 'brace',

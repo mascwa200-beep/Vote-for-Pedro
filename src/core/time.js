@@ -40,9 +40,18 @@ export class Clock {
     return this.accumulator / SIM_STEP;
   }
 
-  /** Advance the calendar. One stardate unit is roughly a day. */
+  /**
+   * Advance the calendar. One stardate unit is roughly a day.
+   *
+   * Full precision is kept internally and rounded only for display. Rounding
+   * here instead meant anything shorter than about two and a half hours
+   * advanced the clock by nothing at all — so an hour of work in the machine
+   * shop, or an hour spent riding out a containment cascade, cost no time
+   * whatsoever. Small increments have to accumulate, because the campaign is
+   * now made of them.
+   */
   advanceStardate(units) {
-    this.stardate = Math.round((this.stardate + units) * 10) / 10;
+    this.stardate += units;
   }
 
   format() {

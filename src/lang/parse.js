@@ -22,7 +22,7 @@ import { similarity } from './fuzzy.js';
 import { soundsLike } from './phonetic.js';
 import {
   findPlace, findFacing, findPowerChannel, findTargetSystem,
-  findFaction, findWarpFactor, findPercent, findBearing,
+  findFaction, findWarpFactor, findPercent, findBearing, findRecipe,
 } from './gazetteer.js';
 import { INTENTS, STATION_AFFINITY } from './lexicon.js';
 
@@ -40,6 +40,7 @@ const SLOT_PROMPTS = {
   powerChannel: 'Power to which system, Captain?',
   targetSystem: 'Target which system, Captain?',
   warp: 'What warp factor, Captain?',
+  recipe: 'Build what, Captain? There is no specification for that.',
 };
 
 /**
@@ -63,6 +64,7 @@ function extract(norm) {
     warp: findWarpFactor(text),
     percent: findPercent(text),
     bearing: findBearing(text),
+    recipe: findRecipe(text),
   };
 }
 

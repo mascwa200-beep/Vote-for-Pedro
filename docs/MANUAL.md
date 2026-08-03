@@ -271,6 +271,45 @@ your hull while you loiter; Wolf 359 still has debris in a slow orbit.
 
 ---
 
+## The machine shop
+
+Wrecks give up **stores** — duranium, isolinear circuitry, deuterium, salvage.
+Stores become things, if you have the hours.
+
+| | |
+|---|---|
+| **Hull patch** | 5 hours. Ugly, and it holds. |
+| **Torpedo casings** | 9 hours. Beats an empty magazine. |
+| **Sensor pallet** | 2 days. You can see again. |
+| **EPS bypass** | 20 minutes and a lot of swearing. |
+| **Graviton charge** | 6 hours. Moves something that does not want to move. |
+| **Sensor decoy** | 14 hours. A replacement ion pod. |
+| **Rotating harmonics** | 3 hours. Does not last, and works. |
+| **Coolant purge** | 1 hour. Puts fires out, costs you the coolant. |
+
+One bench and one chief engineer, so one job at a time. Those hours run on the
+commission clock — a two-day job is two days whether the app is open or not,
+and you can order the shop to put the hours in rather than wait for them.
+
+`"Build a hull patch"`, `"can you rig an EPS bypass"`, `"make torpedoes"`,
+`"strip the wreck"`, `"how much longer"` — all of it works typed.
+
+## When there is nothing to shoot
+
+Some encounters are traps rather than fights. **Engage is not on the menu and
+withdrawing does not work.** There are exactly three ways out:
+
+- **A device you built in advance.** The clean exit — if you thought of it
+  before you needed it. This is the reason to spend six hours on a graviton
+  charge while nothing is wrong.
+- **Everything to one channel.** Dump the grid into engines or auxiliary.
+  Costs antimatter and unbalances the ship.
+- **Ride it out.** Costs hours, and sometimes hull.
+
+That is the whole design: the interesting decision is the one you made an hour
+earlier, when there was no emergency and building something seemed like a waste
+of six hours.
+
 ## Consequences
 
 The consequence ledger is the spine of the game. It is never rolled back.

@@ -11,6 +11,7 @@ import { CaptainProgress, combatXP } from '../sim/skills.js';
 import { Loadout, startingLoadout } from '../sim/loadout.js';
 import { Engagement } from '../sim/combat.js';
 import { AwayTeam } from '../sim/away.js';
+import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import { resolveHail, STANDING_EFFECTS } from '../sim/diplomacy.js';
 
 import { Galaxy, plotTransit } from '../world/galaxy.js';
@@ -121,6 +122,11 @@ export class Game {
     this.pendingCombat = null;
     this.firstStrike = false;
     this.latinum = 500;
+
+    // ---- stores and the machine shop ----
+    this.stores = { ...STARTING_STORES };
+    this.fabrication = null;
+    this.devices = {};
 
     // ---- the commission ----
     // Five years of wall-clock time. The ship works whether the app is open or
@@ -400,6 +406,49 @@ export class Game {
         return out;
       }
 
+      // ---- getting out of a trap ----
+      case 'trap_device': {
+        const trap = enc.trap;
+        if (!trap || (this.devices?.[trap.device] ?? 0) < 1) {
+          out.messages.push('We do not have one aboard, Captain.');
+          return out;
+        }
+        this.devices[trap.device] -= 1;
+        out.messages.push(trap.deviceText);
+        this.encounter = null;
+        this.mode = MODES.BRIDGE;
+        this.earnReputation('crisis_averted');
+        return out;
+      }
+      case 'trap_power': {
+        const trap = enc.trap;
+        if (!trap) return out;
+        // Costs the grid: everything goes to one channel and the rest starves.
+        this.ship.power.set(trap.powerChannel, 100);
+        this.ship.antimatter = Math.max(0, this.ship.antimatter - 12);
+        out.messages.push(trap.powerText);
+        this.encounter = null;
+        this.mode = MODES.BRIDGE;
+        return out;
+      }
+      case 'trap_wait': {
+        const trap = enc.trap;
+        if (!trap) return out;
+        this.clock.advanceStardate(trap.waitHours / 24);
+        if (trap.damage) {
+          this.ship.takeDamage(this.ship.maxHull * trap.damage, {
+            bearing: 0, type: 'kinetic', rng: this.rng,
+          });
+        }
+        out.messages.push(trap.waitText);
+        if (trap.damage) {
+          out.messages.push(`Hull integrity is down to ${Math.round(this.ship.hullPct * 100)} percent.`);
+        }
+        this.encounter = null;
+        this.mode = MODES.BRIDGE;
+        return out;
+      }
+
       case 'assist': {
         const lives = enc.lives ?? 200;
         this.ledger.record('distress_answered', { text: `Assisted at ${enc.system.name}`, system: enc.system.id });
@@ -645,6 +694,19 @@ export class Game {
       );
     }
 
+    // A hulk is stores. Winning a fight and then leaving without stripping the
+    // wreck is a choice, and this is where the materials for the machine shop
+    // actually come from.
+    if (killed.length && (outcome === 'victory' || outcome === 'routed')) {
+      const tier = Math.max(...killed.map((s) => s.cls.tier ?? 1));
+      const haul = this.salvage({ tier });
+      const summary = Object.entries(haul)
+        .filter(([, n]) => n > 0)
+        .map(([m, n]) => `${n} ${m}`)
+        .join(', ');
+      this.officerSays('engineering', `Salvage teams recovered ${summary} from the wreckage.`, 'report');
+    }
+
     if (outcome === 'victory' || outcome === 'routed') {
       const xp = combatXP(eng.hostiles) * this.difficulty.scale('xpRate');
       // The Empire respects a captain who kept fighting while losing.
@@ -833,6 +895,9 @@ export class Game {
       log: this.log.slice(-80),
       over: this.over ?? false,
       campaign: this.campaign?.save() ?? null,
+      stores: this.stores,
+      fabrication: this.fabrication,
+      devices: this.devices,
     };
   }
 
@@ -885,6 +950,14 @@ export class Game {
       if (officer.alive && officer.injured) officer.recover?.(pending);
     }
 
+    // The machine shop works too. A two-day job is a two-day job whether you
+    // are watching it or not — which is what makes committing to one a
+    // decision rather than a button.
+    const finished = advanceFabrication(this, pending);
+    if (finished) {
+      this.pushLog(`${finished.recipe.name} completed while you were away. ${finished.text}`, 'engineering');
+    }
+
     // One stardate unit is roughly a day.
     this.clock.advanceStardate(pending / 24);
 
@@ -899,6 +972,38 @@ export class Game {
 
     emit('campaign:resumed', { hours: pending, lines });
     return { hours: pending, lines };
+  }
+
+  /** Start a job in the machine shop. */
+  fabricate(recipeId) {
+    return beginFabrication(this, recipeId);
+  }
+
+  /**
+   * Work the shop for a stretch of hours the player has chosen to spend, rather
+   * than hours that merely passed. Costs the same time on the stardate.
+   */
+  workTheShop(hours = 1) {
+    if (!this.fabrication) return { ok: false, reason: 'Nothing on the bench, Captain.' };
+    const done = advanceFabrication(this, hours);
+    this.clock.advanceStardate(hours / 24);
+    return { ok: true, done, remaining: this.fabrication?.hoursRemaining ?? 0 };
+  }
+
+  /** Strip a wreck for stores. */
+  salvage(opts = {}) {
+    return salvageWreck(this, this.rng, opts);
+  }
+
+  /** What the shop is building, in a form the UI can render. */
+  get fabricationStatus() {
+    if (!this.fabrication) return null;
+    const recipe = RECIPE_BY_ID[this.fabrication.recipeId];
+    return {
+      name: recipe?.name ?? 'Unknown work',
+      hoursRemaining: this.fabrication.hoursRemaining,
+      progress: 1 - this.fabrication.hoursRemaining / Math.max(1e-6, this.fabrication.hoursTotal),
+    };
   }
 
   /** How far through the five-year mission this commission is. */
@@ -941,6 +1046,10 @@ export class Game {
     // campaign they had not begun.
     g.campaign = CampaignClock.load(data.campaign, opts.now ?? undefined);
     if (opts.compression) g.campaign.compression = opts.compression;
+
+    g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };
+    g.fabrication = data.fabrication ?? null;
+    g.devices = data.devices ?? {};
 
     g.applyAllMods();
     return g;
