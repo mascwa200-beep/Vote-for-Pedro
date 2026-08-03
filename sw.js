@@ -11,7 +11,7 @@
 // because a hand-maintained list of forty-odd paths will otherwise drift, and
 // drifted silently the first time a directory was added.
 
-const VERSION = 'sfc-v5';
+const VERSION = 'sfc-v6';
 const PRECACHE = [
   './',
   './index.html',
@@ -63,6 +63,7 @@ const PRECACHE = [
   './src/rules/reputation.js',
   './src/rules/difficulty.js',
   './src/rules/resolve.js',
+  './src/campaign/clock.js',
   './src/lang/normalize.js',
   './src/lang/phonetic.js',
   './src/lang/fuzzy.js',

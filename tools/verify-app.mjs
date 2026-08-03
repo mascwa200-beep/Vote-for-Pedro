@@ -576,11 +576,34 @@ try {
   await page.evaluate(() => globalThis.__app.save());
   const savedOk = await page.evaluate(() => {
     const raw = localStorage.getItem('sfc:save:auto');
-    if (!raw) return false;
-    const data = JSON.parse(raw);
-    return !!(data.seed && data.ship && data.ledger);
+    if (!raw) return { ok: false };
+    // Records are written as { sum, body } so a half-written save can be
+    // detected rather than handed to the game as if it were sound.
+    const outer = JSON.parse(raw);
+    const hasChecksum = typeof outer.sum === 'string' && typeof outer.body === 'string';
+    const data = hasChecksum ? JSON.parse(outer.body) : outer;
+    return {
+      ok: !!(data.seed && data.ship && data.ledger),
+      hasChecksum,
+      hasCommission: !!data.campaign,
+    };
   });
-  check('the command record saves to storage', savedOk);
+  check('the command record saves to storage', savedOk.ok);
+  check('the command record is checksummed', savedOk.hasChecksum);
+  check('the commission clock is saved with it', savedOk.hasCommission);
+
+  // A five-year commission must survive a corrupted autosave.
+  const recovered = await page.evaluate(async () => {
+    const { loadSave } = await import('./src/core/save.js');
+    // Force a backup to exist, then corrupt the primary record.
+    globalThis.__app.save();
+    globalThis.__app.save();
+    localStorage.setItem('sfc:save:auto', '{"sum":"deadbeef","body":"{\"seed\":\"1\"}"}');
+    const r = loadSave('auto');
+    return { got: !!r, fromBackup: r?.recoveredFromBackup ?? null, seed: r?.seed ?? null };
+  });
+  check('a corrupted record falls back to a backup rather than a blank bridge',
+    recovered.got && recovered.fromBackup !== null, JSON.stringify(recovered));
 
   // ------------------------------------------------ THE OFFLINE PROOF
   const swReady = await page.evaluate(async () => {
