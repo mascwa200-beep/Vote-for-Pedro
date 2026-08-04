@@ -525,8 +525,16 @@ class App {
       };
     }
 
-    // A console showing state that has just changed has to be redrawn with it.
-    if (this.consoleOpen && !this._refreshingConsole) {
+    // A console showing state that has just changed has to be redrawn with it —
+    // but ONLY then.
+    //
+    // Rebuilding it on every render made the modal a new set of DOM nodes
+    // several times a second, and in combat, where the screen refreshes
+    // continuously, that meant every control on an open console detached from
+    // under the finger before the tap landed. A console you cannot press is
+    // worse than one showing a stale number.
+    if (this.consoleOpen && this.consoleDirty && !this._refreshingConsole) {
+      this.consoleDirty = false;
       this._refreshingConsole = true;
       try { this.openConsole(this.consoleOpen.key, this.consoleOpen.station); }
       finally { this._refreshingConsole = false; }
@@ -1068,6 +1076,8 @@ class App {
   executeOrder(order, raw) {
     const g = this.game;
     const eng = g.engagement;
+    // An order given FROM a console changes what that console is showing.
+    this.consoleDirty = true;
 
     // The parser read something plausible but is not sure enough to act on it.
     // Ask, rather than guess — a wrong order in combat costs more than a

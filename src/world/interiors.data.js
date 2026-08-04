@@ -129,12 +129,15 @@ export const ROOMS = {
       // The two that are not on the ring.
       // Side by side in the middle of the floor, forward of the chair, both
       // looking at the viewer.
-      { ...BRIDGE_STATIONS[0], at: [0.58, 1.75], facing: 0, bay: null },
-      { ...BRIDGE_STATIONS[1], at: [-0.58, 1.75], facing: 0, bay: null },
+      { ...BRIDGE_STATIONS[0], at: [0.62, 1.62], facing: 0, bay: null },
+      { ...BRIDGE_STATIONS[1], at: [-0.62, 1.62], facing: 0, bay: null },
       ...ringStations(BRIDGE_RADIUS),
     ],
     props: [
-      { id: 'chair', kind: 'chair', label: 'The command chair', at: [0, -0.2], facing: 0, radius: 0.55, solid: true },
+      // A clear two metres behind the helm officers' seats, which is what the
+      // set had — close enough to speak to them without raising your voice and
+      // far enough to see the viewer over their heads.
+      { id: 'chair', kind: 'chair', label: 'The command chair', at: [0, -1.05], facing: 0, radius: 0.55, solid: true },
       { id: 'rail', kind: 'rail', label: 'The bridge rail', at: [0, 0], facing: 0, radius: 0, solid: false },
     ],
     // Forward, and the whole reason the room is pointed the way it is.
