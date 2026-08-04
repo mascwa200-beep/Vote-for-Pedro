@@ -8,8 +8,11 @@ import { haptic, configureTouch, requestWakeLock, releaseWakeLock, trackViewport
 import { audio } from './audio/engine.js';
 import { TacticalView } from './ui/tactical.js';
 import { TacticalView3D } from './ui/tactical3d.js';
+import { Renderer } from './gfx/gl.js';
+import { FirstPersonView } from './ui/firstperson.js';
 import { GalaxyMap } from './ui/galaxymap.js';
 import * as screens from './ui/screens.js';
+import { warpSwitches } from './ui/chair.js';
 import { CharacterCreator, characterSheetScreen, reputationScreen } from './ui/charscreens.js';
 
 import { Game, MODES } from './core/state.js';
@@ -29,17 +32,34 @@ import { RNG } from './core/rng.js';
 import { FEAT_BY_ID, ABILITIES as ABILITY_LIST } from './rules/character.js';
 import { CONSOLES } from './sim/loadout.js';
 
+// TABS ARE FOR TEXT.
+//
+// The viewer, the tactical plot and the galaxy map used to be tabs, and they
+// are not text — they are things you LOOK at, and a starship's crew looks at
+// them on the main viewer or at a console. So the bridge is the first-person
+// view now, what is outside is on the viewscreen inside it, and the map is the
+// navigation console you walk to.
+//
+// What is left here is the record: the log, the roster, the manual. Reading is
+// the one thing a tab is actually for.
 const NAV = [
   { id: 'bridge', label: 'Bridge', ico: '⌂' },
-  { id: 'viewscreen', label: 'Viewer', ico: '▭' },
-  { id: 'tactical', label: 'Combat', ico: '⊕' },
-  { id: 'galaxy', label: 'Map', ico: '✦' },
+  { id: 'log', label: 'Log', ico: '▤' },
   { id: 'ship', label: 'Ship', ico: '⬡' },
   { id: 'crew', label: 'Crew', ico: '☰' },
   { id: 'sheet', label: 'Captain', ico: '✧' },
   { id: 'reputation', label: 'Rep', ico: '◈' },
   { id: 'captain', label: 'Record', ico: '★' },
 ];
+
+/** Which console panel a station opens when you walk up and use it. */
+const STATION_PANEL = {
+  helm: 'helm', navigation: 'galaxy', comms: 'comms', power: 'power',
+  weapons: 'tactical', science: 'science', damage: 'ship', medical: 'crew',
+  transport: 'transport', fabrication: 'shop', missions: 'missions',
+  log: 'log', record: 'captain', turbolift: 'turbolift', crew: 'crew',
+  galaxy: 'galaxy',
+};
 
 const BACKGROUND_SKILL = {
   command: 'leadership', tactical: 'beam_weapons',
@@ -355,6 +375,26 @@ class App {
     this.render();
   }
 
+  /**
+   * The one WebGL context, made once and lent to whichever view is on screen.
+   *
+   * There is exactly one GL canvas in this application and three views that
+   * draw through it — the tactical plot, the main viewer and the first-person
+   * bridge. Each making its own renderer is how you get two contexts on one
+   * element, which browsers cap and then silently drop the oldest of; the
+   * display goes black and nothing says why. So the App owns it.
+   */
+  sharedRenderer() {
+    if (!this.tacticalCanvas) return null;
+    if (this.renderer && this.rendererCanvas === this.tacticalCanvas && !this.renderer.lost) {
+      return this.renderer;
+    }
+    this.renderer?.dispose?.();
+    this.renderer = Renderer.create(this.tacticalCanvas);
+    this.rendererCanvas = this.tacticalCanvas;
+    return this.renderer;
+  }
+
   /** Release the GL context and overlay canvas. For teardown, not navigation. */
   disposeTacticalView() {
     this.tactical?.dispose?.();
@@ -380,10 +420,15 @@ class App {
     // the bridge, so the map, ship, and record stay reachable while you decide.
     let screen = this.screen;
     if (g.over) screen = 'gameover';
-    // Combat takes the screen, but not the *choice* of screen: the viewer is a
-    // legitimate place to fight from, and being yanked off it the moment
-    // somebody decloaks would defeat the point of having one.
-    else if (g.mode === MODES.COMBAT) screen = screen === 'viewscreen' ? 'viewscreen' : 'tactical';
+    // Combat no longer takes the screen AT ALL. You are on the bridge and they
+    // are on the viewer, which is where a fight is supposed to happen — being
+    // teleported to a plot view the moment somebody decloaks is the thing this
+    // restructure exists to stop.
+    //
+    // Nor does it forbid the plot: the tactical console is a station on the
+    // bridge you can walk to. Redirecting *away* from it during a fight was the
+    // same mistake in the other direction, and it left the tactical view never
+    // built and the renderer reporting a mode it was not in.
     else if (g.mode === MODES.MISSION) screen = 'mission';
     else if (g.mode === MODES.ENCOUNTER && screen === 'bridge') screen = 'encounter';
     else if (g.mode === MODES.TRANSIT && screen === 'bridge') screen = 'transit';
@@ -392,6 +437,7 @@ class App {
     let node;
     switch (screen) {
       case 'tactical': node = screens.tacticalScreen(this); break;
+      case 'chair': node = el('div', { class: 'screen' }, [screens.chairConsole(this)]); break;
       case 'viewscreen': node = screens.viewscreenScreen(this); break;
       case 'galaxy': node = screens.galaxyScreen(this); break;
       case 'crew': node = el('div', { class: 'screen' }, [screens.crewScreen(this)]); break;
@@ -413,6 +459,31 @@ class App {
     old.replaceWith(node);
     this.screenEl = node;
 
+    // The first-person bridge shares the one GL canvas with the tactical plot.
+    // Two contexts on one element is a bug this project has already fixed, and
+    // browsers cap how many can live at once — so the renderer is created once
+    // and the two views take turns owning it.
+    if (screen === 'bridge' && this.tacticalCanvas) {
+      if (!this.fpv || this.fpvCanvas !== this.tacticalCanvas) {
+        this.disposeTacticalView();
+        this.fpv?.dispose?.();
+        const renderer = this.sharedRenderer();
+        this.fpv = renderer ? new FirstPersonView(this.tacticalCanvas, renderer) : null;
+        this.fpvCanvas = this.tacticalCanvas;
+        if (this.fpv) {
+          this.fpv.onLook = (dYaw, dPitch) => {
+            g.walk.yaw += dYaw;
+            this.fpv.look(0, dPitch);
+          };
+          this.fpv.onUse = () => this.useWhatIsInFront();
+        }
+      }
+    } else if (this.fpv) {
+      this.fpv.dispose();
+      this.fpv = null;
+      this.fpvCanvas = null;
+    }
+
     // Canvas-backed screens need their renderers rebuilt after a DOM swap.
     if ((screen === 'tactical' || screen === 'viewscreen') && this.tacticalCanvas) {
       // Three dimensions when the device can, two when it cannot. The 2D view
@@ -421,7 +492,9 @@ class App {
       // broken game.
       if (!this.tactical || this.tacticalViewCanvas !== this.tacticalCanvas) {
         this.tactical?.dispose?.();
-        this.tactical = (this.settings.render3d === false ? null : TacticalView3D.create(this.tacticalCanvas))
+        this.tactical = (this.settings.render3d === false
+          ? null
+          : TacticalView3D.create(this.tacticalCanvas, this.sharedRenderer()))
           ?? new TacticalView(this.tacticalCanvas);
         this.tacticalViewCanvas = this.tacticalCanvas;
         this.renderMode = this.tactical instanceof TacticalView3D ? '3d' : '2d';
@@ -452,8 +525,119 @@ class App {
       };
     }
 
+    // A console showing state that has just changed has to be redrawn with it.
+    if (this.consoleOpen && !this._refreshingConsole) {
+      this._refreshingConsole = true;
+      try { this.openConsole(this.consoleOpen.key, this.consoleOpen.station); }
+      finally { this._refreshingConsole = false; }
+    }
+
     this.orderBar.style.display = (screen === 'gameover' || screen === 'options') ? 'none' : '';
     this.needsRender = false;
+  }
+
+  /**
+   * Operate whatever the captain is standing at.
+   *
+   * This is the whole "walk to a console" interaction. A station opens the
+   * panel that already exists for that department — the power grid, the weapons
+   * console, the galaxy map — as a console rather than as a tab, because the
+   * panel was never the problem. Being able to reach it from anywhere was.
+   */
+  useWhatIsInFront() {
+    const g = this.game;
+    if (!g) return;
+    const w = g.walk;
+
+    if (w.atStation) {
+      const key = STATION_PANEL[w.atStation.panel] ?? w.atStation.panel;
+      if (!key) {
+        audio.play('ui_deny');
+        g.officerSays(w.atStation.crew ?? 'ops', 'That station is not mine to work, Captain.', 'object');
+        this.render();
+        return;
+      }
+      audio.play('computer_query');
+      haptic('tap');
+      this.openConsole(key, w.atStation);
+      return;
+    }
+
+    if (w.atExit) {
+      const r = w.room.lift ? { ok: false, needsDestination: true } : w.useExit();
+      if (r.ok) { audio.play('door'); haptic('confirm'); this.render(); return; }
+      // A lift needs a deck. Offer the stops rather than guessing one.
+      this.showMessage('Turbolift', ['Which deck, Captain?'],
+        w.liftStops().map((e) => button(e.label ?? e.to, () => {
+          this.closeModal();
+          w.useExit(e.to);
+          audio.play('door');
+          this.render();
+        }, { color: 'blue' })));
+      return;
+    }
+
+    audio.play('ui_deny');
+  }
+
+  /** Open a station's console as a modal over the bridge. */
+  openConsole(key, station) {
+    const g = this.game;
+    // Remembered so the console can be rebuilt when the state it shows changes.
+    // Without this, throwing a warp switch set the factor and left the switch
+    // drawn in its old position — the order worked and the console lied.
+    this.consoleOpen = { key, station };
+    const body = [];
+    switch (key) {
+      case 'galaxy': this.go('galaxy'); return;
+      case 'tactical': this.go('tactical'); return;
+      case 'log': this.go('log'); return;
+      case 'captain': this.go('captain'); return;
+      case 'crew': this.go('crew'); return;
+      case 'ship': this.go('ship'); return;
+      case 'chair': this.go('chair'); return;
+      case 'power': body.push(screens.powerPanel(this)); break;
+      case 'shop': body.push(screens.machineShopPanel(this)); break;
+      case 'comms':
+        // Hailing is an ORDER, not a console read-out: it goes through the same
+        // dispatch a typed "open a channel" does, so there is one path.
+        this.executeOrder({ action: 'hail' }, 'hailing frequencies open');
+        return;
+      case 'science': {
+        body.push(el('p', { text: 'Sensor sweep of the system.' }));
+        for (const line of this.scanSystem()) body.push(el('p', { class: 'muted', text: String(line) }));
+        break;
+      }
+      case 'helm':
+        // The eight warp flip switches live on the helm console, because that
+        // is where they were on the prop. The chair shows them too — the chair
+        // is where the order is given from — but this is where they are.
+        body.push(warpSwitches(this));
+        body.push(el('p', { class: 'hint', text: 'Throw a switch to set the standing warp factor. Every course is plotted at it.' }));
+        break;
+      case 'turbolift':
+      default:
+        body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
+        break;
+    }
+    this.showConsole(station?.label ?? 'Console', body);
+  }
+
+  /**
+   * A console, as a modal over the room you are standing in.
+   *
+   * Not `showMessage`: that takes LINES and stringifies whatever it is given,
+   * so handing it a panel produced a dialog reading "[object HTMLDivElement]".
+   * A console is nodes.
+   */
+  showConsole(title, nodes) {
+    this.closeModal(true);
+    this.consoleTitle = title;
+    const body = (nodes.length ? nodes : [el('p', { text: 'Working, Captain.' })])
+      .map((n) => (n instanceof globalThis.Node ? n : el('p', { text: String(n) })));
+    this.modalHandle = modal(title, body, [
+      button('Step away', () => this.closeModal(), { color: 'ghost' }),
+    ]);
   }
 
   renderSystemDetail(sys) {
@@ -477,7 +661,15 @@ class App {
     return this.modalHandle;
   }
 
-  closeModal() {
+  /**
+   * @param {boolean} keepConsole true when the modal is being replaced rather
+   *        than dismissed — a console you are standing at must survive giving
+   *        an order FROM it. Throwing a warp switch dispatches `warp_factor`,
+   *        which closes modals on the way through, and that closed the very
+   *        console the switch was on.
+   */
+  closeModal(keepConsole = false) {
+    if (!keepConsole && !this._refreshingConsole) this.consoleOpen = null;
     this.modalHandle?.close();
     this.modalHandle = null;
   }
@@ -1488,7 +1680,8 @@ class App {
       // Canvas views redraw every frame; DOM only when something changed.
       const dt = Math.min(0.1, Math.max(0, (timestamp - (this.lastFrameAt ?? timestamp)) / 1000));
       this.lastFrameAt = timestamp;
-      if (this.tactical) {
+      if (this.fpv) this.fpv.render(g, dt);
+      else if (this.tactical) {
         if (g.engagement) this.tactical.render(g.engagement, g.clock.alpha, dt);
         // No engagement and the viewer is open: draw what is actually outside,
         // rather than the black rectangle a combat camera gives you at peace.

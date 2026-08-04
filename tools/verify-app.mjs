@@ -47,6 +47,20 @@ async function dismissModals(page) {
   }
 }
 
+/**
+ * Go to a screen that no longer has a tab.
+ *
+ * The viewer, the tactical plot and the galaxy map used to be nav destinations
+ * and are not any more: a viewscreen is where the crew looks, and the map is a
+ * console you walk to. They are still screens, so the harness reaches them the
+ * way the game does — by asking the app for them.
+ */
+async function goTo(page, id) {
+  await dismissModals(page);
+  await page.evaluate((screen) => globalThis.__app.go(screen), id);
+  await page.waitForTimeout(400);
+}
+
 /** Click a bottom-nav destination, clearing modals first. */
 async function nav(page, label) {
   await dismissModals(page);
@@ -234,7 +248,7 @@ try {
   // is pending — check that, then clear it before continuing.
   if (await page.evaluate(() => globalThis.__app.game.mode === 'encounter')) {
     await page.screenshot({ path: join(SHOTS, '03b-encounter.png') });
-    await nav(page, 'Map');
+    await goTo(page, 'galaxy');
     check('the map is reachable with a contact pending',
       await page.locator('#galaxy').isVisible());
     await nav(page, 'Bridge');
@@ -246,7 +260,7 @@ try {
   await dismissModals(page);
 
   // ------------------------------------------------ galaxy map
-  await nav(page, 'Map');
+  await goTo(page, 'galaxy');
   check('galaxy map canvas renders', await page.locator('#galaxy').isVisible());
   const mapDrawn = await page.evaluate(() => {
     const c = document.getElementById('galaxy');
@@ -259,6 +273,76 @@ try {
   check('the map actually draws pixels', mapDrawn > 50, `lit samples: ${mapDrawn}`);
   await page.screenshot({ path: join(SHOTS, '04-galaxy-map.png') });
 
+  // ---- The bridge is a room you are standing in ----
+  //
+  // The tabs for the viewer, the plot and the map are gone: a viewscreen is
+  // where a crew looks and a console is where they read. So the checks that
+  // matter are that the room actually renders, that space shows through the
+  // aperture rather than being painted on the wall, and that one renderer is
+  // doing all of it.
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+  await page.waitForTimeout(500);
+  const fp = await page.evaluate(() => {
+    const app = globalThis.__app;
+    return {
+      fpv: !!app.fpv,
+      shared: app.fpv?.renderer === app.renderer,
+      lost: app.renderer?.lost ?? null,
+      draws: app.fpv?.stats?.drawCalls ?? 0,
+      tris: app.fpv?.stats?.triangles ?? 0,
+      screen: app.fpv?.stats?.screenRect ?? null,
+      overlays: document.querySelectorAll('canvas.tactical-labels').length,
+      canvases: document.querySelectorAll('#tactical').length,
+      tabs: [...document.querySelectorAll('.nav button')].map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
+    };
+  });
+  check('the bridge renders in first person', fp.fpv === true);
+  check('it draws through the one shared renderer', fp.shared === true && fp.lost === false,
+    JSON.stringify({ shared: fp.shared, lost: fp.lost }));
+  check('one GL canvas and one overlay, not two of either',
+    fp.canvases === 1 && fp.overlays === 1, `${fp.canvases}/${fp.overlays}`);
+  check('the room is real geometry', fp.tris > 300 && fp.draws >= 2,
+    `${fp.tris} triangles in ${fp.draws} draws`);
+  check('the main viewer is an aperture with space behind it',
+    fp.screen && fp.screen.w > 20 && fp.screen.h > 10, JSON.stringify(fp.screen));
+
+  // Tabs are for text now.
+  const visualTabs = fp.tabs.filter((t) => /viewer|combat|map/i.test(t));
+  check('the viewer, the plot and the map are no longer tabs',
+    visualTabs.length === 0, fp.tabs.join(' | '));
+
+  const shot = await page.screenshot({
+    clip: await page.evaluate(() => {
+      const r = document.getElementById('tactical').getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    }),
+  });
+  check('the bridge is not a black rectangle', shot.length > 4000, `${shot.length} bytes of PNG`);
+  await page.screenshot({ path: join(SHOTS, '01b-bridge-first-person.png') });
+
+  // Walking to a station and using it opens that station's console — which is
+  // the whole "physically go to a console" interaction.
+  const console3d = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    g.takeChair(false);
+    const helm = g.walk.room.stations.find((s) => s.id === 'helm');
+    g.walk.x = helm.at[0];
+    g.walk.z = helm.at[1] - 0.7;
+    g.walk.step({}, 1 / 30);
+    const at = g.walk.atStation?.id ?? null;
+    app.useWhatIsInFront();
+    await new Promise((r) => setTimeout(r, 250));
+    return { at, modal: !!document.querySelector('.modal'), switches: document.querySelectorAll('.warp-switch').length };
+  });
+  check('standing at the helm reports the helm', console3d.at === 'helm', String(console3d.at));
+  check('using it opens the helm console, with its warp switches',
+    console3d.modal === true && console3d.switches === 8, JSON.stringify(console3d));
+  await page.screenshot({ path: join(SHOTS, '01c-helm-console.png') });
+  await dismissModals(page);
+  await page.evaluate(() => { globalThis.__app.game.takeChair(true); globalThis.__app.render(); });
+
   // ---- The ship has an inside ----
   //
   // Driven through the order line, because "type it and actually arrive" is
@@ -269,11 +353,14 @@ try {
   const aboard = await page.evaluate(() => ({
     room: globalThis.__app.game.walk.roomId,
     seated: globalThis.__app.game.walk.seated,
-    panel: [...document.querySelectorAll('.panel h2')].some((h) => h.textContent.trim() === 'Aboard'),
+    // The bridge names the room you are standing in as its first panel now —
+    // the whole screen is that room, so a separate "Aboard" panel would be
+    // labelling the obvious.
+    panel: [...document.querySelectorAll('.panel h2')].some((h) => h.textContent.trim() === 'Main Bridge'),
   }));
   check('the captain starts in the chair on the bridge',
     aboard.room === 'bridge' && aboard.seated === true, JSON.stringify(aboard));
-  check('the bridge says where you are', aboard.panel === true);
+  check('the bridge names the room you are standing in', aboard.panel === true);
 
   await page.fill('.orderbar input', 'go to sickbay');
   await page.press('.orderbar input', 'Enter');
@@ -484,6 +571,7 @@ try {
         overlays: document.querySelectorAll('canvas.tactical-labels').length,
         glCanvases: document.querySelectorAll('#tactical').length,
         same: app.tactical === before,
+        sameRenderer: app.tactical?.renderer === app.renderer && !!app.renderer,
         lost: app.tactical?.renderer?.lost ?? null,
         drawCalls: app.tactical?.stats?.drawCalls ?? 0,
       };
@@ -492,7 +580,12 @@ try {
       roundTrip.overlays === 1, `${roundTrip.overlays} overlay canvas(es)`);
     check('returning to Tactical does not duplicate the GL canvas',
       roundTrip.glCanvases === 1, `${roundTrip.glCanvases}`);
-    check('the tactical view is reused rather than rebuilt', roundTrip.same === true);
+    // The view is REBUILT on a round trip now and that is correct: the bridge
+    // and the plot are two different views taking turns with one renderer. What
+    // must not change is the renderer and the context underneath them — which
+    // the overlay and canvas counts above, and the liveness below, pin down.
+    check('the shared renderer survives the round trip',
+      roundTrip.sameRenderer === true, JSON.stringify(roundTrip));
     check('the WebGL context survives six screen changes',
       roundTrip.lost === false, String(roundTrip.lost));
     check('the reused view is still drawing', roundTrip.drawCalls > 3, String(roundTrip.drawCalls));
@@ -612,8 +705,12 @@ try {
   // only a test can set is the same inert feature this replaces. That the
   // factor then reaches the course is asserted in tests/sim.test.js, where it
   // can be done without a live engagement in the way.
+  // The switches live on the HELM console now, not on a permanent bridge panel
+  // — you walk to the helm and open it, which is the point of the restructure.
   await dismissModals(page);
   await nav(page, 'Bridge');
+  await page.evaluate(() => globalThis.__app.openConsole('helm', { label: 'Helm' }));
+  await page.waitForTimeout(300);
   const switches = await page.$$('.warp-switch');
   check('the console has eight warp switches', switches.length === 8, String(switches.length));
   if (switches.length === 8) {
@@ -638,7 +735,7 @@ try {
   await page.waitForTimeout(200);
   await page.screenshot({ path: join(SHOTS, '02b-warp-switches.png') });
   // Put the run back where it was: everything after this expects the plot.
-  await nav(page, 'Combat');
+  await goTo(page, 'tactical');
 
   // ---- Audio survives being backgrounded ----
   //

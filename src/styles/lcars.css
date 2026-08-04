@@ -510,6 +510,36 @@ canvas.tactical-labels {
   color: var(--lcars-ice);
 }
 
+/* ---------------- The bridge, in first person ----------------
+
+   The view is the screen. What is left in the DOM is a strip: where you are,
+   what your hand is on, and the order line. Everything else you walk to. */
+
+.screen.bridge3d-screen { gap: 6px; }
+.screen.bridge3d-screen .tactical-wrap {
+  flex: 0 0 auto;
+  height: 46vh;
+  min-height: 220px;
+  max-height: 520px;
+  border-radius: 4px;
+  border: 1px solid var(--trim-dim);
+}
+.screen.bridge3d-screen .bridge3d-side { flex: 1 1 auto; min-height: 0; }
+
+@media (orientation: landscape) and (min-width: 700px) {
+  .screen.bridge3d-screen { flex-direction: row; gap: 8px; }
+  .screen.bridge3d-screen .tactical-wrap {
+    flex: 2 1 auto; height: auto; max-height: none; min-height: 0;
+  }
+  .screen.bridge3d-screen .bridge3d-side {
+    flex: 1 1 0; min-width: 220px; overflow-y: auto;
+  }
+}
+
+/* International orange, the strongest thing in the room and now on the one
+   button that means "use what is in front of you". */
+.btn.orange { background: #eb5c0d; color: #17110c; }
+
 /* ---------------- The main viewer ----------------
 
    The 1966 viewscreen is not a rectangle of video — it is a rectangle of video

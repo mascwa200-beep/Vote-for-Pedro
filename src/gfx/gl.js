@@ -56,14 +56,22 @@ uniform vec3 uTint;       // faction/status tint multiplied into the hull
 uniform float uAlpha;
 uniform float uEmissive;  // 1.0 makes the surface ignore lighting entirely
 uniform float uFogFar;    // distance at which the haze reaches its floor
+uniform float uAmbient;   // how much light a surface facing away still gets
+uniform float uKeyPower;  // strength of the key
 
 void main() {
   vec3 n = normalize(vNormal);
   float key = max(dot(n, normalize(uKey)), 0.0);
   float fill = max(dot(n, normalize(uFill)), 0.0) * 0.35;
-  float ambient = 0.22;
 
-  vec3 lit = vColor * uTint * (ambient + key * 0.85 + fill);
+  // Ambient and key strength are per-FRAME now, not constants.
+  //
+  // 0.22 ambient with a single hard key is right for a hull in vacuum, where
+  // there is one sun and nothing to bounce off. It is completely wrong for a
+  // room: a bridge lit from a ceiling ring, with pale grey walls bouncing light
+  // at each other, has almost no true shadow in it. Hardcoding the vacuum value
+  // rendered the interior as a black box with a few lit panels floating in it.
+  vec3 lit = vColor * uTint * (uAmbient + key * uKeyPower + fill);
   lit = mix(lit, vColor * uTint, uEmissive);
 
   // Fog toward the far plane, so a distant hull recedes rather than hanging
@@ -161,6 +169,8 @@ export class Renderer {
       alpha: gl.getUniformLocation(this.program, 'uAlpha'),
       emissive: gl.getUniformLocation(this.program, 'uEmissive'),
       fogFar: gl.getUniformLocation(this.program, 'uFogFar'),
+      ambient: gl.getUniformLocation(this.program, 'uAmbient'),
+      keyPower: gl.getUniformLocation(this.program, 'uKeyPower'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -231,7 +241,70 @@ export class Renderer {
     gl.useProgram(this.program);
     gl.uniform3f(this.uniform.key, 0.55, 0.72, 0.42);
     gl.uniform3f(this.uniform.fill, -0.6, -0.2, -0.5);
+    // Vacuum by default: one hard sun and nothing to bounce off.
+    gl.uniform1f(this.uniform.ambient, 0.22);
+    gl.uniform1f(this.uniform.keyPower, 0.85);
     return true;
+  }
+
+  /**
+   * Light the scene as a place rather than as a vacuum.
+   *
+   * `key` and `fill` are DIRECTIONS the light comes from; `ambient` is what a
+   * surface facing away from both still receives, which in a room is most of
+   * the light and in space is almost none.
+   */
+  setLighting({ key, fill, ambient = 0.22, keyPower = 0.85 } = {}) {
+    if (this.lost) return;
+    const { gl } = this;
+    if (key) gl.uniform3f(this.uniform.key, key[0], key[1], key[2]);
+    if (fill) gl.uniform3f(this.uniform.fill, fill[0], fill[1], fill[2]);
+    gl.uniform1f(this.uniform.ambient, ambient);
+    gl.uniform1f(this.uniform.keyPower, keyPower);
+  }
+
+  /**
+   * Restrict drawing to a rectangle of the canvas, in device pixels.
+   *
+   * This is how the viewscreen works. A bridge with a live view of space in it
+   * needs the exterior scene rendered INSIDE a rectangle of the interior one,
+   * and this renderer has no framebuffer objects and no render-to-texture — it
+   * is one program, one context, one buffer. A scissor rectangle plus a pushed
+   * depth range gets the same picture out of two passes over the same context,
+   * with no second canvas and nothing to keep in sync.
+   *
+   * @param {number} y measured from the TOP, like every other rectangle in the
+   *        DOM; GL counts from the bottom and the flip happens here rather than
+   *        at each call site.
+   */
+  setScissor(x, y, w, h) {
+    if (this.lost) return;
+    const { gl } = this;
+    const H = this.canvas.height;
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(
+      Math.max(0, Math.round(x)),
+      Math.max(0, Math.round(H - y - h)),
+      Math.max(0, Math.round(w)),
+      Math.max(0, Math.round(h)),
+    );
+  }
+
+  clearScissor() {
+    if (!this.lost) this.gl.disable(this.gl.SCISSOR_TEST);
+  }
+
+  /**
+   * Push a draw to the back of the depth buffer, or restore the full range.
+   *
+   * The other half of the viewscreen: the exterior is drawn first into the
+   * far slice, so the bridge geometry drawn afterwards covers everything except
+   * the aperture — where there is no geometry, and space shows through.
+   * Clearing the depth buffer between passes instead would let the wall paint
+   * over the screen.
+   */
+  setDepthRange(near = 0, far = 1) {
+    if (!this.lost) this.gl.depthRange(near, far);
   }
 
   setCamera(viewProj) {

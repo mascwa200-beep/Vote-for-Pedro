@@ -283,6 +283,97 @@ game most needs, because it is where the fiction lives.
 
 ---
 
+## 8. The bridge as a piece of construction
+
+§3 records who sits where. This is how the room is actually BUILT, which is a
+different question and the one the geometry needs answering.
+
+**The ring is ten wall segments of 36 degrees.** Not a smooth circle and not an
+arbitrary spread of stations: ten flat bays, each one a station, which is why
+ten is the right number of departments and not a coincidence. The bay carrying
+the main viewer is wider — 40.5 degrees — because the screen needed the width.
+
+| | |
+|---|---|
+| Overall diameter | 9.1 m |
+| Clear floor between console edges | 7.9 m |
+| Wall segments | 10, at 36° each |
+| Main viewer segment | 40.5° |
+| Turbolift | single door, **port side, 36° off the centreline** |
+
+**The turbolift is not dead aft.** It sits behind the command chair and over to
+the left. Both explanations offered for this — that the whole bridge is rotated
+36° to port, or that the lift car sidesteps before its doors open — agree on
+what is actually seen, which is the only thing the geometry has to reproduce.
+
+### The paint
+
+This is the part the first build got most wrong, by assuming a 1960s set was
+dark. It was not. It was built for colour television at the moment colour
+television arrived, and it is BRIGHT:
+
+| Element | Colour |
+|---|---|
+| Walls, captain's chair | very light neutral grey |
+| Carpet, both levels | grey, the same shade on each |
+| Turbolift doors, the railing, the helm/navigation console | **international orange** — the colour of a traffic cone |
+| Crew chairs | light blue |
+| Overhead display inserts | light greyish blue, bordered in a lighter near-white |
+| Console buttons | saturated primaries — the "jelly beans" |
+
+The console buttons were coloured resin in circles and triangles, and some of
+them were literally jelly beans. That is the detail that makes the set read as
+1966 rather than as science fiction generally: the controls are not glowing
+glass, they are moulded plastic caps in five or six flat colours.
+
+**What the build takes from this.** The interior palette is rebuilt around a
+light grey room with an orange rail and orange helm housing, not the charcoal
+console the first pass assumed. The bridge shell is ten 36° bays with a 40.5°
+viewer bay, the turbolift door goes 36° to port of aft, and each bay carries one
+station — which the ten documented departments fill exactly.
+
+Sources: [Ex Astris Scientia — Design Issues of the Original Enterprise](https://www.ex-astris-scientia.org/articles/enterprise-issues.htm),
+[Collecting Trek — Is the Enterprise bridge rotated 36 degrees?](https://collectingtrek.ca/2024/05/02/bridge-rotated/),
+[Star Trek Prop Authority — TOS Enterprise Bridge Blueprints](http://www.startrekpropauthority.com/2010/05/star-trek-original-series-uss.html),
+[Hobbytalk — TOS bridge colours](https://www.hobbytalk.com/threads/tos-bridge-colours.406748/),
+[Memory Alpha — Constitution class sets](https://memory-alpha.fandom.com/wiki/Constitution_class_sets)
+
+---
+
+## 9. How the sounds were actually made
+
+The 1966 effects were built by Douglas Grindstaff, Jack Finlay and Joseph
+Sorokin out of recorded objects and tape manipulation, on a Moviola, with fades
+cut into magnetic stock using a razor blade. Every documented technique is a
+recipe rather than a recording, which is exactly what a synthesiser can follow.
+
+| Effect | How it was made |
+|---|---|
+| Transporter | musical tones layered over electric-generator noise; the motor of a 3M tape recorder is named as one ingredient, along with less dignified sources |
+| Communicator | an owl chirp, sped up, then cut |
+| Bridge ambience | continuous panel bleeps and chirps over a bed — every set had its own sonic identity |
+| Transporter room | a throb of power, distinct from the bridge |
+| Engineering | the same idea an octave down: heavy generators |
+
+**What the build takes from this.** Three things, and they are the difference
+between "a beep" and the sound you recognise:
+
+1. **Layering over a noise bed, not a clean tone.** The transporter is musical
+   partials *on top of* generator noise. `sfx.js` builds it from eleven beating
+   partials over a filtered wash for that reason.
+2. **Speed manipulation of a natural recording.** An owl chirp sped up is a fast
+   rising glide with formant structure — which is a frequency sweep with a
+   resonant filter tracking it, not a sine bleep.
+3. **Every room has its own ambience.** The bridge is chirps over a hum;
+   engineering is the same bed pitched down and louder. That is a per-room
+   property, not one global drone.
+
+Sources: [CineMontage — Douglas Grindstaff's sound effects for the original Star Trek](https://cinemontage.org/sound-effects-original-star-trek/),
+[Memory Alpha — Douglas H. Grindstaff](https://memory-alpha.fandom.com/wiki/Douglas_H._Grindstaff),
+[Audible — Behind Star Trek's iconic sounds](https://www.audible.com/blog/kittens-kisses-and-razorblades-behind-star-treks-iconic-sounds)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

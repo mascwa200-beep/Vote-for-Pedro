@@ -62,14 +62,23 @@ function orientationOf(ship, out = quat()) {
 }
 
 export class TacticalView3D {
-  /** @returns {TacticalView3D|null} null when WebGL is unavailable. */
-  static create(canvas) {
-    // The GL canvas sits behind an overlay canvas for LCARS text. The caller
-    // gives us one element, so the second is created here and inserted beside
-    // it, inheriting its box.
-    const renderer = Renderer.create(canvas);
+  /**
+   * @param {HTMLCanvasElement} canvas
+   * @param {Renderer} [shared] a renderer the caller already owns
+   * @returns {TacticalView3D|null} null when WebGL is unavailable.
+   *
+   * The renderer is INJECTED when the caller has one. There is exactly one GL
+   * context in this application and several views that draw through it; a view
+   * that makes its own is how you end up with two contexts on one canvas, which
+   * browsers cap and then silently drop the oldest of. `ownsRenderer` records
+   * which case this is, so `dispose` only tears down what it made.
+   */
+  static create(canvas, shared = null) {
+    const renderer = shared ?? Renderer.create(canvas);
     if (!renderer) return null;
-    return new TacticalView3D(canvas, renderer);
+    const view = new TacticalView3D(canvas, renderer);
+    view.ownsRenderer = !shared;
+    return view;
   }
 
   constructor(canvas, renderer) {
@@ -845,7 +854,9 @@ export class TacticalView3D {
 
   dispose() {
     this._detach?.();
-    this.renderer.dispose();
+    // Only if this view made it. A shared renderer outlives every view that
+    // draws through it and is torn down by whoever owns the canvas.
+    if (this.ownsRenderer !== false) this.renderer.dispose();
     this.overlay.remove();
   }
 }

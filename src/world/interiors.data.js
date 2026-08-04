@@ -61,35 +61,58 @@ const BRIDGE_STATIONS = [
   { id: 'security', label: 'Internal Security', crew: 'security', panel: null , mounted: 'wall' },
 ];
 
+const BRIDGE_RADIUS = 4.55;   // 9.1 m across, per the set plans
+
 /**
- * Place the outer stations around the ring.
+ * The bridge is ten bays of 36 degrees, and that is not a stylisation.
+ *
+ * docs/RESEARCH.md §8: the set is a ring of ten flat wall segments at 36° each,
+ * with the bay carrying the main viewer widened to 40.5°. Ten bays is why ten
+ * departments is the right granularity and not a coincidence — each bay IS a
+ * station.
+ *
+ * Bay 0 is the viewer, dead ahead. Bays are numbered clockwise from there
+ * looking down, so bay 5 is dead astern. The turbolift is NOT dead astern: it
+ * sits behind the chair and over to port, 36° off the centreline, which is one
+ * whole bay round.
+ */
+export const BAY_COUNT = 10;
+export const BAY_ANGLE = (Math.PI * 2) / BAY_COUNT;      // 36 degrees
+export const VIEWER_BAY_ANGLE = 40.5 * Math.PI / 180;
+/** Bay 6: one segment to port of dead astern. */
+export const LIFT_BAY = 6;
+
+/** The centre bearing of a bay, in radians, 0 = forward and increasing to starboard. */
+export function bayBearing(index) {
+  return index * BAY_ANGLE;
+}
+
+/**
+ * Fill the bays with the eight stations that ring the room.
  *
  * Helm and navigation are NOT on the ring — they sit side by side in the middle
- * of the room, forward of the chair and facing the viewscreen, which is the one
- * detail everybody remembers and the one a naive "space them evenly" would get
- * wrong. So the ring carries the other eight, spread across the arc that is not
- * the viewscreen and not the turbolift.
+ * of the floor, forward of the chair and facing the viewer, which is the one
+ * detail everybody remembers and the one a naive "space them evenly" gets
+ * wrong. So bay 0 is the viewer, bay 6 is the turbolift, and the other eight
+ * bays take one station each, which is exactly how many are left.
  */
 function ringStations(radius) {
   const outer = BRIDGE_STATIONS.slice(2);
-  // From just past the viewscreen (which is forward, +z) round to just short of
-  // the turbolift (aft, -z), on both sides.
-  const arcStart = 0.42;
-  const arcEnd = Math.PI * 2 - 0.42;
-  const step = (arcEnd - arcStart) / outer.length;
+  const bays = [];
+  for (let i = 1; i < BAY_COUNT; i++) if (i !== LIFT_BAY) bays.push(i);
+
   return outer.map((s, i) => {
-    const a = arcStart + step * (i + 0.5);
+    const a = bayBearing(bays[i]);
     return {
       ...s,
-      // The consoles are set into the wall, so they stand a little inside it.
+      bay: bays[i],
+      // Set into the bay wall, standing a little proud of it.
       at: [Math.sin(a) * (radius - 0.55), Math.cos(a) * (radius - 0.55)],
       // An officer at a console faces the wall, which is outward from centre.
       facing: a,
     };
   });
 }
-
-const BRIDGE_RADIUS = 5.2;
 
 export const ROOMS = {
   bridge: {
@@ -98,18 +121,16 @@ export const ROOMS = {
     deck: 1,
     // A ring around a central well. `inner` is the rail around the lower
     // command level, which you step down into rather than through.
-    shape: { kind: 'ring', radius: BRIDGE_RADIUS, inner: 0, height: 2.6 },
+    shape: { kind: 'ring', radius: BRIDGE_RADIUS, inner: 0, height: 2.6, bays: BAY_COUNT },
     // The well floor sits below the outer ring. Purely visual — you can walk
     // the whole floor — but it is why the chair reads as being *in* something.
-    well: { radius: 2.4, drop: 0.36 },
+    well: { radius: 2.1, drop: 0.36 },
     stations: [
       // The two that are not on the ring.
-      {
-        ...BRIDGE_STATIONS[0], at: [0.62, 2.05], facing: 0,
-      },
-      {
-        ...BRIDGE_STATIONS[1], at: [-0.62, 2.05], facing: 0,
-      },
+      // Side by side in the middle of the floor, forward of the chair, both
+      // looking at the viewer.
+      { ...BRIDGE_STATIONS[0], at: [0.58, 1.75], facing: 0, bay: null },
+      { ...BRIDGE_STATIONS[1], at: [-0.58, 1.75], facing: 0, bay: null },
       ...ringStations(BRIDGE_RADIUS),
     ],
     props: [
@@ -117,9 +138,26 @@ export const ROOMS = {
       { id: 'rail', kind: 'rail', label: 'The bridge rail', at: [0, 0], facing: 0, radius: 0, solid: false },
     ],
     // Forward, and the whole reason the room is pointed the way it is.
-    viewscreen: { at: [0, BRIDGE_RADIUS - 0.1], width: 3.4, height: 1.8 },
+    // Bay 0, widened to 40.5 degrees. Two chords of that arc give its width.
+    viewscreen: {
+      at: [0, BRIDGE_RADIUS - 0.08],
+      width: 2 * BRIDGE_RADIUS * Math.sin(VIEWER_BAY_ANGLE / 2) * 0.86,
+      height: 1.50,
+      bay: 0,
+    },
     exits: [
-      { to: 'turbolift', at: [0, -(BRIDGE_RADIUS - 0.2)], width: 1.2, label: 'Turbolift' },
+      // Behind the chair and over to port, not dead astern. This is the single
+      // most-noticed fact about the room's plan and the first build had it
+      // straight back.
+      {
+        to: 'turbolift',
+        at: [
+          Math.sin(bayBearing(LIFT_BAY)) * (BRIDGE_RADIUS - 0.2),
+          Math.cos(bayBearing(LIFT_BAY)) * (BRIDGE_RADIUS - 0.2),
+        ],
+        width: 1.3,
+        label: 'Turbolift',
+      },
     ],
   },
 
