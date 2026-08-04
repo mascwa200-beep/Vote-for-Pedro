@@ -22,6 +22,7 @@ import { MeshBuilder, saucer, tube, box, sphere, mirrored } from '../src/gfx/mes
 import { BLUEPRINTS, hullMesh, hullScale, paletteFor } from '../src/gfx/blueprint.js';
 import { sceneMeshes, starfield, gridMesh, bodyMesh, VOLUME } from '../src/gfx/scene.js';
 import { vistaFor, bearingOf, fovFor, horizontalFov, noseOf } from '../src/gfx/vista.js';
+import { roomMeshes, allRoomMeshes } from '../src/gfx/room.js';
 import { RNG } from '../src/core/rng.js';
 import { SHIP_CLASSES } from '../src/world/ships.data.js';
 
@@ -686,4 +687,88 @@ describe('the view out of the window', () => {
       `${CAP} bodies at ${worst} triangles each is ${worst * CAP}, which the ships cannot afford`);
   });
 
+});
+
+describe('the rooms are lit like places', () => {
+  test('occlusion darkens the deck at the bulkhead and leaves the bulkhead alone', () => {
+    // A wall must not occlude ITSELF. Every vertex of a flat bulkhead sits at
+    // zero distance from the bulkhead, so a naive distance term dimmed whole
+    // walls by a third — and the bright 1966 set the research insisted on went
+    // grey again. Horizontal surfaces take the wall's shadow; vertical ones
+    // take the deck's. Each gets the shadow the other casts, neither its own.
+    const bridge = roomMeshes('bridge');
+    const { data, vertexCount, stride } = bridge.solid;
+    const floats = stride / 4;
+
+    let wallBright = 0; let wallCount = 0;
+    let deckEdge = 0; let deckEdgeCount = 0;
+    let deckMiddle = 0; let deckMiddleCount = 0;
+
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const x = data[o]; const y = data[o + 1]; const z = data[o + 2];
+      const ny = Math.abs(data[o + 4]);
+      const lum = (data[o + 6] + data[o + 7] + data[o + 8]) / 3;
+      const r = Math.hypot(x, z);
+
+      // A bulkhead well above the deck, away from the contact shadow.
+      if (ny < 0.3 && y > 1.4 && y < 2.2 && r > 4.0) { wallBright += lum; wallCount++; }
+      // The deck, at the bulkhead and out in the open.
+      if (ny > 0.9 && y < 0.05) {
+        if (r > 4.2) { deckEdge += lum; deckEdgeCount++; }
+        else if (r < 1.5) { deckMiddle += lum; deckMiddleCount++; }
+      }
+    }
+
+    assert.ok(wallCount > 4 && deckEdgeCount > 4 && deckMiddleCount > 4,
+      `not enough samples: ${wallCount}/${deckEdgeCount}/${deckMiddleCount}`);
+
+    const wall = wallBright / wallCount;
+    const edge = deckEdge / deckEdgeCount;
+    const middle = deckMiddle / deckMiddleCount;
+
+    assert.ok(wall > 0.5,
+      `the bulkhead averages ${wall.toFixed(2)} — it is occluding itself`);
+    assert.ok(edge < middle * 0.92,
+      `the deck is ${edge.toFixed(3)} at the bulkhead and ${middle.toFixed(3)} in the open, which is no contact shadow at all`);
+  });
+
+  test('nothing is baked to black', () => {
+    // A floor of 0.42 on the occlusion term: a corner should be darker, not
+    // absent. Geometry you cannot see is geometry you may as well not have
+    // built, and it is the failure mode a distance field falls into.
+    for (const room of allRoomMeshes()) {
+      const { data, vertexCount, stride } = room.solid;
+      const floats = stride / 4;
+      let darkest = 1;
+      for (let i = 0; i < vertexCount; i++) {
+        const o = i * floats;
+        darkest = Math.min(darkest, (data[o + 6] + data[o + 7] + data[o + 8]) / 3);
+      }
+      assert.ok(darkest > 0.04, `${room.id} has a vertex at ${darkest.toFixed(3)}`);
+    }
+  });
+
+  test('the glow mesh is not occluded, because it makes its own light', () => {
+    // A panel that ignores the light must also ignore the shadow, or a console
+    // in a corner has dim buttons for no reason anybody could point at.
+    const bridge = roomMeshes('bridge');
+    const { data, vertexCount, stride } = bridge.glow;
+    const floats = stride / 4;
+    let brightest = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      brightest = Math.max(brightest, (data[o + 6] + data[o + 7] + data[o + 8]) / 3);
+    }
+    assert.ok(brightest > 0.7, `the brightest lit panel is ${brightest.toFixed(2)}`);
+  });
+
+  test('every room stays inside the frame budget with its crew aboard', () => {
+    // Two draws per room and the whole ship's interior in one place, so the
+    // day a room grows a deck of detail this says so.
+    for (const room of allRoomMeshes()) {
+      assert.ok(room.triangles < 4000, `${room.id} is ${room.triangles} triangles`);
+      assert.ok(room.solid.vertexCount > 0, `${room.id} has no lit geometry`);
+    }
+  });
 });
