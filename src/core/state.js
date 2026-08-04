@@ -121,6 +121,10 @@ export class Game {
     this.encounter = null;
     this.awayTeam = null;
     this.alert = 'normal';
+    // What "engage" means until the helm is told otherwise. The eight flip
+    // switches on the console set it; six is the cruise the game has always
+    // assumed when nobody says.
+    this.warpFactor = 6;
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
@@ -348,7 +352,23 @@ export class Game {
    * Set course and engage.
    * @returns {object} { ok, error }
    */
-  setCourse(destinationId, warpFactor = 6) {
+  /**
+   * The standing warp factor: what "engage" means until told otherwise.
+   *
+   * This is what the eight flip switches on the helm console set, and it is the
+   * default every course is plotted at. Before it existed, "warp eight" was an
+   * order the game acknowledged and then discarded — the helm said "warp eight
+   * standing by" and the next course still went out at six.
+   */
+  setWarpFactor(factor) {
+    const max = this.ship.cls.maxWarp ?? 8;
+    const want = Math.max(1, Math.min(9.9, Number(factor) || 1));
+    const set = Math.min(want, max);
+    this.warpFactor = set;
+    return { ok: true, factor: set, limited: set < want - 1e-9, max };
+  }
+
+  setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
     const plan = plotTransit(
       this.galaxy, this.locationId, destinationId, warpFactor,
@@ -966,6 +986,7 @@ export class Game {
       // back from the dead without `podJettisoned`.
       pendingFeats: this.pendingFeats ?? 0,
       podJettisoned: this.podJettisoned === true,
+      warpFactor: this.warpFactor,
       firstStrike: this.firstStrike === true,
       inKobayashi: this.inKobayashi === true,
       gambitOpen: this.gambitOpen === true,
@@ -1199,6 +1220,9 @@ export class Game {
     // than as undefined, so a `=== true` check downstream stays meaningful.
     g.pendingFeats = data.pendingFeats ?? 0;
     g.podJettisoned = data.podJettisoned === true;
+    // Records written before the flip switches existed have no standing
+    // factor, and six is what the game used to assume.
+    g.warpFactor = Number(data.warpFactor) > 0 ? Number(data.warpFactor) : 6;
     g.firstStrike = data.firstStrike === true;
     g.inKobayashi = data.inKobayashi === true;
     g.gambitOpen = data.gambitOpen === true;

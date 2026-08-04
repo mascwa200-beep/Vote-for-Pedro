@@ -26,11 +26,16 @@ import { Renderer } from '../gfx/gl.js';
 import { hullMesh, hullScale, paletteFor } from '../gfx/blueprint.js';
 import {
   starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh,
-  dropLineMesh, VOLUME,
+  dropLineMesh, bodyMesh, VOLUME,
 } from '../gfx/scene.js';
+import { vista, bearingOf, fovFor, noseOf } from '../gfx/vista.js';
 import { fitCanvas } from './touch.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const DEG = Math.PI / 180;
+
+/** How many scenery bodies may be drawn in one frame. See `drawVista`. */
+export const VISTA_DRAW_CAP = 4;
 
 /**
  * Simulation space is currently a plane: ships carry x, y and a heading in
@@ -86,6 +91,20 @@ export class TacticalView3D {
       wantDistance: 1700,
     };
 
+    // 'orbit' is the tactical plot, looking in at the engagement from outside.
+    // 'forward' is the viewscreen: the camera sits at the bridge and looks out
+    // over the bow. Same renderer, same meshes, same frame — one camera.
+    this.cameraMode = 'orbit';
+
+    // Where the screen is pointed relative to the bow, and how tight the
+    // magnification is. In a fight the pan is limited and springs back to
+    // centre, because the screen is slaved to the ship. Parked, it is free:
+    // the helm can point the ship anywhere and there is nothing else to do.
+    this.look = { yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0 };
+    this.magnification = 1;
+    this.vistaSpin = 0;
+    this.vistaSource = null;
+
     this.stats = { drawCalls: 0, triangles: 0, frames: 0, lastMs: 0 };
 
     // Reused matrices — the draw path allocates nothing.
@@ -95,6 +114,10 @@ export class TacticalView3D {
     this._model = mat4();
     this._pos = vec3();
     this._quat = quat();
+    this._nose = vec3();
+    this._eyeTmp = vec3();
+    this._look = vec3();
+    this._camEye = vec3();
 
     this.attachGestures();
   }
@@ -122,16 +145,31 @@ export class TacticalView3D {
       moved += Math.abs(dx) + Math.abs(dy);
 
       if (pointers.size === 1) {
-        // One finger orbits. Pitch is clamped well short of the poles so the
-        // grid never degenerates into a line and the up vector stays valid.
-        this.cam.yaw -= dx * 0.006;
-        this.cam.pitch = clamp(this.cam.pitch + dy * 0.005, 0.08, 1.45);
+        if (this.cameraMode === 'forward') {
+          // On the viewscreen a drag pans the screen rather than orbiting the
+          // scene — you are turning your head, not walking around the outside.
+          // The picture follows the finger: drag right and the sky moves
+          // right, which means the camera swings left. Same convention as the
+          // orbit gesture on this exact canvas, so nothing has to be relearned.
+          this.panLook(-dx * 0.004, dy * 0.003);
+        } else {
+          // One finger orbits. Pitch is clamped well short of the poles so the
+          // grid never degenerates into a line and the up vector stays valid.
+          this.cam.yaw -= dx * 0.006;
+          this.cam.pitch = clamp(this.cam.pitch + dy * 0.005, 0.08, 1.45);
+        }
       } else if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
         const d = Math.hypot(a.x - b.x, a.y - b.y);
         if (lastPinch) {
-          this.cam.wantDistance = clamp(this.cam.wantDistance * (lastPinch / d), 320, VOLUME * 1.6);
-          this.userZoom = true;
+          if (this.cameraMode === 'forward') {
+            // Pinching a viewscreen magnifies. There is no dolly — the camera
+            // is bolted to the ship, which is the entire premise.
+            this.setMagnification(this.magnification * (d / lastPinch));
+          } else {
+            this.cam.wantDistance = clamp(this.cam.wantDistance * (lastPinch / d), 320, VOLUME * 1.6);
+            this.userZoom = true;
+          }
         }
         lastPinch = d;
       }
@@ -151,6 +189,10 @@ export class TacticalView3D {
     c.addEventListener('pointercancel', onUp);
     c.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (this.cameraMode === 'forward') {
+        this.setMagnification(this.magnification * (1 - Math.sign(e.deltaY) * 0.12));
+        return;
+      }
       this.cam.wantDistance = clamp(this.cam.wantDistance * (1 + Math.sign(e.deltaY) * 0.12), 320, VOLUME * 1.6);
       this.userZoom = true;
     }, { passive: false });
@@ -214,7 +256,10 @@ export class TacticalView3D {
     this.cam.distance += (this.cam.wantDistance - this.cam.distance) * 0.07;
   }
 
-  eye(out = vec3()) {
+  // Both callers consume the result immediately, so a shared scratch keeps the
+  // per-frame allocation count at zero where the rest of the draw path is.
+  eye(out = this._camEye) {
+    if (this.cameraMode === 'forward') return this.forwardEye(out);
     const { focus, yaw, pitch, distance } = this.cam;
     const cp = Math.cos(pitch);
     out[0] = focus[0] + Math.cos(yaw) * cp * distance;
@@ -223,9 +268,117 @@ export class TacticalView3D {
     return out;
   }
 
+  // ----------------------------------------------------------- viewscreen
+
+  /** 'orbit' | 'forward'. Unknown values are ignored rather than obeyed. */
+  setCameraMode(mode) {
+    if (mode !== 'orbit' && mode !== 'forward') return this.cameraMode;
+    if (mode === this.cameraMode) return mode;
+    this.cameraMode = mode;
+    // A mode change resets the pan and the magnification. Coming back to the
+    // screen half-turned and zoomed in on nothing is disorienting, and the
+    // player has no obvious way to discover why the bow is not ahead.
+    this.look.yaw = 0; this.look.pitch = 0;
+    this.look.targetYaw = 0; this.look.targetPitch = 0;
+    this.magnification = 1;
+    return mode;
+  }
+
+  toggleCameraMode() {
+    return this.setCameraMode(this.cameraMode === 'forward' ? 'orbit' : 'forward');
+  }
+
+  /** 1× to 12×, which is about the useful range before a planet is a wall. */
+  setMagnification(m) {
+    this.magnification = clamp(m, 1, 12);
+    return this.magnification;
+  }
+
+  /**
+   * How far off the bow the screen may be pointed.
+   *
+   * Slaved in a fight and free when parked. The distinction is not decoration:
+   * a screen that can spin freely while somebody is shooting at you loses the
+   * one thing the viewscreen is *for*, which is seeing what you are aimed at.
+   * Parked, there is no bow-relative anything to lose, and being able to look
+   * around is the whole reason to open the screen at all.
+   */
+  get panLimit() {
+    return this.freeLook ? Math.PI : 0.62;
+  }
+
+  panLook(dYaw, dPitch) {
+    const lim = this.panLimit;
+    this.look.targetYaw = this.freeLook
+      ? this.look.targetYaw + dYaw
+      : clamp(this.look.targetYaw + dYaw, -lim, lim);
+    this.look.targetPitch = clamp(this.look.targetPitch + dPitch, -0.5, 0.5);
+  }
+
+  /** Point the screen back down the bow — the "steady as she goes" reset. */
+  centreLook() {
+    this.look.targetYaw = 0;
+    this.look.targetPitch = 0;
+  }
+
+  /**
+   * The camera position for the viewscreen: forward of the bow, slightly high.
+   *
+   * Ahead of the hull rather than inside it, because the player's own ship is
+   * not drawn in this mode and a camera sitting at the centre of an invisible
+   * saucer would put the near plane through geometry that is about to be drawn
+   * — the nacelles, in particular, which stick out behind.
+   */
+  forwardEye(out = vec3()) {
+    const ship = this.playerShip;
+    const nose = noseOf(ship, this._nose);
+    const lead = (this.hullReach ?? 90) * 1.35;
+    out[0] = (ship?.x ?? 0) + nose[0] * lead;
+    out[1] = (ship?.z ?? 0) + nose[1] * lead + 12;
+    out[2] = (ship?.y ?? 0) + nose[2] * lead;
+    return out;
+  }
+
+  /** Where the viewscreen is looking: the bow, rotated by the pan. */
+  forwardTarget(out = vec3()) {
+    const eye = this.forwardEye(this._eyeTmp);
+    const nose = noseOf(this.playerShip, this._nose);
+
+    // Yaw about world up, then pitch in the plane that contains it. Doing the
+    // yaw in world space rather than ship space is what keeps a rolling hull
+    // from rolling the screen with it — the viewscreen is gyro-stabilised, and
+    // a picture that tilts every time the helm banks is unwatchable.
+    const cy = Math.cos(this.look.yaw);
+    const sy = Math.sin(this.look.yaw);
+    const fx = nose[0] * cy - nose[2] * sy;
+    const fz = nose[0] * sy + nose[2] * cy;
+    const flat = Math.hypot(fx, fz) || 1;
+    const fy = nose[1] + Math.tan(clamp(this.look.pitch, -1.2, 1.2)) * flat;
+
+    const reach = 8000;
+    out[0] = eye[0] + fx * reach;
+    out[1] = eye[1] + fy * reach;
+    out[2] = eye[2] + fz * reach;
+    return out;
+  }
+
+  /** Ease the pan toward where the finger put it, and spring back when slaved. */
+  settleLook(dt = 1 / 60) {
+    if (!this.freeLook) {
+      // A slaved screen drifts back to the bow on its own. This is why you can
+      // glance sideways during a fight without having to remember to look back.
+      const spring = Math.min(1, dt * 0.8);
+      this.look.targetYaw += (0 - this.look.targetYaw) * spring;
+      this.look.targetPitch += (0 - this.look.targetPitch) * spring;
+    }
+    const k = Math.min(1, dt * 9);
+    this.look.yaw += (this.look.targetYaw - this.look.yaw) * k;
+    this.look.pitch += (this.look.targetPitch - this.look.pitch) * k;
+  }
+
   // ---------------------------------------------------------------- draw
 
-  render(engagement, alpha = 0) {
+  render(engagement, alpha = 0, dt = 1 / 60) {
     void alpha;
     const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
     const rect = this.canvas.getBoundingClientRect();
@@ -235,18 +388,23 @@ export class TacticalView3D {
     if (!this.renderer.beginFrame()) return;
     if (!engagement) return;
 
+    this.playerShip = engagement.player;
+    this.hullReach = hullScale(engagement.player?.classId) * 1.1;
+    this.freeLook = false;
     this.frame(engagement);
     this.lastShips = [engagement.player, ...engagement.hostiles, ...engagement.allies]
       .filter(Boolean);
 
-    perspective(52 * Math.PI / 180, aspect, 5, 40000, this._proj);
-    lookAt(this.eye(), this.cam.focus, vec3(0, 1, 0), this._view);
-    multiply(this._proj, this._view, this._viewProj);
-    this.renderer.setCamera(this._viewProj);
+    this.setupCamera(aspect, dt);
 
     this.drawEnvironment();
+    if (this.vistaSource) this.drawVista(dt);
     for (const ship of this.lastShips) {
-      if (!ship.destroyed) this.drawShip(ship, ship === engagement.target);
+      // Your own hull is not on your own viewscreen. The camera is standing
+      // where the bridge is; there is nothing in front of it but space.
+      if (ship.destroyed) continue;
+      if (this.cameraMode === 'forward' && ship === engagement.player) continue;
+      this.drawShip(ship, ship === engagement.target);
     }
     this.drawEffects(engagement);
 
@@ -258,7 +416,138 @@ export class TacticalView3D {
     this.drawOverlay(engagement, rect);
   }
 
-  drawEnvironment() {
+  /**
+   * The viewscreen with nobody shooting: a parked ship, a system, and a sky.
+   *
+   * Separate entry point rather than a branch inside `render` because the two
+   * take different arguments and nothing else about them is shared. The 2D
+   * fallback view has no equivalent and does not need one — it is a tactical
+   * plot, and there is no tactical situation to plot.
+   */
+  renderVista(game, dt = 1 / 60) {
+    const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = globalThis.devicePixelRatio ?? 1;
+    const { aspect } = this.renderer.resize(rect.width || 320, rect.height || 320, dpr);
+    if (!this.renderer.beginFrame()) return;
+
+    const sys = game?.location;
+    if (!sys) return;
+
+    this.setVista(sys.id, sys.type);
+    this.lastShips = [];
+    this.freeLook = true;
+    this.hullReach = hullScale(game.ship?.classId) * 1.1;
+
+    // Parked, the camera is at the origin looking wherever the player has
+    // turned it — the ship's combat coordinates are meaningless out of a fight
+    // and would put the viewscreen somewhere arbitrary in the vista.
+    this.playerShip = { x: 0, y: 0, z: 0, heading: 0, pitch: 0, roll: 0 };
+    this.setupCamera(aspect, dt);
+
+    this.drawEnvironment(false);
+    this.drawVista(dt);
+
+    this.stats.drawCalls = this.renderer.drawCalls;
+    this.stats.triangles = this.renderer.triangles;
+    this.stats.frames++;
+    this.stats.lastMs = (typeof performance !== 'undefined' ? performance.now() : 0) - t0;
+
+    this.drawVistaOverlay(game, rect);
+  }
+
+  /** Build the projection and view matrices for whichever camera is active. */
+  setupCamera(aspect, dt) {
+    if (this.cameraMode === 'forward') {
+      this.settleLook(dt);
+      // Magnification is a narrower lens, not a nearer camera. Dividing the
+      // field of view is what a real optical zoom does and it keeps the
+      // parallax honest — a dolly would slide the ship through its own hull.
+      perspective(fovFor(aspect) / this.magnification, aspect, 2, 40000, this._proj);
+      lookAt(this.forwardEye(this._eyeTmp), this.forwardTarget(this._look), vec3(0, 1, 0), this._view);
+    } else {
+      perspective(52 * DEG, aspect, 5, 40000, this._proj);
+      lookAt(this.eye(), this.cam.focus, vec3(0, 1, 0), this._view);
+    }
+    multiply(this._proj, this._view, this._viewProj);
+    this.renderer.setCamera(this._viewProj);
+  }
+
+  /** Remember which system's scenery to draw. Cheap; safe to call per frame. */
+  setVista(systemId, type) {
+    if (!systemId) { this.vistaSource = null; return null; }
+    if (this.vistaSource?.systemId !== systemId) {
+      this.vistaSource = vista(systemId, type);
+      // Open the screen pointed at something worth seeing rather than at an
+      // arbitrary patch of empty sky.
+      const f = this.vistaSource.focus;
+      if (f) {
+        // The pan rotates the bow by +yaw about world up, and at rest the bow
+        // is +x — so the yaw that lands on a body IS its bearing. It was
+        // negated here at first, which opened the viewer aimed at the exact
+        // opposite patch of empty sky from the planet it had chosen.
+        this.look.targetYaw = bearingOf(f);
+        this.look.yaw = this.look.targetYaw;
+      }
+    }
+    return this.vistaSource;
+  }
+
+  /**
+   * The scenery: a primary and its worlds, drawn once each — if they are in
+   * front of the camera.
+   *
+   * The cull is not an optimisation, it is a budget. A body sphere is 440
+   * triangles, the bodies are spread over the full circle so most of them are
+   * behind you at any moment, and the harness holds the whole frame to 8,000
+   * triangles with a 3,120-triangle starfield and six hostiles already in it.
+   * Drawing all of them would spend the ships' budget on scenery nobody can
+   * see. The hard cap of four never actually bites — the placement spreads
+   * bodies across the full circle and the lens is 82 degrees wide — but the
+   * frame budget must hold in the worst case, not the typical one.
+   */
+  drawVista(dt) {
+    const v = this.vistaSource;
+    if (!v) return;
+    this.vistaSpin += dt;
+
+    // Camera forward, from the two points the view matrix was built from —
+    // whichever camera built it.
+    const eye = this.eye(this._eyeTmp);
+    const at = this.cameraMode === 'forward' ? this.forwardTarget(this._look) : this.cam.focus;
+    let fx = at[0] - eye[0]; let fy = at[1] - eye[1]; let fz = at[2] - eye[2];
+    const flen = Math.hypot(fx, fy, fz) || 1;
+    fx /= flen; fy /= flen; fz /= flen;
+
+    let drawn = 0;
+    for (const b of v.bodies) {
+      if (drawn >= VISTA_DRAW_CAP) break;
+      let dx = b.x - eye[0]; let dy = b.y - eye[1]; let dz = b.z - eye[2];
+      const d = Math.hypot(dx, dy, dz) || 1;
+      // Half-angle to the edge of the body, so a world that is mostly off to
+      // the side still draws the sliver of it that is on screen.
+      const slack = Math.min(0.75, b.radius / d);
+      if ((dx * fx + dy * fy + dz * fz) / d < 0.16 - slack) continue;
+
+      quatFromEuler(0, b.spin * this.vistaSpin, 0, this._quat);
+      this._pos[0] = b.x; this._pos[1] = b.y; this._pos[2] = b.z;
+      compose(this._pos, this._quat, b.radius, this._model);
+      this.renderer.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: b.emissive,
+        tint: b.tint,
+        // Scenery is meant to be far away. Fogging it against a falloff tuned
+        // for a 3,000-unit knife fight is what made the first planet render as
+        // a black disc with a rim.
+        fogFar: 90000,
+      });
+      drawn++;
+    }
+    this.stats.bodiesDrawn = drawn;
+  }
+
+  drawEnvironment(withGrid = true) {
     // The starfield rides with the camera so it never comes into reach.
     const stars = starfield();
     compose(this.eye(), quat(), 1, this._model);
@@ -267,7 +556,16 @@ export class TacticalView3D {
       normalMatrix: normalMatrix(this._model),
       emissive: 1,
       tint: [1, 1, 1],
+      // The sky is not a distant object in the scene, it is the backdrop. It
+      // sits at four times the engagement volume, so the old fixed falloff had
+      // it permanently crushed to a third of its brightness.
+      fogFar: 1e9,
     });
+
+    // The reference grid is a tactical aid, not a thing in space. On the
+    // viewscreen it would be a glowing floor stretching to the horizon, which
+    // is a lie about what is out there.
+    if (!withGrid || this.cameraMode === 'forward') return;
 
     identity(this._model);
     this.renderer.draw('grid', gridMesh(), {
@@ -400,9 +698,21 @@ export class TacticalView3D {
     const { ctx, width, height } = fitCanvas(this.overlay);
     ctx.clearRect(0, 0, width, height);
 
+    const forward = this.cameraMode === 'forward';
+
     for (const ship of this.lastShips) {
       if (ship.destroyed) continue;
+      if (forward && ship.isPlayer) continue;
       const p = project(worldOf(ship, this._pos), this._viewProj);
+
+      // On the viewscreen a contact that is not on screen still matters, and
+      // "there is nothing to see" is the most dangerous thing a screen can
+      // imply while a bird-of-prey comes up behind you. An off-screen contact
+      // gets an arrow on the bezel pointing at where it actually is.
+      if (forward && (!p || p.z > 1 || Math.abs(p.x) > 1 || Math.abs(p.y) > 1)) {
+        this.drawEdgeMarker(ctx, ship, engagement, width, height);
+        continue;
+      }
       if (!p || p.z > 1) continue;
       const sx = (p.x * 0.5 + 0.5) * width;
       const sy = (1 - (p.y * 0.5 + 0.5)) * height;
@@ -439,6 +749,98 @@ export class TacticalView3D {
       ctx.fillStyle = ship.hullPct > 0.5 ? '#7ed957' : ship.hullPct > 0.25 ? '#d9a441' : '#e5533d';
       ctx.fillRect(sx - w / 2, sy - 28, w * clamp(ship.hullPct, 0, 1), 3);
     }
+  }
+
+  /**
+   * An arrow on the edge of the screen for a contact that is not on it.
+   *
+   * Screen-space projection is useless here: a point behind the camera projects
+   * to a mirrored position in front of it, which puts the arrow for a ship
+   * astern on the wrong side of the screen. So the direction is computed in
+   * *view* space instead, where "behind" is unambiguous and the sign of the
+   * horizontal component still says which way to turn.
+   */
+  drawEdgeMarker(ctx, ship, engagement, width, height) {
+    const w = worldOf(ship, this._pos);
+    const eye = this.forwardEye(this._eyeTmp);
+    const dx = w[0] - eye[0];
+    const dy = w[1] - eye[1];
+    const dz = w[2] - eye[2];
+
+    const m = this._view;
+    // View-space direction. Column-major mat4, so a row of the rotation block.
+    const vx = m[0] * dx + m[4] * dy + m[8] * dz;
+    const vy = m[1] * dx + m[5] * dy + m[9] * dz;
+    const vz = m[2] * dx + m[6] * dy + m[10] * dz;   // negative is in front
+
+    // Angle around the screen: +x right, +y up, and a point directly behind
+    // resolves to straight down rather than to a division by zero.
+    const ang = (Math.abs(vx) < 1e-6 && Math.abs(vy) < 1e-6 && vz > 0)
+      ? Math.PI / 2
+      : Math.atan2(-vy, vx);
+
+    const inset = 18;
+    const rx = Math.max(10, width / 2 - inset);
+    const ry = Math.max(10, height / 2 - inset);
+    // Project the angle onto the rectangle rather than a circle, so the arrow
+    // rides the actual edge of a wide screen instead of an inscribed ellipse.
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    const scale = 1 / Math.max(Math.abs(c) / rx, Math.abs(s) / ry);
+    const sx = width / 2 + c * scale;
+    const sy = height / 2 + s * scale;
+
+    const isTarget = ship === engagement?.target;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(ang);
+    ctx.fillStyle = isTarget ? '#ff9a3c' : ship.faction === 'federation' ? '#9cf' : '#e5533d';
+    ctx.globalAlpha = vz > 0 ? 0.55 : 0.9;   // dimmer when it is behind you
+    ctx.beginPath();
+    ctx.moveTo(9, 0);
+    ctx.lineTo(-6, 6);
+    ctx.lineTo(-6, -6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /**
+   * The viewscreen with no engagement: where we are, and where we are looking.
+   *
+   * A bearing readout rather than a compass rose, because there is no north in
+   * space and pretending otherwise is worse than saying nothing. The number is
+   * relative to the ship's own bow, which is the only reference that exists.
+   */
+  drawVistaOverlay(game, rect) {
+    this.overlay.style.width = `${rect.width}px`;
+    this.overlay.style.height = `${rect.height}px`;
+    const { ctx, width, height } = fitCanvas(this.overlay);
+    ctx.clearRect(0, 0, width, height);
+    if (this.cameraMode !== 'forward') return;
+
+    const sys = game?.location;
+    ctx.font = '600 11px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(232, 163, 23, 0.85)';
+    ctx.fillText(String(sys?.name ?? '').toUpperCase(), 12, 20);
+
+    const deg = ((-this.look.yaw * 180 / Math.PI) % 360 + 360) % 360;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(42, 168, 168, 0.85)';
+    const mag = this.magnification > 1.05 ? ` · MAG ${this.magnification.toFixed(1)}×` : '';
+    ctx.fillText(`BEARING ${deg.toFixed(0).padStart(3, '0')}${mag}`, width - 12, 20);
+
+    // A faint centre tick. Without it there is no way to tell a slow pan from a
+    // still image of empty space.
+    ctx.strokeStyle = 'rgba(230, 230, 223, 0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(width / 2 - 9, height / 2);
+    ctx.lineTo(width / 2 - 3, height / 2);
+    ctx.moveTo(width / 2 + 3, height / 2);
+    ctx.lineTo(width / 2 + 9, height / 2);
+    ctx.stroke();
   }
 
   dispose() {

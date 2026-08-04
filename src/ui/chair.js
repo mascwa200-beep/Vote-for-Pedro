@@ -74,9 +74,9 @@ export function chairPanel(app) {
 
   // ---- Left arm: viewscreen, hailing frequencies, shuttle bay ----
   const left = [
-    button('Viewscreen', press(app, { action: 'viewscreen', chairLabel: 'on screen' }, 'ui_tap'), {
+    button('On screen', press(app, { action: 'viewscreen', chairLabel: 'on screen' }, 'ui_tap'), {
       color: 'ice',
-      sub: app.screen === 'tactical' ? 'Return to the bridge' : 'Tactical display',
+      sub: app.screen === 'viewscreen' ? 'Screen off' : 'The forward view from the bridge',
     }),
     button('Hailing frequencies', press(app, { action: 'hail', chairLabel: 'hailing frequencies open' }), {
       color: 'blue',
@@ -105,10 +105,46 @@ export function chairPanel(app) {
   };
   logInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') record(); });
 
+  // ---- The helm's eight warp switches ----
+  //
+  // Documented in docs/RESEARCH.md as a real control on the prop: a row of
+  // eight flip switches below the main helm panel that set the warp factor.
+  // The game had a factor picker buried in the system-detail card on the map
+  // and nothing on the bridge, so "warp eight" was a thing you could say and
+  // then watch the ship leave at six.
+  //
+  // These set a standing order rather than engaging: you throw the switch, then
+  // give the course. Which is how it works — the switches are on the console
+  // whether or not there is anywhere to go.
+  const maxWarp = g.ship.cls.maxWarp ?? 8;
+  const standing = g.warpFactor ?? 6;
+  const switches = el('div', { class: 'warp-switches' }, Array.from({ length: 8 }, (_, i) => {
+    const f = i + 1;
+    const beyond = f > maxWarp;
+    const on = Math.round(standing) === f;
+    return el('button', {
+      class: `warp-switch${on ? ' on' : ''}${beyond ? ' beyond' : ''}`,
+      disabled: beyond,
+      title: beyond ? `Beyond this drive's rating of warp ${maxWarp}` : `Warp ${f}`,
+      'aria-label': `Warp factor ${f}`,
+      'aria-pressed': on ? 'true' : 'false',
+      onclick: beyond ? null : press(app, {
+        action: 'warp_factor', warp: f, chairLabel: `warp ${f}`,
+      }, 'ui_tap'),
+    }, [
+      el('span', { class: 'lever' }),
+      el('span', { class: 'digit', text: String(f) }),
+    ]);
+  }));
+
   return panel('Command Chair', [
     el('div', { class: 'chair-arm' }, alerts),
     el('div', { class: 'chair-arm' }, left),
     pod,
+    el('div', { class: 'chair-warp' }, [
+      el('div', { class: 'label', text: `Warp factor — standing at ${standing % 1 ? standing.toFixed(1) : standing}` }),
+      switches,
+    ]),
     el('div', { class: 'chair-intercom' }, [
       el('div', { class: 'label', text: 'Intercom' }),
       el('div', { class: 'chair-stations' }, INTERCOM_STATIONS.map((s) =>
