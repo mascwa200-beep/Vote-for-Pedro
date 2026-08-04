@@ -348,6 +348,52 @@ try {
   }
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
 
+  // ---- Audio survives being backgrounded ----
+  //
+  // The actual bug behind "the sound effects are too quiet": a phone suspends
+  // the AudioContext when the app goes to the background, `audio.unlock()` is
+  // the only thing that resumes it, and the gesture listener that called it
+  // removed itself after the first tap. So the game went permanently silent
+  // the first time you looked at something else, with no way back but a
+  // reload. Driven here rather than asserted, because the chain is
+  // visibilitychange -> unlock -> ctx.resume and any link could be missing.
+  await dismissModals(page);
+  const resumed = await page.evaluate(async () => {
+    const a = globalThis.__audio;
+    if (!a?.ctx) return { error: 'audio never unlocked' };
+
+    // Suspend it the way backgrounding does, then come back.
+    await a.ctx.suspend();
+    const suspended = a.ctx.state;
+    document.dispatchEvent(new Event('visibilitychange'));
+    await new Promise((r) => setTimeout(r, 250));
+    return { suspended, after: a.ctx.state };
+  });
+  check('the audio context can be suspended and comes back',
+    !resumed.error && resumed.suspended === 'suspended' && resumed.after === 'running',
+    JSON.stringify(resumed));
+
+  const stillPlays = await page.evaluate(async () => {
+    const a = globalThis.__audio;
+    const played = [];
+    const real = a.play.bind(a);
+    a.play = (n, o) => { played.push(n); return real(n, o); };
+    a.play('red_alert');
+    a.play = real;
+    return { played, state: a.ctx?.state, enabled: a.enabled, ready: a.ready };
+  });
+  check('and cues still fire after coming back',
+    stillPlays.played.includes('red_alert') && stillPlays.state === 'running' && stillPlays.ready,
+    JSON.stringify(stillPlays));
+
+  // The mixer must not ship quieter than its own ceiling.
+  const mixer = await page.evaluate(() => {
+    const a = globalThis.__audio;
+    return { master: a.master?.gain?.value ?? null, makeup: a.makeup?.gain?.value ?? null };
+  });
+  check('the master runs at unity or better', mixer.master >= 1, JSON.stringify(mixer));
+  check('the compressor has makeup gain', mixer.makeup > 1, JSON.stringify(mixer));
+
   // ---- The warp core breach is audible ----
   //
   // The most dramatic thing that can happen to the ship, and it happened in

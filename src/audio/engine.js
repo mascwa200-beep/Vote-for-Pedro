@@ -7,11 +7,21 @@
 import { CUES, busFor } from './sfx.js';
 import { drone, impulseResponse } from './synth.js';
 
+// The bridge hum.
+//
+// This is the most-heard sound in the whole show — it is under every scene set
+// aboard, and its absence is what makes a quiet bridge feel like a menu rather
+// than a room. It was mixed at 0.05, which on a phone is inaudible, so the
+// ship simply had no presence at all.
+//
+// Pitched around 55 Hz with the air layer three octaves up, which is where the
+// original engine rumble sits: low enough to feel, with enough upper content
+// to survive a speaker that cannot reproduce 55 Hz at all.
 const ALERT_AMBIENCE = {
-  normal: { pitch: 58, gain: 0.05, filter: 300 },
-  yellow: { pitch: 62, gain: 0.07, filter: 420 },
-  red: { pitch: 68, gain: 0.09, filter: 560 },
-  warp: { pitch: 84, gain: 0.1, filter: 900 },
+  normal: { pitch: 55, gain: 0.16, filter: 320 },
+  yellow: { pitch: 60, gain: 0.20, filter: 440 },
+  red: { pitch: 66, gain: 0.26, filter: 600 },
+  warp: { pitch: 82, gain: 0.30, filter: 940 },
 };
 
 export class AudioEngine {
@@ -20,7 +30,11 @@ export class AudioEngine {
     this.ready = false;
     this.enabled = true;
     this.buses = {};
-    this.volumes = { master: 0.8, ui: 0.9, sfx: 1.0, alert: 0.9, ambience: 0.7, voice: 1.0 };
+    // Unity, not a cut. This used to default to 0.8 with a slider ceiling of
+    // 1.0, so the game started 2 dB down and the player could recover exactly
+    // that much — on a phone speaker in a room with any noise in it, the
+    // difference between audible and not.
+    this.volumes = { master: 1.0, ui: 1.0, sfx: 1.0, alert: 1.0, ambience: 0.8, voice: 1.0 };
     this.ambience = null;
     this.alertLevel = 'normal';
     this.lastPlayed = new Map();
@@ -52,13 +66,24 @@ export class AudioEngine {
     verbSend.connect(verb).connect(master);
 
     // Compressor keeps a torpedo volley from clipping the phone speaker.
+    //
+    // The knee was 22 dB wide at a −14 dB threshold, so it started bending at
+    // −25 dBFS — below where ordinary cues sit, meaning everything got reduced
+    // a little and nothing was ever restored. A tighter knee leaves normal
+    // cues alone and only catches the volley it exists for.
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -14;
-    comp.knee.value = 22;
+    comp.threshold.value = -10;
+    comp.knee.value = 6;
     comp.ratio.value = 5;
     comp.attack.value = 0.004;
     comp.release.value = 0.22;
-    comp.connect(master);
+
+    // Makeup gain. A DynamicsCompressorNode reduces and never restores — Web
+    // Audio gives you no makeup stage — so without this every loud moment is
+    // permanently quieter than it should be and nothing gives it back.
+    const makeup = ctx.createGain();
+    makeup.gain.value = 1.9;
+    comp.connect(makeup).connect(master);
 
     for (const name of ['ui', 'sfx', 'alert', 'ambience', 'voice']) {
       const g = ctx.createGain();
@@ -69,6 +94,7 @@ export class AudioEngine {
     }
 
     this.master = master;
+    this.makeup = makeup;
     this.ready = true;
     this.startAmbience();
     return true;
@@ -123,7 +149,11 @@ export class AudioEngine {
       air: drone(this.ctx, bus, { type: 'triangle', pitch: cfg.pitch * 3.1, filterFreq: 900, detune: 3, q: 0.5 }),
     };
     this.ambience.engine.fadeTo(cfg.gain, 2.0);
-    this.ambience.air.fadeTo(cfg.gain * 0.25, 2.0);
+    // 0.45, not 0.25. A phone speaker cannot reproduce the 55 Hz fundamental
+    // at all — the air layer three octaves up is the entire sound as far as
+    // the device is concerned, so mixing it as a faint garnish left the bridge
+    // silent on exactly the hardware this game is built for.
+    this.ambience.air.fadeTo(cfg.gain * 0.45, 2.0);
   }
 
   /** normal | yellow | red | warp */
@@ -135,7 +165,7 @@ export class AudioEngine {
     this.ambience.engine.setPitch(cfg.pitch, 1.2);
     this.ambience.engine.fadeTo(cfg.gain, 1.2);
     this.ambience.air.setPitch(cfg.pitch * 3.1, 1.2);
-    this.ambience.air.fadeTo(cfg.gain * 0.25, 1.2);
+    this.ambience.air.fadeTo(cfg.gain * 0.45, 1.2);
     if (this.ambience.engine.biq) {
       const now = this.ctx.currentTime;
       const f = this.ambience.engine.biq.frequency;

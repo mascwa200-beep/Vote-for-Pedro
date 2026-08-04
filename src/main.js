@@ -167,8 +167,10 @@ class App {
     configureTouch({ haptics: s.haptics, wakeLock: s.wakeLock });
     audio.voiceEnabled = s.voice;
     for (const key of ['master', 'sfx', 'ui', 'alert', 'ambience']) {
-      audio.setVolume(key, s[key] ?? 0.8);
+      audio.setVolume(key, s[key] ?? 1);
     }
+    // After the volumes, so muting wins over whatever they just restored.
+    audio.setEnabled(!s.muted);
     if (s.wakeLock) requestWakeLock(); else releaseWakeLock();
     this.saveSettings();
   }
@@ -296,20 +298,28 @@ class App {
     on('game:over', () => { this.go('gameover'); });
     on('log', () => { this.needsRender = true; });
 
-    // Unlock audio on the first touch anywhere — mobile policy requires a gesture.
-    const unlock = () => {
-      audio.unlock();
-      document.removeEventListener('pointerdown', unlock);
-      document.removeEventListener('keydown', unlock);
-    };
-    document.addEventListener('pointerdown', unlock);
+    // Unlock audio on any touch — mobile policy requires a gesture to start,
+    // and the listener deliberately does NOT remove itself.
+    //
+    // It used to. That was the whole bug behind "the sound effects are too
+    // quiet": a phone suspends the AudioContext when the app goes to the
+    // background, `unlock()` is the only thing that resumes it, and after the
+    // first tap nothing could call it again. The game went permanently silent
+    // the first time you looked at something else, with no way back but a
+    // reload.
+    const unlock = () => audio.unlock();
+    document.addEventListener('pointerdown', unlock, { passive: true });
     document.addEventListener('keydown', unlock);
 
     globalThis.addEventListener('beforeunload', () => { if (this.game) this.save(); });
     document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') { if (this.game) this.save(); return; }
+      // Back in the foreground. The audio context was very likely suspended
+      // while we were away, and this is the only thing that brings it back —
+      // before the game check, because a silent menu is still silent.
+      audio.unlock();
       if (!this.game) return;
-      if (document.visibilityState === 'hidden') { this.save(); return; }
-      // Back in the foreground. The ship has been working the whole time.
+      // The ship has been working the whole time we were gone.
       this.resumeCommission();
     });
   }

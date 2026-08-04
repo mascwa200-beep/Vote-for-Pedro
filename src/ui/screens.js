@@ -716,10 +716,13 @@ export function optionsScreen(app) {
   const s = app.settings;
   const root = el('div', { class: 'scroll' });
 
+  // The ceiling is 200%, not 100%. At 100% the defaults were already the
+  // maximum, so a player on a quiet phone in a noisy room had no way to ask
+  // for more — the slider could only ever take sound away.
   const vol = (label, key) => {
     const val = el('div', { class: 'val', text: `${Math.round(s[key] * 100)}` });
     const input = el('input', {
-      type: 'range', min: '0', max: '100', value: String(Math.round(s[key] * 100)),
+      type: 'range', min: '0', max: '200', value: String(Math.round(s[key] * 100)),
       oninput: (e) => {
         s[key] = parseInt(e.target.value, 10) / 100;
         val.textContent = e.target.value;
@@ -768,6 +771,13 @@ export function optionsScreen(app) {
   ]));
 
   root.append(panel('Audio', [
+    button(s.muted ? 'Sound: muted' : 'Sound: on', tap(() => {
+      s.muted = !s.muted;
+      audio.setEnabled(!s.muted);
+      app.saveSettings();
+      app.render();
+    }), { color: s.muted ? 'red' : 'green', sub: 'Silences everything at once' }),
+    el('p', { class: 'muted', text: 'The sliders run to 200%. Anything above 100% is asking for more than the mix was built for, which is exactly what a phone speaker in a noisy room needs.' }),
     vol('Master', 'master'), vol('Effects', 'sfx'), vol('Interface', 'ui'),
     vol('Alerts', 'alert'), vol('Ambience', 'ambience'),
     button(s.voice ? 'Computer voice: on' : 'Computer voice: off', tap(() => {

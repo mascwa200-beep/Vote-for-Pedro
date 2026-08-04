@@ -220,7 +220,11 @@ export function importSave(text) {
 // ---------------- settings ----------------
 
 const DEFAULT_SETTINGS = {
-  master: 0.8, sfx: 1.0, ui: 0.9, ambience: 0.7, alert: 0.9,
+  // Unity across the board. These used to default below 1.0 against a slider
+  // that stopped at 1.0, so the shipped mix was quieter than its own ceiling
+  // and no amount of dragging could recover it.
+  master: 1.0, sfx: 1.0, ui: 1.0, ambience: 0.8, alert: 1.0,
+  muted: false,
   voice: true, haptics: true, autoFire: true, wakeLock: true,
   textSize: 'normal', reduceMotion: false, orders: 'both',
   // The commission runs in real time. This is the escape hatch, and it is
