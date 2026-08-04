@@ -40,9 +40,115 @@ function tap(fn, cue = 'ui_tap', feel = 'tap') {
 
 // ================================================================ BRIDGE
 
+/**
+ * The bridge, in first person.
+ *
+ * This screen IS the game now. There is no tactical tab, no viewer tab and no
+ * map tab, because a viewscreen is where a starship's crew sees what is
+ * outside and a console is where they read what the ship knows. Tabs are for
+ * text: the log, the record, the manual.
+ *
+ * What is left in the DOM is the order line and one strip: where you are, and
+ * what your hand is on. Everything else you walk to.
+ */
 export function bridgeScreen(app) {
   const g = app.game;
+  const root = el('div', { class: 'screen bridge3d-screen' });
+
+  // The GL canvas is a singleton that gets MOVED between screens rather than
+  // rebuilt — a WebGL context is expensive, browsers cap how many can exist,
+  // and making a fresh one per render silently blacks out the display.
+  let wrap = app.tacticalHost;
+  if (!wrap) {
+    wrap = el('div', { class: 'tactical-wrap' }, [
+      el('canvas', { id: 'tactical' }),
+      el('div', { class: 'tactical-overlay' }),
+    ]);
+    app.tacticalHost = wrap;
+  }
+  app.tacticalCanvas = wrap.querySelector('#tactical');
+  app.tacticalOverlay = wrap.querySelector('.tactical-overlay');
+  root.append(wrap);
+
+  const side = el('div', { class: 'bridge3d-side scroll' });
+  root.append(side);
+
+  const w = g.walk;
+  const target = w.looking;
+  const walking = g.walkOrder;
+
+  // --- What your hand is on ---
+  const hand = [];
+  if (walking) {
+    hand.push(el('p', { class: 'muted', text: `Under way to ${ROOMS[walking.toId]?.name ?? walking.toId}.` }));
+    hand.push(button('Stop here', tap(() => { g.walkOrder = null; app.render(); }), { color: 'ghost' }));
+  } else if (target) {
+    hand.push(button(
+      target.panel || target.id ? `Use ${target.label ?? ROOMS[target.to]?.name}` : 'Use',
+      tap(() => app.useWhatIsInFront()),
+      { color: 'orange', sub: target.panel ? 'Open this console' : 'Through the door' },
+    ));
+  } else if (w.seated) {
+    hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
+    hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }), { color: 'blue' }));
+  } else {
+    hand.push(el('p', { class: 'muted', text: 'Drag to look. Walk to a station to use it.' }));
+    if (w.roomId === 'bridge') {
+      hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }), { color: 'orange' }));
+    }
+  }
+
+  // Somewhere to walk, without having to aim at a door.
+  const doors = w.room.lift ? w.liftStops() : (w.room.exits ?? []);
+  if (!walking && doors.length) {
+    hand.push(el('div', { class: 'chip-row' }, doors.slice(0, 6).map((e) => button(
+      ROOMS[e.to]?.name ?? e.to,
+      tap(() => { if (g.goToRoom(e.to).ok) audio.play('door'); app.render(); }),
+      { color: 'blue' },
+    ))));
+  }
+
+  side.append(panel(w.room.name, hand, walking ? 'accent' : ''));
+
+  // --- The one thing that has to be visible without walking anywhere ---
+  // Whether the ship is in danger. A captain does not have to consult a panel
+  // to know the hull is failing, and hiding it behind a walk would be a
+  // simulation of bureaucracy rather than of command.
+  const eng = g.engagement;
+  if (eng && !eng.over) {
+    side.append(panel('Engaged', [
+      el('div', { class: 'meta' }, [
+        pill(`${eng.liveHostiles.length} hostile${eng.liveHostiles.length === 1 ? '' : 's'}`, 'red'),
+        eng.target && !eng.target.destroyed ? pill(`${Math.round(g.ship.distanceTo(eng.target))} km`) : null,
+        g.ship.shieldsUp ? pill('shields up', 'green') : pill('shields down', 'red'),
+      ].filter(Boolean)),
+      readout('Hull', g.ship.hullPct),
+      el('p', { class: 'hint', text: 'They are on the viewer. Say what you want done — “fire phasers”, “evasive”, “target their engines” — or walk to weapons and do it yourself.' }),
+    ], 'danger'));
+  } else if (g.ship.hullPct < 1) {
+    side.append(panel('Ship', [readout('Hull', g.ship.hullPct)],
+      g.ship.hullPct < 0.4 ? 'danger' : 'warn'));
+  }
+
+  // --- Recent log ---
+  side.append(panel('Ship’s Log', [
+    ...g.log.slice(-4).reverse().map(logLine),
+    button('Full log', tap(() => app.go('log')), { color: 'ghost' }),
+  ]));
+  return root;
+}
+
+/**
+ * The old panel bridge, kept as the console the captain's chair opens.
+ *
+ * Everything that used to be a permanent panel on the bridge screen is now
+ * behind a console you walk to — but the chair itself is a console, and this is
+ * what it shows: where we are, how the commission is going, and the ship.
+ */
+export function chairConsole(app) {
+  const g = app.game;
   const root = el('div', { class: 'scroll' });
+
 
   // --- Where we are ---
   const sys = g.location;
@@ -133,12 +239,6 @@ export function bridgeScreen(app) {
     }));
   }
   root.append(panel('Bridge', actions));
-
-  // --- Where you are ---
-  // The ship has an inside, and the captain is somewhere in it. This is the
-  // smallest honest way to say so: which compartment, what is within reach, and
-  // whether you are walking somewhere.
-  root.append(positionPanel(app));
 
   // --- The chair ---
   root.append(chairPanel(app));
@@ -533,7 +633,7 @@ function signaturePanel(app) {
   ], used ? '' : 'warn');
 }
 
-function powerPanel(app) {
+export function powerPanel(app) {
   const g = app.game;
   return panel('Power Distribution', [
     el('div', { class: 'grid-3' }, PRESET_LIST.slice(0, 3).map((p) =>
