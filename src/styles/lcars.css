@@ -440,6 +440,91 @@ canvas.tactical-labels {
 .tactical-overlay .chip.warn { color: var(--lcars-amber); }
 .tactical-overlay .chip.danger { color: var(--lcars-red); }
 
+/* ---------------- The main viewer ----------------
+
+   The 1966 viewscreen is not a rectangle of video — it is a rectangle of video
+   set into a wall. The bezel is most of what makes it read as a viewscreen at
+   all: without it you have a full-bleed 3D view, which is a video game, not a
+   bridge. So the housing is the light warm grey of the forward bulkhead, the
+   frame is deep matte black with softly rounded corners, and the picture sits
+   inside it with a hairline of light where the glass meets the frame.
+
+   The aspect ratio is fixed and wide, which also quietly fixes the portrait
+   field-of-view problem: whatever shape the phone is, the picture is 16:9, so
+   the camera never has to squeeze eighty degrees of view through a letterbox
+   standing on end. */
+
+.viewscreen-housing {
+  flex: 0 0 auto;
+  padding: 12px 10px 14px;
+  background:
+    linear-gradient(180deg, #4a4b50 0%, #3c3d42 42%, #2f3035 100%);
+  border-bottom: 2px solid var(--trim-dim);
+  display: flex;
+  justify-content: center;
+}
+
+.viewscreen-bezel {
+  position: relative;
+  width: 100%;
+  max-width: 780px;
+  padding: 10px;
+  background: #0a0a0c;
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.8),
+    0 3px 10px rgba(0, 0, 0, 0.55);
+}
+
+/* The trim ring: the thin bright line around the glass on the prop. */
+.viewscreen-bezel::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 14px;
+  border: 1px solid rgba(160, 165, 175, 0.28);
+  pointer-events: none;
+}
+
+.viewscreen-bezel .tactical-wrap {
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  border: none;
+}
+
+.screen.viewscreen-screen { gap: 6px; }
+.screen.viewscreen-screen .viewscreen-side { flex: 1 1 auto; min-height: 0; }
+
+/* Landscape: the picture is the point, so it takes the room it can get. */
+@media (orientation: landscape) and (min-width: 700px) {
+  .screen.viewscreen-screen { flex-direction: row; gap: 8px; }
+  .screen.viewscreen-screen .viewscreen-housing {
+    flex: 2 1 auto; min-width: 0; align-items: center;
+  }
+  .screen.viewscreen-screen .viewscreen-side {
+    flex: 1 1 0; min-width: 220px; overflow-y: auto;
+  }
+}
+
+/* The LCARS eras get the same geometry with their own materials — a viewscreen
+   is still a viewscreen in 2371, it is just set into a different wall. */
+:root[data-era='tng'] .viewscreen-housing,
+:root[data-era='ds9'] .viewscreen-housing,
+:root[data-era='voy'] .viewscreen-housing {
+  background: linear-gradient(180deg, #1a1c24 0%, #101218 100%);
+  border-bottom-color: var(--lcars-orange);
+}
+:root[data-era='tng'] .viewscreen-bezel,
+:root[data-era='ds9'] .viewscreen-bezel,
+:root[data-era='voy'] .viewscreen-bezel { border-radius: 26px; }
+:root[data-era='tng'] .viewscreen-bezel .tactical-wrap,
+:root[data-era='ds9'] .viewscreen-bezel .tactical-wrap,
+:root[data-era='voy'] .viewscreen-bezel .tactical-wrap { border-radius: 18px; }
+
 /* ---------------- Order input ---------------- */
 
 .orderbar {
@@ -466,19 +551,22 @@ canvas.tactical-labels {
 /* ---------------- Bottom navigation ---------------- */
 
 .nav {
-  display: flex; gap: 4px; padding: 0 8px 6px; flex: 0 0 auto;
+  display: flex; gap: 3px; padding: 0 6px 6px; flex: 0 0 auto;
 }
-/* Seven destinations have to fit across a phone, so the labels are sized to
-   the narrowest case and clipped rather than allowed to collide. */
+/* Ten destinations have to fit across a phone. The labels are sized to the
+   narrowest case and clipped rather than allowed to collide — but "clipped"
+   has to still leave a readable word, and adding the Viewer took the longest
+   ones down to stubs like TACTIC and RECORI. Tighter type and no letter
+   spacing buys back the two characters that costs. */
 .nav button {
   flex: 1 1 0; min-height: var(--tap); min-width: 0;
   background: var(--panel-2); color: var(--text-dim);
   border: none; border-radius: 4px;
-  font-size: 0.56em; letter-spacing: 0.02em; text-transform: uppercase;
+  font-size: 0.5em; letter-spacing: 0; text-transform: uppercase;
   font-weight: 700; cursor: pointer;
   position: relative; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  padding: 4px 1px;
+  padding: 4px 0;
 }
 .nav button > div:last-child {
   max-width: 100%; overflow: hidden; text-overflow: clip; white-space: nowrap;
@@ -758,6 +846,75 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   gap: 6px;
   margin-bottom: 6px;
 }
+
+/* The eight warp flip switches off the helm console.
+   Drawn as toggles rather than buttons because that is what they are: a lever
+   in a slot, up when the factor is set. A row of eight identical rectangles
+   reads as a keypad; a row of eight levers reads as 1966. */
+.chair-warp { margin: 10px 0 6px; }
+.chair-warp > .label {
+  font-size: 0.72em;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
+
+.warp-switches {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+
+.warp-switch {
+  position: relative;
+  min-height: 46px;
+  padding: 4px 0 3px;
+  background: var(--slot);
+  border: 1px solid var(--trim-dim);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  cursor: pointer;
+}
+
+/* The lever, sitting at the bottom of its slot until the switch is thrown. */
+.warp-switch .lever {
+  width: 9px;
+  height: 12px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #cfd2d8 0%, #8b8d93 60%, #55575d 100%);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+  align-self: center;
+  margin-top: auto;
+  transform: translateY(6px);
+  transition: transform 0.12s ease-out, background 0.12s;
+}
+:root[data-motion='reduced'] .warp-switch .lever { transition: none; }
+
+.warp-switch.on {
+  background: var(--slot-2);
+  border-color: var(--lcars-amber);
+}
+.warp-switch.on .lever {
+  transform: translateY(-6px);
+  background: linear-gradient(180deg, #ffe9a8 0%, var(--lcars-amber) 55%, #a07a17 100%);
+}
+
+.warp-switch .digit {
+  font-size: 0.68em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.warp-switch.on .digit { color: var(--lcars-amber); }
+
+/* Past what this drive is rated for. Present, because the console has eight
+   switches on every ship — just dead, which is more honest than hiding them. */
+.warp-switch.beyond { opacity: 0.3; cursor: default; }
 
 .chair-intercom { margin: 10px 0 6px; }
 .chair-intercom > .label {

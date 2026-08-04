@@ -456,6 +456,91 @@ canvas.tactical-labels {
 .tactical-overlay .chip.warn { color: var(--lcars-amber); }
 .tactical-overlay .chip.danger { color: var(--lcars-red); }
 
+/* ---------------- The main viewer ----------------
+
+   The 1966 viewscreen is not a rectangle of video — it is a rectangle of video
+   set into a wall. The bezel is most of what makes it read as a viewscreen at
+   all: without it you have a full-bleed 3D view, which is a video game, not a
+   bridge. So the housing is the light warm grey of the forward bulkhead, the
+   frame is deep matte black with softly rounded corners, and the picture sits
+   inside it with a hairline of light where the glass meets the frame.
+
+   The aspect ratio is fixed and wide, which also quietly fixes the portrait
+   field-of-view problem: whatever shape the phone is, the picture is 16:9, so
+   the camera never has to squeeze eighty degrees of view through a letterbox
+   standing on end. */
+
+.viewscreen-housing {
+  flex: 0 0 auto;
+  padding: 12px 10px 14px;
+  background:
+    linear-gradient(180deg, #4a4b50 0%, #3c3d42 42%, #2f3035 100%);
+  border-bottom: 2px solid var(--trim-dim);
+  display: flex;
+  justify-content: center;
+}
+
+.viewscreen-bezel {
+  position: relative;
+  width: 100%;
+  max-width: 780px;
+  padding: 10px;
+  background: #0a0a0c;
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.8),
+    0 3px 10px rgba(0, 0, 0, 0.55);
+}
+
+/* The trim ring: the thin bright line around the glass on the prop. */
+.viewscreen-bezel::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 14px;
+  border: 1px solid rgba(160, 165, 175, 0.28);
+  pointer-events: none;
+}
+
+.viewscreen-bezel .tactical-wrap {
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  border: none;
+}
+
+.screen.viewscreen-screen { gap: 6px; }
+.screen.viewscreen-screen .viewscreen-side { flex: 1 1 auto; min-height: 0; }
+
+/* Landscape: the picture is the point, so it takes the room it can get. */
+@media (orientation: landscape) and (min-width: 700px) {
+  .screen.viewscreen-screen { flex-direction: row; gap: 8px; }
+  .screen.viewscreen-screen .viewscreen-housing {
+    flex: 2 1 auto; min-width: 0; align-items: center;
+  }
+  .screen.viewscreen-screen .viewscreen-side {
+    flex: 1 1 0; min-width: 220px; overflow-y: auto;
+  }
+}
+
+/* The LCARS eras get the same geometry with their own materials — a viewscreen
+   is still a viewscreen in 2371, it is just set into a different wall. */
+:root[data-era='tng'] .viewscreen-housing,
+:root[data-era='ds9'] .viewscreen-housing,
+:root[data-era='voy'] .viewscreen-housing {
+  background: linear-gradient(180deg, #1a1c24 0%, #101218 100%);
+  border-bottom-color: var(--lcars-orange);
+}
+:root[data-era='tng'] .viewscreen-bezel,
+:root[data-era='ds9'] .viewscreen-bezel,
+:root[data-era='voy'] .viewscreen-bezel { border-radius: 26px; }
+:root[data-era='tng'] .viewscreen-bezel .tactical-wrap,
+:root[data-era='ds9'] .viewscreen-bezel .tactical-wrap,
+:root[data-era='voy'] .viewscreen-bezel .tactical-wrap { border-radius: 18px; }
+
 /* ---------------- Order input ---------------- */
 
 .orderbar {
@@ -482,19 +567,22 @@ canvas.tactical-labels {
 /* ---------------- Bottom navigation ---------------- */
 
 .nav {
-  display: flex; gap: 4px; padding: 0 8px 6px; flex: 0 0 auto;
+  display: flex; gap: 3px; padding: 0 6px 6px; flex: 0 0 auto;
 }
-/* Seven destinations have to fit across a phone, so the labels are sized to
-   the narrowest case and clipped rather than allowed to collide. */
+/* Ten destinations have to fit across a phone. The labels are sized to the
+   narrowest case and clipped rather than allowed to collide — but "clipped"
+   has to still leave a readable word, and adding the Viewer took the longest
+   ones down to stubs like TACTIC and RECORI. Tighter type and no letter
+   spacing buys back the two characters that costs. */
 .nav button {
   flex: 1 1 0; min-height: var(--tap); min-width: 0;
   background: var(--panel-2); color: var(--text-dim);
   border: none; border-radius: 4px;
-  font-size: 0.56em; letter-spacing: 0.02em; text-transform: uppercase;
+  font-size: 0.5em; letter-spacing: 0; text-transform: uppercase;
   font-weight: 700; cursor: pointer;
   position: relative; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  padding: 4px 1px;
+  padding: 4px 0;
 }
 .nav button > div:last-child {
   max-width: 100%; overflow: hidden; text-overflow: clip; white-space: nowrap;
@@ -774,6 +862,75 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   gap: 6px;
   margin-bottom: 6px;
 }
+
+/* The eight warp flip switches off the helm console.
+   Drawn as toggles rather than buttons because that is what they are: a lever
+   in a slot, up when the factor is set. A row of eight identical rectangles
+   reads as a keypad; a row of eight levers reads as 1966. */
+.chair-warp { margin: 10px 0 6px; }
+.chair-warp > .label {
+  font-size: 0.72em;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
+
+.warp-switches {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+
+.warp-switch {
+  position: relative;
+  min-height: 46px;
+  padding: 4px 0 3px;
+  background: var(--slot);
+  border: 1px solid var(--trim-dim);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  cursor: pointer;
+}
+
+/* The lever, sitting at the bottom of its slot until the switch is thrown. */
+.warp-switch .lever {
+  width: 9px;
+  height: 12px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #cfd2d8 0%, #8b8d93 60%, #55575d 100%);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+  align-self: center;
+  margin-top: auto;
+  transform: translateY(6px);
+  transition: transform 0.12s ease-out, background 0.12s;
+}
+:root[data-motion='reduced'] .warp-switch .lever { transition: none; }
+
+.warp-switch.on {
+  background: var(--slot-2);
+  border-color: var(--lcars-amber);
+}
+.warp-switch.on .lever {
+  transform: translateY(-6px);
+  background: linear-gradient(180deg, #ffe9a8 0%, var(--lcars-amber) 55%, #a07a17 100%);
+}
+
+.warp-switch .digit {
+  font-size: 0.68em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.warp-switch.on .digit { color: var(--lcars-amber); }
+
+/* Past what this drive is rated for. Present, because the console has eight
+   switches on every ship — just dead, which is more honest than hiding them. */
+.warp-switch.beyond { opacity: 0.3; cursor: default; }
 
 .chair-intercom { margin: 10px 0 6px; }
 .chair-intercom > .label {
@@ -4280,6 +4437,7 @@ uniform vec3 uFill;       // fill light direction
 uniform vec3 uTint;       // faction/status tint multiplied into the hull
 uniform float uAlpha;
 uniform float uEmissive;  // 1.0 makes the surface ignore lighting entirely
+uniform float uFogFar;    // distance at which the haze reaches its floor
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -4292,7 +4450,15 @@ void main() {
 
   // Fog toward the far plane, so a distant hull recedes rather than hanging
   // at full contrast against the starfield.
-  float fog = clamp(1.0 - vDepth / 9000.0, 0.35, 1.0);
+  //
+  // The falloff used to be hardcoded at 9,000 units, which is right for the
+  // 3,000-unit engagement volume and wrong for everything else in the scene.
+  // A planet sits four to thirteen thousand units out and the starfield twelve
+  // thousand, so both were pinned at the 0.35 floor — the sky was permanently
+  // dimmed to a third of its colour and a world outside the window rendered as
+  // a near-black disc. It is a uniform now, and the draws that are meant to be
+  // far away set it accordingly.
+  float fog = clamp(1.0 - vDepth / uFogFar, 0.35, 1.0);
   gl_FragColor = vec4(lit * fog, uAlpha);
 }
 `;
@@ -4375,6 +4541,7 @@ class Renderer {
       tint: gl.getUniformLocation(this.program, 'uTint'),
       alpha: gl.getUniformLocation(this.program, 'uAlpha'),
       emissive: gl.getUniformLocation(this.program, 'uEmissive'),
+      fogFar: gl.getUniformLocation(this.program, 'uFogFar'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -4471,7 +4638,11 @@ class Renderer {
    * Draw an uploaded mesh.
    * @param {object} opts { model, normalMatrix, tint, alpha, emissive }
    */
-  draw(key, mesh, { model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0 }) {
+  draw(key, mesh, {
+    model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0,
+    // Default is the engagement volume, which is what almost every draw is.
+    fogFar = 9000,
+  }) {
     if (this.lost) return;
     const entry = this.upload(key, mesh);
     if (!entry) return;
@@ -4493,6 +4664,7 @@ class Renderer {
     gl.uniform3f(this.uniform.tint, tint[0], tint[1], tint[2]);
     gl.uniform1f(this.uniform.alpha, alpha);
     gl.uniform1f(this.uniform.emissive, emissive);
+    gl.uniform1f(this.uniform.fogFar, fogFar);
 
     gl.drawArrays(gl.TRIANGLES, 0, entry.vertexCount);
     this.drawCalls++;
@@ -5434,6 +5606,401 @@ __exports.sceneMeshes = sceneMeshes;
 
 });
 
+__define("src/core/rng.js", function (__exports, __require) {
+// 64-bit deterministic pseudo-random number generation.
+//
+// The whole simulation is reproducible from a single 64-bit seed: the galaxy,
+// every encounter roll, every damage variance. Saves store the seed and the
+// draw counter, so a restored game continues the exact same number stream.
+//
+// xoshiro256** by Blackman & Vigna, on BigInt state. splitmix64 seeds it.
+
+const M64 = (1n << 64n) - 1n;
+
+const rotl = (x, k) => ((x << k) | (x >> (64n - k))) & M64;
+
+/** splitmix64 — used to expand one seed into xoshiro's four state words. */
+function splitmix64(seed) {
+  let z = BigInt.asUintN(64, seed);
+  return () => {
+    z = (z + 0x9e3779b97f4a7c15n) & M64;
+    let x = z;
+    x = ((x ^ (x >> 30n)) * 0xbf58476d1ce4e5b9n) & M64;
+    x = ((x ^ (x >> 27n)) * 0x94d049bb133111ebn) & M64;
+    return x ^ (x >> 31n);
+  };
+}
+
+/** Hash an arbitrary string into a 64-bit seed (FNV-1a, then avalanched). */
+function hashSeed(str) {
+  let h = 0xcbf29ce484222325n;
+  for (let i = 0; i < str.length; i++) {
+    h ^= BigInt(str.charCodeAt(i));
+    h = (h * 0x100000001b3n) & M64;
+  }
+  return splitmix64(h)();
+}
+class RNG {
+  /**
+   * @param {bigint|number|string} seed
+   * @param {bigint} [count] draws already consumed (for save restore)
+   */
+  constructor(seed = 0x1701n, count = 0n) {
+    this.seed = typeof seed === 'bigint' ? BigInt.asUintN(64, seed)
+      : typeof seed === 'number' ? BigInt.asUintN(64, BigInt(Math.floor(seed)))
+      : hashSeed(String(seed));
+    this.reset(count);
+  }
+
+  reset(count = 0n) {
+    const sm = splitmix64(this.seed);
+    this.s = [sm(), sm(), sm(), sm()];
+    this.count = 0n;
+    // Fast-forwarding by replay keeps restore exact without jump polynomials.
+    for (let i = 0n; i < count; i++) this.next();
+  }
+
+  /** Raw 64-bit draw. */
+  next() {
+    const s = this.s;
+    const result = (rotl((s[1] * 5n) & M64, 7n) * 9n) & M64;
+    const t = (s[1] << 17n) & M64;
+    s[2] ^= s[0];
+    s[3] ^= s[1];
+    s[1] ^= s[2];
+    s[0] ^= s[3];
+    s[2] ^= t;
+    s[3] = rotl(s[3], 45n);
+    this.count++;
+    return result;
+  }
+
+  /** Float in [0,1) with full 53-bit mantissa precision. */
+  float() {
+    return Number(this.next() >> 11n) / 9007199254740992; // 2^53
+  }
+
+  /** Float in [min,max). */
+  range(min, max) {
+    return min + this.float() * (max - min);
+  }
+
+  /** Integer in [min,max] inclusive. */
+  int(min, max) {
+    if (max < min) return min;
+    return min + Number(this.next() % BigInt(max - min + 1));
+  }
+
+  /** True with probability p. */
+  chance(p) {
+    return this.float() < p;
+  }
+
+  pick(arr) {
+    return arr.length ? arr[this.int(0, arr.length - 1)] : undefined;
+  }
+
+  /** Weighted pick. `weightOf` defaults to reading `.weight`. */
+  weighted(arr, weightOf = (x) => x.weight ?? 1) {
+    let total = 0;
+    for (const item of arr) total += Math.max(0, weightOf(item));
+    if (total <= 0) return this.pick(arr);
+    let roll = this.float() * total;
+    for (const item of arr) {
+      roll -= Math.max(0, weightOf(item));
+      if (roll <= 0) return item;
+    }
+    return arr[arr.length - 1];
+  }
+
+  /** In-place Fisher-Yates. */
+  shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = this.int(0, i);
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  /** Approximately normal via Irwin-Hall; clamped to +/-3 sigma. */
+  normal(mean = 0, sigma = 1) {
+    let sum = 0;
+    for (let i = 0; i < 6; i++) sum += this.float();
+    const z = (sum - 3) / Math.sqrt(0.5);
+    return mean + sigma * Math.max(-3, Math.min(3, z));
+  }
+
+  /** Independent stream derived from this seed — used per-system/per-mission. */
+  fork(label) {
+    return new RNG(BigInt.asUintN(64, this.seed ^ hashSeed(label)));
+  }
+
+  save() {
+    return { seed: this.seed.toString(), count: this.count.toString() };
+  }
+
+  static load(data) {
+    if (!data) return new RNG();
+    return new RNG(BigInt(data.seed), BigInt(data.count ?? 0));
+  }
+}
+
+/** Shared stream for presentation-only randomness (never affects sim outcomes). */
+const cosmetic = new RNG(hashSeed('cosmetic'));
+
+__exports.splitmix64 = splitmix64;
+__exports.hashSeed = hashSeed;
+__exports.RNG = RNG;
+__exports.cosmetic = cosmetic;
+
+});
+
+__define("src/gfx/vista.js", function (__exports, __require) {
+// What is outside the window when nobody is shooting.
+//
+// The tactical display only ever had something to draw during a fight. A
+// viewscreen that goes black the moment the shooting stops is not a viewscreen,
+// it is a combat camera — so this file answers the other question: you are
+// parked at Rigel VII, you say "on screen", what do you see?
+//
+// A primary and a handful of worlds, placed once per system and identical every
+// time you come back. That last part is the whole point. A planet that moves
+// between visits is a screensaver; a planet that is exactly where you left it is
+// a place.
+//
+// Two rules this file exists to keep:
+//
+//   The campaign's RNG is never touched. `Game.rng` is a save-file-critical
+//   stream — drawing from it to decide the colour of a moon would desynchronise
+//   a five-year commission from its own seed. Everything here hashes the system
+//   id instead, so generating a vista is observationally free.
+//
+//   No meshes are built. This is placement only. `bodyMesh` in scene.js turns a
+//   `kind` into geometry, and it memoises per kind, so forty systems of scenery
+//   cost six meshes total.
+
+// The camera arithmetic for the viewscreen lives here rather than in the view
+// that uses it, for one reason: `ui/tactical3d.js` cannot be imported outside a
+// browser — it reaches for `document` at module load through its touch helpers.
+// Putting the two pure functions the viewscreen camera is built from in a file
+// node can import is the difference between testing them and hoping.
+
+const { vec3 } = __require("src/gfx/math.js");
+const { hashSeed } = __require("src/core/rng.js");
+
+const DEG = Math.PI / 180;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * Vertical field of view for a viewport of this shape.
+ *
+ * The old fixed 52° vertical was tuned on a laptop. On a phone held upright the
+ * viewport is about 0.46 wide to tall, and 52° vertical works out to twenty-five
+ * degrees horizontal — a letterbox turned on its side, through which you can see
+ * almost nothing. Fixing the *horizontal* angle and solving for the vertical is
+ * the correct way round: the width of what you can see is what matters, and it
+ * then stays constant as the shape of the window changes.
+ *
+ * The clamp is what stops the arithmetic from being silly at extremes — a very
+ * tall window would otherwise demand a vertical FOV past 120°, which is all
+ * distortion and no information.
+ */
+function fovFor(aspect, horizontalDeg = 82) {
+  // A viewport of NaN is not a hypothetical: `getBoundingClientRect` on a node
+  // that is mid-swap returns zeros, and 0/0 is how a black screen starts.
+  const a = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+  const halfH = Math.tan(horizontalDeg * DEG / 2);
+  const fovy = 2 * Math.atan(halfH / a);
+  // The ceiling is a real limit, not a rounding: a very tall window would
+  // otherwise demand 113 degrees vertical to hold 82 horizontal, and that is
+  // all barrel distortion and no information. Where it binds, the horizontal
+  // view narrows — which is why the viewer's bezel pins the picture at 16:9
+  // rather than letting it take the shape of the phone.
+  return clamp(fovy, 46 * DEG, 88 * DEG);
+}
+
+/** The narrowest horizontal view any viewport shape can be reduced to. */
+function horizontalFov(aspect, horizontalDeg = 82) {
+  const a = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+  return 2 * Math.atan(Math.tan(fovFor(a, horizontalDeg) / 2) * a);
+}
+
+/**
+ * The direction a hull's nose points, in render space.
+ *
+ * The simulation carries a compass heading in the xy plane with z for altitude;
+ * render space is +y up with sim y mapped onto render z. Getting this conversion
+ * wrong gives you a viewscreen that looks ninety degrees off the bow and swings
+ * the wrong way when you turn, which is exactly as disorienting as it sounds.
+ */
+function noseOf(ship, out = vec3()) {
+  const h = (ship?.heading ?? 0) * DEG;
+  const p = (ship?.pitch ?? 0) * DEG;
+  const flat = Math.cos(p);
+  out[0] = Math.cos(h) * flat;
+  out[1] = Math.sin(p);
+  out[2] = Math.sin(h) * flat;
+  return out;
+}
+
+/** xorshift32 from a seed. Small, fast, and entirely separate from the sim. */
+function stream(seed) {
+  let h = seed || 0x9e3779b9;
+  return () => {
+    h ^= h << 13; h >>>= 0;
+    h ^= h >>> 17;
+    h ^= h << 5; h >>>= 0;
+    return h / 4294967296;
+  };
+}
+
+// Which worlds a system tends to have. `bodyMesh` knows six kinds; these are
+// the pools each system type draws from, so the Neutral Zone does not look like
+// Risa and a dead system looks dead.
+const KIND_POOLS = {
+  core: ['planet', 'planet', 'desert', 'moon'],
+  homeworld: ['planet', 'planet', 'moon', 'ice'],
+  colony: ['planet', 'desert', 'moon'],
+  starbase: ['planet', 'moon', 'ice'],
+  station: ['gas', 'moon', 'ice'],
+  outpost: ['desert', 'ice', 'moon'],
+  anomaly: ['gas', 'gas', 'ice'],
+  deadspace: ['moon', 'ice'],
+};
+
+// How many worlds are worth drawing. Deadspace is nearly empty on purpose —
+// Wolf 359 should feel like an absence, and an empty sky is how you say that.
+const BODY_COUNT = {
+  core: [3, 4], homeworld: [3, 4], colony: [2, 3], starbase: [2, 3],
+  station: [2, 3], outpost: [1, 3], anomaly: [2, 3], deadspace: [0, 1],
+};
+
+// Star colour by class, which the palette in scene.js does not vary — so the
+// tint is applied per draw instead. Hot blue-white through to a dim red dwarf.
+const STAR_TINTS = [
+  [1.00, 0.94, 0.82], [1.00, 0.86, 0.55], [1.00, 0.72, 0.42],
+  [0.86, 0.90, 1.00], [1.00, 0.58, 0.38],
+];
+
+/**
+ * Scenery for one system, in render space (+y up), centred on the origin.
+ *
+ * Distances are chosen against the renderer's 40,000-unit far plane and the
+ * 3,000-unit tactical volume: near enough that a world fills a useful slice of
+ * the screen, far enough that flying at it during a fight never reaches it.
+ *
+ * @param {string} systemId
+ * @param {string} type    system type from systems.data.js
+ * @returns {{bodies: Array, focus: object|null}} focus is what the screen
+ *          points at when first opened — the largest thing worth looking at.
+ */
+function vistaFor(systemId, type = 'colony') {
+  // `hashSeed` returns a 64-bit BigInt; the local stream is a 32-bit
+  // xorshift, so it is folded rather than truncated — taking the low word
+  // alone throws away exactly the bits the avalanche put the entropy in.
+  const h64 = hashSeed(`vista:${systemId}`);
+  const rnd = stream(Number((h64 ^ (h64 >> 32n)) & 0xffffffffn));
+  const pool = KIND_POOLS[type] ?? KIND_POOLS.colony;
+  const [lo, hi] = BODY_COUNT[type] ?? BODY_COUNT.colony;
+  const count = lo + Math.floor(rnd() * (hi - lo + 1));
+
+  const bodies = [];
+
+  // The primary. Always present, always the farthest thing, and always the
+  // brightest — it is the only object in the sky that is its own light source.
+  const starBearing = rnd() * Math.PI * 2;
+  const starHeight = (rnd() - 0.5) * 0.34;
+  const starDist = 26000 + rnd() * 8000;
+  bodies.push({
+    id: `${systemId}:primary`,
+    kind: 'star',
+    x: Math.cos(starBearing) * starDist,
+    y: starHeight * starDist,
+    z: Math.sin(starBearing) * starDist,
+    radius: 2000 + rnd() * 1400,
+    tint: STAR_TINTS[Math.floor(rnd() * STAR_TINTS.length)],
+    emissive: 1,
+    spin: 0,
+  });
+
+  // Worlds, spread around the full circle rather than clustered ahead. Turning
+  // the ship has to be how you find them, or the sky is wallpaper.
+  //
+  // Bearings are dealt from evenly spaced arcs with jitter inside each, which
+  // avoids the clumping a uniform random gives you at these small counts — two
+  // planets overlapping at 4,000 units reads as one badly-drawn planet.
+  const arc = (Math.PI * 2) / Math.max(1, count);
+  for (let i = 0; i < count; i++) {
+    const bearing = i * arc + rnd() * arc;
+    const height = (rnd() - 0.5) * 0.30;
+    const dist = 4200 + rnd() * 9000;
+    const kind = pool[Math.floor(rnd() * pool.length)];
+    bodies.push({
+      id: `${systemId}:body:${i}`,
+      kind,
+      x: Math.cos(bearing) * dist,
+      y: height * dist,
+      z: Math.sin(bearing) * dist,
+      // Angular size, not absolute size, is what reads: a gas giant far out and
+      // a moon close in should both fill a satisfying part of the screen.
+      // These are radii as a fraction of distance, so they ARE the angular
+      // sizes — a planet subtends about twenty degrees, which is a quarter of
+      // the viewer's width. The first pass used a third of these and every
+      // world came out a pea.
+      radius: dist * (kind === 'gas' ? 0.26 : kind === 'moon' ? 0.11 : 0.18),
+      // The body palette in scene.js is mid-tone, and mid-tone under a 0.22
+      // ambient with the key light coming from above reads as near-black on a
+      // phone. The lift is applied here rather than in the palette because the
+      // same meshes are lit differently everywhere else they are used.
+      tint: [1.5, 1.5, 1.5],
+      emissive: 0,
+      // A slow roll so a parked ship is not a still photograph. Purely visual;
+      // nothing in the simulation reads it.
+      spin: (rnd() - 0.5) * 0.05,
+    });
+  }
+
+  // What the screen points at when you open it. The nearest real world if there
+  // is one, because a planet filling the frame is the shot; the primary if the
+  // system is empty, because an empty screen is not.
+  const worlds = bodies.filter((b) => b.kind !== 'star');
+  const focus = worlds.length
+    ? worlds.reduce((best, b) => (Math.hypot(b.x, b.y, b.z) < Math.hypot(best.x, best.y, best.z) ? b : best))
+    : bodies[0] ?? null;
+
+  return { systemId, type, bodies, focus };
+}
+
+/** The render-space compass bearing of a point, in radians. */
+function bearingOf(body) {
+  return Math.atan2(body.z, body.x);
+}
+
+const CACHE = new Map();
+
+/** Memoised, because the viewscreen asks for this every frame. */
+function vista(systemId, type) {
+  const key = `${systemId}:${type}`;
+  let v = CACHE.get(key);
+  if (!v) {
+    v = vistaFor(systemId, type);
+    // Forty systems is the whole galaxy, so this can never grow unbounded —
+    // but the cap is here anyway, because "can never" is how leaks start.
+    if (CACHE.size > 64) CACHE.clear();
+    CACHE.set(key, v);
+  }
+  return v;
+}
+
+__exports.fovFor = fovFor;
+__exports.horizontalFov = horizontalFov;
+__exports.noseOf = noseOf;
+__exports.vistaFor = vistaFor;
+__exports.bearingOf = bearingOf;
+__exports.vista = vista;
+
+});
+
 __define("src/ui/tactical3d.js", function (__exports, __require) {
 // The tactical display, in three dimensions.
 //
@@ -5458,10 +6025,15 @@ __define("src/ui/tactical3d.js", function (__exports, __require) {
 const { vec3, mat4, quat, identity, multiply, perspective, lookAt, compose, normalMatrix, quatFromEuler, project, sub, length: vlength, normalize, cross } = __require("src/gfx/math.js");
 const { Renderer } = __require("src/gfx/gl.js");
 const { hullMesh, hullScale, paletteFor } = __require("src/gfx/blueprint.js");
-const { starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh, dropLineMesh, VOLUME } = __require("src/gfx/scene.js");
+const { starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh, dropLineMesh, bodyMesh, VOLUME } = __require("src/gfx/scene.js");
+const { vista, bearingOf, fovFor, noseOf } = __require("src/gfx/vista.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const DEG = Math.PI / 180;
+
+/** How many scenery bodies may be drawn in one frame. See `drawVista`. */
+const VISTA_DRAW_CAP = 4;
 
 /**
  * Simulation space is currently a plane: ships carry x, y and a heading in
@@ -5516,6 +6088,20 @@ class TacticalView3D {
       wantDistance: 1700,
     };
 
+    // 'orbit' is the tactical plot, looking in at the engagement from outside.
+    // 'forward' is the viewscreen: the camera sits at the bridge and looks out
+    // over the bow. Same renderer, same meshes, same frame — one camera.
+    this.cameraMode = 'orbit';
+
+    // Where the screen is pointed relative to the bow, and how tight the
+    // magnification is. In a fight the pan is limited and springs back to
+    // centre, because the screen is slaved to the ship. Parked, it is free:
+    // the helm can point the ship anywhere and there is nothing else to do.
+    this.look = { yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0 };
+    this.magnification = 1;
+    this.vistaSpin = 0;
+    this.vistaSource = null;
+
     this.stats = { drawCalls: 0, triangles: 0, frames: 0, lastMs: 0 };
 
     // Reused matrices — the draw path allocates nothing.
@@ -5525,6 +6111,10 @@ class TacticalView3D {
     this._model = mat4();
     this._pos = vec3();
     this._quat = quat();
+    this._nose = vec3();
+    this._eyeTmp = vec3();
+    this._look = vec3();
+    this._camEye = vec3();
 
     this.attachGestures();
   }
@@ -5552,16 +6142,31 @@ class TacticalView3D {
       moved += Math.abs(dx) + Math.abs(dy);
 
       if (pointers.size === 1) {
-        // One finger orbits. Pitch is clamped well short of the poles so the
-        // grid never degenerates into a line and the up vector stays valid.
-        this.cam.yaw -= dx * 0.006;
-        this.cam.pitch = clamp(this.cam.pitch + dy * 0.005, 0.08, 1.45);
+        if (this.cameraMode === 'forward') {
+          // On the viewscreen a drag pans the screen rather than orbiting the
+          // scene — you are turning your head, not walking around the outside.
+          // The picture follows the finger: drag right and the sky moves
+          // right, which means the camera swings left. Same convention as the
+          // orbit gesture on this exact canvas, so nothing has to be relearned.
+          this.panLook(-dx * 0.004, dy * 0.003);
+        } else {
+          // One finger orbits. Pitch is clamped well short of the poles so the
+          // grid never degenerates into a line and the up vector stays valid.
+          this.cam.yaw -= dx * 0.006;
+          this.cam.pitch = clamp(this.cam.pitch + dy * 0.005, 0.08, 1.45);
+        }
       } else if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
         const d = Math.hypot(a.x - b.x, a.y - b.y);
         if (lastPinch) {
-          this.cam.wantDistance = clamp(this.cam.wantDistance * (lastPinch / d), 320, VOLUME * 1.6);
-          this.userZoom = true;
+          if (this.cameraMode === 'forward') {
+            // Pinching a viewscreen magnifies. There is no dolly — the camera
+            // is bolted to the ship, which is the entire premise.
+            this.setMagnification(this.magnification * (d / lastPinch));
+          } else {
+            this.cam.wantDistance = clamp(this.cam.wantDistance * (lastPinch / d), 320, VOLUME * 1.6);
+            this.userZoom = true;
+          }
         }
         lastPinch = d;
       }
@@ -5581,6 +6186,10 @@ class TacticalView3D {
     c.addEventListener('pointercancel', onUp);
     c.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (this.cameraMode === 'forward') {
+        this.setMagnification(this.magnification * (1 - Math.sign(e.deltaY) * 0.12));
+        return;
+      }
       this.cam.wantDistance = clamp(this.cam.wantDistance * (1 + Math.sign(e.deltaY) * 0.12), 320, VOLUME * 1.6);
       this.userZoom = true;
     }, { passive: false });
@@ -5644,7 +6253,10 @@ class TacticalView3D {
     this.cam.distance += (this.cam.wantDistance - this.cam.distance) * 0.07;
   }
 
-  eye(out = vec3()) {
+  // Both callers consume the result immediately, so a shared scratch keeps the
+  // per-frame allocation count at zero where the rest of the draw path is.
+  eye(out = this._camEye) {
+    if (this.cameraMode === 'forward') return this.forwardEye(out);
     const { focus, yaw, pitch, distance } = this.cam;
     const cp = Math.cos(pitch);
     out[0] = focus[0] + Math.cos(yaw) * cp * distance;
@@ -5653,9 +6265,117 @@ class TacticalView3D {
     return out;
   }
 
+  // ----------------------------------------------------------- viewscreen
+
+  /** 'orbit' | 'forward'. Unknown values are ignored rather than obeyed. */
+  setCameraMode(mode) {
+    if (mode !== 'orbit' && mode !== 'forward') return this.cameraMode;
+    if (mode === this.cameraMode) return mode;
+    this.cameraMode = mode;
+    // A mode change resets the pan and the magnification. Coming back to the
+    // screen half-turned and zoomed in on nothing is disorienting, and the
+    // player has no obvious way to discover why the bow is not ahead.
+    this.look.yaw = 0; this.look.pitch = 0;
+    this.look.targetYaw = 0; this.look.targetPitch = 0;
+    this.magnification = 1;
+    return mode;
+  }
+
+  toggleCameraMode() {
+    return this.setCameraMode(this.cameraMode === 'forward' ? 'orbit' : 'forward');
+  }
+
+  /** 1× to 12×, which is about the useful range before a planet is a wall. */
+  setMagnification(m) {
+    this.magnification = clamp(m, 1, 12);
+    return this.magnification;
+  }
+
+  /**
+   * How far off the bow the screen may be pointed.
+   *
+   * Slaved in a fight and free when parked. The distinction is not decoration:
+   * a screen that can spin freely while somebody is shooting at you loses the
+   * one thing the viewscreen is *for*, which is seeing what you are aimed at.
+   * Parked, there is no bow-relative anything to lose, and being able to look
+   * around is the whole reason to open the screen at all.
+   */
+  get panLimit() {
+    return this.freeLook ? Math.PI : 0.62;
+  }
+
+  panLook(dYaw, dPitch) {
+    const lim = this.panLimit;
+    this.look.targetYaw = this.freeLook
+      ? this.look.targetYaw + dYaw
+      : clamp(this.look.targetYaw + dYaw, -lim, lim);
+    this.look.targetPitch = clamp(this.look.targetPitch + dPitch, -0.5, 0.5);
+  }
+
+  /** Point the screen back down the bow — the "steady as she goes" reset. */
+  centreLook() {
+    this.look.targetYaw = 0;
+    this.look.targetPitch = 0;
+  }
+
+  /**
+   * The camera position for the viewscreen: forward of the bow, slightly high.
+   *
+   * Ahead of the hull rather than inside it, because the player's own ship is
+   * not drawn in this mode and a camera sitting at the centre of an invisible
+   * saucer would put the near plane through geometry that is about to be drawn
+   * — the nacelles, in particular, which stick out behind.
+   */
+  forwardEye(out = vec3()) {
+    const ship = this.playerShip;
+    const nose = noseOf(ship, this._nose);
+    const lead = (this.hullReach ?? 90) * 1.35;
+    out[0] = (ship?.x ?? 0) + nose[0] * lead;
+    out[1] = (ship?.z ?? 0) + nose[1] * lead + 12;
+    out[2] = (ship?.y ?? 0) + nose[2] * lead;
+    return out;
+  }
+
+  /** Where the viewscreen is looking: the bow, rotated by the pan. */
+  forwardTarget(out = vec3()) {
+    const eye = this.forwardEye(this._eyeTmp);
+    const nose = noseOf(this.playerShip, this._nose);
+
+    // Yaw about world up, then pitch in the plane that contains it. Doing the
+    // yaw in world space rather than ship space is what keeps a rolling hull
+    // from rolling the screen with it — the viewscreen is gyro-stabilised, and
+    // a picture that tilts every time the helm banks is unwatchable.
+    const cy = Math.cos(this.look.yaw);
+    const sy = Math.sin(this.look.yaw);
+    const fx = nose[0] * cy - nose[2] * sy;
+    const fz = nose[0] * sy + nose[2] * cy;
+    const flat = Math.hypot(fx, fz) || 1;
+    const fy = nose[1] + Math.tan(clamp(this.look.pitch, -1.2, 1.2)) * flat;
+
+    const reach = 8000;
+    out[0] = eye[0] + fx * reach;
+    out[1] = eye[1] + fy * reach;
+    out[2] = eye[2] + fz * reach;
+    return out;
+  }
+
+  /** Ease the pan toward where the finger put it, and spring back when slaved. */
+  settleLook(dt = 1 / 60) {
+    if (!this.freeLook) {
+      // A slaved screen drifts back to the bow on its own. This is why you can
+      // glance sideways during a fight without having to remember to look back.
+      const spring = Math.min(1, dt * 0.8);
+      this.look.targetYaw += (0 - this.look.targetYaw) * spring;
+      this.look.targetPitch += (0 - this.look.targetPitch) * spring;
+    }
+    const k = Math.min(1, dt * 9);
+    this.look.yaw += (this.look.targetYaw - this.look.yaw) * k;
+    this.look.pitch += (this.look.targetPitch - this.look.pitch) * k;
+  }
+
   // ---------------------------------------------------------------- draw
 
-  render(engagement, alpha = 0) {
+  render(engagement, alpha = 0, dt = 1 / 60) {
     void alpha;
     const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
     const rect = this.canvas.getBoundingClientRect();
@@ -5665,18 +6385,23 @@ class TacticalView3D {
     if (!this.renderer.beginFrame()) return;
     if (!engagement) return;
 
+    this.playerShip = engagement.player;
+    this.hullReach = hullScale(engagement.player?.classId) * 1.1;
+    this.freeLook = false;
     this.frame(engagement);
     this.lastShips = [engagement.player, ...engagement.hostiles, ...engagement.allies]
       .filter(Boolean);
 
-    perspective(52 * Math.PI / 180, aspect, 5, 40000, this._proj);
-    lookAt(this.eye(), this.cam.focus, vec3(0, 1, 0), this._view);
-    multiply(this._proj, this._view, this._viewProj);
-    this.renderer.setCamera(this._viewProj);
+    this.setupCamera(aspect, dt);
 
     this.drawEnvironment();
+    if (this.vistaSource) this.drawVista(dt);
     for (const ship of this.lastShips) {
-      if (!ship.destroyed) this.drawShip(ship, ship === engagement.target);
+      // Your own hull is not on your own viewscreen. The camera is standing
+      // where the bridge is; there is nothing in front of it but space.
+      if (ship.destroyed) continue;
+      if (this.cameraMode === 'forward' && ship === engagement.player) continue;
+      this.drawShip(ship, ship === engagement.target);
     }
     this.drawEffects(engagement);
 
@@ -5688,7 +6413,138 @@ class TacticalView3D {
     this.drawOverlay(engagement, rect);
   }
 
-  drawEnvironment() {
+  /**
+   * The viewscreen with nobody shooting: a parked ship, a system, and a sky.
+   *
+   * Separate entry point rather than a branch inside `render` because the two
+   * take different arguments and nothing else about them is shared. The 2D
+   * fallback view has no equivalent and does not need one — it is a tactical
+   * plot, and there is no tactical situation to plot.
+   */
+  renderVista(game, dt = 1 / 60) {
+    const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = globalThis.devicePixelRatio ?? 1;
+    const { aspect } = this.renderer.resize(rect.width || 320, rect.height || 320, dpr);
+    if (!this.renderer.beginFrame()) return;
+
+    const sys = game?.location;
+    if (!sys) return;
+
+    this.setVista(sys.id, sys.type);
+    this.lastShips = [];
+    this.freeLook = true;
+    this.hullReach = hullScale(game.ship?.classId) * 1.1;
+
+    // Parked, the camera is at the origin looking wherever the player has
+    // turned it — the ship's combat coordinates are meaningless out of a fight
+    // and would put the viewscreen somewhere arbitrary in the vista.
+    this.playerShip = { x: 0, y: 0, z: 0, heading: 0, pitch: 0, roll: 0 };
+    this.setupCamera(aspect, dt);
+
+    this.drawEnvironment(false);
+    this.drawVista(dt);
+
+    this.stats.drawCalls = this.renderer.drawCalls;
+    this.stats.triangles = this.renderer.triangles;
+    this.stats.frames++;
+    this.stats.lastMs = (typeof performance !== 'undefined' ? performance.now() : 0) - t0;
+
+    this.drawVistaOverlay(game, rect);
+  }
+
+  /** Build the projection and view matrices for whichever camera is active. */
+  setupCamera(aspect, dt) {
+    if (this.cameraMode === 'forward') {
+      this.settleLook(dt);
+      // Magnification is a narrower lens, not a nearer camera. Dividing the
+      // field of view is what a real optical zoom does and it keeps the
+      // parallax honest — a dolly would slide the ship through its own hull.
+      perspective(fovFor(aspect) / this.magnification, aspect, 2, 40000, this._proj);
+      lookAt(this.forwardEye(this._eyeTmp), this.forwardTarget(this._look), vec3(0, 1, 0), this._view);
+    } else {
+      perspective(52 * DEG, aspect, 5, 40000, this._proj);
+      lookAt(this.eye(), this.cam.focus, vec3(0, 1, 0), this._view);
+    }
+    multiply(this._proj, this._view, this._viewProj);
+    this.renderer.setCamera(this._viewProj);
+  }
+
+  /** Remember which system's scenery to draw. Cheap; safe to call per frame. */
+  setVista(systemId, type) {
+    if (!systemId) { this.vistaSource = null; return null; }
+    if (this.vistaSource?.systemId !== systemId) {
+      this.vistaSource = vista(systemId, type);
+      // Open the screen pointed at something worth seeing rather than at an
+      // arbitrary patch of empty sky.
+      const f = this.vistaSource.focus;
+      if (f) {
+        // The pan rotates the bow by +yaw about world up, and at rest the bow
+        // is +x — so the yaw that lands on a body IS its bearing. It was
+        // negated here at first, which opened the viewer aimed at the exact
+        // opposite patch of empty sky from the planet it had chosen.
+        this.look.targetYaw = bearingOf(f);
+        this.look.yaw = this.look.targetYaw;
+      }
+    }
+    return this.vistaSource;
+  }
+
+  /**
+   * The scenery: a primary and its worlds, drawn once each — if they are in
+   * front of the camera.
+   *
+   * The cull is not an optimisation, it is a budget. A body sphere is 440
+   * triangles, the bodies are spread over the full circle so most of them are
+   * behind you at any moment, and the harness holds the whole frame to 8,000
+   * triangles with a 3,120-triangle starfield and six hostiles already in it.
+   * Drawing all of them would spend the ships' budget on scenery nobody can
+   * see. The hard cap of four never actually bites — the placement spreads
+   * bodies across the full circle and the lens is 82 degrees wide — but the
+   * frame budget must hold in the worst case, not the typical one.
+   */
+  drawVista(dt) {
+    const v = this.vistaSource;
+    if (!v) return;
+    this.vistaSpin += dt;
+
+    // Camera forward, from the two points the view matrix was built from —
+    // whichever camera built it.
+    const eye = this.eye(this._eyeTmp);
+    const at = this.cameraMode === 'forward' ? this.forwardTarget(this._look) : this.cam.focus;
+    let fx = at[0] - eye[0]; let fy = at[1] - eye[1]; let fz = at[2] - eye[2];
+    const flen = Math.hypot(fx, fy, fz) || 1;
+    fx /= flen; fy /= flen; fz /= flen;
+
+    let drawn = 0;
+    for (const b of v.bodies) {
+      if (drawn >= VISTA_DRAW_CAP) break;
+      let dx = b.x - eye[0]; let dy = b.y - eye[1]; let dz = b.z - eye[2];
+      const d = Math.hypot(dx, dy, dz) || 1;
+      // Half-angle to the edge of the body, so a world that is mostly off to
+      // the side still draws the sliver of it that is on screen.
+      const slack = Math.min(0.75, b.radius / d);
+      if ((dx * fx + dy * fy + dz * fz) / d < 0.16 - slack) continue;
+
+      quatFromEuler(0, b.spin * this.vistaSpin, 0, this._quat);
+      this._pos[0] = b.x; this._pos[1] = b.y; this._pos[2] = b.z;
+      compose(this._pos, this._quat, b.radius, this._model);
+      this.renderer.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: b.emissive,
+        tint: b.tint,
+        // Scenery is meant to be far away. Fogging it against a falloff tuned
+        // for a 3,000-unit knife fight is what made the first planet render as
+        // a black disc with a rim.
+        fogFar: 90000,
+      });
+      drawn++;
+    }
+    this.stats.bodiesDrawn = drawn;
+  }
+
+  drawEnvironment(withGrid = true) {
     // The starfield rides with the camera so it never comes into reach.
     const stars = starfield();
     compose(this.eye(), quat(), 1, this._model);
@@ -5697,7 +6553,16 @@ class TacticalView3D {
       normalMatrix: normalMatrix(this._model),
       emissive: 1,
       tint: [1, 1, 1],
+      // The sky is not a distant object in the scene, it is the backdrop. It
+      // sits at four times the engagement volume, so the old fixed falloff had
+      // it permanently crushed to a third of its brightness.
+      fogFar: 1e9,
     });
+
+    // The reference grid is a tactical aid, not a thing in space. On the
+    // viewscreen it would be a glowing floor stretching to the horizon, which
+    // is a lie about what is out there.
+    if (!withGrid || this.cameraMode === 'forward') return;
 
     identity(this._model);
     this.renderer.draw('grid', gridMesh(), {
@@ -5830,9 +6695,21 @@ class TacticalView3D {
     const { ctx, width, height } = fitCanvas(this.overlay);
     ctx.clearRect(0, 0, width, height);
 
+    const forward = this.cameraMode === 'forward';
+
     for (const ship of this.lastShips) {
       if (ship.destroyed) continue;
+      if (forward && ship.isPlayer) continue;
       const p = project(worldOf(ship, this._pos), this._viewProj);
+
+      // On the viewscreen a contact that is not on screen still matters, and
+      // "there is nothing to see" is the most dangerous thing a screen can
+      // imply while a bird-of-prey comes up behind you. An off-screen contact
+      // gets an arrow on the bezel pointing at where it actually is.
+      if (forward && (!p || p.z > 1 || Math.abs(p.x) > 1 || Math.abs(p.y) > 1)) {
+        this.drawEdgeMarker(ctx, ship, engagement, width, height);
+        continue;
+      }
       if (!p || p.z > 1) continue;
       const sx = (p.x * 0.5 + 0.5) * width;
       const sy = (1 - (p.y * 0.5 + 0.5)) * height;
@@ -5871,6 +6748,98 @@ class TacticalView3D {
     }
   }
 
+  /**
+   * An arrow on the edge of the screen for a contact that is not on it.
+   *
+   * Screen-space projection is useless here: a point behind the camera projects
+   * to a mirrored position in front of it, which puts the arrow for a ship
+   * astern on the wrong side of the screen. So the direction is computed in
+   * *view* space instead, where "behind" is unambiguous and the sign of the
+   * horizontal component still says which way to turn.
+   */
+  drawEdgeMarker(ctx, ship, engagement, width, height) {
+    const w = worldOf(ship, this._pos);
+    const eye = this.forwardEye(this._eyeTmp);
+    const dx = w[0] - eye[0];
+    const dy = w[1] - eye[1];
+    const dz = w[2] - eye[2];
+
+    const m = this._view;
+    // View-space direction. Column-major mat4, so a row of the rotation block.
+    const vx = m[0] * dx + m[4] * dy + m[8] * dz;
+    const vy = m[1] * dx + m[5] * dy + m[9] * dz;
+    const vz = m[2] * dx + m[6] * dy + m[10] * dz;   // negative is in front
+
+    // Angle around the screen: +x right, +y up, and a point directly behind
+    // resolves to straight down rather than to a division by zero.
+    const ang = (Math.abs(vx) < 1e-6 && Math.abs(vy) < 1e-6 && vz > 0)
+      ? Math.PI / 2
+      : Math.atan2(-vy, vx);
+
+    const inset = 18;
+    const rx = Math.max(10, width / 2 - inset);
+    const ry = Math.max(10, height / 2 - inset);
+    // Project the angle onto the rectangle rather than a circle, so the arrow
+    // rides the actual edge of a wide screen instead of an inscribed ellipse.
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    const scale = 1 / Math.max(Math.abs(c) / rx, Math.abs(s) / ry);
+    const sx = width / 2 + c * scale;
+    const sy = height / 2 + s * scale;
+
+    const isTarget = ship === engagement?.target;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(ang);
+    ctx.fillStyle = isTarget ? '#ff9a3c' : ship.faction === 'federation' ? '#9cf' : '#e5533d';
+    ctx.globalAlpha = vz > 0 ? 0.55 : 0.9;   // dimmer when it is behind you
+    ctx.beginPath();
+    ctx.moveTo(9, 0);
+    ctx.lineTo(-6, 6);
+    ctx.lineTo(-6, -6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /**
+   * The viewscreen with no engagement: where we are, and where we are looking.
+   *
+   * A bearing readout rather than a compass rose, because there is no north in
+   * space and pretending otherwise is worse than saying nothing. The number is
+   * relative to the ship's own bow, which is the only reference that exists.
+   */
+  drawVistaOverlay(game, rect) {
+    this.overlay.style.width = `${rect.width}px`;
+    this.overlay.style.height = `${rect.height}px`;
+    const { ctx, width, height } = fitCanvas(this.overlay);
+    ctx.clearRect(0, 0, width, height);
+    if (this.cameraMode !== 'forward') return;
+
+    const sys = game?.location;
+    ctx.font = '600 11px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(232, 163, 23, 0.85)';
+    ctx.fillText(String(sys?.name ?? '').toUpperCase(), 12, 20);
+
+    const deg = ((-this.look.yaw * 180 / Math.PI) % 360 + 360) % 360;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(42, 168, 168, 0.85)';
+    const mag = this.magnification > 1.05 ? ` · MAG ${this.magnification.toFixed(1)}×` : '';
+    ctx.fillText(`BEARING ${deg.toFixed(0).padStart(3, '0')}${mag}`, width - 12, 20);
+
+    // A faint centre tick. Without it there is no way to tell a slow pan from a
+    // still image of empty space.
+    ctx.strokeStyle = 'rgba(230, 230, 223, 0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(width / 2 - 9, height / 2);
+    ctx.lineTo(width / 2 - 3, height / 2);
+    ctx.moveTo(width / 2 + 3, height / 2);
+    ctx.lineTo(width / 2 + 9, height / 2);
+    ctx.stroke();
+  }
+
   dispose() {
     this._detach?.();
     this.renderer.dispose();
@@ -5878,6 +6847,7 @@ class TacticalView3D {
   }
 }
 
+__exports.VISTA_DRAW_CAP = VISTA_DRAW_CAP;
 __exports.TacticalView3D = TacticalView3D;
 
 });
@@ -7526,9 +8496,9 @@ function chairPanel(app) {
 
   // ---- Left arm: viewscreen, hailing frequencies, shuttle bay ----
   const left = [
-    button('Viewscreen', press(app, { action: 'viewscreen', chairLabel: 'on screen' }, 'ui_tap'), {
+    button('On screen', press(app, { action: 'viewscreen', chairLabel: 'on screen' }, 'ui_tap'), {
       color: 'ice',
-      sub: app.screen === 'tactical' ? 'Return to the bridge' : 'Tactical display',
+      sub: app.screen === 'viewscreen' ? 'Screen off' : 'The forward view from the bridge',
     }),
     button('Hailing frequencies', press(app, { action: 'hail', chairLabel: 'hailing frequencies open' }), {
       color: 'blue',
@@ -7557,10 +8527,46 @@ function chairPanel(app) {
   };
   logInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') record(); });
 
+  // ---- The helm's eight warp switches ----
+  //
+  // Documented in docs/RESEARCH.md as a real control on the prop: a row of
+  // eight flip switches below the main helm panel that set the warp factor.
+  // The game had a factor picker buried in the system-detail card on the map
+  // and nothing on the bridge, so "warp eight" was a thing you could say and
+  // then watch the ship leave at six.
+  //
+  // These set a standing order rather than engaging: you throw the switch, then
+  // give the course. Which is how it works — the switches are on the console
+  // whether or not there is anywhere to go.
+  const maxWarp = g.ship.cls.maxWarp ?? 8;
+  const standing = g.warpFactor ?? 6;
+  const switches = el('div', { class: 'warp-switches' }, Array.from({ length: 8 }, (_, i) => {
+    const f = i + 1;
+    const beyond = f > maxWarp;
+    const on = Math.round(standing) === f;
+    return el('button', {
+      class: `warp-switch${on ? ' on' : ''}${beyond ? ' beyond' : ''}`,
+      disabled: beyond,
+      title: beyond ? `Beyond this drive's rating of warp ${maxWarp}` : `Warp ${f}`,
+      'aria-label': `Warp factor ${f}`,
+      'aria-pressed': on ? 'true' : 'false',
+      onclick: beyond ? null : press(app, {
+        action: 'warp_factor', warp: f, chairLabel: `warp ${f}`,
+      }, 'ui_tap'),
+    }, [
+      el('span', { class: 'lever' }),
+      el('span', { class: 'digit', text: String(f) }),
+    ]);
+  }));
+
   return panel('Command Chair', [
     el('div', { class: 'chair-arm' }, alerts),
     el('div', { class: 'chair-arm' }, left),
     pod,
+    el('div', { class: 'chair-warp' }, [
+      el('div', { class: 'label', text: `Warp factor — standing at ${standing % 1 ? standing.toFixed(1) : standing}` }),
+      switches,
+    ]),
     el('div', { class: 'chair-intercom' }, [
       el('div', { class: 'label', text: 'Intercom' }),
       el('div', { class: 'chair-stations' }, INTERCOM_STATIONS.map((s) =>
@@ -8749,155 +9755,6 @@ __exports.scoreAppeal = scoreAppeal;
 __exports.forceChannel = forceChannel;
 __exports.closeChannel = closeChannel;
 __exports.resolveGambit = resolveGambit;
-
-});
-
-__define("src/core/rng.js", function (__exports, __require) {
-// 64-bit deterministic pseudo-random number generation.
-//
-// The whole simulation is reproducible from a single 64-bit seed: the galaxy,
-// every encounter roll, every damage variance. Saves store the seed and the
-// draw counter, so a restored game continues the exact same number stream.
-//
-// xoshiro256** by Blackman & Vigna, on BigInt state. splitmix64 seeds it.
-
-const M64 = (1n << 64n) - 1n;
-
-const rotl = (x, k) => ((x << k) | (x >> (64n - k))) & M64;
-
-/** splitmix64 — used to expand one seed into xoshiro's four state words. */
-function splitmix64(seed) {
-  let z = BigInt.asUintN(64, seed);
-  return () => {
-    z = (z + 0x9e3779b97f4a7c15n) & M64;
-    let x = z;
-    x = ((x ^ (x >> 30n)) * 0xbf58476d1ce4e5b9n) & M64;
-    x = ((x ^ (x >> 27n)) * 0x94d049bb133111ebn) & M64;
-    return x ^ (x >> 31n);
-  };
-}
-
-/** Hash an arbitrary string into a 64-bit seed (FNV-1a, then avalanched). */
-function hashSeed(str) {
-  let h = 0xcbf29ce484222325n;
-  for (let i = 0; i < str.length; i++) {
-    h ^= BigInt(str.charCodeAt(i));
-    h = (h * 0x100000001b3n) & M64;
-  }
-  return splitmix64(h)();
-}
-class RNG {
-  /**
-   * @param {bigint|number|string} seed
-   * @param {bigint} [count] draws already consumed (for save restore)
-   */
-  constructor(seed = 0x1701n, count = 0n) {
-    this.seed = typeof seed === 'bigint' ? BigInt.asUintN(64, seed)
-      : typeof seed === 'number' ? BigInt.asUintN(64, BigInt(Math.floor(seed)))
-      : hashSeed(String(seed));
-    this.reset(count);
-  }
-
-  reset(count = 0n) {
-    const sm = splitmix64(this.seed);
-    this.s = [sm(), sm(), sm(), sm()];
-    this.count = 0n;
-    // Fast-forwarding by replay keeps restore exact without jump polynomials.
-    for (let i = 0n; i < count; i++) this.next();
-  }
-
-  /** Raw 64-bit draw. */
-  next() {
-    const s = this.s;
-    const result = (rotl((s[1] * 5n) & M64, 7n) * 9n) & M64;
-    const t = (s[1] << 17n) & M64;
-    s[2] ^= s[0];
-    s[3] ^= s[1];
-    s[1] ^= s[2];
-    s[0] ^= s[3];
-    s[2] ^= t;
-    s[3] = rotl(s[3], 45n);
-    this.count++;
-    return result;
-  }
-
-  /** Float in [0,1) with full 53-bit mantissa precision. */
-  float() {
-    return Number(this.next() >> 11n) / 9007199254740992; // 2^53
-  }
-
-  /** Float in [min,max). */
-  range(min, max) {
-    return min + this.float() * (max - min);
-  }
-
-  /** Integer in [min,max] inclusive. */
-  int(min, max) {
-    if (max < min) return min;
-    return min + Number(this.next() % BigInt(max - min + 1));
-  }
-
-  /** True with probability p. */
-  chance(p) {
-    return this.float() < p;
-  }
-
-  pick(arr) {
-    return arr.length ? arr[this.int(0, arr.length - 1)] : undefined;
-  }
-
-  /** Weighted pick. `weightOf` defaults to reading `.weight`. */
-  weighted(arr, weightOf = (x) => x.weight ?? 1) {
-    let total = 0;
-    for (const item of arr) total += Math.max(0, weightOf(item));
-    if (total <= 0) return this.pick(arr);
-    let roll = this.float() * total;
-    for (const item of arr) {
-      roll -= Math.max(0, weightOf(item));
-      if (roll <= 0) return item;
-    }
-    return arr[arr.length - 1];
-  }
-
-  /** In-place Fisher-Yates. */
-  shuffle(arr) {
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = this.int(0, i);
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
-  }
-
-  /** Approximately normal via Irwin-Hall; clamped to +/-3 sigma. */
-  normal(mean = 0, sigma = 1) {
-    let sum = 0;
-    for (let i = 0; i < 6; i++) sum += this.float();
-    const z = (sum - 3) / Math.sqrt(0.5);
-    return mean + sigma * Math.max(-3, Math.min(3, z));
-  }
-
-  /** Independent stream derived from this seed — used per-system/per-mission. */
-  fork(label) {
-    return new RNG(BigInt.asUintN(64, this.seed ^ hashSeed(label)));
-  }
-
-  save() {
-    return { seed: this.seed.toString(), count: this.count.toString() };
-  }
-
-  static load(data) {
-    if (!data) return new RNG();
-    return new RNG(BigInt(data.seed), BigInt(data.count ?? 0));
-  }
-}
-
-/** Shared stream for presentation-only randomness (never affects sim outcomes). */
-const cosmetic = new RNG(hashSeed('cosmetic'));
-
-__exports.splitmix64 = splitmix64;
-__exports.hashSeed = hashSeed;
-__exports.RNG = RNG;
-__exports.cosmetic = cosmetic;
 
 });
 
@@ -13873,6 +14730,10 @@ class Game {
     this.encounter = null;
     this.awayTeam = null;
     this.alert = 'normal';
+    // What "engage" means until the helm is told otherwise. The eight flip
+    // switches on the console set it; six is the cruise the game has always
+    // assumed when nobody says.
+    this.warpFactor = 6;
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
@@ -14100,7 +14961,23 @@ class Game {
    * Set course and engage.
    * @returns {object} { ok, error }
    */
-  setCourse(destinationId, warpFactor = 6) {
+  /**
+   * The standing warp factor: what "engage" means until told otherwise.
+   *
+   * This is what the eight flip switches on the helm console set, and it is the
+   * default every course is plotted at. Before it existed, "warp eight" was an
+   * order the game acknowledged and then discarded — the helm said "warp eight
+   * standing by" and the next course still went out at six.
+   */
+  setWarpFactor(factor) {
+    const max = this.ship.cls.maxWarp ?? 8;
+    const want = Math.max(1, Math.min(9.9, Number(factor) || 1));
+    const set = Math.min(want, max);
+    this.warpFactor = set;
+    return { ok: true, factor: set, limited: set < want - 1e-9, max };
+  }
+
+  setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
     const plan = plotTransit(
       this.galaxy, this.locationId, destinationId, warpFactor,
@@ -14718,6 +15595,7 @@ class Game {
       // back from the dead without `podJettisoned`.
       pendingFeats: this.pendingFeats ?? 0,
       podJettisoned: this.podJettisoned === true,
+      warpFactor: this.warpFactor,
       firstStrike: this.firstStrike === true,
       inKobayashi: this.inKobayashi === true,
       gambitOpen: this.gambitOpen === true,
@@ -14951,6 +15829,9 @@ class Game {
     // than as undefined, so a `=== true` check downstream stays meaningful.
     g.pendingFeats = data.pendingFeats ?? 0;
     g.podJettisoned = data.podJettisoned === true;
+    // Records written before the flip switches existed have no standing
+    // factor, and six is what the game used to assume.
+    g.warpFactor = Number(data.warpFactor) > 0 ? Number(data.warpFactor) : 6;
     g.firstStrike = data.firstStrike === true;
     g.inKobayashi = data.inKobayashi === true;
     g.gambitOpen = data.gambitOpen === true;
@@ -15143,6 +16024,96 @@ function transitScreen(app) {
   return root;
 }
 
+// ============================================================== VIEWSCREEN
+
+/**
+ * The main viewer.
+ *
+ * Same GL context, same meshes, same frame as the tactical plot — the only
+ * difference is where the camera stands. The plot looks in at the engagement
+ * from outside; this looks out over the bow from where the bridge is. That is
+ * the whole implementation, and it is the right one: a second renderer would
+ * mean a second WebGL context, and browsers quietly drop the oldest when you
+ * open too many.
+ *
+ * The controls are deliberately thin. On the viewscreen you are in the chair,
+ * and the chair's instrument is the order line — you say "fire phasers" and
+ * the tactical officer fires them. The buttons here are for the two things a
+ * captain does with the screen itself: point it, and put it away.
+ */
+function viewscreenScreen(app) {
+  const g = app.game;
+  const eng = g.engagement;
+  const root = el('div', { class: 'screen viewscreen-screen' });
+
+  // The viewport node is a singleton that gets *moved* between screens rather
+  // than rebuilt — see the note in tacticalScreen. Here it is moved inside a
+  // bezel instead of sitting flush.
+  let wrap = app.tacticalHost;
+  if (!wrap) {
+    wrap = el('div', { class: 'tactical-wrap' }, [
+      el('canvas', { id: 'tactical' }),
+      el('div', { class: 'tactical-overlay' }),
+    ]);
+    app.tacticalHost = wrap;
+  }
+  app.tacticalCanvas = wrap.querySelector('#tactical');
+  app.tacticalOverlay = wrap.querySelector('.tactical-overlay');
+
+  const bezel = el('div', { class: 'viewscreen-bezel' }, [wrap]);
+  root.append(el('div', { class: 'viewscreen-housing' }, [bezel]));
+
+  const side = el('div', { class: 'viewscreen-side scroll' });
+  root.append(side);
+
+  // A status strip, not a console. What is on the screen, and whether it is
+  // about to shoot at us.
+  const sys = g.location;
+  const status = [
+    el('p', {}, [el('b', { text: sys.name }), ' — ', el('span', { class: 'muted', text: sys.description })]),
+  ];
+  if (eng && !eng.over) {
+    const t = eng.target;
+    status.push(el('div', { class: 'meta' }, [
+      pill(`${eng.liveHostiles.length} hostile${eng.liveHostiles.length === 1 ? '' : 's'}`, 'red'),
+      t && !t.destroyed ? pill(`${Math.round(g.ship.distanceTo(t))} km`) : null,
+      g.ship.shieldsUp ? pill('shields up', 'green') : pill('shields down', 'red'),
+    ].filter(Boolean)));
+    if (t && !t.destroyed) {
+      status.push(readout(`${t.name} hull`, t.hullPct));
+      status.push(readout(`${t.name} shields`, t.shieldPct));
+    }
+  }
+  side.append(panel('On Screen', status, eng && !eng.over ? 'danger' : 'accent'));
+
+  side.append(panel('Main Viewer', [
+    el('div', { class: 'grid-2' }, [
+      button('Steady as she goes', tap(() => {
+        app.tactical?.centreLook?.();
+      }), { color: 'blue', sub: 'Point the screen back down the bow' }),
+      button('Magnify', tap(() => {
+        const v = app.tactical;
+        if (!v?.setMagnification) return;
+        // Cycles rather than ramps: a captain says "magnification factor
+        // three", not "a bit more". Wraps back to 1 so one button does both.
+        const next = v.magnification >= 8 ? 1 : Math.min(12, v.magnification * 2);
+        v.setMagnification(next);
+        app.render();
+      }), {
+        color: 'ice',
+        sub: app.tactical?.magnification > 1.05 ? `Now ${app.tactical.magnification.toFixed(0)}×` : 'Optical zoom',
+      }),
+    ]),
+    el('p', { class: 'hint', text: 'Drag to pan the screen; pinch to magnify. In a fight the viewer is slaved to the bow and drifts back on its own.' }),
+    eng && !eng.over
+      ? button('Tactical plot', tap(() => app.go('tactical')), { color: 'amber', sub: 'The outside view, with the full weapons console' })
+      : button('Close the viewer', tap(() => app.go('bridge')), { color: 'ghost' }),
+  ]));
+
+  side.append(panel('Ship’s Log', g.log.slice(-4).reverse().map(logLine)));
+  return root;
+}
+
 // ================================================================ TACTICAL
 function tacticalScreen(app) {
   const g = app.game;
@@ -15234,6 +16205,11 @@ function tacticalScreen(app) {
 
   // --- Helm ---
   side.append(panel('Helm', [
+    // The way out to the forward view. It lives under Helm because pointing
+    // the ship is what pointing the screen amounts to in a fight.
+    button('On screen', tap(() => app.go('viewscreen')), {
+      color: 'ice', sub: 'The forward view from the bridge',
+    }),
     el('div', { class: 'grid-2' }, [
       button('Come about', tap(() => eng.comeAboutTo(eng.target)), { color: 'blue' }),
       button(g.ship.evasive ? 'Evasive: on' : 'Evasive', tap(() => {
@@ -16124,6 +17100,7 @@ function kobayashiPanel(app) {
 
 __exports.bridgeScreen = bridgeScreen;
 __exports.transitScreen = transitScreen;
+__exports.viewscreenScreen = viewscreenScreen;
 __exports.tacticalScreen = tacticalScreen;
 __exports.galaxyScreen = galaxyScreen;
 __exports.systemDetail = systemDetail;
@@ -17679,7 +18656,7 @@ __define("src/lang/lexicon.js", function (__exports, __require) {
 // documented and inert in this repository; a lexicon is the easiest possible
 // place for that to happen again, so it is checked mechanically.
 
-const { fold } = __require("src/lang/normalize.js");
+const { fold, readNumber } = __require("src/lang/normalize.js");
 
 /** Departments an order can be aimed at, used to break ties. */
 const STATION_AFFINITY = {
@@ -18291,13 +19268,35 @@ const INTENTS = [
     id: 'viewscreen',
     help: 'On screen / main viewer',
     phrases: [
-      'main viewer', 'tactical display', 'show me the tactical',
-      'put it on the viewscreen', 'switch the viewscreen', 'viewscreen',
-      'show me what is out there', 'let me see',
+      'on screen', 'on the screen', 'main viewer', 'tactical display',
+      'show me the tactical', 'put it on the viewscreen', 'switch the viewscreen',
+      'viewscreen', 'show me what is out there', 'let me see',
+      'screen off', 'close the viewer',
     ],
-    keywords: { viewscreen: 3, display: 2, viewer: 2.5, see: 1.5 },
+    keywords: { viewscreen: 3, display: 2, viewer: 2.5, see: 1.5, screen: 2.5 },
     veto: ['hail', 'channel', 'them'],
     build: () => ({ action: 'viewscreen' }),
+  },
+  {
+    // The most quotable order on the bridge, and until now it did nothing at
+    // all — there was no screen to magnify. It opens the viewer if it is shut,
+    // because "magnify" while looking at a crew roster means "show me".
+    id: 'magnify',
+    help: 'Magnify — optical zoom on the main viewer',
+    phrases: [
+      'magnify', 'magnification', 'zoom in', 'closer look', 'enhance',
+      'magnify that', 'increase magnification', 'zoom in on that',
+      'magnify the image', 'give me a closer look', 'closer view',
+      'increase magnification factor', 'magnification factor', 'zoom the viewer',
+    ],
+    keywords: { magnify: 3, magnification: 3, zoom: 2.5, enhance: 2 },
+    veto: ['scan', 'sensor'],
+    build: (c) => ({
+      // "magnification factor three" — a number in the order is the factor.
+      // No number means one more step, which is what a bare "magnify" means.
+      action: 'magnify',
+      factor: readNumber(c.text, null),
+    }),
   },
   // ------------------------------------------------------------------
   // The machine shop. Being trapped is a situation you build your way out
@@ -19199,7 +20198,8 @@ const { CONSOLES } = __require("src/sim/loadout.js");
 
 const NAV = [
   { id: 'bridge', label: 'Bridge', ico: '⌂' },
-  { id: 'tactical', label: 'Tactical', ico: '⊕' },
+  { id: 'viewscreen', label: 'Viewer', ico: '▭' },
+  { id: 'tactical', label: 'Combat', ico: '⊕' },
   { id: 'galaxy', label: 'Map', ico: '✦' },
   { id: 'ship', label: 'Ship', ico: '⬡' },
   { id: 'crew', label: 'Crew', ico: '☰' },
@@ -19536,7 +20536,10 @@ class App {
     // the bridge, so the map, ship, and record stay reachable while you decide.
     let screen = this.screen;
     if (g.over) screen = 'gameover';
-    else if (g.mode === MODES.COMBAT) screen = 'tactical';
+    // Combat takes the screen, but not the *choice* of screen: the viewer is a
+    // legitimate place to fight from, and being yanked off it the moment
+    // somebody decloaks would defeat the point of having one.
+    else if (g.mode === MODES.COMBAT) screen = screen === 'viewscreen' ? 'viewscreen' : 'tactical';
     else if (g.mode === MODES.MISSION) screen = 'mission';
     else if (g.mode === MODES.ENCOUNTER && screen === 'bridge') screen = 'encounter';
     else if (g.mode === MODES.TRANSIT && screen === 'bridge') screen = 'transit';
@@ -19545,6 +20548,7 @@ class App {
     let node;
     switch (screen) {
       case 'tactical': node = screens.tacticalScreen(this); break;
+      case 'viewscreen': node = screens.viewscreenScreen(this); break;
       case 'galaxy': node = screens.galaxyScreen(this); break;
       case 'crew': node = el('div', { class: 'screen' }, [screens.crewScreen(this)]); break;
       case 'sheet': node = el('div', { class: 'screen' }, [characterSheetScreen(this)]); break;
@@ -19565,7 +20569,7 @@ class App {
     this.screenEl = node;
 
     // Canvas-backed screens need their renderers rebuilt after a DOM swap.
-    if (screen === 'tactical' && this.tacticalCanvas) {
+    if ((screen === 'tactical' || screen === 'viewscreen') && this.tacticalCanvas) {
       // Three dimensions when the device can, two when it cannot. The 2D view
       // is not a stub — it is the display this game shipped with, and it stays
       // complete, because "no WebGL" must mean a different picture and not a
@@ -19582,6 +20586,13 @@ class App {
           this.render();
         };
       }
+      // The camera follows the screen you are on: the plot orbits, the viewer
+      // looks out. Same renderer, same context — one call, not one more canvas.
+      this.tactical.setCameraMode?.(screen === 'viewscreen' ? 'forward' : 'orbit');
+      // The sky belongs to the system, not to the screen. Setting it here means
+      // a fight at Rigel happens against Rigel's worlds whether or not you
+      // happened to open the viewer first.
+      this.tactical.setVista?.(g.location?.id, g.location?.type);
     }
     if (screen === 'galaxy' && this.galaxyCanvas) {
       this.map = new GalaxyMap(this.galaxyCanvas);
@@ -20059,9 +21070,18 @@ class App {
         else audio.play('ui_deny');
         break;
       }
-      case 'warp_factor':
-        ack('helm', `Warp ${order.warp} standing by.`);
+      case 'warp_factor': {
+        // This used to be an acknowledgement and nothing else — the helm said
+        // "warp eight standing by" and the next course still went out at six.
+        // It sets the standing factor now, which is what the flip switches on
+        // the console do and what the word means.
+        const r = g.setWarpFactor(order.warp);
+        audio.play(r.limited ? 'ui_deny' : 'ui_confirm');
+        ack('helm', r.limited
+          ? `Warp ${r.max} is all she has, Captain. Standing by at warp ${r.factor}.`
+          : `Warp ${r.factor} standing by.`);
         break;
+      }
       case 'throttle': {
         // Engines answering an order is a sound the game had and never made.
         const opening = order.value > g.ship.throttle + 0.15;
@@ -20239,11 +21259,31 @@ class App {
         break;
       }
       case 'viewscreen': {
-        // The viewscreen shows the tactical picture when there is one to show,
-        // and the bridge otherwise. Same button, both directions.
-        const target = this.screen === 'tactical' ? 'bridge'
-          : (eng && !eng.over ? 'tactical' : 'galaxy');
-        this.go(target);
+        // "On screen." One order, both directions: it opens the main viewer,
+        // and said again it closes it and puts you back where you were —
+        // the tactical plot mid-fight, the bridge otherwise.
+        if (this.screen === 'viewscreen') {
+          this.go(eng && !eng.over ? 'tactical' : 'bridge');
+          ack('helm', 'Screen off, Captain.');
+        } else {
+          this.go('viewscreen');
+          audio.play('ui_select');
+          ack('helm', 'On screen.');
+        }
+        break;
+      }
+      case 'magnify': {
+        // "Magnify" while the viewer is shut means "show me" — open it first,
+        // then zoom, rather than silently magnifying something nobody can see.
+        if (this.screen !== 'viewscreen') this.go('viewscreen');
+        const v = this.tactical;
+        if (!v?.setMagnification) { audio.play('ui_deny'); break; }
+        const factor = order.factor && order.factor > 0
+          ? order.factor
+          : Math.min(12, v.magnification * 2);
+        const now = v.setMagnification(factor);
+        audio.play('computer_ack');
+        ack('science', `Magnification factor ${now % 1 ? now.toFixed(1) : now.toFixed(0)}.`);
         break;
       }
 
@@ -20580,7 +21620,14 @@ class App {
       for (let i = 0; i < steps; i++) g.update(SIM_STEP);
 
       // Canvas views redraw every frame; DOM only when something changed.
-      if (this.tactical && g.engagement) this.tactical.render(g.engagement, g.clock.alpha);
+      const dt = Math.min(0.1, Math.max(0, (timestamp - (this.lastFrameAt ?? timestamp)) / 1000));
+      this.lastFrameAt = timestamp;
+      if (this.tactical) {
+        if (g.engagement) this.tactical.render(g.engagement, g.clock.alpha, dt);
+        // No engagement and the viewer is open: draw what is actually outside,
+        // rather than the black rectangle a combat camera gives you at peace.
+        else if (this.screen === 'viewscreen') this.tactical.renderVista?.(g, dt);
+      }
       if (this.map) this.map.render(g);
       this.updateOverlay();
 

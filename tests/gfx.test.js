@@ -20,7 +20,9 @@ import {
 } from '../src/gfx/math.js';
 import { MeshBuilder, saucer, tube, box, sphere, mirrored } from '../src/gfx/mesh.js';
 import { BLUEPRINTS, hullMesh, hullScale, paletteFor } from '../src/gfx/blueprint.js';
-import { sceneMeshes, starfield, gridMesh, VOLUME } from '../src/gfx/scene.js';
+import { sceneMeshes, starfield, gridMesh, bodyMesh, VOLUME } from '../src/gfx/scene.js';
+import { vistaFor, bearingOf, fovFor, horizontalFov, noseOf } from '../src/gfx/vista.js';
+import { RNG } from '../src/core/rng.js';
 import { SHIP_CLASSES } from '../src/world/ships.data.js';
 
 const close = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
@@ -498,4 +500,190 @@ describe('the TOS Constitution', () => {
     // Six hostiles plus the player must stay inside the harness budget.
     assert.ok(tris < 1200, `${tris} triangles is too much for one hull`);
   });
+});
+
+// =========================================================== the viewscreen
+//
+// The main viewer is the same renderer with the camera in a different place,
+// so what is worth testing is the arithmetic that puts it there — and the
+// scenery it looks at, which has one property that matters more than how it
+// looks: it must be the same every time you come back.
+
+describe('the viewscreen camera', () => {
+  const deg = (rad) => rad * 180 / Math.PI;
+
+  test('the viewer\u2019s own shape gives a wide view, which is why it is fixed', () => {
+    // The bezel pins the picture at 16:9 whatever shape the phone is. That is
+    // not decoration \u2014 it is what lets the camera hold a wide horizontal
+    // field without the vertical angle going past the point of distortion.
+    assert.ok(deg(horizontalFov(16 / 9)) > 78,
+      `only ${deg(horizontalFov(16 / 9)).toFixed(0)} degrees across the viewer`);
+  });
+
+  test('no viewport shape is ever narrower than the old fixed lens', () => {
+    // The bug this replaces: a fixed 52 degrees *vertical*, which on a phone
+    // held upright works out to about twenty-five degrees horizontal \u2014 a
+    // letterbox turned on its side. The vertical clamp still binds on very tall
+    // viewports, so the guarantee is a floor, not a constant.
+    const oldPortrait = deg(2 * Math.atan(Math.tan(52 * Math.PI / 180 / 2) * 0.46));
+    for (const aspect of [0.4, 0.46, 0.6, 0.75, 1.0, 1.4, 1.78, 2.4]) {
+      const h = deg(horizontalFov(aspect));
+      assert.ok(h > 40, `aspect ${aspect} gives only ${h.toFixed(0)} degrees across`);
+      assert.ok(h > oldPortrait * 1.5,
+        `aspect ${aspect} is no better than the ${oldPortrait.toFixed(0)} degrees it replaced`);
+    }
+  });
+
+  test('a taller window never shows you less than a wider one shows vertically', () => {
+    // Solving for the vertical means the vertical angle rises as the window
+    // gets taller, monotonically. If it ever went the other way, rotating the
+    // phone would take view away in both directions at once.
+    const aspects = [2.4, 1.78, 1.4, 1.0, 0.75, 0.6, 0.46, 0.4];
+    for (let i = 1; i < aspects.length; i++) {
+      assert.ok(fovFor(aspects[i]) >= fovFor(aspects[i - 1]) - 1e-12,
+        `aspect ${aspects[i]} sees less vertically than ${aspects[i - 1]}`);
+    }
+  });
+
+  test('an absurd viewport does not produce an absurd lens', () => {
+    // A node mid-DOM-swap measures as zero by zero, and 0/0 is how a black
+    // screen starts.
+    for (const aspect of [0.01, 0, -1, 40, NaN, Infinity, undefined]) {
+      const f = fovFor(aspect);
+      assert.ok(Number.isFinite(f) && f > 0 && f < Math.PI,
+        `aspect ${aspect} gave a field of view of ${f}`);
+    }
+  });
+
+  test('the camera looks where the bow points, in render space', () => {
+    // Heading is a compass bearing in the simulation's xy plane; render space
+    // is +y up with sim y mapped onto render z. Getting this wrong gives a
+    // viewscreen ninety degrees off the bow that swings the wrong way.
+    const east = noseOf({ heading: 0, pitch: 0 });
+    assert.ok(vecClose(east, [1, 0, 0], 1e-12), `heading 0 looks at [${east}]`);
+
+    const ninety = noseOf({ heading: 90, pitch: 0 });
+    assert.ok(vecClose(ninety, [0, 0, 1], 1e-12), `heading 90 looks at [${ninety}]`);
+
+    // Nose up is up on the screen, not down. This one is a sign error away
+    // from a viewscreen that dives when the helm climbs.
+    const up = noseOf({ heading: 0, pitch: 30 });
+    assert.ok(up[1] > 0.49 && up[1] < 0.51, `pitch +30 gives a y of ${up[1]}`);
+  });
+
+  test('the nose is always a unit vector, whatever it is handed', () => {
+    for (const ship of [undefined, {}, { heading: 725, pitch: -89 }, { heading: -40 }]) {
+      const n = noseOf(ship);
+      assert.ok(close(length(n), 1, 1e-9), `[${n}] is not unit length`);
+    }
+  });
+});
+
+describe('the view out of the window', () => {
+  test('a system looks the same every time you come back', () => {
+    // The whole reason this is hashed rather than random. A planet that moves
+    // between visits is a screensaver; one that is where you left it is a place.
+    for (const id of ['sol', 'vulcan', 'wolf359', 'qonos']) {
+      const a = vistaFor(id, 'colony');
+      const b = vistaFor(id, 'colony');
+      assert.deepEqual(a.bodies, b.bodies, `${id} was different the second time`);
+    }
+  });
+
+  test('two systems do not look like each other', () => {
+    const a = vistaFor('sol', 'core');
+    const b = vistaFor('vulcan', 'core');
+    assert.notDeepEqual(a.bodies, b.bodies, 'every system has the same sky');
+  });
+
+  test('generating scenery does not touch the campaign RNG', () => {
+    // If it did, looking out of the window would desynchronise a five-year
+    // commission from its own seed — every save after it would be a different
+    // game. Nothing here may consume a draw from that stream.
+    const rng = new RNG(12345n);
+    const before = rng.save();
+    for (const id of ['sol', 'rigel', 'wolf359']) vistaFor(id, 'colony');
+    assert.deepEqual(rng.save(), before, 'the vista consumed draws from the simulation RNG');
+  });
+
+  test('there is always a primary, and it is the only thing lit from within', () => {
+    for (const type of ['core', 'homeworld', 'colony', 'outpost', 'anomaly', 'deadspace']) {
+      const v = vistaFor(`t:${type}`, type);
+      const stars = v.bodies.filter((b) => b.kind === 'star');
+      assert.equal(stars.length, 1, `${type} has ${stars.length} suns`);
+      const lit = v.bodies.filter((b) => b.emissive > 0);
+      assert.deepEqual(lit, stars, `${type} has planets glowing in the dark`);
+    }
+  });
+
+  test('every body is somewhere the camera can actually see it', () => {
+    // Inside the 40,000-unit far plane and outside the 3,000-unit tactical
+    // volume — a planet parked inside the engagement would be flown through.
+    for (const id of ['sol', 'vulcan', 'qonos', 'rigel', 'wolf359']) {
+      for (const b of vistaFor(id, 'core').bodies) {
+        const d = Math.hypot(b.x, b.y, b.z);
+        assert.ok(d > VOLUME, `${b.id} is at ${d.toFixed(0)}, inside the battle volume`);
+        assert.ok(d + b.radius < 40000, `${b.id} is past the far plane`);
+        assert.ok(b.radius > 0 && Number.isFinite(b.radius), `${b.id} has radius ${b.radius}`);
+      }
+    }
+  });
+
+  test('dead space is empty, and a core system is not', () => {
+    // Wolf 359 should feel like an absence. That is a content decision the
+    // data has to actually carry, not a note in a comment.
+    const dead = vistaFor('wolf359', 'deadspace').bodies.filter((b) => b.kind !== 'star');
+    const core = vistaFor('sol', 'core').bodies.filter((b) => b.kind !== 'star');
+    assert.ok(dead.length <= 1, `dead space has ${dead.length} worlds in it`);
+    assert.ok(core.length >= 3, `a core system has only ${core.length} worlds`);
+  });
+
+  test('the screen opens pointed at something rather than at empty sky', () => {
+    for (const id of ['sol', 'vulcan', 'rigel']) {
+      const v = vistaFor(id, 'colony');
+      assert.ok(v.focus, `${id} has nothing to look at`);
+      assert.ok(v.bodies.includes(v.focus), 'the focus is not one of the bodies');
+      // Pointing the camera at the focus must actually put it ahead: the
+      // bearing has to invert cleanly, which is the bug that would otherwise
+      // open the viewer aimed 180 degrees away from the planet.
+      const yaw = bearingOf(v.focus);
+      const fx = Math.cos(yaw) * 1 - Math.sin(yaw) * 0;
+      const fz = Math.sin(yaw) * 1 + Math.cos(yaw) * 0;
+      const len = Math.hypot(v.focus.x, v.focus.z) || 1;
+      const dot2 = (fx * v.focus.x + fz * v.focus.z) / len;
+      assert.ok(dot2 > 0.99, `the focus ends up ${Math.acos(dot2) * 180 / Math.PI | 0} degrees off centre`);
+    }
+  });
+
+  test('every body kind the vista can produce has a mesh', () => {
+    const kinds = new Set();
+    for (const id of ['sol', 'vulcan', 'qonos', 'rigel', 'wolf359', 'risa']) {
+      for (const type of ['core', 'homeworld', 'colony', 'station', 'outpost', 'anomaly', 'deadspace']) {
+        for (const b of vistaFor(`${id}:${type}`, type).bodies) kinds.add(b.kind);
+      }
+    }
+    for (const kind of kinds) {
+      const m = bodyMesh(kind, 0);
+      assert.ok(m.vertexCount > 0, `${kind} produced no geometry`);
+    }
+  });
+
+  test('the scenery cannot spend the ships\u2019 triangle budget', () => {
+    // A body is memoised per kind, so the cost of the sky is bounded by how
+    // many bodies are DRAWN, not by how many exist or how many systems have
+    // been visited. `drawVista` culls to what is in front of the camera and
+    // caps the rest at six. The harness holds the whole frame to 8,000
+    // triangles with a starfield and six hostiles already in it, so this is
+    // the headroom that cap has to fit inside.
+    // Mirrors VISTA_DRAW_CAP in ui/tactical3d.js, which node cannot import.
+    const CAP = 4;
+    const kinds = new Set();
+    for (const type of ['core', 'homeworld', 'colony', 'station', 'outpost', 'anomaly', 'deadspace']) {
+      for (const b of vistaFor(`b:${type}`, type).bodies) kinds.add(b.kind);
+    }
+    const worst = Math.max(...[...kinds].map((k) => bodyMesh(k, 0).vertexCount / 3));
+    assert.ok(worst * CAP < 2000,
+      `${CAP} bodies at ${worst} triangles each is ${worst * CAP}, which the ships cannot afford`);
+  });
+
 });

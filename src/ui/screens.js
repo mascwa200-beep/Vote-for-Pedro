@@ -177,6 +177,96 @@ export function transitScreen(app) {
   return root;
 }
 
+// ============================================================== VIEWSCREEN
+
+/**
+ * The main viewer.
+ *
+ * Same GL context, same meshes, same frame as the tactical plot — the only
+ * difference is where the camera stands. The plot looks in at the engagement
+ * from outside; this looks out over the bow from where the bridge is. That is
+ * the whole implementation, and it is the right one: a second renderer would
+ * mean a second WebGL context, and browsers quietly drop the oldest when you
+ * open too many.
+ *
+ * The controls are deliberately thin. On the viewscreen you are in the chair,
+ * and the chair's instrument is the order line — you say "fire phasers" and
+ * the tactical officer fires them. The buttons here are for the two things a
+ * captain does with the screen itself: point it, and put it away.
+ */
+export function viewscreenScreen(app) {
+  const g = app.game;
+  const eng = g.engagement;
+  const root = el('div', { class: 'screen viewscreen-screen' });
+
+  // The viewport node is a singleton that gets *moved* between screens rather
+  // than rebuilt — see the note in tacticalScreen. Here it is moved inside a
+  // bezel instead of sitting flush.
+  let wrap = app.tacticalHost;
+  if (!wrap) {
+    wrap = el('div', { class: 'tactical-wrap' }, [
+      el('canvas', { id: 'tactical' }),
+      el('div', { class: 'tactical-overlay' }),
+    ]);
+    app.tacticalHost = wrap;
+  }
+  app.tacticalCanvas = wrap.querySelector('#tactical');
+  app.tacticalOverlay = wrap.querySelector('.tactical-overlay');
+
+  const bezel = el('div', { class: 'viewscreen-bezel' }, [wrap]);
+  root.append(el('div', { class: 'viewscreen-housing' }, [bezel]));
+
+  const side = el('div', { class: 'viewscreen-side scroll' });
+  root.append(side);
+
+  // A status strip, not a console. What is on the screen, and whether it is
+  // about to shoot at us.
+  const sys = g.location;
+  const status = [
+    el('p', {}, [el('b', { text: sys.name }), ' — ', el('span', { class: 'muted', text: sys.description })]),
+  ];
+  if (eng && !eng.over) {
+    const t = eng.target;
+    status.push(el('div', { class: 'meta' }, [
+      pill(`${eng.liveHostiles.length} hostile${eng.liveHostiles.length === 1 ? '' : 's'}`, 'red'),
+      t && !t.destroyed ? pill(`${Math.round(g.ship.distanceTo(t))} km`) : null,
+      g.ship.shieldsUp ? pill('shields up', 'green') : pill('shields down', 'red'),
+    ].filter(Boolean)));
+    if (t && !t.destroyed) {
+      status.push(readout(`${t.name} hull`, t.hullPct));
+      status.push(readout(`${t.name} shields`, t.shieldPct));
+    }
+  }
+  side.append(panel('On Screen', status, eng && !eng.over ? 'danger' : 'accent'));
+
+  side.append(panel('Main Viewer', [
+    el('div', { class: 'grid-2' }, [
+      button('Steady as she goes', tap(() => {
+        app.tactical?.centreLook?.();
+      }), { color: 'blue', sub: 'Point the screen back down the bow' }),
+      button('Magnify', tap(() => {
+        const v = app.tactical;
+        if (!v?.setMagnification) return;
+        // Cycles rather than ramps: a captain says "magnification factor
+        // three", not "a bit more". Wraps back to 1 so one button does both.
+        const next = v.magnification >= 8 ? 1 : Math.min(12, v.magnification * 2);
+        v.setMagnification(next);
+        app.render();
+      }), {
+        color: 'ice',
+        sub: app.tactical?.magnification > 1.05 ? `Now ${app.tactical.magnification.toFixed(0)}×` : 'Optical zoom',
+      }),
+    ]),
+    el('p', { class: 'hint', text: 'Drag to pan the screen; pinch to magnify. In a fight the viewer is slaved to the bow and drifts back on its own.' }),
+    eng && !eng.over
+      ? button('Tactical plot', tap(() => app.go('tactical')), { color: 'amber', sub: 'The outside view, with the full weapons console' })
+      : button('Close the viewer', tap(() => app.go('bridge')), { color: 'ghost' }),
+  ]));
+
+  side.append(panel('Ship’s Log', g.log.slice(-4).reverse().map(logLine)));
+  return root;
+}
+
 // ================================================================ TACTICAL
 
 export function tacticalScreen(app) {
@@ -269,6 +359,11 @@ export function tacticalScreen(app) {
 
   // --- Helm ---
   side.append(panel('Helm', [
+    // The way out to the forward view. It lives under Helm because pointing
+    // the ship is what pointing the screen amounts to in a fight.
+    button('On screen', tap(() => app.go('viewscreen')), {
+      color: 'ice', sub: 'The forward view from the bridge',
+    }),
     el('div', { class: 'grid-2' }, [
       button('Come about', tap(() => eng.comeAboutTo(eng.target)), { color: 'blue' }),
       button(g.ship.evasive ? 'Evasive: on' : 'Evasive', tap(() => {

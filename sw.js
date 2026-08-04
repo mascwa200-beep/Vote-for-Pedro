@@ -80,6 +80,7 @@ const PRECACHE = [
   './src/gfx/gl.js',
   './src/gfx/blueprint.js',
   './src/gfx/scene.js',
+  './src/gfx/vista.js',
 ];
 
 self.addEventListener('install', (event) => {

@@ -20,10 +20,24 @@ const modules = new Map();   // absolute path -> { source, deps, order }
 const order = [];
 
 // Import/export statements are matched across newlines: the codebase wraps
-// long binding lists, and a line-anchored pattern silently skips those.
-const IMPORT_RE = /\bimport\s+(?:([\s\S]+?)\s+from\s+)?['"](\.[^'"]+)['"]\s*;?/g;
-const EXPORT_FROM_RE = /\bexport\s+\{([\s\S]*?)\}\s+from\s+['"](\.[^'"]+)['"]\s*;?/g;
-const EXPORT_NAMED_RE = /\bexport\s+\{([\s\S]*?)\}\s*;?/g;
+// long binding lists, and a pattern that stops at a newline silently skips
+// those. But "across newlines" and "anywhere in the file" are different
+// things, and the difference was a real bug.
+//
+// These used to start with \b, so the word appearing in ordinary PROSE would
+// begin a match, and the lazy clause would then run forward through the
+// comment and swallow the next real statement whole. One sentence in a file
+// header — the word, then any later `from './x.js'` — produced a bundle with
+// `import = __require(...)` in it and a build that would not parse. The bundle
+// is what ships, so a comment could break the game and nothing else would say
+// so.
+//
+// Anchoring to the start of a line is the fix: a statement begins a line, and
+// prose about one does not. The clause is also barred from crossing a `;`,
+// which is the other boundary a real clause never contains.
+const IMPORT_RE = /^[ \t]*import\s+(?:([^;]+?)\s+from\s+)?['"](\.[^'"]+)['"][ \t]*;?/gm;
+const EXPORT_FROM_RE = /^[ \t]*export\s+\{([^;]*?)\}\s+from\s+['"](\.[^'"]+)['"][ \t]*;?/gm;
+const EXPORT_NAMED_RE = /^[ \t]*export\s+\{([^;}]*?)\}[ \t]*;?/gm;
 
 async function collect(path) {
   const abs = resolve(path);

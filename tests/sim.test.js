@@ -1080,3 +1080,56 @@ test('faster warp never takes longer', () => {
     }
   }
 });
+
+// ---------------------------------------------------------- the warp switches
+//
+// "Warp eight" used to be an order the game acknowledged and then discarded:
+// the helm said "warp eight standing by", nothing recorded it, and the next
+// course was plotted at six. These assert the effect, not the acknowledgement.
+
+test('the standing warp factor is what a course is actually plotted at', () => {
+  const slow = new Game({ seed: 1801n, crewMode: 'canon', era: 'tos' });
+  const fast = new Game({ seed: 1801n, crewMode: 'canon', era: 'tos' });
+
+  slow.setWarpFactor(2);
+  fast.setWarpFactor(8);
+  assert.ok(slow.setCourse('vulcan').ok);
+  assert.ok(fast.setCourse('vulcan').ok);
+
+  assert.equal(slow.transit.warpFactor, 2);
+  assert.equal(fast.transit.warpFactor, 8);
+  assert.ok(fast.transit.totalHours < slow.transit.totalHours,
+    `warp 8 took ${fast.transit.totalHours}h and warp 2 took ${slow.transit.totalHours}h`);
+});
+
+test('a factor the drive cannot reach is clamped, and says so', () => {
+  const g = new Game({ seed: 1802n, crewMode: 'canon', era: 'tos' });
+  const max = g.ship.cls.maxWarp;
+  const r = g.setWarpFactor(9.9);
+  assert.equal(r.factor, max, `asked for 9.9 on a warp-${max} drive and got ${r.factor}`);
+  assert.equal(r.limited, true, 'the helm did not report that it was limited');
+  assert.equal(g.warpFactor, max);
+});
+
+test('nonsense on the switch does not become a nonsense course', () => {
+  const g = new Game({ seed: 1803n, crewMode: 'canon', era: 'tos' });
+  for (const bad of [0, -4, NaN, undefined, 'eight', Infinity]) {
+    g.setWarpFactor(bad);
+    assert.ok(g.warpFactor >= 1 && g.warpFactor <= g.ship.cls.maxWarp,
+      `${String(bad)} set the standing factor to ${g.warpFactor}`);
+  }
+});
+
+test('the standing factor survives a save', () => {
+  const g = new Game({ seed: 1804n, crewMode: 'canon', era: 'tos' });
+  g.setWarpFactor(3);
+  const restored = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.equal(restored.warpFactor, 3);
+});
+
+test('a record written before the switches existed still cruises at six', () => {
+  const g = new Game({ seed: 1805n, crewMode: 'canon', era: 'tos' });
+  const data = JSON.parse(JSON.stringify(g.save()));
+  delete data.warpFactor;
+  assert.equal(Game.load(data).warpFactor, 6);
+});

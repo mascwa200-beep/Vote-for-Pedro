@@ -345,8 +345,149 @@ try {
     check('the WebGL context survives six screen changes',
       roundTrip.lost === false, String(roundTrip.lost));
     check('the reused view is still drawing', roundTrip.drawCalls > 3, String(roundTrip.drawCalls));
+
+    // ---- The main viewer ----
+    //
+    // Same renderer, same context, camera in a different place. Everything
+    // worth checking here is a thing that cannot be checked in node: that the
+    // camera really moves, that the picture is not black, that the budget
+    // survives a second scene being drawn into the same frame, and above all
+    // that opening the viewer does not mint a second WebGL context — which is
+    // exactly the bug the round-trip checks above exist for.
+    const viewer = await page.evaluate(async () => {
+      const app = globalThis.__app;
+      const before = app.tactical;
+      const orbitEye = [...app.tactical.eye()];
+      app.go('viewscreen');
+      await new Promise((r) => setTimeout(r, 260));
+      const v = app.tactical;
+      const forwardEye = [...v.eye()];
+      const dist = Math.hypot(
+        orbitEye[0] - forwardEye[0], orbitEye[1] - forwardEye[1], orbitEye[2] - forwardEye[2]);
+      return {
+        same: v === before,
+        mode: v.cameraMode,
+        moved: dist,
+        overlays: document.querySelectorAll('canvas.tactical-labels').length,
+        glCanvases: document.querySelectorAll('#tactical').length,
+        bezel: document.querySelectorAll('.viewscreen-bezel').length,
+        drawCalls: v.stats.drawCalls,
+        triangles: v.stats.triangles,
+        lost: v.renderer?.lost ?? null,
+      };
+    });
+    check('the viewer reuses the tactical renderer rather than making a second one',
+      viewer.same === true);
+    check('opening the viewer does not mint a second GL canvas',
+      viewer.glCanvases === 1 && viewer.overlays === 1,
+      `${viewer.glCanvases} canvas(es), ${viewer.overlays} overlay(s)`);
+    check('the viewer puts the camera in forward mode', viewer.mode === 'forward', viewer.mode);
+    check('the forward camera is somewhere else entirely', viewer.moved > 200,
+      `${viewer.moved.toFixed(0)} units from the orbit camera`);
+    check('the picture sits in a bezel', viewer.bezel === 1, String(viewer.bezel));
+    check('the viewer is still drawing a real scene', viewer.drawCalls > 3, String(viewer.drawCalls));
+    check('the viewer stays inside the triangle budget', viewer.triangles <= 8000,
+      String(viewer.triangles));
+    check('the viewer stays inside the draw-call budget', viewer.drawCalls <= 60,
+      String(viewer.drawCalls));
+    check('the WebGL context survives the camera change', viewer.lost === false, String(viewer.lost));
+
+    const viewerShot = await page.screenshot({
+      clip: await page.evaluate(() => {
+        const r = document.getElementById('tactical').getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      }),
+    });
+    check('the viewer is not a black rectangle', viewerShot.length > 3000,
+      `${viewerShot.length} bytes of PNG`);
+    await page.screenshot({ path: join(SHOTS, '05b-viewscreen.png') });
+
+    // Panning and magnifying are the two things the screen itself does, and
+    // both are reachable by voice — "on screen", "magnify". Driving them
+    // through the order line proves the parser, the dispatch and the camera
+    // all agree, which three separate assertions would not.
+    const panned = await page.evaluate(async () => {
+      const app = globalThis.__app;
+      const v = app.tactical;
+      const yaw0 = v.look.targetYaw;
+      v.panLook(0.4, 0.1);
+      const yaw1 = v.look.targetYaw;
+      v.centreLook();
+      await new Promise((r) => setTimeout(r, 200));
+      return { yaw0, yaw1, centred: Math.abs(v.look.targetYaw) < 0.05, mag: v.magnification };
+    });
+    check('the screen pans', Math.abs(panned.yaw1 - panned.yaw0) > 0.2,
+      `${panned.yaw0.toFixed(2)} -> ${panned.yaw1.toFixed(2)}`);
+    check('steady as she goes puts the screen back on the bow', panned.centred === true);
+
+    const say = async (text) => {
+      await page.fill('.orderbar input', text);
+      await page.press('.orderbar input', 'Enter');
+      await page.waitForTimeout(180);
+      return page.evaluate(() => ({
+        mag: globalThis.__app.tactical.magnification,
+        screen: globalThis.__app.screen,
+        mode: globalThis.__app.tactical.cameraMode,
+      }));
+    };
+    const step = await say('magnify');
+    const exact = await say('magnification factor five');
+    const magnified = { after: step.mag, exact: exact.mag, screen: exact.screen };
+    check('"magnify" zooms the viewer', magnified.after > 1.05, String(magnified.after));
+    check('a spoken magnification factor is obeyed exactly',
+      Math.abs(magnified.exact - 5) < 0.01, String(magnified.exact));
+
+    // Back out, and the plot must be a plot again — a camera left in forward
+    // mode on the tactical screen is a display with no overview at all.
+    const backToPlot = await page.evaluate(async () => {
+      globalThis.__app.go('tactical');
+      await new Promise((r) => setTimeout(r, 200));
+      const v = globalThis.__app.tactical;
+      return { mode: v.cameraMode, mag: v.magnification, drawCalls: v.stats.drawCalls };
+    });
+    check('leaving the viewer returns the camera to the orbit plot',
+      backToPlot.mode === 'orbit', backToPlot.mode);
+    check('the plot is not left magnified', Math.abs(backToPlot.mag - 1) < 0.01,
+      String(backToPlot.mag));
+    check('the plot is still drawing after the round trip', backToPlot.drawCalls > 3,
+      String(backToPlot.drawCalls));
   }
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
+
+  // ---- The helm's eight warp switches ----
+  //
+  // Driven through the DOM rather than the model, because the point of the
+  // switches is that they are a control on the bridge. A standing factor that
+  // only a test can set is the same inert feature this replaces. That the
+  // factor then reaches the course is asserted in tests/sim.test.js, where it
+  // can be done without a live engagement in the way.
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+  const switches = await page.$$('.warp-switch');
+  check('the console has eight warp switches', switches.length === 8, String(switches.length));
+  if (switches.length === 8) {
+    await page.click('.warp-switch:nth-child(3)');
+    await page.waitForTimeout(150);
+    const thrown = await page.evaluate(() => ({
+      factor: globalThis.__app.game.warpFactor,
+      lit: document.querySelectorAll('.warp-switch.on').length,
+      litIndex: [...document.querySelectorAll('.warp-switch')]
+        .findIndex((b) => b.classList.contains('on')),
+    }));
+    check('throwing a switch sets the standing warp factor', thrown.factor === 3,
+      String(thrown.factor));
+    check('exactly one switch is up at a time', thrown.lit === 1, String(thrown.lit));
+    check('the switch that is up is the one that was thrown', thrown.litIndex === 2,
+      String(thrown.litIndex));
+  }
+  // Scroll the chair into frame so the screenshot is of the switches rather
+  // than of whatever happens to be at the top of the screen.
+  await page.evaluate(() => document.querySelector('.chair-warp')
+    ?.scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(SHOTS, '02b-warp-switches.png') });
+  // Put the run back where it was: everything after this expects the plot.
+  await nav(page, 'Combat');
 
   // ---- Audio survives being backgrounded ----
   //

@@ -55,6 +55,7 @@ uniform vec3 uFill;       // fill light direction
 uniform vec3 uTint;       // faction/status tint multiplied into the hull
 uniform float uAlpha;
 uniform float uEmissive;  // 1.0 makes the surface ignore lighting entirely
+uniform float uFogFar;    // distance at which the haze reaches its floor
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -67,7 +68,15 @@ void main() {
 
   // Fog toward the far plane, so a distant hull recedes rather than hanging
   // at full contrast against the starfield.
-  float fog = clamp(1.0 - vDepth / 9000.0, 0.35, 1.0);
+  //
+  // The falloff used to be hardcoded at 9,000 units, which is right for the
+  // 3,000-unit engagement volume and wrong for everything else in the scene.
+  // A planet sits four to thirteen thousand units out and the starfield twelve
+  // thousand, so both were pinned at the 0.35 floor — the sky was permanently
+  // dimmed to a third of its colour and a world outside the window rendered as
+  // a near-black disc. It is a uniform now, and the draws that are meant to be
+  // far away set it accordingly.
+  float fog = clamp(1.0 - vDepth / uFogFar, 0.35, 1.0);
   gl_FragColor = vec4(lit * fog, uAlpha);
 }
 `;
@@ -151,6 +160,7 @@ export class Renderer {
       tint: gl.getUniformLocation(this.program, 'uTint'),
       alpha: gl.getUniformLocation(this.program, 'uAlpha'),
       emissive: gl.getUniformLocation(this.program, 'uEmissive'),
+      fogFar: gl.getUniformLocation(this.program, 'uFogFar'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -247,7 +257,11 @@ export class Renderer {
    * Draw an uploaded mesh.
    * @param {object} opts { model, normalMatrix, tint, alpha, emissive }
    */
-  draw(key, mesh, { model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0 }) {
+  draw(key, mesh, {
+    model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0,
+    // Default is the engagement volume, which is what almost every draw is.
+    fogFar = 9000,
+  }) {
     if (this.lost) return;
     const entry = this.upload(key, mesh);
     if (!entry) return;
@@ -269,6 +283,7 @@ export class Renderer {
     gl.uniform3f(this.uniform.tint, tint[0], tint[1], tint[2]);
     gl.uniform1f(this.uniform.alpha, alpha);
     gl.uniform1f(this.uniform.emissive, emissive);
+    gl.uniform1f(this.uniform.fogFar, fogFar);
 
     gl.drawArrays(gl.TRIANGLES, 0, entry.vertexCount);
     this.drawCalls++;

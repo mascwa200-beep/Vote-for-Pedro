@@ -31,7 +31,8 @@ import { CONSOLES } from './sim/loadout.js';
 
 const NAV = [
   { id: 'bridge', label: 'Bridge', ico: '⌂' },
-  { id: 'tactical', label: 'Tactical', ico: '⊕' },
+  { id: 'viewscreen', label: 'Viewer', ico: '▭' },
+  { id: 'tactical', label: 'Combat', ico: '⊕' },
   { id: 'galaxy', label: 'Map', ico: '✦' },
   { id: 'ship', label: 'Ship', ico: '⬡' },
   { id: 'crew', label: 'Crew', ico: '☰' },
@@ -368,7 +369,10 @@ class App {
     // the bridge, so the map, ship, and record stay reachable while you decide.
     let screen = this.screen;
     if (g.over) screen = 'gameover';
-    else if (g.mode === MODES.COMBAT) screen = 'tactical';
+    // Combat takes the screen, but not the *choice* of screen: the viewer is a
+    // legitimate place to fight from, and being yanked off it the moment
+    // somebody decloaks would defeat the point of having one.
+    else if (g.mode === MODES.COMBAT) screen = screen === 'viewscreen' ? 'viewscreen' : 'tactical';
     else if (g.mode === MODES.MISSION) screen = 'mission';
     else if (g.mode === MODES.ENCOUNTER && screen === 'bridge') screen = 'encounter';
     else if (g.mode === MODES.TRANSIT && screen === 'bridge') screen = 'transit';
@@ -377,6 +381,7 @@ class App {
     let node;
     switch (screen) {
       case 'tactical': node = screens.tacticalScreen(this); break;
+      case 'viewscreen': node = screens.viewscreenScreen(this); break;
       case 'galaxy': node = screens.galaxyScreen(this); break;
       case 'crew': node = el('div', { class: 'screen' }, [screens.crewScreen(this)]); break;
       case 'sheet': node = el('div', { class: 'screen' }, [characterSheetScreen(this)]); break;
@@ -397,7 +402,7 @@ class App {
     this.screenEl = node;
 
     // Canvas-backed screens need their renderers rebuilt after a DOM swap.
-    if (screen === 'tactical' && this.tacticalCanvas) {
+    if ((screen === 'tactical' || screen === 'viewscreen') && this.tacticalCanvas) {
       // Three dimensions when the device can, two when it cannot. The 2D view
       // is not a stub — it is the display this game shipped with, and it stays
       // complete, because "no WebGL" must mean a different picture and not a
@@ -414,6 +419,13 @@ class App {
           this.render();
         };
       }
+      // The camera follows the screen you are on: the plot orbits, the viewer
+      // looks out. Same renderer, same context — one call, not one more canvas.
+      this.tactical.setCameraMode?.(screen === 'viewscreen' ? 'forward' : 'orbit');
+      // The sky belongs to the system, not to the screen. Setting it here means
+      // a fight at Rigel happens against Rigel's worlds whether or not you
+      // happened to open the viewer first.
+      this.tactical.setVista?.(g.location?.id, g.location?.type);
     }
     if (screen === 'galaxy' && this.galaxyCanvas) {
       this.map = new GalaxyMap(this.galaxyCanvas);
@@ -891,9 +903,18 @@ class App {
         else audio.play('ui_deny');
         break;
       }
-      case 'warp_factor':
-        ack('helm', `Warp ${order.warp} standing by.`);
+      case 'warp_factor': {
+        // This used to be an acknowledgement and nothing else — the helm said
+        // "warp eight standing by" and the next course still went out at six.
+        // It sets the standing factor now, which is what the flip switches on
+        // the console do and what the word means.
+        const r = g.setWarpFactor(order.warp);
+        audio.play(r.limited ? 'ui_deny' : 'ui_confirm');
+        ack('helm', r.limited
+          ? `Warp ${r.max} is all she has, Captain. Standing by at warp ${r.factor}.`
+          : `Warp ${r.factor} standing by.`);
         break;
+      }
       case 'throttle': {
         // Engines answering an order is a sound the game had and never made.
         const opening = order.value > g.ship.throttle + 0.15;
@@ -1071,11 +1092,31 @@ class App {
         break;
       }
       case 'viewscreen': {
-        // The viewscreen shows the tactical picture when there is one to show,
-        // and the bridge otherwise. Same button, both directions.
-        const target = this.screen === 'tactical' ? 'bridge'
-          : (eng && !eng.over ? 'tactical' : 'galaxy');
-        this.go(target);
+        // "On screen." One order, both directions: it opens the main viewer,
+        // and said again it closes it and puts you back where you were —
+        // the tactical plot mid-fight, the bridge otherwise.
+        if (this.screen === 'viewscreen') {
+          this.go(eng && !eng.over ? 'tactical' : 'bridge');
+          ack('helm', 'Screen off, Captain.');
+        } else {
+          this.go('viewscreen');
+          audio.play('ui_select');
+          ack('helm', 'On screen.');
+        }
+        break;
+      }
+      case 'magnify': {
+        // "Magnify" while the viewer is shut means "show me" — open it first,
+        // then zoom, rather than silently magnifying something nobody can see.
+        if (this.screen !== 'viewscreen') this.go('viewscreen');
+        const v = this.tactical;
+        if (!v?.setMagnification) { audio.play('ui_deny'); break; }
+        const factor = order.factor && order.factor > 0
+          ? order.factor
+          : Math.min(12, v.magnification * 2);
+        const now = v.setMagnification(factor);
+        audio.play('computer_ack');
+        ack('science', `Magnification factor ${now % 1 ? now.toFixed(1) : now.toFixed(0)}.`);
         break;
       }
 
@@ -1412,7 +1453,14 @@ class App {
       for (let i = 0; i < steps; i++) g.update(SIM_STEP);
 
       // Canvas views redraw every frame; DOM only when something changed.
-      if (this.tactical && g.engagement) this.tactical.render(g.engagement, g.clock.alpha);
+      const dt = Math.min(0.1, Math.max(0, (timestamp - (this.lastFrameAt ?? timestamp)) / 1000));
+      this.lastFrameAt = timestamp;
+      if (this.tactical) {
+        if (g.engagement) this.tactical.render(g.engagement, g.clock.alpha, dt);
+        // No engagement and the viewer is open: draw what is actually outside,
+        // rather than the black rectangle a combat camera gives you at peace.
+        else if (this.screen === 'viewscreen') this.tactical.renderVista?.(g, dt);
+      }
       if (this.map) this.map.render(g);
       this.updateOverlay();
 

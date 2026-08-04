@@ -15,7 +15,7 @@
 // documented and inert in this repository; a lexicon is the easiest possible
 // place for that to happen again, so it is checked mechanically.
 
-import { fold } from './normalize.js';
+import { fold, readNumber } from './normalize.js';
 
 /** Departments an order can be aimed at, used to break ties. */
 export const STATION_AFFINITY = {
@@ -627,13 +627,35 @@ export const INTENTS = [
     id: 'viewscreen',
     help: 'On screen / main viewer',
     phrases: [
-      'main viewer', 'tactical display', 'show me the tactical',
-      'put it on the viewscreen', 'switch the viewscreen', 'viewscreen',
-      'show me what is out there', 'let me see',
+      'on screen', 'on the screen', 'main viewer', 'tactical display',
+      'show me the tactical', 'put it on the viewscreen', 'switch the viewscreen',
+      'viewscreen', 'show me what is out there', 'let me see',
+      'screen off', 'close the viewer',
     ],
-    keywords: { viewscreen: 3, display: 2, viewer: 2.5, see: 1.5 },
+    keywords: { viewscreen: 3, display: 2, viewer: 2.5, see: 1.5, screen: 2.5 },
     veto: ['hail', 'channel', 'them'],
     build: () => ({ action: 'viewscreen' }),
+  },
+  {
+    // The most quotable order on the bridge, and until now it did nothing at
+    // all — there was no screen to magnify. It opens the viewer if it is shut,
+    // because "magnify" while looking at a crew roster means "show me".
+    id: 'magnify',
+    help: 'Magnify — optical zoom on the main viewer',
+    phrases: [
+      'magnify', 'magnification', 'zoom in', 'closer look', 'enhance',
+      'magnify that', 'increase magnification', 'zoom in on that',
+      'magnify the image', 'give me a closer look', 'closer view',
+      'increase magnification factor', 'magnification factor', 'zoom the viewer',
+    ],
+    keywords: { magnify: 3, magnification: 3, zoom: 2.5, enhance: 2 },
+    veto: ['scan', 'sensor'],
+    build: (c) => ({
+      // "magnification factor three" — a number in the order is the factor.
+      // No number means one more step, which is what a bare "magnify" means.
+      action: 'magnify',
+      factor: readNumber(c.text, null),
+    }),
   },
   // ------------------------------------------------------------------
   // The machine shop. Being trapped is a situation you build your way out
