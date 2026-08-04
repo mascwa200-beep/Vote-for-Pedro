@@ -10,6 +10,7 @@ import { FACINGS } from '../sim/ship.js';
 import { ABILITIES } from '../sim/officers.js';
 import { parseText, CONFIDENT } from '../lang/parse.js';
 import { intentHelp, phraseCount, INTENTS, STATION_AFFINITY } from '../lang/lexicon.js';
+import { findRoom } from '../world/interiors.data.js';
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
@@ -97,8 +98,12 @@ const ORDERS = [
   {
     id: 'set_course',
     help: 'Helm, set course for <system>, warp <n>',
-    test: (t) => /\b(set (a )?course|lay in a course|plot a course|course for|take us to|head for|make for|proceed to|go to|warp to)\b/.test(t)
-      || (/\bwarp\s*\d/.test(t) && findSystem(t)),
+    // Naming a compartment rules this out. Without the guard the regex layer
+    // claimed "go to sickbay" and answered "Which system, Captain?" — the same
+    // failure as in the lexicon, arriving one layer lower down.
+    test: (t, raw) => !findRoom(raw ?? t)
+      && (/\b(set (a )?course|lay in a course|plot a course|course for|take us to|head for|make for|proceed to|go to|warp to)\b/.test(t)
+        || (/\bwarp\s*\d/.test(t) && findSystem(t))),
     build: (t) => {
       const system = findSystem(t);
       if (!system) return { error: 'Which system, Captain?' };
@@ -370,7 +375,10 @@ export function parseOrder(raw) {
 
 function matchPlainOrder(t, raw) {
   for (const order of ORDERS) {
-    if (order.test(t)) {
+    // `raw` is passed so a test can consult the UNSTRIPPED line. Only
+    // `set_course` needs it, and it needs it badly: it owns the phrase "go to",
+    // and "go to sickbay" is not a course.
+    if (order.test(t, raw)) {
       const built = order.build(t);
       return { ...built, orderId: order.id, raw };
     }

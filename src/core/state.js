@@ -11,6 +11,7 @@ import { CaptainProgress, combatXP } from '../sim/skills.js';
 import { Loadout, startingLoadout } from '../sim/loadout.js';
 import { Engagement } from '../sim/combat.js';
 import { AwayTeam } from '../sim/away.js';
+import { Walker, stepToward, findRoom } from '../sim/walk.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import { resolveHail, STANDING_EFFECTS } from '../sim/diplomacy.js';
 
@@ -125,6 +126,9 @@ export class Game {
     // switches on the console set it; six is the cruise the game has always
     // assumed when nobody says.
     this.warpFactor = 6;
+    // Where the captain physically is. A commission starts in the chair.
+    this.walk = new Walker();
+    this.walkOrder = null;
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
@@ -344,6 +348,70 @@ export class Game {
     this.engagement.deployDecoy(14);
     this.officerSays('engineering', 'Ion pod away. It will read like us for a minute or so.', 'report');
     return { ok: true };
+  }
+
+  /**
+   * Advance a walk that is under way.
+   *
+   * "Go to sickbay" walks you there. It does not teleport you, and the
+   * difference is the whole reason the ship has geometry: a lift ride and a
+   * corridor are a minute of the captain's day, and being somewhere other than
+   * the bridge is a thing that can matter when the shooting starts.
+   */
+  updateWalk(dt) {
+    if (!this.walkOrder) return;
+    const { toId } = this.walkOrder;
+    this.walkOrder.memory ??= {};
+    const r = stepToward(this.walk, toId, dt, this.walkOrder.memory);
+    this.walkOrder.elapsed = (this.walkOrder.elapsed ?? 0) + dt;
+
+    if (r.arrived) {
+      this.walkOrder = null;
+      this.pushLog(`Arrived at ${this.walk.room.name}.`, 'captain');
+      emit('walk', { roomId: this.walk.roomId, arrived: true });
+      return;
+    }
+    if (r.blocked) {
+      this.walkOrder = null;
+      this.pushLog(`There is no route to ${toId} from here.`, 'computer');
+      return;
+    }
+    // A walk that has not arrived in two minutes is a walk that is not going
+    // to. Better to say so than to leave the captain pacing forever.
+    if (this.walkOrder.elapsed > 120) {
+      this.walkOrder = null;
+      this.pushLog(`Could not reach ${toId}. Standing by in ${this.walk.room.name}.`, 'computer');
+    }
+  }
+
+  /** Set off for another part of the ship. */
+  goToRoom(nameOrId) {
+    const room = findRoom(nameOrId) ?? null;
+    if (!room) return { ok: false, reason: 'There is no such compartment aboard, Captain.' };
+    if (room.id === this.walk.roomId && !this.walkOrder) {
+      return { ok: false, reason: `You are in ${room.name}, Captain.` };
+    }
+    if (this.mode === MODES.COMBAT) {
+      return { ok: false, reason: 'Not while we are under fire, Captain.' };
+    }
+    this.walkOrder = { toId: room.id, memory: {}, elapsed: 0 };
+    this.pushLog(`Making for ${room.name}.`, 'captain');
+    return { ok: true, room };
+  }
+
+  /** Stand up from the chair, or take it. */
+  takeChair(on = true) {
+    if (on && this.walk.roomId !== 'bridge') {
+      // Taking the chair from another deck means walking back to it first.
+      const r = this.goToRoom('bridge');
+      return r.ok
+        ? { ok: true, walking: true, reason: 'Making for the bridge, Captain.' }
+        : r;
+    }
+    this.walkOrder = null;
+    const r = this.walk.sit(on);
+    if (r.ok) this.pushLog(on ? 'Took the chair.' : 'Stood up from the chair.', 'captain');
+    return r;
   }
 
   // ------------------------------------------------------------------ orders
@@ -865,6 +933,7 @@ export class Game {
 
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
+    this.updateWalk(dt);
 
     switch (this.mode) {
       case MODES.TRANSIT: {
@@ -987,6 +1056,7 @@ export class Game {
       pendingFeats: this.pendingFeats ?? 0,
       podJettisoned: this.podJettisoned === true,
       warpFactor: this.warpFactor,
+      walk: this.walk.save(),
       firstStrike: this.firstStrike === true,
       inKobayashi: this.inKobayashi === true,
       gambitOpen: this.gambitOpen === true,
@@ -1223,6 +1293,10 @@ export class Game {
     // Records written before the flip switches existed have no standing
     // factor, and six is what the game used to assume.
     g.warpFactor = Number(data.warpFactor) > 0 ? Number(data.warpFactor) : 6;
+    // Records written before the ship had an inside put you in the chair,
+    // which is where every commission starts anyway.
+    g.walk = Walker.load(data.walk ?? {});
+    g.walkOrder = null;
     g.firstStrike = data.firstStrike === true;
     g.inKobayashi = data.inKobayashi === true;
     g.gambitOpen = data.gambitOpen === true;

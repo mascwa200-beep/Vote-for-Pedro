@@ -259,6 +259,81 @@ try {
   check('the map actually draws pixels', mapDrawn > 50, `lit samples: ${mapDrawn}`);
   await page.screenshot({ path: join(SHOTS, '04-galaxy-map.png') });
 
+  // ---- The ship has an inside ----
+  //
+  // Driven through the order line, because "type it and actually arrive" is
+  // the check the whole subsystem exists for: it proves the geometry, the room
+  // graph, the collision, the autopilot and the parser all agree at once.
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+  const aboard = await page.evaluate(() => ({
+    room: globalThis.__app.game.walk.roomId,
+    seated: globalThis.__app.game.walk.seated,
+    panel: [...document.querySelectorAll('.panel h2')].some((h) => h.textContent.trim() === 'Aboard'),
+  }));
+  check('the captain starts in the chair on the bridge',
+    aboard.room === 'bridge' && aboard.seated === true, JSON.stringify(aboard));
+  check('the bridge says where you are', aboard.panel === true);
+
+  await page.fill('.orderbar input', 'go to sickbay');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(250);
+  const setOff = await page.evaluate(() => ({
+    walking: !!globalThis.__app.game.walkOrder,
+    to: globalThis.__app.game.walkOrder?.toId ?? null,
+    room: globalThis.__app.game.walk.roomId,
+  }));
+  check('"go to sickbay" sets off rather than teleporting',
+    setOff.walking && setOff.to === 'sickbay' && setOff.room === 'bridge',
+    JSON.stringify(setOff));
+
+  // The walk runs on the real frame loop, so this waits in wall-clock time
+  // rather than stepping the simulation by hand — which is the point: it is a
+  // walk, and it takes as long as walking takes.
+  const reachedSickbay = await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    const deadline = performance.now() + 30000;
+    while (g.walk.roomId !== 'sickbay' && performance.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    return { room: g.walk.roomId, seated: g.walk.seated, order: !!g.walkOrder };
+  });
+  check('and the captain actually arrives in sickbay',
+    reachedSickbay.room === 'sickbay', JSON.stringify(reachedSickbay));
+  check('arriving ends the walk and leaves you on your feet',
+    reachedSickbay.order === false && reachedSickbay.seated === false,
+    JSON.stringify(reachedSickbay));
+
+  await page.evaluate(() => globalThis.__app.render());
+  await page.waitForTimeout(200);
+  // The Aboard panel is well down the bridge; scroll it into frame so the
+  // screenshot is of the thing this section is about.
+  await page.evaluate(() => {
+    const h = [...document.querySelectorAll('.panel h2')].find((x) => x.textContent.trim() === 'Aboard');
+    h?.closest('.panel')?.scrollIntoView({ block: 'start' });
+  });
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, '10-aboard.png') });
+
+  // And back, by voice, to where the game normally sits.
+  await page.fill('.orderbar input', 'back to the bridge');
+  await page.press('.orderbar input', 'Enter');
+  const home = await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    const deadline = performance.now() + 30000;
+    while (g.walk.roomId !== 'bridge' && performance.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    return g.walk.roomId;
+  });
+  check('"back to the bridge" walks you home', home === 'bridge', home);
+
+  await page.fill('.orderbar input', 'take the chair');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(300);
+  check('and you can take the chair again',
+    await page.evaluate(() => globalThis.__app.game.walk.seated) === true);
+
   // ---- The manual, and the whole log ----
   //
   // Both existed and neither was reachable: `orderHelp()` was exported and

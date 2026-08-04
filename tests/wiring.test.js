@@ -951,7 +951,8 @@ describe('every sound cue is reachable', () => {
   const RESERVED = {
     intruder_alert: 'boarding is not implemented — ship.boarders is only ever decremented, never set',
     tractor_beam: 'there is no tractor beam mechanic',
-    door: 'no interior scene; the transporter cue covers away teams',
+    // `door` came off this list when the ship got an inside: "go to sickbay"
+    // walks you through real doorways and the cue plays on the way out.
   };
 
   test('a cue is either played or explicitly reserved, with a reason', () => {

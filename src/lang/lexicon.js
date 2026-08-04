@@ -72,6 +72,11 @@ export const INTENTS = [
     ],
     keywords: { course: 2, destination: 2, navigate: 1.5, plot: 1, lay: 0.8, travel: 1 },
     veto: ['bearing'],
+    // A compartment is not a star system. This intent owns the phrases "go to"
+    // and "take me to", so without standing aside it won "go to sickbay" and
+    // then asked which system — which is the exact failure the room matcher was
+    // written to avoid, arriving from the other direction.
+    vetoSlots: ['room'],
     requires: ['place'],
     build: (c) => ({
       action: 'course',
@@ -641,6 +646,55 @@ export const INTENTS = [
     veto: ['core', 'reactor'],
     build: () => ({ action: 'jettison_pod' }),
   },
+  // ------------------------------------------------------------------
+  // Where the captain physically is. The ship has an inside now, and
+  // "go to sickbay" walks you there rather than opening a menu.
+  // ------------------------------------------------------------------
+  {
+    id: 'go_to_room',
+    help: 'Go to sickbay / take me to engineering',
+    // Movement idioms only, with NO room name in them.
+    //
+    // Two compartments are also station names — sickbay, engineering — and the
+    // normaliser pulls an addressee off the line before any of this is scored.
+    // So "go to sickbay" reached the scorer as the bare phrase "go to" and a
+    // phrase list full of room names matched none of it.
+    //
+    // The room is an ENTITY, found on the unstripped line, and it is what
+    // separates this intent from `set_course`: naming a compartment vetoes the
+    // course order, and this one requires one. The two share their phrasings
+    // and split on the noun, which is what the sentence actually means.
+    phrases: [
+      'go to', 'take me to', 'get me to', 'down to', 'walk to',
+      'head down to', 'report to', 'meet me in', 'take me down to',
+      'i want to be in', 'over to', 'back to', 'return to',
+    ],
+    keywords: { quarters: 2.5, briefing: 2.5, turbolift: 2.5, deck: 1.5 },
+    // A compartment is not a star system, and this is the one intent that could
+    // be mistaken for `set_course`. Naming a place rules it out outright.
+    vetoSlots: ['place'],
+    requires: ['room'],
+    build: (c) => ({ action: 'go_to_room', room: c.room.id }),
+  },
+  {
+    id: 'stand_up',
+    help: 'Stand up / take the chair',
+    phrases: [
+      'stand up', 'get up', 'on my feet', 'leave the chair',
+      'out of the chair', 'take the chair', 'sit down', 'be seated',
+      'i will take the chair', 'have a seat', 'back in the chair',
+      'resume the chair', 'take my seat',
+    ],
+    keywords: { chair: 2.5, seat: 2, stand: 2, sit: 2 },
+    veto: ['battle', 'station', 'red', 'yellow'],
+    build: (c) => ({
+      action: 'chair',
+      // One intent, both directions — the words are the same family and the
+      // verb decides. "Take the chair" and "stand up" are opposites said the
+      // same way round.
+      sit: !/\b(?:stand|get up|leave|out of|on my feet)\b/.test(c.text),
+    }),
+  },
   {
     // The one order that is about the game rather than the ship. It exists
     // because the parser accepts hundreds of phrasings and a player who has
@@ -832,6 +886,7 @@ export function lexiconActions() {
     text: '', tokens: [], negated: false, percent: null, urgent: false,
     place: { id: 'sol' }, facing: 'fore', powerChannel: 'shields',
     targetSystem: 'engines', warp: 6, bearing: null, faction: null,
+    room: { id: 'sickbay' }, recipe: null, elevation: null,
   };
   return [...new Set(INTENTS.map((i) => i.build(ctx).action))];
 }

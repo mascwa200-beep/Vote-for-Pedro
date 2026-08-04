@@ -260,6 +260,13 @@ export function normalize(raw) {
     station,
     urgent,
     negated,
+    // The whole folded line, before the addressee was pulled off it.
+    //
+    // Needed because several compartments are ALSO station names — sickbay,
+    // engineering — so "go to sickbay" had the word stripped as an address and
+    // arrived at the room matcher as the bare phrase "go to". Every entity that
+    // can collide with a station name has to be looked for here instead.
+    full: t,
   };
 }
 

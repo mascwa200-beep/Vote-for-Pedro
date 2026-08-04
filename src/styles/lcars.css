@@ -1001,9 +1001,16 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   gap: 5px;
 }
 .chair-stations .btn {
-  padding: 9px 6px;
-  font-size: 0.78em;
+  padding: 9px 4px;
+  /* "ENGINEERING" is eleven characters in a hundred-pixel cell on a phone, and
+     at 0.78em it ran straight into the button beside it. */
+  font-size: 0.68em;
+  letter-spacing: 0.02em;
   min-height: 44px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chair-recorder {
