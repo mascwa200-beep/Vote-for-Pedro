@@ -1103,6 +1103,23 @@ class App {
         else { audio.play('ui_deny'); g.pushLog(r.reason, 'engineering'); }
         break;
       }
+      case 'go_to_room': {
+        const r = g.goToRoom(order.room);
+        if (r.ok) {
+          audio.play('door');
+          haptic('confirm');
+        } else {
+          audio.play('ui_deny');
+          ack('computer', r.reason);
+        }
+        break;
+      }
+      case 'chair': {
+        const r = g.takeChair(order.sit !== false);
+        if (r.ok) { audio.play('ui_confirm'); haptic('tap'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
       case 'help':
         audio.play('computer_ack');
         this.go('reference');

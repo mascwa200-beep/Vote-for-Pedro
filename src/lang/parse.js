@@ -20,6 +20,7 @@
 import { normalize } from './normalize.js';
 import { similarity } from './fuzzy.js';
 import { soundsLike } from './phonetic.js';
+import { findRoom } from '../world/interiors.data.js';
 import {
   findPlace, findFacing, findPowerChannel, findTargetSystem,
   findFaction, findWarpFactor, findPercent, findBearing, findRecipe, findElevation,
@@ -40,6 +41,7 @@ const SLOT_PROMPTS = {
   powerChannel: 'Power to which system, Captain?',
   targetSystem: 'Target which system, Captain?',
   warp: 'What warp factor, Captain?',
+  room: 'Which compartment, Captain?',
   recipe: 'Build what, Captain? There is no specification for that.',
 };
 
@@ -66,6 +68,14 @@ function extract(norm) {
     bearing: findBearing(text),
     elevation: findElevation(text, tokens),
     recipe: findRecipe(text),
+    // The ship has an inside. A compartment is deliberately matched exactly
+    // rather than fuzzily — see the note on findRoom — because "go to
+    // sickbay" becoming a course for a star system is the obvious failure.
+    //
+    // Matched against the FULL line rather than the addressee-stripped one:
+    // sickbay and engineering are station names too, so "go to sickbay" had the
+    // room stripped off as an address and reached this point as "go to".
+    room: findRoom(norm.full ?? text),
   };
 }
 

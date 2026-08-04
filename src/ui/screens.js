@@ -10,6 +10,7 @@ import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { commandReference } from './orders.js';
+import { ROOMS, DECKS } from '../world/interiors.data.js';
 import { listBackups, downloadSave } from '../core/save.js';
 import { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } from '../sim/fabrication.js';
 import { SCENARIO as KOBAYASHI, GAMBIT_TIER } from '../missions/kobayashi.js';
@@ -133,6 +134,12 @@ export function bridgeScreen(app) {
   }
   root.append(panel('Bridge', actions));
 
+  // --- Where you are ---
+  // The ship has an inside, and the captain is somewhere in it. This is the
+  // smallest honest way to say so: which compartment, what is within reach, and
+  // whether you are walking somewhere.
+  root.append(positionPanel(app));
+
   // --- The chair ---
   root.append(chairPanel(app));
 
@@ -148,6 +155,64 @@ export function bridgeScreen(app) {
       tap(() => app.go('log')), { color: 'ghost' }),
   ]));
   return root;
+}
+
+// ============================================================ WHERE YOU ARE
+
+/**
+ * Which compartment the captain is standing in, and what is to hand.
+ *
+ * Deliberately a panel rather than a screen. Being aboard is a fact about the
+ * game state, not a mode you enter — the orders that move you work from
+ * anywhere, and the first-person view is a way of LOOKING at this, not a
+ * prerequisite for it.
+ */
+export function positionPanel(app) {
+  const g = app.game;
+  const w = g.walk;
+  const room = w.room;
+  const walking = g.walkOrder;
+
+  const body = [
+    el('p', {}, [
+      el('b', { text: room.name }),
+      ' — ',
+      // Just the number: the deck names in DECKS already carry the room name
+      // ("Deck 5 — Sickbay"), which read as "Sickbay — Deck 5 — Sickbay" here.
+      el('span', { class: 'muted', text: `Deck ${room.deck}` }),
+    ]),
+  ];
+
+  if (walking) {
+    const to = ROOMS[walking.toId];
+    body.push(el('p', { class: 'muted', text: `Under way to ${to?.name ?? walking.toId}.` }));
+    body.push(button('Stop here', tap(() => { g.walkOrder = null; app.render(); }), { color: 'ghost' }));
+  } else {
+    if (w.seated) {
+      body.push(el('p', { class: 'muted', text: 'In the command chair.' }));
+    } else if (w.atStation) {
+      body.push(el('div', { class: 'meta' }, [pill(`at ${w.atStation.label}`, 'green')]));
+    }
+
+    // Somewhere to go. Only the rooms you can reach in one move are offered as
+    // buttons; anything else is an order away — "go to sickbay" works from
+    // wherever you are and routes itself.
+    const doors = w.room.lift ? w.liftStops() : (room.exits ?? []);
+    if (doors.length) {
+      body.push(el('div', { class: 'chip-row' }, doors.slice(0, 6).map((e) => button(
+        ROOMS[e.to]?.name ?? e.to,
+        tap(() => {
+          const r = g.goToRoom(e.to);
+          if (r.ok) audio.play('door'); else audio.play('ui_deny');
+          app.render();
+        }),
+        { color: 'blue' },
+      ))));
+    }
+    body.push(el('p', { class: 'hint', text: 'Or say where you want to be — “go to sickbay”, “take me to engineering”. You walk there; the crew keeps working while you do.' }));
+  }
+
+  return panel('Aboard', body, walking ? 'accent' : '');
 }
 
 // ================================================================ TRANSIT

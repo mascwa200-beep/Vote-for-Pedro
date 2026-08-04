@@ -1017,9 +1017,16 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   gap: 5px;
 }
 .chair-stations .btn {
-  padding: 9px 6px;
-  font-size: 0.78em;
+  padding: 9px 4px;
+  /* "ENGINEERING" is eleven characters in a hundred-pixel cell on a phone, and
+     at 0.78em it ran straight into the button beside it. */
+  font-size: 0.68em;
+  letter-spacing: 0.02em;
   min-height: 44px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chair-recorder {
@@ -9487,6 +9494,13 @@ function normalize(raw) {
     station,
     urgent,
     negated,
+    // The whole folded line, before the addressee was pulled off it.
+    //
+    // Needed because several compartments are ALSO station names — sickbay,
+    // engineering — so "go to sickbay" had the word stripped as an address and
+    // arrived at the room matcher as the bare phrase "go to". Every entity that
+    // can collide with a station name has to be looked for here instead.
+    full: t,
   };
 }
 
@@ -9788,6 +9802,344 @@ __exports.soundex = soundex;
 __exports.skeleton = skeleton;
 __exports.soundsLike = soundsLike;
 __exports.phoneticKey = phoneticKey;
+
+});
+
+__define("src/world/interiors.data.js", function (__exports, __require) {
+// The inside of the ship, as hand-written rooms.
+//
+// The scope here is the iconic sets, not a generated starship. A Constitution
+// has twenty-three decks and four hundred and thirty people on it, and a
+// procedural corridor maze would be twenty-two decks of nothing between the
+// eight rooms anybody wants to stand in. So these are authored: the bridge, the
+// turbolift that reaches everything, and the six rooms the show actually used.
+//
+// Every room is a `ring` or a `box`. That is not a simplification for its own
+// sake — it makes collision ANALYTIC. A circle test or an axis-aligned box
+// test, plus a short list of solid props as circles, and there is no physics
+// engine, no broadphase, no tunnelling at high speed and nothing to tune. The
+// sets were built on soundstages out of curved walls and straight ones; the
+// geometry that describes them is the geometry that was there.
+//
+// Coordinates are metres in the room's own frame, x to starboard and z forward,
+// with the origin at the centre of the room. Facings are radians, 0 looking
+// down +z. `docs/RESEARCH.md` §3 is the authority for the bridge.
+
+/**
+ * Deck numbers, for the turbolift and for the log.
+ * Deck 1 is the bridge on a Constitution, and the number goes up going down.
+ */
+const DECKS = {
+  1: 'Deck 1 — Bridge',
+  2: 'Deck 2 — Briefing and quarters',
+  5: 'Deck 5 — Sickbay',
+  7: 'Deck 7 — Transporters',
+  11: 'Deck 11 — Engineering',
+};
+
+/**
+ * The ten stations documented on a Constitution bridge, in the order they ring
+ * the room from the viewscreen round to port.
+ *
+ * `panel` names an existing UI component where one fits — walking to a console
+ * and opening the panel that is already written is most of what makes a station
+ * worth walking to. A station with no panel is still a place to stand, and
+ * still somebody's post.
+ *
+ * `mounted` is a collision fact, not decoration. A console set INTO a wall is
+ * part of that wall: you stand in front of it, and the bulkhead behind it is
+ * what stops you. A console standing on the floor — helm and navigation, in the
+ * middle of the bridge — is furniture you can walk all the way around.
+ *
+ * Modelling both as free-standing circles is what put an unreachable
+ * quarter-metre gap behind every wall console on the ship, into which a walker
+ * could be squeezed by the push-out and then trapped between two constraints
+ * that cannot both be satisfied.
+ */
+const BRIDGE_STATIONS = [
+  { id: 'helm', label: 'Helm', crew: 'helm', panel: 'helm', mounted: 'floor' },
+  { id: 'navigation', label: 'Navigation', crew: 'helm', panel: 'navigation', mounted: 'floor' },
+  { id: 'comms', label: 'Communications', crew: 'comms', panel: 'comms' , mounted: 'wall' },
+  { id: 'engineering', label: 'Engineering', crew: 'engineering', panel: 'power' , mounted: 'wall' },
+  { id: 'weapons', label: 'Weapons Control', crew: 'tactical', panel: 'weapons' , mounted: 'wall' },
+  { id: 'science', label: 'Science', crew: 'science', panel: 'science' , mounted: 'wall' },
+  { id: 'gravity', label: 'Gravity Control', crew: 'ops', panel: null , mounted: 'wall' },
+  { id: 'damagecontrol', label: 'Damage Control', crew: 'damagecontrol', panel: 'damage' , mounted: 'wall' },
+  { id: 'environmental', label: 'Environmental', crew: 'environmental', panel: null , mounted: 'wall' },
+  { id: 'security', label: 'Internal Security', crew: 'security', panel: null , mounted: 'wall' },
+];
+
+/**
+ * Place the outer stations around the ring.
+ *
+ * Helm and navigation are NOT on the ring — they sit side by side in the middle
+ * of the room, forward of the chair and facing the viewscreen, which is the one
+ * detail everybody remembers and the one a naive "space them evenly" would get
+ * wrong. So the ring carries the other eight, spread across the arc that is not
+ * the viewscreen and not the turbolift.
+ */
+function ringStations(radius) {
+  const outer = BRIDGE_STATIONS.slice(2);
+  // From just past the viewscreen (which is forward, +z) round to just short of
+  // the turbolift (aft, -z), on both sides.
+  const arcStart = 0.42;
+  const arcEnd = Math.PI * 2 - 0.42;
+  const step = (arcEnd - arcStart) / outer.length;
+  return outer.map((s, i) => {
+    const a = arcStart + step * (i + 0.5);
+    return {
+      ...s,
+      // The consoles are set into the wall, so they stand a little inside it.
+      at: [Math.sin(a) * (radius - 0.55), Math.cos(a) * (radius - 0.55)],
+      // An officer at a console faces the wall, which is outward from centre.
+      facing: a,
+    };
+  });
+}
+
+const BRIDGE_RADIUS = 5.2;
+const ROOMS = {
+  bridge: {
+    id: 'bridge',
+    name: 'Main Bridge',
+    deck: 1,
+    // A ring around a central well. `inner` is the rail around the lower
+    // command level, which you step down into rather than through.
+    shape: { kind: 'ring', radius: BRIDGE_RADIUS, inner: 0, height: 2.6 },
+    // The well floor sits below the outer ring. Purely visual — you can walk
+    // the whole floor — but it is why the chair reads as being *in* something.
+    well: { radius: 2.4, drop: 0.36 },
+    stations: [
+      // The two that are not on the ring.
+      {
+        ...BRIDGE_STATIONS[0], at: [0.62, 2.05], facing: 0,
+      },
+      {
+        ...BRIDGE_STATIONS[1], at: [-0.62, 2.05], facing: 0,
+      },
+      ...ringStations(BRIDGE_RADIUS),
+    ],
+    props: [
+      { id: 'chair', kind: 'chair', label: 'The command chair', at: [0, -0.2], facing: 0, radius: 0.55, solid: true },
+      { id: 'rail', kind: 'rail', label: 'The bridge rail', at: [0, 0], facing: 0, radius: 0, solid: false },
+    ],
+    // Forward, and the whole reason the room is pointed the way it is.
+    viewscreen: { at: [0, BRIDGE_RADIUS - 0.1], width: 3.4, height: 1.8 },
+    exits: [
+      { to: 'turbolift', at: [0, -(BRIDGE_RADIUS - 0.2)], width: 1.2, label: 'Turbolift' },
+    ],
+  },
+
+  turbolift: {
+    id: 'turbolift',
+    name: 'Turbolift',
+    deck: 1,
+    // The one room that is not on a deck, because it is how you change decks.
+    shape: { kind: 'box', width: 2.2, depth: 2.2, height: 2.6 },
+    lift: true,
+    stations: [
+      { id: 'lift_control', label: 'Turbolift control', crew: null, panel: 'turbolift', at: [0.85, 0], facing: Math.PI / 2, mounted: 'wall' },
+    ],
+    props: [],
+    // A lift reaches everywhere; the exits are generated from the deck list
+    // rather than written out, because a lift that only goes where somebody
+    // remembered to type is the classic way a ship stops being connected.
+    exits: [],
+  },
+
+  corridor_a: {
+    id: 'corridor_a',
+    name: 'Deck 5 Corridor',
+    deck: 5,
+    shape: { kind: 'box', width: 2.6, depth: 14.0, height: 2.5 },
+    stations: [],
+    props: [
+      { id: 'panel_a', kind: 'wallpanel', label: 'A wall panel', at: [1.15, 3.0], facing: -Math.PI / 2, radius: 0, solid: false },
+      // Recessed into the bulkhead, so the wall is what stops you. A solid
+      // circle here would sit mostly outside the corridor and pinch the
+      // walkable width to nothing.
+      { id: 'extinguisher', kind: 'locker', label: 'An emergency locker', at: [-1.15, -2.4], facing: Math.PI / 2, radius: 0.3, solid: false },
+    ],
+    exits: [
+      { to: 'turbolift', at: [0, -6.8], width: 1.2, label: 'Turbolift' },
+      { to: 'sickbay', at: [1.25, 2.0], width: 1.2, label: 'Sickbay' },
+      { to: 'quarters', at: [-1.25, -1.0], width: 1.2, label: 'Captain’s quarters' },
+    ],
+  },
+
+  sickbay: {
+    id: 'sickbay',
+    name: 'Sickbay',
+    deck: 5,
+    shape: { kind: 'box', width: 8.0, depth: 6.4, height: 2.5 },
+    stations: [
+      { id: 'biobed', label: 'The biobed', crew: 'medical', panel: 'medical', at: [-2.0, 1.4], facing: Math.PI / 2, mounted: 'wall' },
+      { id: 'medlab', label: 'Medical laboratory', crew: 'medical', panel: 'medical', at: [2.6, 1.8], facing: Math.PI, mounted: 'wall' },
+      { id: 'cmo_desk', label: 'The chief surgeon’s desk', crew: 'medical', panel: null, at: [2.6, -1.9], facing: Math.PI, mounted: 'wall' },
+    ],
+    props: [
+      { id: 'bed2', kind: 'bed', label: 'A second biobed', at: [-2.0, -0.6], facing: Math.PI / 2, radius: 0.7, solid: true },
+      { id: 'surgery', kind: 'table', label: 'The surgical bay', at: [0, 1.9], facing: 0, radius: 0.6, solid: true },
+    ],
+    exits: [
+      { to: 'corridor_a', at: [3.9, -2.4], width: 1.2, label: 'Corridor' },
+    ],
+  },
+
+  quarters: {
+    id: 'quarters',
+    name: 'Captain’s Quarters',
+    deck: 5,
+    shape: { kind: 'box', width: 5.6, depth: 6.2, height: 2.5 },
+    stations: [
+      { id: 'desk', label: 'The captain’s desk', crew: null, panel: 'log', at: [-1.4, 1.6], facing: 0, mounted: 'wall' },
+      { id: 'wall_computer', label: 'The desk viewer', crew: null, panel: 'record', at: [1.6, 1.9], facing: 0, mounted: 'wall' },
+    ],
+    props: [
+      { id: 'bunk', kind: 'bed', label: 'The bunk', at: [1.4, -1.4], facing: Math.PI, radius: 0.7, solid: true },
+      { id: 'chess', kind: 'table', label: 'A three-dimensional chess set', at: [-1.5, -1.4], facing: 0, radius: 0.4, solid: true },
+    ],
+    exits: [
+      { to: 'corridor_a', at: [0, -2.6], width: 1.2, label: 'Corridor' },
+    ],
+  },
+
+  transporter: {
+    id: 'transporter',
+    name: 'Transporter Room',
+    deck: 7,
+    shape: { kind: 'box', width: 6.4, depth: 5.6, height: 2.5 },
+    stations: [
+      { id: 'transporter_console', label: 'The transporter console', crew: 'transporter', panel: 'transport', at: [0, -1.9], facing: 0, mounted: 'wall' },
+    ],
+    props: [
+      // Six pads in a circle, which is what the set had and what makes the
+      // room read at a glance.
+      ...Array.from({ length: 6 }, (_, i) => {
+        const a = (i / 6) * Math.PI * 2;
+        return {
+          id: `pad${i}`, kind: 'pad', label: 'A transporter pad',
+          at: [Math.sin(a) * 0.95, 1.5 + Math.cos(a) * 0.95], facing: 0,
+          radius: 0.34, solid: false,
+        };
+      }),
+    ],
+    // Where an away team stands, and where you stand to beam down.
+    padCentre: [0, 1.5],
+    exits: [
+      { to: 'turbolift', at: [-3.1, -1.6], width: 1.2, label: 'Turbolift' },
+    ],
+  },
+
+  engineering: {
+    id: 'engineering',
+    name: 'Main Engineering',
+    deck: 11,
+    shape: { kind: 'box', width: 9.0, depth: 8.0, height: 3.6 },
+    stations: [
+      { id: 'main_console', label: 'The engineering console', crew: 'engineering', panel: 'power', at: [-3.1, 0.4], facing: -Math.PI / 2, mounted: 'wall' },
+      { id: 'core_monitor', label: 'The intermix monitor', crew: 'engineering', panel: 'damage', at: [3.1, 0.4], facing: Math.PI / 2, mounted: 'wall' },
+      { id: 'machine_shop', label: 'The machine shop', crew: 'engineering', panel: 'fabrication', at: [0, -3.1], facing: Math.PI, mounted: 'wall' },
+    ],
+    props: [
+      { id: 'core', kind: 'core', label: 'The matter/antimatter reactor', at: [0, 1.9], facing: 0, radius: 1.1, solid: true },
+      { id: 'conduit_a', kind: 'conduit', label: 'A plasma conduit', at: [-3.6, 3.0], facing: 0, radius: 0.35, solid: true },
+      { id: 'conduit_b', kind: 'conduit', label: 'A plasma conduit', at: [3.6, 3.0], facing: 0, radius: 0.35, solid: true },
+    ],
+    exits: [
+      { to: 'turbolift', at: [0, -3.9], width: 1.4, label: 'Turbolift' },
+    ],
+  },
+
+  briefing: {
+    id: 'briefing',
+    name: 'Briefing Room',
+    deck: 2,
+    shape: { kind: 'box', width: 6.0, depth: 4.6, height: 2.5 },
+    stations: [
+      { id: 'briefing_screen', label: 'The briefing screen', crew: null, panel: 'missions', at: [0, 2.1], facing: 0, mounted: 'wall' },
+      { id: 'briefing_terminal', label: 'The table terminal', crew: null, panel: 'crew', at: [1.9, -0.2], facing: Math.PI / 2, mounted: 'wall' },
+    ],
+    props: [
+      { id: 'table', kind: 'table', label: 'The briefing table', at: [0, -0.2], facing: 0, radius: 1.2, solid: true },
+    ],
+    exits: [
+      { to: 'turbolift', at: [-2.9, -1.6], width: 1.2, label: 'Turbolift' },
+    ],
+  },
+};
+
+/**
+ * Rooms the turbolift serves.
+ *
+ * The RECIPROCAL of the rooms that have a lift door, generated rather than
+ * written out. A lift that only goes where somebody remembered to type is how a
+ * ship quietly stops being connected, and the reachability test would then be
+ * asserting the typing rather than the ship.
+ *
+ * Reciprocal, not "everywhere", because a lift that opens directly into sickbay
+ * makes the corridor outside it pointless — and a ship where every room is one
+ * hop from every other is a menu with walls painted on.
+ */
+const LIFT_STOPS = Object.values(ROOMS)
+  .filter((r) => !r.lift && (r.exits ?? []).some((e) => e.to === 'turbolift'))
+  .map((r) => ({ to: r.id, deck: r.deck, label: r.name }));
+
+ROOMS.turbolift.exits = LIFT_STOPS.map((s) => ({ ...s, at: [0, 1.0], width: 1.2 }));
+const ROOM_LIST = Object.values(ROOMS);
+
+/** Where a new commission starts: in the chair. */
+const START_ROOM = 'bridge';
+
+/**
+ * Find a room by name or id, tolerantly.
+ *
+ * Deliberately NOT fuzzy. `findPlace` in the gazetteer resolves star systems
+ * from typed orders, and "go to sickbay" becoming a course for a system is the
+ * obvious way this breaks — a fuzzy room matcher would make it likelier, not
+ * less. Exact ids, exact names, and a short list of the ways people say these
+ * eight rooms. Everything else is not a room.
+ */
+const ROOM_ALIASES = {
+  bridge: 'bridge', 'main bridge': 'bridge', 'the bridge': 'bridge',
+  turbolift: 'turbolift', lift: 'turbolift', elevator: 'turbolift',
+  sickbay: 'sickbay', 'sick bay': 'sickbay', medbay: 'sickbay',
+  infirmary: 'sickbay', 'medical bay': 'sickbay',
+  engineering: 'engineering', 'main engineering': 'engineering',
+  'engine room': 'engineering', 'the engine room': 'engineering',
+  'transporter room': 'transporter', transporter: 'transporter',
+  'transporter bay': 'transporter', 'the transporter room': 'transporter',
+  'briefing room': 'briefing', briefing: 'briefing',
+  'conference room': 'briefing', 'the briefing room': 'briefing',
+  quarters: 'quarters', 'my quarters': 'quarters', 'captains quarters': 'quarters',
+  'captain quarters': 'quarters', 'the captains quarters': 'quarters',
+  corridor: 'corridor_a', 'the corridor': 'corridor_a', hallway: 'corridor_a',
+};
+function findRoom(text) {
+  if (!text) return null;
+  const t = String(text).toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  if (ROOMS[t]) return ROOMS[t];
+  const id = ROOM_ALIASES[t];
+  if (id) return ROOMS[id];
+  // A longest-first scan, so "take me to the transporter room" beats the bare
+  // word "transporter" inside it.
+  const keys = Object.keys(ROOM_ALIASES).sort((a, b) => b.length - a.length);
+  for (const k of keys) {
+    if (new RegExp(`\\b${k}\\b`).test(t)) return ROOMS[ROOM_ALIASES[k]];
+  }
+  return null;
+}
+
+/** Every phrasing that names a room, for the parser's gazetteer. */
+const ROOM_WORDS = Object.keys(ROOM_ALIASES);
+
+__exports.DECKS = DECKS;
+__exports.ROOMS = ROOMS;
+__exports.LIFT_STOPS = LIFT_STOPS;
+__exports.ROOM_LIST = ROOM_LIST;
+__exports.START_ROOM = START_ROOM;
+__exports.findRoom = findRoom;
+__exports.ROOM_WORDS = ROOM_WORDS;
 
 });
 
@@ -10130,6 +10482,11 @@ const INTENTS = [
     ],
     keywords: { course: 2, destination: 2, navigate: 1.5, plot: 1, lay: 0.8, travel: 1 },
     veto: ['bearing'],
+    // A compartment is not a star system. This intent owns the phrases "go to"
+    // and "take me to", so without standing aside it won "go to sickbay" and
+    // then asked which system — which is the exact failure the room matcher was
+    // written to avoid, arriving from the other direction.
+    vetoSlots: ['room'],
     requires: ['place'],
     build: (c) => ({
       action: 'course',
@@ -10699,6 +11056,55 @@ const INTENTS = [
     veto: ['core', 'reactor'],
     build: () => ({ action: 'jettison_pod' }),
   },
+  // ------------------------------------------------------------------
+  // Where the captain physically is. The ship has an inside now, and
+  // "go to sickbay" walks you there rather than opening a menu.
+  // ------------------------------------------------------------------
+  {
+    id: 'go_to_room',
+    help: 'Go to sickbay / take me to engineering',
+    // Movement idioms only, with NO room name in them.
+    //
+    // Two compartments are also station names — sickbay, engineering — and the
+    // normaliser pulls an addressee off the line before any of this is scored.
+    // So "go to sickbay" reached the scorer as the bare phrase "go to" and a
+    // phrase list full of room names matched none of it.
+    //
+    // The room is an ENTITY, found on the unstripped line, and it is what
+    // separates this intent from `set_course`: naming a compartment vetoes the
+    // course order, and this one requires one. The two share their phrasings
+    // and split on the noun, which is what the sentence actually means.
+    phrases: [
+      'go to', 'take me to', 'get me to', 'down to', 'walk to',
+      'head down to', 'report to', 'meet me in', 'take me down to',
+      'i want to be in', 'over to', 'back to', 'return to',
+    ],
+    keywords: { quarters: 2.5, briefing: 2.5, turbolift: 2.5, deck: 1.5 },
+    // A compartment is not a star system, and this is the one intent that could
+    // be mistaken for `set_course`. Naming a place rules it out outright.
+    vetoSlots: ['place'],
+    requires: ['room'],
+    build: (c) => ({ action: 'go_to_room', room: c.room.id }),
+  },
+  {
+    id: 'stand_up',
+    help: 'Stand up / take the chair',
+    phrases: [
+      'stand up', 'get up', 'on my feet', 'leave the chair',
+      'out of the chair', 'take the chair', 'sit down', 'be seated',
+      'i will take the chair', 'have a seat', 'back in the chair',
+      'resume the chair', 'take my seat',
+    ],
+    keywords: { chair: 2.5, seat: 2, stand: 2, sit: 2 },
+    veto: ['battle', 'station', 'red', 'yellow'],
+    build: (c) => ({
+      action: 'chair',
+      // One intent, both directions — the words are the same family and the
+      // verb decides. "Take the chair" and "stand up" are opposites said the
+      // same way round.
+      sit: !/\b(?:stand|get up|leave|out of|on my feet)\b/.test(c.text),
+    }),
+  },
   {
     // The one order that is about the game rather than the ship. It exists
     // because the parser accepts hundreds of phrasings and a player who has
@@ -10890,6 +11296,7 @@ function lexiconActions() {
     text: '', tokens: [], negated: false, percent: null, urgent: false,
     place: { id: 'sol' }, facing: 'fore', powerChannel: 'shields',
     targetSystem: 'engines', warp: 6, bearing: null, faction: null,
+    room: { id: 'sickbay' }, recipe: null, elevation: null,
   };
   return [...new Set(INTENTS.map((i) => i.build(ctx).action))];
 }
@@ -11380,6 +11787,7 @@ __define("src/lang/parse.js", function (__exports, __require) {
 const { normalize } = __require("src/lang/normalize.js");
 const { similarity } = __require("src/lang/fuzzy.js");
 const { soundsLike } = __require("src/lang/phonetic.js");
+const { findRoom } = __require("src/world/interiors.data.js");
 const { findPlace, findFacing, findPowerChannel, findTargetSystem, findFaction, findWarpFactor, findPercent, findBearing, findRecipe, findElevation } = __require("src/lang/gazetteer.js");
 const { INTENTS, STATION_AFFINITY } = __require("src/lang/lexicon.js");
 
@@ -11397,6 +11805,7 @@ const SLOT_PROMPTS = {
   powerChannel: 'Power to which system, Captain?',
   targetSystem: 'Target which system, Captain?',
   warp: 'What warp factor, Captain?',
+  room: 'Which compartment, Captain?',
   recipe: 'Build what, Captain? There is no specification for that.',
 };
 
@@ -11423,6 +11832,14 @@ function extract(norm) {
     bearing: findBearing(text),
     elevation: findElevation(text, tokens),
     recipe: findRecipe(text),
+    // The ship has an inside. A compartment is deliberately matched exactly
+    // rather than fuzzily — see the note on findRoom — because "go to
+    // sickbay" becoming a course for a star system is the obvious failure.
+    //
+    // Matched against the FULL line rather than the addressee-stripped one:
+    // sickbay and engineering are station names too, so "go to sickbay" had the
+    // room stripped off as an address and reached this point as "go to".
+    room: findRoom(norm.full ?? text),
   };
 }
 
@@ -11680,6 +12097,7 @@ const { FACINGS } = __require("src/sim/ship.js");
 const { ABILITIES } = __require("src/sim/officers.js");
 const { parseText, CONFIDENT } = __require("src/lang/parse.js");
 const { intentHelp, phraseCount, INTENTS, STATION_AFFINITY } = __require("src/lang/lexicon.js");
+const { findRoom } = __require("src/world/interiors.data.js");
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
@@ -11767,8 +12185,12 @@ const ORDERS = [
   {
     id: 'set_course',
     help: 'Helm, set course for <system>, warp <n>',
-    test: (t) => /\b(set (a )?course|lay in a course|plot a course|course for|take us to|head for|make for|proceed to|go to|warp to)\b/.test(t)
-      || (/\bwarp\s*\d/.test(t) && findSystem(t)),
+    // Naming a compartment rules this out. Without the guard the regex layer
+    // claimed "go to sickbay" and answered "Which system, Captain?" — the same
+    // failure as in the lexicon, arriving one layer lower down.
+    test: (t, raw) => !findRoom(raw ?? t)
+      && (/\b(set (a )?course|lay in a course|plot a course|course for|take us to|head for|make for|proceed to|go to|warp to)\b/.test(t)
+        || (/\bwarp\s*\d/.test(t) && findSystem(t))),
     build: (t) => {
       const system = findSystem(t);
       if (!system) return { error: 'Which system, Captain?' };
@@ -12040,7 +12462,10 @@ function parseOrder(raw) {
 
 function matchPlainOrder(t, raw) {
   for (const order of ORDERS) {
-    if (order.test(t)) {
+    // `raw` is passed so a test can consult the UNSTRIPPED line. Only
+    // `set_course` needs it, and it needs it badly: it owns the phrase "go to",
+    // and "go to sickbay" is not a course.
+    if (order.test(t, raw)) {
       const built = order.build(t);
       return { ...built, orderId: order.id, raw };
     }
@@ -14963,6 +15388,480 @@ __exports.AWAY_TEMPLATES = AWAY_TEMPLATES;
 
 });
 
+__define("src/sim/walk.js", function (__exports, __require) {
+// Walking around inside the ship.
+//
+// Position, facing, movement and collision, and nothing else. No rendering, no
+// DOM, no GL — this file runs in node, which is the point: "you cannot walk
+// through a wall" and "every room is reachable from every other" are properties
+// you want a test to hold you to, not things you check by wandering around.
+//
+// The collision is analytic because the rooms are circles and boxes. A capsule
+// against a circle is one distance and one clamp; against a box it is two.
+// There is no broadphase, no solver, no timestep sensitivity, and nothing to
+// tune — which matters more than it sounds, because the alternative on a phone
+// at 30 Hz is tunnelling through a bulkhead at a sprint.
+//
+// The one rule that shapes everything: MOVEMENT IS RESOLVED, NOT REJECTED. A
+// walker who stops dead on contact with a wall is unbearable to control on a
+// touch screen, where you cannot steer precisely. Sliding along the wall is
+// what makes a thumb-stick feel like walking rather than like bumping.
+
+const { ROOMS, findRoom, START_ROOM } = __require("src/world/interiors.data.js");
+const { clamp, finite, wrapDegrees } = __require("src/core/num.js");
+
+/** How wide a person is, for collision. Half a metre across the shoulders. */
+const WALKER_RADIUS = 0.26;
+
+/** Metres per second. A brisk walk; a red alert is a jog. */
+const WALK_SPEED = 2.1;
+const RUN_SPEED = 3.6;
+
+/** How close a station has to be before you can operate it. */
+const REACH = 1.25;
+
+/** How close to an exit before you go through it. */
+const EXIT_REACH = 0.9;
+
+const TAU = Math.PI * 2;
+
+/** Shortest signed angle from a to b, in radians. */
+function angleDelta(a, b) {
+  let d = (b - a) % TAU;
+  if (d > Math.PI) d -= TAU;
+  if (d < -Math.PI) d += TAU;
+  return d;
+}
+
+/**
+ * Push a point out of a solid circle, if it is inside one.
+ *
+ * Returns the corrected point. The push is along the line from the circle's
+ * centre, which is the shortest way out and the direction that produces a
+ * slide rather than a stop when the walker keeps pressing forward.
+ */
+function pushOutOfCircle(x, z, cx, cz, radius) {
+  const dx = x - cx;
+  const dz = z - cz;
+  const d = Math.hypot(dx, dz);
+  if (d >= radius) return [x, z];
+  // Dead centre: no direction to push, so pick one rather than divide by zero.
+  if (d < 1e-6) return [cx + radius, cz];
+  const s = radius / d;
+  return [cx + dx * s, cz + dz * s];
+}
+
+/**
+ * Keep a point inside a room's walls.
+ *
+ * Exits are holes in the wall, so a walker standing in a doorway is not pushed
+ * back in — otherwise you could never leave, and the doorway would read as a
+ * decorated section of bulkhead.
+ */
+function confine(room, x, z, radius = WALKER_RADIUS) {
+  if (!room) return [x, z];
+
+  if (nearAnyExit(room, x, z)) return [x, z];
+
+  if (room.shape.kind === 'ring') {
+    const r = Math.hypot(x, z);
+    const limit = room.shape.radius - radius;
+    if (r > limit) {
+      if (r < 1e-6) return [x, z];
+      const s = limit / r;
+      return [x * s, z * s];
+    }
+    // An inner rail you cannot cross, when a room has one. The bridge's is 0,
+    // because the command well is a step down and not a hole.
+    const inner = room.shape.inner ?? 0;
+    if (inner > 0 && r < inner + radius) {
+      const s = (inner + radius) / Math.max(r, 1e-6);
+      return [x * s, z * s];
+    }
+    return [x, z];
+  }
+
+  const hw = room.shape.width / 2 - radius;
+  const hd = room.shape.depth / 2 - radius;
+  return [clamp(x, -hw, hw), clamp(z, -hd, hd)];
+}
+
+/** Is this point in a doorway? Doorways are gaps, not walls. */
+function nearAnyExit(room, x, z) {
+  for (const e of room.exits ?? []) {
+    const [ex, ez] = e.at;
+    // Generous along the door's width and tight across it, so the gap is a
+    // gap and not a dent in the wall you can be pushed sideways through.
+    if (Math.hypot(x - ex, z - ez) < (e.width ?? 1.2) * 0.55 + WALKER_RADIUS) return true;
+  }
+  return false;
+}
+
+/** Push out of every solid prop in the room, in order. */
+function avoidProps(room, x, z, radius = WALKER_RADIUS) {
+  let px = x;
+  let pz = z;
+  for (const p of room.props ?? []) {
+    if (!p.solid || !(p.radius > 0)) continue;
+    [px, pz] = pushOutOfCircle(px, pz, p.at[0], p.at[1], p.radius + radius);
+  }
+  // A console standing on the floor is furniture: you stand at it, not in it.
+  // A console set into a WALL is part of that wall, and the bulkhead is what
+  // stops you — giving it its own circle carves an unreachable gap behind it
+  // and creates a spot where the wall and the console each push you into the
+  // other and neither constraint can be satisfied.
+  for (const s of room.stations ?? []) {
+    if (s.mounted === 'wall') continue;
+    [px, pz] = pushOutOfCircle(px, pz, s.at[0], s.at[1], 0.42 + radius);
+  }
+  return [px, pz];
+}
+
+/**
+ * Resolve a proposed move against the room.
+ *
+ * Walls first, then props, then walls again — the second wall pass is not
+ * belt-and-braces, it is the case where a prop against the bulkhead pushes you
+ * through it. Two passes is enough for the geometry this game has, and a
+ * general solver would be a lot of machinery for one console in a corner.
+ */
+function resolve(room, x, z, radius = WALKER_RADIUS) {
+  let [px, pz] = confine(room, x, z, radius);
+  [px, pz] = avoidProps(room, px, pz, radius);
+  [px, pz] = confine(room, px, pz, radius);
+  return [px, pz];
+}
+
+/**
+ * Where you are, and which way you are looking.
+ *
+ * Persisted whole into the save, so every field here has to survive a
+ * round-trip through JSON — no class instances, no functions, no undefined.
+ */
+class Walker {
+  constructor(state = {}) {
+    this.roomId = ROOMS[state.roomId] ? state.roomId : START_ROOM;
+    // Seated in the chair is a distinct state from standing next to it: it is
+    // where the game starts, and "stand up" is what begins a walk.
+    this.seated = state.seated !== false;
+
+    // A new commission starts IN the chair, not near it. The default used to be
+    // a fixed point a metre behind it, so the game began with the captain
+    // standing in the well insisting he was sitting down — and every walk
+    // measured a metre short because standing up started from the wrong place.
+    const chair = this.seated && this.roomId === 'bridge'
+      ? ROOMS.bridge.props.find((p) => p.id === 'chair')
+      : null;
+    this.x = finite(state.x, chair ? chair.at[0] : 0);
+    this.z = finite(state.z, chair ? chair.at[1] : -1.4);
+    this.yaw = finite(state.yaw, 0);
+    // The station you are close enough to operate, recomputed each step.
+    this.atStation = null;
+    this.atExit = null;
+  }
+
+  get room() { return ROOMS[this.roomId]; }
+
+  /** A unit vector along the way you are facing, in room coordinates. */
+  forward() { return [Math.sin(this.yaw), Math.cos(this.yaw)]; }
+
+  /**
+   * One step of movement.
+   *
+   * @param {object} input  {move: [x, z] in [-1,1], turn: radians/sec, run: bool}
+   * @param {number} dt     seconds
+   */
+  step(input = {}, dt = 1 / 30) {
+    const room = this.room;
+    if (!room) return this;
+
+    const d = clamp(finite(dt, 0), 0, 0.1);
+    this.yaw = (this.yaw + finite(input.turn, 0) * d) % TAU;
+
+    if (!this.seated) {
+      const mx = clamp(finite(input.move?.[0], 0), -1, 1);
+      const mz = clamp(finite(input.move?.[1], 0), -1, 1);
+      const mag = Math.hypot(mx, mz);
+      if (mag > 1e-4) {
+        // Normalise so diagonal is not faster, which is the oldest bug in
+        // first-person movement and still the most common.
+        const nx = mx / Math.max(1, mag);
+        const nz = mz / Math.max(1, mag);
+        const speed = (input.run ? RUN_SPEED : WALK_SPEED) * d;
+        // The stick is relative to where you are looking, not to the room.
+        const c = Math.cos(this.yaw);
+        const s = Math.sin(this.yaw);
+        const wx = this.x + (nx * c + nz * s) * speed;
+        const wz = this.z + (-nx * s + nz * c) * speed;
+        [this.x, this.z] = resolve(room, wx, wz);
+      }
+    }
+
+    this.atStation = this.nearestStation();
+    this.atExit = this.nearestExit();
+    return this;
+  }
+
+  /** The station within reach, if any. Nearest wins. */
+  nearestStation() {
+    const room = this.room;
+    let best = null;
+    let bestD = REACH;
+    for (const s of room.stations ?? []) {
+      const d = Math.hypot(this.x - s.at[0], this.z - s.at[1]);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return best;
+  }
+
+  nearestExit() {
+    const room = this.room;
+    if (!room) return null;
+    // A lift is two metres across and its door is the only thing in it. You are
+    // always at the door; what you are not always at is a decision about which
+    // deck. Requiring the usual reach here meant stepping in from the bridge
+    // landed you a hair outside it — a lift you could ride into and not out of.
+    if (room.lift) return (room.exits ?? [])[0] ?? null;
+
+    let best = null;
+    let bestD = EXIT_REACH;
+    for (const e of room.exits ?? []) {
+      const d = Math.hypot(this.x - e.at[0], this.z - e.at[1]);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best;
+  }
+
+  /** Anything worth naming that you are standing at. */
+  get looking() { return this.atStation ?? this.atExit ?? null; }
+
+  /**
+   * Go through a door into another room.
+   *
+   * You arrive just inside the far room's matching door, facing into the room —
+   * arriving at its origin would drop you on top of whatever is in the middle,
+   * which on the bridge is the captain's chair.
+   */
+  enter(roomId) {
+    const next = ROOMS[roomId];
+    if (!next) return { ok: false, reason: `There is no ${roomId} aboard.` };
+
+    this.roomId = roomId;
+    this.seated = false;
+
+    // The door back the way we came, if there is one — that is where we appear.
+    const back = (next.exits ?? []).find((e) => e.to === this.previousRoomId);
+    const door = back ?? (next.exits ?? [])[0];
+    if (door) {
+      const [dx, dz] = door.at;
+      const inward = Math.hypot(dx, dz) || 1;
+      // A metre inside, along the line from the door toward the room's centre.
+      this.x = dx - (dx / inward) * 1.0;
+      this.z = dz - (dz / inward) * 1.0;
+      this.yaw = Math.atan2(-dx, -dz);
+    } else {
+      this.x = 0;
+      this.z = 0;
+    }
+    [this.x, this.z] = resolve(next, this.x, this.z);
+    return { ok: true, room: next };
+  }
+
+  /**
+   * Go through the door you are standing in.
+   *
+   * `toId` is optional everywhere except the turbolift, and the turbolift is
+   * why this argument exists. A lift has ONE door, and every stop it serves is
+   * behind that same door — so "walk through the nearest exit" is not a
+   * question the lift can answer. You have to say which deck, which is exactly
+   * what the control panel inside it is for.
+   *
+   * Without this the lift was a room you could enter and not leave: every
+   * generated exit sat at the same point, `nearestExit` returned whichever came
+   * first, and it was the same one every time.
+   */
+  useExit(toId = null) {
+    const room = this.room;
+    if (!this.atExit) return { ok: false, reason: 'There is no door within reach, Captain.' };
+
+    let target = this.atExit;
+    if (toId) {
+      const named = (room.exits ?? []).find((e) => e.to === toId);
+      if (!named) {
+        return { ok: false, reason: `This deck has no door to the ${toId}, Captain.` };
+      }
+      target = named;
+    } else if (room.lift) {
+      return { ok: false, reason: 'Which deck, Captain?', needsDestination: true };
+    }
+
+    this.previousRoomId = this.roomId;
+    return this.enter(target.to);
+  }
+
+  /** Where this lift can take you. Empty for a room that is not a lift. */
+  liftStops() {
+    return this.room?.lift ? (this.room.exits ?? []) : [];
+  }
+
+  /** Stand up from the chair, or sit back down in it. */
+  sit(on = true) {
+    if (this.roomId !== 'bridge') {
+      return { ok: false, reason: 'The chair is on the bridge, Captain.' };
+    }
+    if (on) {
+      const chair = ROOMS.bridge.props.find((p) => p.id === 'chair');
+      this.x = chair.at[0];
+      this.z = chair.at[1];
+      this.yaw = 0;
+      this.seated = true;
+      return { ok: true, seated: true };
+    }
+    this.seated = false;
+    // Step clear of the chair rather than standing inside it.
+    [this.x, this.z] = resolve(ROOMS.bridge, this.x, this.z - 0.9);
+    return { ok: true, seated: false };
+  }
+
+  save() {
+    return {
+      roomId: this.roomId,
+      x: this.x, z: this.z, yaw: this.yaw,
+      seated: this.seated,
+      previousRoomId: this.previousRoomId ?? null,
+    };
+  }
+
+  static load(data = {}) {
+    const w = new Walker(data);
+    w.previousRoomId = data.previousRoomId ?? null;
+    // Positions in the save could be anything — a corrupted record, a room
+    // whose geometry changed between versions. Resolve on load so a walker
+    // never wakes up inside a bulkhead with no way out.
+    [w.x, w.z] = resolve(w.room, w.x, w.z);
+    return w;
+  }
+}
+
+/**
+ * Walk one step toward another room, on your own.
+ *
+ * This is the autopilot behind "go to sickbay", and it is deliberately a PLAYER
+ * rather than a pathfinder: it aims at the next door and presses forward with
+ * no idea what is between it and the doorway, and when it stops making progress
+ * it sidesteps — which is what a thumb on a stick does. Anything cleverer would
+ * navigate around the captain's chair so smoothly that nobody would ever notice
+ * if the chair stopped being solid.
+ *
+ * `memory` is caller-owned scratch, so the caller decides when a walk restarts.
+ *
+ * @returns {{arrived: boolean, blocked: boolean, room: string}}
+ */
+function stepToward(walker, toId, dt = 1 / 30, memory = {}) {
+  if (walker.roomId === toId) return { arrived: true, blocked: false, room: walker.roomId };
+  if (walker.seated) walker.sit(false);
+
+  const path = route(walker.roomId, toId);
+  if (!path || path.length < 2) return { arrived: false, blocked: true, room: walker.roomId };
+
+  const door = (walker.room.exits ?? []).find((e) => e.to === path[1]);
+  if (!door) return { arrived: false, blocked: true, room: walker.roomId };
+
+  const dx = door.at[0] - walker.x;
+  const dz = door.at[1] - walker.z;
+  const d = Math.hypot(dx, dz);
+
+  if (d > (memory.lastDistance ?? Infinity) - 0.005) memory.stuck = (memory.stuck ?? 0) + 1;
+  else memory.stuck = 0;
+  memory.lastDistance = d;
+  if (memory.stuck > 12 && !(memory.sidestep > 0)) {
+    memory.sidestep = 22;
+    memory.side = -(memory.side ?? 1);
+    memory.stuck = 0;
+  }
+
+  walker.yaw = Math.atan2(dx, dz);
+  if (memory.sidestep > 0) {
+    memory.sidestep--;
+    walker.step({ move: [memory.side ?? 1, 0.35] }, dt);
+  } else {
+    walker.step({ move: [0, 1] }, dt);
+  }
+
+  if (walker.atExit) {
+    const r = walker.useExit(path[1]);
+    if (r.ok) {
+      memory.lastDistance = Infinity;
+      memory.stuck = 0;
+      memory.sidestep = 0;
+    }
+  }
+
+  return { arrived: walker.roomId === toId, blocked: false, room: walker.roomId };
+}
+
+/**
+ * The shortest route between two rooms, as a list of room ids.
+ *
+ * Breadth-first over the exit graph. Used by "go to sickbay", which walks you
+ * there rather than teleporting — the single most valuable check in this whole
+ * subsystem is that typing that and running the simulation actually arrives,
+ * because it proves the geometry, the graph, the collision and the parser all
+ * agree at once.
+ */
+function route(fromId, toId) {
+  if (!ROOMS[fromId] || !ROOMS[toId]) return null;
+  if (fromId === toId) return [fromId];
+
+  const seen = new Set([fromId]);
+  const queue = [[fromId]];
+  while (queue.length) {
+    const path = queue.shift();
+    const here = ROOMS[path[path.length - 1]];
+    for (const e of here.exits ?? []) {
+      if (seen.has(e.to)) continue;
+      const next = [...path, e.to];
+      if (e.to === toId) return next;
+      seen.add(e.to);
+      queue.push(next);
+    }
+  }
+  return null;
+}
+
+/** Is every room reachable from every other? A ship must be connected. */
+function connectivity() {
+  const ids = Object.keys(ROOMS);
+  const broken = [];
+  for (const a of ids) {
+    for (const b of ids) {
+      if (a !== b && !route(a, b)) broken.push(`${a} -> ${b}`);
+    }
+  }
+  return broken;
+}
+
+__exports.findRoom = findRoom;
+__exports.ROOMS = ROOMS;
+__exports.wrapDegrees = wrapDegrees;
+
+__exports.WALKER_RADIUS = WALKER_RADIUS;
+__exports.WALK_SPEED = WALK_SPEED;
+__exports.RUN_SPEED = RUN_SPEED;
+__exports.REACH = REACH;
+__exports.EXIT_REACH = EXIT_REACH;
+__exports.angleDelta = angleDelta;
+__exports.confine = confine;
+__exports.nearAnyExit = nearAnyExit;
+__exports.avoidProps = avoidProps;
+__exports.resolve = resolve;
+__exports.Walker = Walker;
+__exports.stepToward = stepToward;
+__exports.route = route;
+__exports.connectivity = connectivity;
+
+});
+
 __define("src/sim/diplomacy.js", function (__exports, __require) {
 // Hails, negotiation, and what talking actually gets you.
 //
@@ -17386,6 +18285,7 @@ const { CaptainProgress, combatXP } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
 const { Engagement } = __require("src/sim/combat.js");
 const { AwayTeam } = __require("src/sim/away.js");
+const { Walker, stepToward, findRoom } = __require("src/sim/walk.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { resolveHail, STANDING_EFFECTS } = __require("src/sim/diplomacy.js");
 
@@ -17496,6 +18396,9 @@ class Game {
     // switches on the console set it; six is the cruise the game has always
     // assumed when nobody says.
     this.warpFactor = 6;
+    // Where the captain physically is. A commission starts in the chair.
+    this.walk = new Walker();
+    this.walkOrder = null;
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
@@ -17715,6 +18618,70 @@ class Game {
     this.engagement.deployDecoy(14);
     this.officerSays('engineering', 'Ion pod away. It will read like us for a minute or so.', 'report');
     return { ok: true };
+  }
+
+  /**
+   * Advance a walk that is under way.
+   *
+   * "Go to sickbay" walks you there. It does not teleport you, and the
+   * difference is the whole reason the ship has geometry: a lift ride and a
+   * corridor are a minute of the captain's day, and being somewhere other than
+   * the bridge is a thing that can matter when the shooting starts.
+   */
+  updateWalk(dt) {
+    if (!this.walkOrder) return;
+    const { toId } = this.walkOrder;
+    this.walkOrder.memory ??= {};
+    const r = stepToward(this.walk, toId, dt, this.walkOrder.memory);
+    this.walkOrder.elapsed = (this.walkOrder.elapsed ?? 0) + dt;
+
+    if (r.arrived) {
+      this.walkOrder = null;
+      this.pushLog(`Arrived at ${this.walk.room.name}.`, 'captain');
+      emit('walk', { roomId: this.walk.roomId, arrived: true });
+      return;
+    }
+    if (r.blocked) {
+      this.walkOrder = null;
+      this.pushLog(`There is no route to ${toId} from here.`, 'computer');
+      return;
+    }
+    // A walk that has not arrived in two minutes is a walk that is not going
+    // to. Better to say so than to leave the captain pacing forever.
+    if (this.walkOrder.elapsed > 120) {
+      this.walkOrder = null;
+      this.pushLog(`Could not reach ${toId}. Standing by in ${this.walk.room.name}.`, 'computer');
+    }
+  }
+
+  /** Set off for another part of the ship. */
+  goToRoom(nameOrId) {
+    const room = findRoom(nameOrId) ?? null;
+    if (!room) return { ok: false, reason: 'There is no such compartment aboard, Captain.' };
+    if (room.id === this.walk.roomId && !this.walkOrder) {
+      return { ok: false, reason: `You are in ${room.name}, Captain.` };
+    }
+    if (this.mode === MODES.COMBAT) {
+      return { ok: false, reason: 'Not while we are under fire, Captain.' };
+    }
+    this.walkOrder = { toId: room.id, memory: {}, elapsed: 0 };
+    this.pushLog(`Making for ${room.name}.`, 'captain');
+    return { ok: true, room };
+  }
+
+  /** Stand up from the chair, or take it. */
+  takeChair(on = true) {
+    if (on && this.walk.roomId !== 'bridge') {
+      // Taking the chair from another deck means walking back to it first.
+      const r = this.goToRoom('bridge');
+      return r.ok
+        ? { ok: true, walking: true, reason: 'Making for the bridge, Captain.' }
+        : r;
+    }
+    this.walkOrder = null;
+    const r = this.walk.sit(on);
+    if (r.ok) this.pushLog(on ? 'Took the chair.' : 'Stood up from the chair.', 'captain');
+    return r;
   }
 
   // ------------------------------------------------------------------ orders
@@ -18236,6 +19203,7 @@ class Game {
 
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
+    this.updateWalk(dt);
 
     switch (this.mode) {
       case MODES.TRANSIT: {
@@ -18358,6 +19326,7 @@ class Game {
       pendingFeats: this.pendingFeats ?? 0,
       podJettisoned: this.podJettisoned === true,
       warpFactor: this.warpFactor,
+      walk: this.walk.save(),
       firstStrike: this.firstStrike === true,
       inKobayashi: this.inKobayashi === true,
       gambitOpen: this.gambitOpen === true,
@@ -18594,6 +19563,10 @@ class Game {
     // Records written before the flip switches existed have no standing
     // factor, and six is what the game used to assume.
     g.warpFactor = Number(data.warpFactor) > 0 ? Number(data.warpFactor) : 6;
+    // Records written before the ship had an inside put you in the chair,
+    // which is where every commission starts anyway.
+    g.walk = Walker.load(data.walk ?? {});
+    g.walkOrder = null;
     g.firstStrike = data.firstStrike === true;
     g.inKobayashi = data.inKobayashi === true;
     g.gambitOpen = data.gambitOpen === true;
@@ -18621,6 +19594,7 @@ const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
 const { commandReference } = __require("src/ui/orders.js");
+const { ROOMS, DECKS } = __require("src/world/interiors.data.js");
 const { listBackups, downloadSave } = __require("src/core/save.js");
 const { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } = __require("src/sim/fabrication.js");
 const { SCENARIO: KOBAYASHI, GAMBIT_TIER } = __require("src/missions/kobayashi.js");
@@ -18743,6 +19717,12 @@ function bridgeScreen(app) {
   }
   root.append(panel('Bridge', actions));
 
+  // --- Where you are ---
+  // The ship has an inside, and the captain is somewhere in it. This is the
+  // smallest honest way to say so: which compartment, what is within reach, and
+  // whether you are walking somewhere.
+  root.append(positionPanel(app));
+
   // --- The chair ---
   root.append(chairPanel(app));
 
@@ -18758,6 +19738,64 @@ function bridgeScreen(app) {
       tap(() => app.go('log')), { color: 'ghost' }),
   ]));
   return root;
+}
+
+// ============================================================ WHERE YOU ARE
+
+/**
+ * Which compartment the captain is standing in, and what is to hand.
+ *
+ * Deliberately a panel rather than a screen. Being aboard is a fact about the
+ * game state, not a mode you enter — the orders that move you work from
+ * anywhere, and the first-person view is a way of LOOKING at this, not a
+ * prerequisite for it.
+ */
+function positionPanel(app) {
+  const g = app.game;
+  const w = g.walk;
+  const room = w.room;
+  const walking = g.walkOrder;
+
+  const body = [
+    el('p', {}, [
+      el('b', { text: room.name }),
+      ' — ',
+      // Just the number: the deck names in DECKS already carry the room name
+      // ("Deck 5 — Sickbay"), which read as "Sickbay — Deck 5 — Sickbay" here.
+      el('span', { class: 'muted', text: `Deck ${room.deck}` }),
+    ]),
+  ];
+
+  if (walking) {
+    const to = ROOMS[walking.toId];
+    body.push(el('p', { class: 'muted', text: `Under way to ${to?.name ?? walking.toId}.` }));
+    body.push(button('Stop here', tap(() => { g.walkOrder = null; app.render(); }), { color: 'ghost' }));
+  } else {
+    if (w.seated) {
+      body.push(el('p', { class: 'muted', text: 'In the command chair.' }));
+    } else if (w.atStation) {
+      body.push(el('div', { class: 'meta' }, [pill(`at ${w.atStation.label}`, 'green')]));
+    }
+
+    // Somewhere to go. Only the rooms you can reach in one move are offered as
+    // buttons; anything else is an order away — "go to sickbay" works from
+    // wherever you are and routes itself.
+    const doors = w.room.lift ? w.liftStops() : (room.exits ?? []);
+    if (doors.length) {
+      body.push(el('div', { class: 'chip-row' }, doors.slice(0, 6).map((e) => button(
+        ROOMS[e.to]?.name ?? e.to,
+        tap(() => {
+          const r = g.goToRoom(e.to);
+          if (r.ok) audio.play('door'); else audio.play('ui_deny');
+          app.render();
+        }),
+        { color: 'blue' },
+      ))));
+    }
+    body.push(el('p', { class: 'hint', text: 'Or say where you want to be — “go to sickbay”, “take me to engineering”. You walk there; the crew keeps working while you do.' }));
+  }
+
+  return panel('Aboard', body, walking ? 'accent' : '');
 }
 
 // ================================================================ TRANSIT
@@ -19969,6 +21007,7 @@ function kobayashiPanel(app) {
 }
 
 __exports.bridgeScreen = bridgeScreen;
+__exports.positionPanel = positionPanel;
 __exports.transitScreen = transitScreen;
 __exports.viewscreenScreen = viewscreenScreen;
 __exports.tacticalScreen = tacticalScreen;
@@ -21650,6 +22689,23 @@ class App {
         const r = g.jettisonPod();
         if (r.ok) { audio.play('torpedo_launch'); haptic('warp'); }
         else { audio.play('ui_deny'); g.pushLog(r.reason, 'engineering'); }
+        break;
+      }
+      case 'go_to_room': {
+        const r = g.goToRoom(order.room);
+        if (r.ok) {
+          audio.play('door');
+          haptic('confirm');
+        } else {
+          audio.play('ui_deny');
+          ack('computer', r.reason);
+        }
+        break;
+      }
+      case 'chair': {
+        const r = g.takeChair(order.sit !== false);
+        if (r.ok) { audio.play('ui_confirm'); haptic('tap'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
         break;
       }
       case 'help':
