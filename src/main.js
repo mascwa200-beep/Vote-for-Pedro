@@ -162,6 +162,10 @@ class App {
 
   applySettings() {
     const s = this.settings;
+    // The interface has an era, and the game already knows which one. This is
+    // the seam the stylesheet reads: TOS gets 1966 consoles, TNG/DS9/VOY get
+    // LCARS, which is what those eras actually had.
+    document.documentElement.dataset.era = this.game?.era ?? s.era ?? 'tos';
     document.documentElement.dataset.text = s.textSize ?? 'normal';
     document.documentElement.dataset.motion = s.reduceMotion ? 'reduced' : 'normal';
     configureTouch({ haptics: s.haptics, wakeLock: s.wakeLock });
@@ -349,6 +353,12 @@ class App {
   render() {
     if (!this.game) return;
     const g = this.game;
+
+    // The era drives the whole interface, and it is only known once a game
+    // exists — applySettings() runs before that, on the menu.
+    if (document.documentElement.dataset.era !== g.era) {
+      document.documentElement.dataset.era = g.era ?? 'tos';
+    }
 
     this.shipNameEl.textContent = `${g.ship.name} ${g.ship.registry}`;
     this.stardateEl.textContent = `SD ${g.stardate}`;

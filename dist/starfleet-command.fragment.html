@@ -1,9 +1,82 @@
 <title>Starfleet Command</title>
 <style>
-/* LCARS, built for a phone held in one hand.
-   Portrait is the primary layout; landscape widens the tactical view. */
+/* The console, built for a phone held in one hand.
+   Portrait is the primary layout; landscape widens the tactical view.
+
+   THE INTERFACE HAS AN ERA, AND SO DOES THE GAME.
+
+   This stylesheet used to be LCARS throughout — which is The Next Generation,
+   1987. The game defaults to `era: 'tos'`, that setting picks the crew, the
+   ship class and the stardate, and it drove nothing visual at all. You were
+   commanding Kirk's Enterprise through Picard's console.
+
+   So the era now drives the look. The base is 1966: rectangular panels,
+   brushed-aluminium trim, and saturated "jelly bean" buttons on dark
+   charcoal. The LCARS palette is not deleted — it moves to
+   `:root[data-era='tng' | 'ds9' | 'voy']`, because those genuinely are the
+   LCARS eras. Picking a TNG crew now gets you a TNG console, which is what the
+   setting always implied.
+
+   The colour NAMES are unchanged (blue, ice, lilac, peach, amber…) so several
+   hundred `button(label, fn, {color: 'ice'})` call sites keep working. Only
+   what those names mean changes. */
 
 :root {
+  /* ---- 1966: the jelly-bean button colours off the physical prop ---- */
+  --lcars-orange: #e8a317;   /* gold — the command accent */
+  --lcars-amber: #f0c04a;
+  --lcars-peach: #d2703a;
+  --lcars-lilac: #2aa8a8;    /* the TOS turquoise, where LCARS had lilac */
+  --lcars-blue: #2e6db4;
+  --lcars-ice: #6fb4dc;
+  --lcars-red: #cc2b1d;
+  --lcars-green: #3faa5a;
+  --lcars-grey: #5a5c62;
+
+  /* Brushed aluminium trim, and the charcoal the consoles are set into. */
+  --trim: #8b8d93;
+  --trim-dim: #55575d;
+
+  --bg: #08090c;
+  --panel: #16181d;
+  --panel-2: #20232a;
+  --text: #e6e6df;
+  --text-dim: #9a9c96;
+
+  /* Rectangular. TOS has no elbows and no pills. */
+  --radius: 2px;
+
+  --accent: var(--lcars-orange);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /* The neutral greys the panels are built from. These were hardcoded as
+     blue-purples (var(--slot), var(--trough), var(--slot-2)…) — LCARS colours sitting inside
+     what is now a 1966 console, and the one thing that still read as the wrong
+     decade once the shapes changed. */
+  --slot: #23252b;
+  --slot-2: #2b2e35;
+  --trough: #2a2d33;
+  --rule: #24262b;
+  --canvas: #05060a;
+  --canvas-edge: #3a3d44;
+
+  --tap: 48px;
+  --fs: 16px;
+}
+
+:root[data-alert='yellow'] { --accent: var(--lcars-amber); }
+:root[data-alert='red'] { --accent: var(--lcars-red); }
+
+/* ---- The LCARS eras, restored verbatim ---- */
+:root[data-era='tng'] body, :root[data-era='ds9'] body, :root[data-era='voy'] body {
+  font-family: 'Antonio', 'Helvetica Neue', 'Arial Narrow', system-ui, sans-serif;
+  letter-spacing: normal;
+}
+
+:root[data-era='tng'], :root[data-era='ds9'], :root[data-era='voy'] {
   --lcars-orange: #ff9c00;
   --lcars-amber: #ffcc66;
   --lcars-peach: #ff9966;
@@ -13,26 +86,21 @@
   --lcars-red: #cc4444;
   --lcars-green: #66cc66;
   --lcars-grey: #666688;
-
+  --trim: #9999ff;
+  --trim-dim: #666688;
   --bg: #000000;
   --panel: #14141c;
   --panel-2: #1c1c28;
   --text: #ffcc99;
   --text-dim: #b08a6a;
   --radius: 22px;
-
-  --accent: var(--lcars-orange);
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-left: env(safe-area-inset-left, 0px);
-  --safe-right: env(safe-area-inset-right, 0px);
-
-  --tap: 48px;
-  --fs: 16px;
+  --slot: #23233a;
+  --slot-2: #33334a;
+  --trough: #2a2a38;
+  --rule: #22222e;
+  --canvas: #04040a;
+  --canvas-edge: #22223a;
 }
-
-:root[data-alert='yellow'] { --accent: var(--lcars-amber); }
-:root[data-alert='red'] { --accent: var(--lcars-red); }
 :root[data-text='large'] { --fs: 18px; }
 :root[data-text='xlarge'] { --fs: 21px; }
 
@@ -42,7 +110,10 @@ html, body {
   margin: 0; padding: 0; height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Antonio', 'Helvetica Neue', 'Arial Narrow', system-ui, sans-serif;
+  /* Wide and even, not condensed. Antonio is the LCARS-alike face and stays
+     for the LCARS eras; TOS labelling is squarer and more spaced out. */
+  font-family: 'Helvetica Neue', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  letter-spacing: 0.015em;
   font-size: var(--fs);
   overscroll-behavior: none;
   -webkit-user-select: none; user-select: none;
@@ -72,12 +143,14 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .topbar .cap {
   width: 46px; border-radius: var(--radius) 0 0 0;
   background: var(--accent);
+  border-bottom: 2px solid var(--trim-dim);
 }
 
 .topbar .title {
   flex: 1;
   background: var(--panel-2);
   border-radius: 0 var(--radius) 0 0;
+  border-bottom: 2px solid var(--trim-dim);
   padding: 6px 14px;
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   min-width: 0;
@@ -128,17 +201,34 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 
 /* ---------------- Panels ---------------- */
 
+/* A console panel: rectangular, set into charcoal, capped with a coloured
+   band along the top. The LCARS left spine is an elbow language; TOS labels
+   its panels across the top edge. */
 .panel {
   background: var(--panel);
-  border-radius: 8px;
-  border-left: 8px solid var(--lcars-blue);
+  border-radius: var(--radius);
+  border-top: 5px solid var(--lcars-blue);
+  border-left: 1px solid var(--trim-dim);
+  border-right: 1px solid var(--trim-dim);
+  border-bottom: 1px solid var(--trim-dim);
   padding: 10px 12px;
   margin-bottom: 8px;
 }
-.panel.accent { border-left-color: var(--accent); }
-.panel.warn { border-left-color: var(--lcars-amber); }
-.panel.danger { border-left-color: var(--lcars-red); }
-.panel.good { border-left-color: var(--lcars-green); }
+.panel.accent { border-top-color: var(--accent); }
+.panel.warn { border-top-color: var(--lcars-amber); }
+.panel.danger { border-top-color: var(--lcars-red); }
+.panel.good { border-top-color: var(--lcars-green); }
+
+/* The LCARS eras keep their spine. */
+:root[data-era='tng'] .panel, :root[data-era='ds9'] .panel, :root[data-era='voy'] .panel {
+  border-radius: 8px;
+  border-top: none; border-right: none; border-bottom: none;
+  border-left: 8px solid var(--lcars-blue);
+}
+:root[data-era='tng'] .panel.accent, :root[data-era='ds9'] .panel.accent, :root[data-era='voy'] .panel.accent { border-left-color: var(--accent); }
+:root[data-era='tng'] .panel.warn, :root[data-era='ds9'] .panel.warn, :root[data-era='voy'] .panel.warn { border-left-color: var(--lcars-amber); }
+:root[data-era='tng'] .panel.danger, :root[data-era='ds9'] .panel.danger, :root[data-era='voy'] .panel.danger { border-left-color: var(--lcars-red); }
+:root[data-era='tng'] .panel.good, :root[data-era='ds9'] .panel.good, :root[data-era='voy'] .panel.good { border-left-color: var(--lcars-green); }
 
 .panel h2, .panel h3 {
   margin: 0 0 8px;
@@ -164,11 +254,19 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   background: var(--lcars-orange);
   color: #000;
   border: none;
-  border-radius: 4px 22px 22px 4px;
+  /* Rectangular, with a lit top edge and a shadowed bottom — the jelly-bean
+     buttons on the 1966 consoles are moulded plastic caps, not flat fills. */
+  border-radius: var(--radius);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.28), inset 0 -2px 0 rgba(0, 0, 0, 0.3);
   text-align: left;
-  font-weight: 700; letter-spacing: 0.05em;
+  font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
   cursor: pointer;
   transition: filter 0.1s, transform 0.05s;
+}
+:root[data-era='tng'] .btn, :root[data-era='ds9'] .btn, :root[data-era='voy'] .btn {
+  border-radius: 4px 22px 22px 4px;
+  box-shadow: none;
+  letter-spacing: 0.05em; text-transform: none;
 }
 .btn:active { filter: brightness(1.3); transform: scale(0.985); }
 .btn.blue { background: var(--lcars-blue); }
@@ -207,7 +305,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   text-transform: uppercase; color: var(--text-dim);
 }
 .readout .bar {
-  flex: 1; height: 14px; background: #2a2a38; border-radius: 7px; overflow: hidden;
+  flex: 1; height: 14px; background: var(--trough); border-radius: 7px; overflow: hidden;
 }
 .readout .bar > i {
   display: block; height: 100%; border-radius: 7px;
@@ -230,7 +328,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 }
 .shields .sh {
   width: 100%; padding: 8px 4px; text-align: center;
-  border-radius: 4px; background: #23233a;
+  border-radius: 4px; background: var(--slot);
   font-size: 0.72em; letter-spacing: 0.06em; text-transform: uppercase;
   font-variant-numeric: tabular-nums;
 }
@@ -270,7 +368,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   flex: 1; height: var(--tap); background: transparent; -webkit-appearance: none; appearance: none;
 }
 .power-row input[type='range']::-webkit-slider-runnable-track {
-  height: 10px; background: #2a2a38; border-radius: 5px;
+  height: 10px; background: var(--trough); border-radius: 5px;
 }
 .power-row input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
@@ -278,7 +376,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   background: var(--lcars-orange); border-radius: 50%; border: 2px solid #000;
 }
 .power-row input[type='range']::-moz-range-track {
-  height: 10px; background: #2a2a38; border-radius: 5px;
+  height: 10px; background: var(--trough); border-radius: 5px;
 }
 .power-row input[type='range']::-moz-range-thumb {
   width: 28px; height: 28px; background: var(--lcars-orange);
@@ -292,7 +390,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 /* ---------------- Log ---------------- */
 
 .logline {
-  padding: 5px 0; border-bottom: 1px solid #22222e;
+  padding: 5px 0; border-bottom: 1px solid var(--rule);
   font-size: 0.88em; line-height: 1.4;
 }
 .logline .src {
@@ -312,8 +410,8 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .tactical-wrap {
   position: relative; flex: 0 0 auto;
   height: 42vh; min-height: 200px; max-height: 460px;
-  background: #05050c; border-radius: 8px; overflow: hidden;
-  border: 1px solid #22223a;
+  background: var(--canvas); border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--canvas-edge);
 }
 .screen.tactical-screen { gap: 6px; }
 .screen.tactical-screen .tactical-side { flex: 1 1 auto; min-height: 0; }
@@ -353,7 +451,7 @@ canvas.tactical-labels {
 .orderbar input {
   flex: 1; min-width: 0; min-height: var(--tap);
   background: var(--panel-2); border: 2px solid var(--lcars-grey);
-  border-radius: 22px 4px 4px 22px;
+  border-radius: var(--radius);
   padding: 0 16px; color: var(--text);
   -webkit-user-select: text; user-select: text;
 }
@@ -362,7 +460,8 @@ canvas.tactical-labels {
 .orderbar button {
   flex: 0 0 auto; min-width: 64px; min-height: var(--tap);
   background: var(--accent); color: #000; border: none;
-  border-radius: 4px 22px 22px 4px; font-weight: 700; cursor: pointer;
+  border-radius: var(--radius); font-weight: 700; cursor: pointer;
+  letter-spacing: 0.09em; text-transform: uppercase;
 }
 .orderbar button:active { filter: brightness(1.3); }
 
@@ -388,8 +487,15 @@ canvas.tactical-labels {
 }
 .nav button .ico { font-size: 1.5em; line-height: 1; }
 .nav button.active { background: var(--accent); color: #000; }
-.nav button:first-child { border-radius: 22px 4px 4px 22px; }
-.nav button:last-child { border-radius: 4px 22px 22px 4px; }
+.nav button:first-child { border-radius: var(--radius); }
+.nav button:last-child { border-radius: var(--radius); }
+
+/* The LCARS eras keep their rounded caps on the input, the order button and
+   the ends of the nav rail. */
+:root[data-era='tng'] .orderbar input, :root[data-era='ds9'] .orderbar input, :root[data-era='voy'] .orderbar input { border-radius: 22px 4px 4px 22px; }
+:root[data-era='tng'] .orderbar button, :root[data-era='ds9'] .orderbar button, :root[data-era='voy'] .orderbar button { border-radius: 4px 22px 22px 4px; text-transform: none; }
+:root[data-era='tng'] .nav button:first-child, :root[data-era='ds9'] .nav button:first-child, :root[data-era='voy'] .nav button:first-child { border-radius: 22px 4px 4px 22px; }
+:root[data-era='tng'] .nav button:last-child, :root[data-era='ds9'] .nav button:last-child, :root[data-era='voy'] .nav button:last-child { border-radius: 4px 22px 22px 4px; }
 .nav button .badge {
   position: absolute; top: 3px; right: 5px;
   background: var(--lcars-red); color: #fff;
@@ -403,8 +509,8 @@ canvas.tactical-labels {
 
 .map-wrap {
   position: relative; flex: 1 1 auto; min-height: 200px;
-  background: #04040a; border-radius: 8px; overflow: hidden;
-  border: 1px solid #22223a;
+  background: var(--canvas); border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--canvas-edge);
 }
 canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 
@@ -414,7 +520,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   font-size: 0.74em; text-transform: uppercase; letter-spacing: 0.08em;
 }
 .sys-card .meta span {
-  background: #23233a; padding: 3px 8px; border-radius: 10px; color: var(--lcars-ice);
+  background: var(--slot); padding: 3px 8px; border-radius: 10px; color: var(--lcars-ice);
 }
 .sys-card .meta span.contested { background: #4a2020; color: #ffaaaa; }
 .sys-card .meta span.mission { background: #4a3a10; color: var(--lcars-amber); }
@@ -446,7 +552,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 
 .officer {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 0; border-bottom: 1px solid #22222e;
+  padding: 8px 0; border-bottom: 1px solid var(--rule);
 }
 .officer .pip {
   flex: 0 0 40px; height: 40px; border-radius: 50%;
@@ -476,7 +582,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 .skill .info small { color: var(--text-dim); font-size: 0.76em; line-height: 1.3; }
 .skill .pips { flex: 0 0 auto; display: flex; gap: 3px; }
 .skill .pips i {
-  width: 10px; height: 18px; border-radius: 2px; background: #33334a; display: block;
+  width: 10px; height: 18px; border-radius: 2px; background: var(--slot-2); display: block;
 }
 .skill .pips i.on { background: var(--lcars-orange); }
 .skill button {
@@ -484,7 +590,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   background: var(--lcars-green); color: #000; border: none;
   border-radius: 6px; font-size: 1.3em; font-weight: 700; cursor: pointer;
 }
-.skill button[disabled] { background: #33334a; color: #666; }
+.skill button[disabled] { background: var(--slot-2); color: #666; }
 
 /* ---------------- Misc ---------------- */
 
@@ -493,7 +599,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 .center { text-align: center; }
 .muted { color: var(--text-dim); }
 .pill {
-  display: inline-block; background: #23233a; color: var(--lcars-ice);
+  display: inline-block; background: var(--slot); color: var(--lcars-ice);
   padding: 2px 9px; border-radius: 10px; font-size: 0.76em;
   letter-spacing: 0.08em; text-transform: uppercase; margin: 0 4px 4px 0;
 }
@@ -538,7 +644,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 
 .steprail { display: flex; gap: 4px; margin: 4px 0 8px; }
 .steppip {
-  flex: 1; height: 5px; border-radius: 3px; background: #2a2a3c;
+  flex: 1; height: 5px; border-radius: 3px; background: var(--slot-2);
   transition: background 0.2s;
 }
 .steppip.done { background: var(--lcars-blue); }
@@ -550,7 +656,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 /* Selectable option cards — species, origin, career, traits */
 .optcard, .diffcard {
   background: var(--panel); border-radius: 8px;
-  border-left: 8px solid #33334a;
+  border-left: 8px solid var(--slot-2);
   padding: 10px 12px; margin-bottom: 6px;
   cursor: pointer; transition: border-color 0.15s, background 0.15s;
 }
@@ -559,7 +665,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   background: var(--panel-2);
 }
 .optcard.disabled { opacity: 0.4; cursor: not-allowed; }
-.optcard:active, .diffcard:active { background: #22222e; }
+.optcard:active, .diffcard:active { background: var(--rule); }
 
 .opthead, .diffhead {
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
@@ -580,7 +686,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 /* Ability score rows with steppers */
 .abilityrow {
   display: flex; align-items: center; gap: 10px;
-  padding: 7px 0; border-bottom: 1px solid #22222e;
+  padding: 7px 0; border-bottom: 1px solid var(--rule);
 }
 .abilityname { flex: 1; min-width: 0; }
 .abilityname b { color: var(--lcars-amber); display: block; font-size: 0.95em; }
@@ -596,7 +702,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   background: var(--lcars-blue); color: #000;
   font-size: 1.4em; font-weight: 700; cursor: pointer;
 }
-.stepbtn[disabled] { background: #2a2a3c; color: #55556a; cursor: not-allowed; }
+.stepbtn[disabled] { background: var(--slot-2); color: #55556a; cursor: not-allowed; }
 .abilityrow.static { padding: 9px 0; }
 .profdot { color: var(--lcars-orange); font-size: 0.7em; margin-left: 5px; }
 
@@ -607,7 +713,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
 
 /* A roll shown inline in an away-mission report */
 .rollcard {
-  background: #10101c; border-radius: 6px; padding: 8px 10px; margin: 6px 0;
+  background: var(--canvas); border-radius: 6px; padding: 8px 10px; margin: 6px 0;
   border-left: 4px solid var(--lcars-blue);
   font-variant-numeric: tabular-nums;
 }
@@ -621,7 +727,7 @@ canvas#galaxy { display: block; width: 100%; height: 100%; touch-action: none; }
   position: relative;
   height: 5px;
   margin: 7px 0 6px;
-  background: #23233a;
+  background: var(--slot);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -4638,7 +4744,13 @@ const { MeshBuilder, saucer, tube, box, sphere, mirrored } = __require("src/gfx/
 
 /** Hull plating by faction. Flat shading means these are the whole look. */
 const PALETTE = {
-  federation: { hull: [0.74, 0.77, 0.82], trim: [0.52, 0.58, 0.66], glow: [0.45, 0.72, 1.0] },
+  // Warm off-white, not refit grey. The 1966 miniature photographed as a
+  // cream-white hull with darker grey detailing; [0.74, 0.77, 0.82] is the
+  // cool grey of the 1979 film refit, which is a different ship.
+  federation: {
+    hull: [0.82, 0.81, 0.77], trim: [0.56, 0.57, 0.60], glow: [0.45, 0.72, 1.0],
+    dish: [0.85, 0.55, 0.25],   // the copper deflector
+  },
   klingon: { hull: [0.42, 0.48, 0.44], trim: [0.28, 0.33, 0.30], glow: [0.95, 0.35, 0.25] },
   romulan: { hull: [0.44, 0.50, 0.44], trim: [0.30, 0.40, 0.32], glow: [0.55, 0.95, 0.60] },
   cardassian: { hull: [0.68, 0.62, 0.44], trim: [0.48, 0.43, 0.30], glow: [0.95, 0.75, 0.35] },
@@ -4720,6 +4832,135 @@ const FORMS = {
         segments: 8,
         rings: 5,
         color: p.glow,
+      });
+    });
+  },
+
+  /**
+   * The 1966 Constitution, which is a different ship from a generic saucer hull.
+   *
+   * `starfleet` gets the four masses right and stops there, which reads as
+   * "Federation ship" and not as *this* one. Four details do the identifying,
+   * and every one of them was missing:
+   *
+   *   THE DEFLECTOR DISH. The copper dish recessed in the bow of the secondary
+   *     hull. Probably the single most recognisable feature after the saucer,
+   *     and there was just a capped tube.
+   *   THE BUSSARD DOMES. Amber caps on the front of each nacelle — domes set
+   *     into a collar, not the bare spheres the generic form uses.
+   *   THIN SWEPT PYLONS. The 1966 struts are slender and raked back. Box slabs
+   *     read as the 1979 refit, which is a different ship.
+   *   THE HANGAR. A flat transom at the stern with the bay doors on it.
+   *
+   * Colour matters too: `[0.74, 0.77, 0.82]` is refit grey. The 1966 miniature
+   * was a warm off-white.
+   */
+  tos_starfleet(mb, p, b) {
+    const sr = b.saucerRadius ?? 0.46;
+    const sx = b.saucerX ?? 0.34;
+    const hullY = b.hullY ?? -0.17;
+
+    saucer(mb, {
+      origin: vec3(sx, b.saucerY ?? 0.02, 0),
+      radius: sr,
+      thickness: b.saucerThickness ?? 0.09,
+      domeRatio: b.domeRatio ?? 0.3,
+      domeHeight: b.domeHeight ?? 0.055,
+      segments: b.segments ?? 24,
+      color: p.hull,
+      rimColor: p.trim,
+    });
+
+    // The dorsal neck, raked rather than vertical.
+    box(mb, {
+      center: vec3(sx - sr * 0.6, hullY / 2 - 0.02, 0),
+      size: vec3(sr * 0.42, 0.26, 0.075),
+      sweep: 0.08,
+      color: p.hull,
+    });
+
+    // Secondary hull. Blunter at the bow than the generic taper, because the
+    // dish has to sit in something.
+    const hl = b.hullLength ?? 0.8;
+    tube(mb, {
+      origin: vec3(-0.46, hullY, 0),
+      length: hl,
+      r0: 0.105,
+      r1: 0.145,
+      segments: 14,
+      color: p.hull,
+      capAft: true,
+    });
+
+    // The deflector dish, recessed in a collar at the bow.
+    const dishX = -0.46 + hl;
+    tube(mb, {
+      origin: vec3(dishX - 0.03, hullY, 0),
+      length: 0.05,
+      r0: 0.145,
+      r1: 0.125,
+      segments: 14,
+      color: p.trim,
+    });
+    sphere(mb, {
+      origin: vec3(dishX + 0.035, hullY, 0),
+      radius: 0.108,
+      segments: 12,
+      rings: 6,
+      color: p.dish ?? p.glow,
+    });
+
+    // The hangar: a flat transom closing the stern.
+    box(mb, {
+      center: vec3(-0.47, hullY, 0),
+      size: vec3(0.05, 0.17, 0.15),
+      color: p.trim,
+    });
+
+    // Nacelles on slender raked pylons.
+    const nz = b.nacelleZ ?? 0.35;
+    const ny = b.nacelleY ?? 0.155;
+    const nx = b.nacelleX ?? -0.44;
+    const nl = b.nacelleLength ?? 0.9;
+    const nr = b.nacelleRadius ?? 0.072;
+    mirrored(mb, (m) => {
+      // Thin, and swept harder than the generic slab.
+      box(m, {
+        center: vec3(nx + nl * 0.3, (ny + hullY) / 2, nz * 0.55),
+        size: vec3(0.055, 0.35, nz * 0.92),
+        sweep: b.pylonSweep ?? 0.26,
+        color: p.trim,
+      });
+      tube(m, {
+        origin: vec3(nx, ny, nz),
+        length: nl,
+        r0: nr,
+        r1: nr * 0.9,
+        segments: 12,
+        color: p.hull,
+        capAft: true,
+      });
+      // The bussard collar, then the dome set into it.
+      tube(m, {
+        origin: vec3(nx + nl - 0.02, ny, nz),
+        length: 0.045,
+        r0: nr * 0.95,
+        r1: nr * 1.1,
+        segments: 12,
+        color: p.trim,
+      });
+      sphere(m, {
+        origin: vec3(nx + nl + 0.035, ny, nz),
+        radius: nr * 1.08,
+        segments: 10,
+        rings: 6,
+        color: p.glow,
+      });
+      // The blue intercooler grille along the outboard face.
+      box(m, {
+        center: vec3(nx + nl * 0.45, ny - nr * 0.55, nz),
+        size: vec3(nl * 0.42, 0.012, nr * 0.5),
+        color: p.trim,
       });
     });
   },
@@ -4865,7 +5106,7 @@ const FORMS = {
  */
 const BLUEPRINTS = {
   // ---- Starfleet ----
-  constitution: { form: 'starfleet', length: 289, saucerRadius: 0.46, nacelleLength: 0.9 },
+  constitution: { form: 'tos_starfleet', length: 289, saucerRadius: 0.46, nacelleLength: 0.9 },
   constitution_refit: { form: 'starfleet', length: 305, saucerRadius: 0.45, nacelleRadius: 0.085, pylonSweep: 0.1 },
   miranda: { form: 'starfleet', length: 278, saucerRadius: 0.52, neck: false, hullLength: 0.5, nacelleX: -0.34, nacelleY: -0.02, nacelleLength: 0.62 },
   oberth: { form: 'starfleet', length: 120, saucerRadius: 0.38, hullY: -0.36, hullLength: 0.66, nacelleY: -0.3, nacelleLength: 0.6 },
@@ -19068,6 +19309,10 @@ class App {
 
   applySettings() {
     const s = this.settings;
+    // The interface has an era, and the game already knows which one. This is
+    // the seam the stylesheet reads: TOS gets 1966 consoles, TNG/DS9/VOY get
+    // LCARS, which is what those eras actually had.
+    document.documentElement.dataset.era = this.game?.era ?? s.era ?? 'tos';
     document.documentElement.dataset.text = s.textSize ?? 'normal';
     document.documentElement.dataset.motion = s.reduceMotion ? 'reduced' : 'normal';
     configureTouch({ haptics: s.haptics, wakeLock: s.wakeLock });
@@ -19255,6 +19500,12 @@ class App {
   render() {
     if (!this.game) return;
     const g = this.game;
+
+    // The era drives the whole interface, and it is only known once a game
+    // exists — applySettings() runs before that, on the menu.
+    if (document.documentElement.dataset.era !== g.era) {
+      document.documentElement.dataset.era = g.era ?? 'tos';
+    }
 
     this.shipNameEl.textContent = `${g.ship.name} ${g.ship.registry}`;
     this.stardateEl.textContent = `SD ${g.stardate}`;
