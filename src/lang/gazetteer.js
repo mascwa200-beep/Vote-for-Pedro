@@ -12,6 +12,28 @@ import { RECIPES } from '../sim/fabrication.js';
 import { FACINGS } from '../sim/ship.js';
 import { similarity } from './fuzzy.js';
 import { soundsLike } from './phonetic.js';
+import { ORDER_VOCABULARY } from './lexicon.js';
+
+/**
+ * Is this token a word the game already uses, correctly spelled?
+ *
+ * The fuzzy passes below exist for typos — "forwrad", "nacels", "vulcn". They
+ * are not for words that are simply other words. `similarity('power','lower')`
+ * is 0.83, which is inside every threshold in this file, so every order
+ * containing `power` came out carrying a ventral facing that nobody typed;
+ * `fire`, `core` and `more` all became fore, and `stop` became dorsal.
+ *
+ * A threshold cannot fix that, because those ARE single edits — exactly what
+ * the fuzzy pass is for. What separates them is that they are spelled
+ * correctly and this game already uses them, which `ORDER_VOCABULARY` knows
+ * because it is derived from the lexicon's own phrasings.
+ *
+ * `NOT_A_PLACE` above is the same idea maintained by hand, for the one
+ * extractor somebody had already noticed it in.
+ */
+function spelledCorrectly(tok) {
+  return ORDER_VOCABULARY.has(tok);
+}
 
 /** Words that are never a destination even though they look like nouns. */
 const NOT_A_PLACE = new Set([
@@ -145,7 +167,7 @@ export function findFacing(text, tokens) {
     if (f) return f;
   }
   for (const tok of tokens) {
-    if (tok.length < 4) continue;
+    if (tok.length < 4 || spelledCorrectly(tok)) continue;
     for (const word of Object.keys(FACING_WORDS)) {
       if (similarity(tok, word) > 0.75 || soundsLike(tok, word)) {
         return FACING_WORDS[word];

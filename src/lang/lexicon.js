@@ -338,15 +338,26 @@ export const INTENTS = [
     help: 'Reinforce the forward shields',
     phrases: [
       'reinforce the shield', 'strengthen the shield', 'bolster the shield',
-      'shore up the shield', 'transfer power to the shield', 'more power to the shield',
-      'double up the shield', 'thicken the shield', 'brace the shield',
-      'all power to the forward shield', 'reinforce forward', 'reinforce aft',
-      'harden the shield', 'boost the shield', 'shore up', 'double up',
-      'thicken', 'more shield on the', 'extra shield',
+      'shore up the shield', 'double up the shield', 'thicken the shield',
+      'brace the shield', 'all power to the forward shield',
+      'reinforce forward', 'reinforce aft', 'harden the shield',
+      'boost the shield', 'shore up', 'double up', 'thicken',
+      'more shield on the', 'extra shield',
+      // "transfer power to the shield" and "more power to the shield" used to
+      // be listed here and always lost to `power`, which is the correct
+      // reading: with no facing named, that IS a grid order. What makes it a
+      // reinforce order is the facing, and `power` now stands aside whenever
+      // one is present.
+      'more power to the forward shield', 'transfer power to the aft shield',
+      'power to the port shield',
     ],
     keywords: {
       reinforce: 3, strengthen: 3, bolster: 3, harden: 2.5, boost: 1.5,
       shore: 2.5, thicken: 2.5, double: 2, brace: 2,
+      // Safe to score on, because `power` vetoes itself when a facing is named
+      // and this intent requires one. Without it "more power to the forward
+      // shields" fell between the two and reached neither.
+      power: 1.5,
     },
     requires: ['facing'],
     build: (c) => ({ action: 'reinforce', facing: c.facing }),
@@ -367,6 +378,13 @@ export const INTENTS = [
     ],
     keywords: { power: 2.5, divert: 3, reroute: 3, energy: 1.5, eps: 2 },
     veto: ['preset', 'posture', 'configuration'],
+    // A power channel has no facing. "More power to the forward shields" is a
+    // reinforce order about one shield face; "more power to shields" is a
+    // routing order about the grid. Without this the word `power` carried
+    // every one of them to the grid and the word `forward` — the entire point
+    // of the sentence — was discarded. Three of `reinforce`'s own listed
+    // phrasings lost to this intent.
+    vetoSlots: ['facing'],
     requires: ['powerChannel'],
     build: (c) => ({
       action: 'power',
@@ -624,6 +642,29 @@ export const INTENTS = [
     build: () => ({ action: 'jettison_pod' }),
   },
   {
+    // The one order that is about the game rather than the ship. It exists
+    // because the parser accepts hundreds of phrasings and a player who has
+    // only seen the buttons has no way to discover that.
+    id: 'help',
+    help: 'What can I say? — the command reference',
+    phrases: [
+      'what can i say', 'what can i do', 'what are my orders', 'list orders',
+      'show me the orders', 'command reference', 'show the manual',
+      'what commands are there', 'how do i give orders', 'i need help',
+      'show help', 'the manual',
+    ],
+    keywords: { help: 2.5, manual: 2.5, command: 2, order: 1.2 },
+    // "Send help to the colony" is a rescue order, not a request for the
+    // manual. The distinction is grammatical — help as an object rather than
+    // as a request — and these are the words that mark it.
+    veto: [
+      'medical', 'sickbay', 'distress', 'assist', 'aid', 'rescue', 'engineering',
+      'send', 'render', 'colony', 'survivor', 'wounded', 'injured', 'evacuate',
+      'them', 'their', 'they', 'ship', 'vessel', 'freighter', 'outpost',
+    ],
+    build: () => ({ action: 'help' }),
+  },
+  {
     id: 'viewscreen',
     help: 'On screen / main viewer',
     phrases: [
@@ -799,6 +840,34 @@ export function lexiconActions() {
 export function intentHelp() {
   return INTENTS.map((i) => ({ id: i.id, help: i.help, phrases: i.phrases.length }));
 }
+
+/**
+ * Every word the lexicon itself uses, folded, four letters or longer.
+ *
+ * This exists to stop the gazetteer's fuzzy passes from "correcting" a word
+ * that was not misspelled. `similarity('power', 'lower')` is 0.83, so every
+ * order containing the word `power` silently carried a ventral facing; `fire`,
+ * `core` and `more` all became fore, `stop` became dorsal, and `head` became
+ * ahead. Eighteen ordinary order words in this file resolved to a facing
+ * nobody typed.
+ *
+ * A threshold cannot separate those from real typos — they ARE single edits.
+ * What separates them is that they are correctly spelled words this game
+ * already uses, and the fuzzy pass exists for "forwrad", not for "power".
+ *
+ * Deriving it from the phrases rather than listing it by hand means a new
+ * phrasing protects its own words, with no second table to drift.
+ */
+export const ORDER_VOCABULARY = (() => {
+  const words = new Set();
+  for (const intent of INTENTS) {
+    for (const phrase of intent.phrases) {
+      for (const w of phrase.split(/\s+/)) if (w.length >= 4) words.add(w);
+    }
+    for (const k of Object.keys(intent.keywords)) if (k.length >= 4) words.add(k);
+  }
+  return words;
+})();
 
 /** Total number of distinct phrasings carried, for the size budget in CI. */
 export function phraseCount() {

@@ -214,7 +214,7 @@ try {
 
   // ------------------------------------------------ typed order -> warp
   await page.fill('.orderbar input', 'helm, set course for Vulcan, warp eight');
-  await page.click('.orderbar button');
+  await page.click('.orderbar button.send');
   await page.waitForTimeout(800);
 
   const inTransit = await page.evaluate(() => globalThis.__app.game.mode);
@@ -258,6 +258,82 @@ try {
   });
   check('the map actually draws pixels', mapDrawn > 50, `lit samples: ${mapDrawn}`);
   await page.screenshot({ path: join(SHOTS, '04-galaxy-map.png') });
+
+  // ---- The manual, and the whole log ----
+  //
+  // Both existed and neither was reachable: `orderHelp()` was exported and
+  // never imported, and `logScreen()` was wired into the router with nothing
+  // ever calling go('log'). A feature nobody can navigate to has not shipped,
+  // so what is checked here is arrival — from the key, from the log panel, and
+  // from the order line.
+  await dismissModals(page);
+  await page.click('.orderbar button.manual');
+  await page.waitForTimeout(300);
+  const manual = await page.evaluate(() => ({
+    screen: globalThis.__app.screen,
+    groups: document.querySelectorAll('.panel').length,
+    entries: document.querySelectorAll('.ref-entry').length,
+    phrases: document.querySelectorAll('.ref-phrase').length,
+  }));
+  check('the ? key opens the command reference', manual.screen === 'reference', manual.screen);
+  check('the reference lists every order', manual.entries >= 38, String(manual.entries));
+  check('the reference shows the phrasings, which are the point',
+    manual.phrases >= 100, String(manual.phrases));
+  await page.screenshot({ path: join(SHOTS, '08-reference.png') });
+
+  // And by voice, which is the discovery path that does not require finding a
+  // button in the first place.
+  await page.evaluate(() => globalThis.__app.go('bridge'));
+  await page.waitForTimeout(200);
+  await page.fill('.orderbar input', 'what can i say');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(300);
+  check('asking what you can say opens the manual',
+    await page.evaluate(() => globalThis.__app.screen) === 'reference');
+
+  await page.evaluate(() => globalThis.__app.go('bridge'));
+  await page.waitForTimeout(250);
+  const logReach = await page.evaluate(async () => {
+    const b = [...document.querySelectorAll('.btn')]
+      .find((x) => x.textContent.trim().startsWith('Full log'));
+    if (!b) return { error: 'no way to the full log from the bridge' };
+    b.click();
+    await new Promise((r) => setTimeout(r, 250));
+    return {
+      screen: globalThis.__app.screen,
+      lines: document.querySelectorAll('.logline').length,
+      entries: globalThis.__app.game.log.length,
+      filters: document.querySelectorAll('.chip-row .btn').length,
+    };
+  });
+  check('the full log is reachable from the bridge',
+    logReach.screen === 'log', JSON.stringify(logReach));
+  // The whole log, not a tail of it. The bridge shows six lines; this screen
+  // exists because a five-year commission is longer than that.
+  check('the log screen shows every entry there is',
+    logReach.lines === logReach.entries, `${logReach.lines} of ${logReach.entries}`);
+
+  // The filter reads `source`, which is what pushLog writes. It read `station`
+  // at first, which produced no chips and an empty list behind every one.
+  const filtered = await page.evaluate(async () => {
+    const chips = [...document.querySelectorAll('.chip-row .btn')];
+    const pick = chips.find((c) => c.textContent.trim() !== 'All');
+    if (!pick) return { error: 'no filter chips' };
+    const label = pick.textContent.trim();
+    pick.click();
+    await new Promise((r) => setTimeout(r, 250));
+    return {
+      label,
+      shown: document.querySelectorAll('.logline').length,
+      expected: globalThis.__app.game.log.filter((l) => l.source === label).length,
+    };
+  });
+  check('filtering the log by station shows that station and nothing else',
+    filtered.shown > 0 && filtered.shown === filtered.expected, JSON.stringify(filtered));
+  await page.evaluate(() => { globalThis.__app.logFilter = null; globalThis.__app.render(); });
+  void logReach.filters;
+  await page.screenshot({ path: join(SHOTS, '09-log.png') });
+  await nav(page, 'Bridge');
 
   // ------------------------------------------------ combat
   await page.evaluate(() => {
@@ -624,7 +700,7 @@ try {
   const typeOrder = async (text) => {
     await dismissModals(page);
     await page.fill('.orderbar input', text);
-    await page.click('.orderbar button');
+    await page.click('.orderbar button.send');
     await page.waitForTimeout(120);
   };
 

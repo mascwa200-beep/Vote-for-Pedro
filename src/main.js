@@ -128,8 +128,19 @@ class App {
       onkeydown: (e) => { if (e.key === 'Enter') this.submitOrder(); },
     });
     this.orderBar = el('div', { class: 'orderbar' }, [
+      // The parser accepts hundreds of phrasings and the game had no way to
+      // say so. This is that way: one tap from wherever you are stuck.
+      //
+      // It sits to the LEFT of the input on purpose. Putting it between the
+      // input and Order left it under the thumb that reaches for Order — and
+      // made `.orderbar button` ambiguous, which the browser harness noticed
+      // by typing an order and watching the manual open instead.
+      el('button', {
+        class: 'manual', text: '?', title: 'What can I say?', 'aria-label': 'Command reference',
+        onclick: () => { audio.play('ui_tap'); haptic('tap'); this.go('reference'); },
+      }),
       this.orderInput,
-      el('button', { text: 'Order', onclick: () => this.submitOrder() }),
+      el('button', { class: 'send', text: 'Order', onclick: () => this.submitOrder() }),
     ]);
     this.root.append(this.orderBar);
 
@@ -394,6 +405,7 @@ class App {
       case 'transit': node = el('div', { class: 'screen' }, [screens.transitScreen(this)]); break;
       case 'gameover': node = el('div', { class: 'screen' }, [screens.gameOverScreen(this)]); break;
       case 'log': node = el('div', { class: 'screen' }, [screens.logScreen(this)]); break;
+      case 'reference': node = el('div', { class: 'screen' }, [screens.referenceScreen(this)]); break;
       case 'bridge':
       default: node = el('div', { class: 'screen' }, [screens.bridgeScreen(this)]); break;
     }
@@ -1091,6 +1103,10 @@ class App {
         else { audio.play('ui_deny'); g.pushLog(r.reason, 'engineering'); }
         break;
       }
+      case 'help':
+        audio.play('computer_ack');
+        this.go('reference');
+        break;
       case 'viewscreen': {
         // "On screen." One order, both directions: it opens the main viewer,
         // and said again it closes it and puts you back where you were —

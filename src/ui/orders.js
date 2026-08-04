@@ -9,7 +9,7 @@ import { SUBSYSTEMS } from '../sim/power.js';
 import { FACINGS } from '../sim/ship.js';
 import { ABILITIES } from '../sim/officers.js';
 import { parseText, CONFIDENT } from '../lang/parse.js';
-import { intentHelp, phraseCount } from '../lang/lexicon.js';
+import { intentHelp, phraseCount, INTENTS, STATION_AFFINITY } from '../lang/lexicon.js';
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
@@ -376,6 +376,102 @@ function matchPlainOrder(t, raw) {
     }
   }
   return { unknown: true, raw };
+}
+
+// Which department an order belongs to, for the reference sheet. The lexicon
+// already carries this as station -> intent ids, for tie-breaking when an order
+// is addressed to somebody; inverting it here gives the grouping for free
+// rather than maintaining a second table that can drift out of step.
+const STATION_OF = (() => {
+  const map = {};
+  for (const [station, ids] of Object.entries(STATION_AFFINITY)) {
+    for (const id of ids) if (!(id in map)) map[id] = station;
+  }
+  // `intercom` is pushed onto every station's list, so the inversion above
+  // assigns it to whichever came first.
+  //
+  // The rest of these are orders the affinity table does not carry, because
+  // affinity exists to break ties when an order is ADDRESSED to a station and
+  // nobody says "tactical, red alert". They are grouped here by where the
+  // control physically is, which is what a reference sheet is for. Anything not
+  // listed falls through to Command, so a new intent appears in the manual by
+  // default rather than being dropped from it.
+  Object.assign(map, {
+    intercom: 'chair', alert: 'chair', jettison_pod: 'chair',
+    viewscreen: 'chair', magnify: 'chair', log_entry: 'chair',
+    fabricate: 'engineering', work_shop: 'engineering', salvage: 'engineering',
+  });
+  return map;
+})();
+
+const STATION_LABEL = {
+  helm: 'Helm',
+  tactical: 'Tactical',
+  engineering: 'Engineering',
+  science: 'Science',
+  comms: 'Communications',
+  medical: 'Sickbay',
+  transporter: 'Transporter room',
+  security: 'Security',
+  chair: 'The chair',
+  command: 'Command',
+};
+
+// The order the departments read in, which is roughly the order you use them.
+const STATION_ORDER = [
+  'helm', 'tactical', 'engineering', 'science', 'comms',
+  'transporter', 'medical', 'security', 'chair', 'command',
+];
+
+/**
+ * Every order the game understands, grouped by the station that carries it out,
+ * with the alternate phrasings the parser accepts.
+ *
+ * This exists because the parser is much more forgiving than it looks, and a
+ * player who has only ever seen the buttons has no way to discover that. The
+ * phrasings are the point: showing that "come about", "bring us around" and
+ * "get our nose on them" are the same order is what teaches you that you can
+ * simply say what you mean.
+ *
+ * @param {number} examples how many phrasings to show per order
+ */
+export function commandReference({ examples = 4 } = {}) {
+  const groups = new Map();
+  const push = (station, entry) => {
+    if (!groups.has(station)) groups.set(station, []);
+    groups.get(station).push(entry);
+  };
+
+  for (const intent of INTENTS) {
+    push(STATION_OF[intent.id] ?? 'command', {
+      id: intent.id,
+      help: intent.help,
+      // Longest first is how the lexicon sorts them, and the longest phrasings
+      // are the most natural-sounding ones — which is what to show.
+      examples: intent.phrases.slice(0, examples),
+      total: intent.phrases.length,
+    });
+  }
+
+  const out = [];
+  for (const station of STATION_ORDER) {
+    const entries = groups.get(station);
+    if (entries?.length) out.push({ station, label: STATION_LABEL[station] ?? station, entries });
+  }
+  // Anything the lexicon grows a station for that this file has not been told
+  // about still appears, rather than silently vanishing from the manual.
+  for (const [station, entries] of groups) {
+    if (!STATION_ORDER.includes(station)) {
+      out.push({ station, label: STATION_LABEL[station] ?? station, entries });
+    }
+  }
+
+  return {
+    groups: out,
+    abilities: Object.values(ABILITIES).map((a) => ({ name: a.name, order: a.order })),
+    phrasings: phraseCount(),
+    intents: INTENTS.length,
+  };
 }
 
 /** Everything the parser understands, for the manual and the help sheet. */
