@@ -9,6 +9,7 @@ import {
 import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
+import { commandReference } from './orders.js';
 import { listBackups, downloadSave } from '../core/save.js';
 import { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } from '../sim/fabrication.js';
 import { SCENARIO as KOBAYASHI, GAMBIT_TIER } from '../missions/kobayashi.js';
@@ -136,7 +137,16 @@ export function bridgeScreen(app) {
   root.append(chairPanel(app));
 
   // --- Recent log ---
-  root.append(panel('Ship’s Log', g.log.slice(-6).reverse().map(logLine)));
+  // Six lines and a way to the rest of it. The full log screen was written and
+  // wired into the router and nothing ever navigated to it, so a five-year
+  // commission's record stopped at whatever happened in the last few minutes.
+  root.append(panel('Ship’s Log', [
+    ...g.log.slice(-6).reverse().map(logLine),
+    // Always offered, not only once the log is long. A way out that appears
+    // later is a way out nobody finds.
+    button(`Full log — ${g.log.length} entr${g.log.length === 1 ? 'y' : 'ies'}`,
+      tap(() => app.go('log')), { color: 'ghost' }),
+  ]));
   return root;
 }
 
@@ -263,7 +273,10 @@ export function viewscreenScreen(app) {
       : button('Close the viewer', tap(() => app.go('bridge')), { color: 'ghost' }),
   ]));
 
-  side.append(panel('Ship’s Log', g.log.slice(-4).reverse().map(logLine)));
+  side.append(panel('Ship’s Log', [
+    ...g.log.slice(-4).reverse().map(logLine),
+    button('Full log', tap(() => app.go('log')), { color: 'ghost' }),
+  ]));
   return root;
 }
 
@@ -798,10 +811,99 @@ export function shipScreen(app) {
 
 // ================================================================ LOG
 
+/**
+ * The whole log, not the last six lines.
+ *
+ * This screen was written, wired into the router, and unreachable: nothing ever
+ * called `go('log')` and `log` was absent from the nav table. The bridge showed
+ * a six-line tail and there was no way to see any further back, which for a
+ * five-year commission is most of the record.
+ */
 export function logScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'scroll' });
-  root.append(panel('Ship’s Log', g.log.slice().reverse().map(logLine)));
+
+  // Filter by the station that spoke. A five-year log is hundreds of lines and
+  // "what did engineering say about the core" is the question you actually
+  // have.
+  //
+  // The field is `source`, not `station` — `pushLog(text, source)` names it
+  // that way and `logLine` reads it that way. Filtering on the wrong name gave
+  // no filter chips at all and an empty list for every one of them, which is
+  // the quietest possible failure.
+  const sources = [...new Set(g.log.map((l) => l.source).filter(Boolean))].sort();
+  const active = app.logFilter ?? null;
+  const entries = active ? g.log.filter((l) => l.source === active) : g.log;
+
+  if (sources.length > 1) {
+    root.append(panel('Filter', [
+      el('div', { class: 'chip-row' }, [
+        button('All', tap(() => { app.logFilter = null; app.render(); }), {
+          color: active === null ? 'green' : 'ghost',
+        }),
+        ...sources.map((st) => button(st, tap(() => {
+          app.logFilter = app.logFilter === st ? null : st;
+          app.render();
+        }), { color: active === st ? 'green' : 'ghost' })),
+      ]),
+    ]));
+  }
+
+  root.append(panel(
+    active ? `Ship’s Log — ${active}` : 'Ship’s Log',
+    entries.length
+      ? entries.slice().reverse().map(logLine)
+      : [el('p', { class: 'muted', text: 'Nothing on this channel yet.' })],
+  ));
+  return root;
+}
+
+// ====================================================== COMMAND REFERENCE
+
+/**
+ * Every order the game understands, and the ways you can phrase it.
+ *
+ * `orderHelp()` has assembled exactly this since the parser was written and was
+ * never imported anywhere — the game shipped with a natural-language layer that
+ * accepts 857 phrasings and no way to find out. The phrasings are the point:
+ * seeing that "come about", "bring us around" and "get our nose on them" are
+ * one order is what teaches you that you can simply say what you mean instead
+ * of hunting for the right button.
+ */
+export function referenceScreen(app) {
+  const root = el('div', { class: 'scroll' });
+  const ref = commandReference({ examples: 4 });
+
+  root.append(panel('Giving Orders', [
+    el('p', {}, [
+      'Type what you would say. The parser carries ',
+      el('b', { text: String(ref.phrasings) }),
+      ` phrasings across ${ref.intents} orders, and it forgives typos, so you do not have to `,
+      'match anything here word for word.',
+    ]),
+    el('p', { class: 'muted', text: 'You can address an officer — "Mister Sulu, come about" — and the order goes to that station. If something is ambiguous the bridge asks rather than guessing.' }),
+  ], 'accent'));
+
+  for (const group of ref.groups) {
+    root.append(panel(group.label, group.entries.map((e) => el('div', { class: 'ref-entry' }, [
+      el('div', { class: 'ref-help', text: e.help }),
+      el('div', { class: 'ref-examples' }, [
+        ...e.examples.map((p) => el('span', { class: 'ref-phrase', text: `“${p}”` })),
+        e.total > e.examples.length
+          ? el('span', { class: 'ref-more', text: `+${e.total - e.examples.length} more` })
+          : null,
+      ].filter(Boolean)),
+    ]))));
+  }
+
+  root.append(panel('Bridge Officer Abilities', [
+    el('p', { class: 'muted', text: 'Each officer carries one. Say the order and they carry it out, if they are fit to.' }),
+    ...ref.abilities.map((a) => el('div', { class: 'ref-entry' }, [
+      el('div', { class: 'ref-help', text: a.name }),
+      el('div', { class: 'ref-examples' }, [el('span', { class: 'ref-phrase', text: `“${a.order}”` })]),
+    ])),
+  ]));
+
   return root;
 }
 
@@ -835,6 +937,11 @@ export function optionsScreen(app) {
     { value: 168, label: '×168', sub: 'A week an hour — about eleven days' },
     { value: 1000, label: '×1000', sub: 'For testing. Not a commission.' },
   ];
+  root.append(panel('The Manual', [
+    el('p', { class: 'muted', text: 'Every order the game understands, and the ways you can phrase it. Also on the “?” key beside the order line, or say “what can I say”.' }),
+    button('Command reference', tap(() => app.go('reference')), { color: 'ice' }),
+  ], 'accent'));
+
   root.append(panel('Commission', [
     el('p', { class: 'muted', text: 'The five-year mission runs on the clock on your wrist. The ship repairs, the crew recovers and the stardate advances whether this app is open or not.' }),
     el('p', { class: 'muted', text: 'You can compress it. Nothing is locked behind real time and nothing is taken away — but a commission you finish in a fortnight is not the thing the game was built to be, and it will say so on the bridge.' }),

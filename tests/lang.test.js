@@ -25,7 +25,9 @@ import {
 } from '../src/lang/gazetteer.js';
 import { parseText, CONFIDENT } from '../src/lang/parse.js';
 import { INTENTS, lexiconActions, phraseCount } from '../src/lang/lexicon.js';
-import { parseOrder } from '../src/ui/orders.js';
+import { parseOrder, commandReference, orderHelp } from '../src/ui/orders.js';
+import { article } from '../src/world/encounters.js';
+import { FACTIONS } from '../src/world/factions.data.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -149,6 +151,70 @@ describe('entity extraction', () => {
   test('finds facings including the two new ones', () => {
     assert.equal(findFacing(...Object.values(at('reinforce forward shields'))), 'fore');
     assert.equal(findFacing(...Object.values(at('hit them from below'))), 'ventral');
+  });
+
+  test('a correctly spelled word is not a typo of a facing', () => {
+    // The bug: `similarity('power', 'lower')` is 0.83, inside the fuzzy
+    // threshold, so EVERY order containing the word `power` came back carrying
+    // a ventral facing nobody typed. `fire`, `core` and `more` all became fore;
+    // `stop` became dorsal; `head` became ahead. Eighteen ordinary words.
+    //
+    // Only `reinforce` reads a facing, and it REQUIRES one — so "reinforce the
+    // shields" with no facing named quietly reinforced whichever face the
+    // hallucination picked, and any order containing "fire" or "more" could
+    // satisfy the requirement outright.
+    for (const word of ['power', 'fire', 'core', 'more', 'stop', 'head',
+      'force', 'light', 'night', 'fight', 'bear', 'read', 'blow', 'slower']) {
+      assert.equal(findFacing(word, [word]), null,
+        `"${word}" was read as a facing`);
+    }
+  });
+
+  test('the fuzzy pass still forgives an actual typo', () => {
+    // The guard must not have simply disabled it.
+    assert.equal(findFacing('forwrad', ['forwrad']), 'fore');
+    assert.equal(findFacing('starbord', ['starbord']), 'starboard');
+  });
+
+  test('no word the lexicon itself uses resolves to a facing by accident', () => {
+    // The general form, so a new phrasing cannot reintroduce this.
+    const exact = new Set(['fore', 'forward', 'front', 'bow', 'ahead', 'aft',
+      'rear', 'stern', 'behind', 'back', 'port', 'larboard', 'left', 'starboard',
+      'right', 'dorsal', 'top', 'upper', 'above', 'ventral', 'bottom', 'lower',
+      'below', 'underside', 'belly']);
+    const wrong = [];
+    for (const intent of INTENTS) {
+      for (const phrase of intent.phrases) {
+        for (const w of phrase.split(/\s+/)) {
+          if (exact.has(w) || w.length < 4) continue;
+          const f = findFacing(w, [w]);
+          if (f) wrong.push(`"${w}" (in ${intent.id}) reads as ${f}`);
+        }
+      }
+    }
+    assert.deepEqual(wrong.slice(0, 10), [], `${wrong.length} phantom facing(s)`);
+  });
+
+  test('reinforce asks for a facing rather than inventing one', () => {
+    // The observable consequence of the fix. Before it, this reinforced the
+    // ventral shield, because "power" hallucinated one.
+    const bare = parseText('reinforce the shields');
+    assert.ok((bare.confidence ?? 0) < CONFIDENT,
+      `"reinforce the shields" fired at ${(bare.confidence ?? 0).toFixed(2)} with no facing named`);
+
+    const named = parseText('reinforce the forward shields');
+    assert.equal(named.intent, 'reinforce');
+    assert.ok(named.confidence >= CONFIDENT);
+  });
+
+  test('a facing decides between routing power and reinforcing a face', () => {
+    // A power channel has no facing. Naming one means you are talking about a
+    // shield face, and the word `power` used to carry all of these to the grid
+    // with the word `forward` — the point of the sentence — discarded.
+    assert.equal(parseText('divert power to shields').intent, 'power');
+    assert.equal(parseText('all power to weapons').intent, 'power');
+    assert.equal(parseText('more power to the forward shields').intent, 'reinforce');
+    assert.equal(parseText('all power to the forward shield').intent, 'reinforce');
   });
 
   test('separates our power channels from their subsystems', () => {
@@ -450,5 +516,136 @@ describe('orders a captain will actually give', () => {
       assert.equal(r.action, 'cloak');
       assert.equal(r.on, false);
     }
+  });
+});
+
+// ================================================== the command reference
+//
+// `orderHelp()` assembled exactly this from the day the parser was written and
+// was never imported by anything. The game shipped with a natural-language
+// layer that accepts hundreds of phrasings and no way to find out — which is
+// the same "documented and inert" failure this file already exists to catch,
+// one level up: the feature works, and nobody can reach it.
+//
+// So these assert the property that makes a manual worth having, which is that
+// it is complete. A reference that quietly omits an order is worse than none,
+// because the player concludes the order does not exist.
+
+describe('the command reference', () => {
+  const ref = commandReference();
+
+  test('every intent in the lexicon appears in the manual', () => {
+    const listed = new Set(ref.groups.flatMap((g) => g.entries.map((e) => e.id)));
+    const missing = INTENTS.map((i) => i.id).filter((id) => !listed.has(id));
+    assert.deepEqual(missing, [], 'orders the player has no way to discover');
+  });
+
+  test('no order is listed twice under different stations', () => {
+    const seen = new Map();
+    const dupes = [];
+    for (const g of ref.groups) {
+      for (const e of g.entries) {
+        if (seen.has(e.id)) dupes.push(`${e.id} in both ${seen.get(e.id)} and ${g.label}`);
+        seen.set(e.id, g.label);
+      }
+    }
+    assert.deepEqual(dupes, []);
+  });
+
+  test('every entry carries phrasings, because the phrasings are the point', () => {
+    // A list of order names teaches you nothing you could not guess from the
+    // buttons. Seeing that "come about", "bring us around" and "get our nose on
+    // them" are one order is what teaches you to just say what you mean.
+    const bare = [];
+    for (const g of ref.groups) {
+      for (const e of g.entries) {
+        if (!e.examples.length) bare.push(e.id);
+        if (!e.help || e.help.length < 5) bare.push(`${e.id} (no help line)`);
+      }
+    }
+    assert.deepEqual(bare, []);
+  });
+
+  test('the examples are real phrasings the parser accepts', () => {
+    // The failure this catches: a manual that drifts from the parser and
+    // teaches phrasings that do not work. Every example is run through the
+    // real parser and must come back as the order it is filed under.
+    const wrong = [];
+    for (const g of ref.groups) {
+      for (const e of g.entries) {
+        for (const phrase of e.examples) {
+          const r = parseText(phrase);
+          // Some orders need an object the bare phrase does not supply — "set
+          // course" with no system. Being ASKED for it is a correct outcome;
+          // being routed to a different order is not.
+          if (r.intent && r.intent !== e.id && r.confidence >= CONFIDENT) {
+            wrong.push(`"${phrase}" is filed under ${e.id} but parses as ${r.intent}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(wrong.slice(0, 8), [], `${wrong.length} example(s) do not parse as themselves`);
+  });
+
+  test('no station group is empty, and none is a dumping ground', () => {
+    for (const g of ref.groups) {
+      assert.ok(g.entries.length > 0, `${g.label} is an empty heading`);
+      assert.ok(g.entries.length <= INTENTS.length * 0.4,
+        `${g.label} holds ${g.entries.length} of ${INTENTS.length} orders, which is not a grouping`);
+    }
+  });
+
+  test('the manual counts what the lexicon actually carries', () => {
+    assert.equal(ref.phrasings, phraseCount());
+    assert.equal(ref.intents, INTENTS.length);
+    assert.ok(ref.abilities.length > 5, `only ${ref.abilities.length} officer abilities listed`);
+    for (const a of ref.abilities) {
+      assert.ok(a.name && a.order, `an ability is missing its name or its order: ${JSON.stringify(a)}`);
+    }
+  });
+
+  test('asking for help is itself an order', () => {
+    // Otherwise the manual is only reachable by finding the button, which is
+    // the discovery problem it exists to solve.
+    for (const phrase of ['help', 'what can i say', 'what are my orders', 'show me the orders']) {
+      const r = parseText(phrase);
+      assert.equal(r.intent, 'help', `"${phrase}" parsed as ${r.intent}`);
+    }
+  });
+
+  test('asking for help does not shoot anybody', () => {
+    // "I need help" in a firefight must not become an order. The veto list is
+    // what keeps a distress call and a request for the manual apart.
+    for (const phrase of ['send help to the colony', 'they need medical assistance', 'render aid']) {
+      const r = parseText(phrase);
+      assert.notEqual(r.intent, 'help', `"${phrase}" opened the manual`);
+    }
+  });
+
+  test('orderHelp still works, since it is the older shape of the same thing', () => {
+    const h = orderHelp();
+    assert.ok(h.orders.length > 20, `${h.orders.length} orders`);
+    assert.ok(h.abilities.length > 5);
+    assert.equal(h.phrasings, phraseCount());
+  });
+});
+
+describe('the prose the game writes', () => {
+  test('an article agrees with the word after it', () => {
+    // "A Independent patrol is holding position" shipped in the log. The
+    // adjectives come from factions.data.js and two of them start with a vowel,
+    // so the article cannot be a literal in the template.
+    for (const f of Object.values(FACTIONS)) {
+      const expected = /^[aeiou]/i.test(f.adjective) ? 'An' : 'A';
+      assert.equal(article(f.adjective), expected,
+        `"${article(f.adjective)} ${f.adjective}" reads wrong`);
+    }
+  });
+
+  test('no template hardcodes an article in front of faction data', () => {
+    // The general form: a literal "A ${...}" is the shape of the bug.
+    const src = readFileSync(join(HERE, '..', 'src', 'world', 'encounters.js'), 'utf8');
+    const hardcoded = src.match(/`A \$\{|`An \$\{/g) ?? [];
+    assert.deepEqual(hardcoded, [], 'an article is hardcoded in front of data');
   });
 });

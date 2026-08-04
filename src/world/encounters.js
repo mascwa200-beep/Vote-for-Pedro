@@ -95,6 +95,19 @@ export function rollEncounter(rng, systemId, { ledger, inTransit = false } = {})
   }
 }
 
+/**
+ * "A" or "An", for a name the data supplies.
+ *
+ * Faction adjectives are data, and two of them start with a vowel — the log
+ * read "A Independent patrol" and "A Orion convoy". Vowel-initial is the only
+ * rule worth encoding here; the ten adjectives in factions.data.js contain no
+ * silent-h or long-u exceptions, and a general English article function would
+ * be more machinery than the problem deserves.
+ */
+export function article(word) {
+  return /^[aeiou]/i.test(String(word ?? '')) ? 'An' : 'A';
+}
+
 function pickFaction(rng, presence, { exclude = ['federation'] } = {}) {
   const options = Object.entries(presence)
     .filter(([id]) => !exclude.includes(id))
@@ -115,7 +128,7 @@ function buildPatrol(rng, system, presence, ledger) {
     title: `${FACTIONS[factionId]?.adjective ?? 'Unknown'} patrol`,
     text: hostile
       ? `${FACTIONS[factionId].adjective} vessels closing on an intercept course. They are arming weapons.`
-      : `A ${FACTIONS[factionId].adjective} patrol is holding position and scanning us. No weapons charged — yet.`,
+      : `${article(FACTIONS[factionId].adjective)} ${FACTIONS[factionId].adjective} patrol is holding position and scanning us. No weapons charged — yet.`,
   };
 }
 
@@ -234,7 +247,7 @@ function buildConvoy(rng, system, presence) {
   return {
     kind: 'convoy', system, factionId, hostile: false,
     title: 'Merchant convoy',
-    text: `A ${FACTIONS[factionId]?.adjective ?? 'civilian'} convoy hails us for an escort through the sector.`,
+    text: `${article(FACTIONS[factionId]?.adjective ?? 'civilian')} ${FACTIONS[factionId]?.adjective ?? 'civilian'} convoy hails us for an escort through the sector.`,
     hailable: true,
     escortReward: rng.int(200, 700),
   };
