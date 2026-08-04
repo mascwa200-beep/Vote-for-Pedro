@@ -58,13 +58,42 @@ export function impulseResponse(ctx, seconds = 1.6, decay = 3.2) {
 }
 
 /**
+ * Attack, hold, decay, release — written once, used by every voice.
+ *
+ * The old envelope had no hold at all: it hit peak 4 ms in and went straight
+ * into an exponential decay to silence. That makes the *peak* look fine on
+ * paper while the perceived loudness sits far below it, because almost none of
+ * the sound's duration is spent anywhere near the peak. A cue read as -18 dBFS
+ * and sounded a good deal quieter than that.
+ *
+ * `sustain` is the fraction of the peak held across the body of the note.
+ * 0.75 keeps a cue present without making short UI blips feel sluggish.
+ */
+export function envelope(param, t0, {
+  gain = 0.2, attack = 0.005, duration = 0.2, release = 0.08, sustain = 0.75,
+} = {}) {
+  const peak = Math.max(0.0002, gain);
+  const held = Math.max(0.0002, peak * Math.min(1, Math.max(0, sustain)));
+  // A short note gets proportionally less hold, so a 45 ms blip still reads as
+  // a blip rather than a beep.
+  const hold = Math.min(duration * 0.55, Math.max(0.012, duration * 0.35));
+
+  param.setValueAtTime(0.0001, t0);
+  param.exponentialRampToValueAtTime(peak, t0 + attack);
+  param.exponentialRampToValueAtTime(held, t0 + attack + hold);
+  param.setValueAtTime(held, t0 + duration);
+  param.exponentialRampToValueAtTime(0.0001, t0 + duration + release);
+  return param;
+}
+
+/**
  * A single oscillator voice with an ADSR-ish envelope.
  * `pitch` may be a number or [start, end] for a sweep.
  */
 export function tone(ctx, dest, {
   type = 'sine', pitch = 440, at = 0, duration = 0.2,
   gain = 0.2, attack = 0.005, release = 0.08,
-  detune = 0, curve = 'exponential',
+  detune = 0, curve = 'exponential', sustain = 0.75,
 } = {}) {
   const t0 = ctx.currentTime + at;
   const osc = ctx.createOscillator();
@@ -82,9 +111,7 @@ export function tone(ctx, dest, {
     }
   }
 
-  amp.gain.setValueAtTime(0.0001, t0);
-  amp.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t0 + attack);
-  amp.gain.exponentialRampToValueAtTime(0.0001, t0 + duration + release);
+  envelope(amp.gain, t0, { gain, attack, duration, release, sustain });
 
   osc.connect(amp).connect(dest);
   osc.start(t0);
@@ -92,11 +119,43 @@ export function tone(ctx, dest, {
   return { osc, amp, endsAt: t0 + duration + release };
 }
 
+/**
+ * Two oscillators a few Hz apart, so they beat against each other.
+ *
+ * This is the ingredient the sound set was missing. Almost every memorable
+ * 1960s Star Trek effect has an audible wobble in it, and that wobble is not
+ * vibrato — it is two close frequencies interfering, which is what you get
+ * from a pair of analogue oscillators that will not quite stay in tune. A
+ * phaser is the clearest case: the beat rate is the warble you actually hear.
+ *
+ * `beat` is the interference frequency in Hz. 6-14 reads as a rich warble;
+ * above about 25 it stops being a beat and starts being a buzz.
+ */
+export function beatPair(ctx, dest, {
+  type = 'sawtooth', pitch = 440, at = 0, duration = 0.4,
+  gain = 0.2, attack = 0.005, release = 0.08, beat = 9,
+  curve = 'exponential', sustain = 0.8,
+} = {}) {
+  const [p0, p1] = Array.isArray(pitch) ? pitch : [pitch, pitch];
+  // Split the detune either side of the centre so the perceived pitch is the
+  // one that was asked for, not one of the two oscillators.
+  const half = beat / 2;
+  const a = tone(ctx, dest, {
+    type, at, duration, gain: gain * 0.55, attack, release, curve, sustain,
+    pitch: Array.isArray(pitch) ? [p0 - half, p1 - half] : p0 - half,
+  });
+  const b = tone(ctx, dest, {
+    type, at, duration, gain: gain * 0.55, attack, release, curve, sustain,
+    pitch: Array.isArray(pitch) ? [p0 + half, p1 + half] : p0 + half,
+  });
+  return { a, b, endsAt: a.endsAt };
+}
+
 /** A filtered noise burst — impacts, transporters, explosions. */
 export function noiseBurst(ctx, dest, {
   at = 0, duration = 0.3, gain = 0.3,
   filter = 'bandpass', freq = 900, q = 1.2, freqEnd = null,
-  attack = 0.004, release = 0.1, pink = false,
+  attack = 0.004, release = 0.1, pink = false, sustain = 0.7,
 } = {}) {
   const t0 = ctx.currentTime + at;
   const src = ctx.createBufferSource();
@@ -110,9 +169,7 @@ export function noiseBurst(ctx, dest, {
     biq.frequency.exponentialRampToValueAtTime(Math.max(20, freqEnd), t0 + duration);
   }
   const amp = ctx.createGain();
-  amp.gain.setValueAtTime(0.0001, t0);
-  amp.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t0 + attack);
-  amp.gain.exponentialRampToValueAtTime(0.0001, t0 + duration + release);
+  envelope(amp.gain, t0, { gain, attack, duration, release, sustain });
 
   src.connect(biq).connect(amp).connect(dest);
   src.start(t0);
