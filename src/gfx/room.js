@@ -426,6 +426,82 @@ function prop3d(solid, glow, prop) {
   }
 }
 
+/**
+ * An officer at a post.
+ *
+ * Blocky on purpose — this renderer is flat-shaded with no textures and no
+ * skinning, and a low-polygon figure in a uniform colour reads as a person at a
+ * console far better than a detailed one would at phone size. What matters is
+ * that the room is CREWED: a bridge with ten empty stations is a museum, and
+ * the whole point of walking to a console is that somebody is usually already
+ * working it.
+ *
+ * The uniform colour is the division, which is the one thing about a crewman
+ * you are supposed to be able to read across a room.
+ */
+const DIVISION_COLOUR = {
+  command: [0.86, 0.72, 0.18],       // gold
+  helm: [0.86, 0.72, 0.18],
+  comms: [0.68, 0.16, 0.16],         // red
+  engineering: [0.68, 0.16, 0.16],
+  security: [0.68, 0.16, 0.16],
+  damagecontrol: [0.68, 0.16, 0.16],
+  environmental: [0.68, 0.16, 0.16],
+  ops: [0.68, 0.16, 0.16],
+  science: [0.20, 0.42, 0.72],       // blue
+  medical: [0.20, 0.42, 0.72],
+  tactical: [0.86, 0.72, 0.18],
+  transporter: [0.68, 0.16, 0.16],
+};
+const SKIN = [0.78, 0.62, 0.50];
+
+function officer3d(solid, station) {
+  const colour = DIVISION_COLOUR[station.crew] ?? [0.6, 0.6, 0.62];
+  const yaw = station.facing ?? 0;
+  // Standing at the console, on the near side of it — which is the side away
+  // from the wall the console is set into.
+  const back = station.mounted === 'wall' ? -0.72 : -0.74;
+  const x = station.at[0] + Math.sin(yaw) * back;
+  const z = station.at[1] + Math.cos(yaw) * back;
+
+  // A seated officer at a floor console, standing at a wall one.
+  const seated = station.mounted === 'floor';
+  const hip = seated ? 0.46 : 0.50;
+  const shoulder = seated ? 1.06 : 1.34;
+
+  if (seated) {
+    // The chair under them: light blue, which is what the crew chairs were.
+    // The back stops below shoulder height — a tall back in front of the
+    // command chair is a wall across the viewscreen.
+    box(solid, {
+      center: vec3(x, 0.22, z), size: vec3(0.40, 0.44, 0.40), color: PALETTE.crewChair,
+    });
+    box(solid, {
+      center: vec3(x - Math.sin(yaw) * 0.21, 0.60, z - Math.cos(yaw) * 0.21),
+      size: vec3(0.40, 0.32, 0.09), color: PALETTE.crewChair,
+    });
+  } else {
+    box(solid, { center: vec3(x, hip / 2, z), size: vec3(0.24, hip, 0.20), color: [0.16, 0.16, 0.18] });
+  }
+
+  // Torso, arms, head.
+  box(solid, {
+    center: vec3(x, (hip + shoulder) / 2, z),
+    size: vec3(0.40, shoulder - hip, 0.24), color: colour,
+  });
+  box(solid, {
+    center: vec3(x + Math.cos(yaw) * 0.26, shoulder - 0.16, z - Math.sin(yaw) * 0.26),
+    size: vec3(0.11, 0.34, 0.11), color: colour,
+  });
+  box(solid, {
+    center: vec3(x - Math.cos(yaw) * 0.26, shoulder - 0.16, z + Math.sin(yaw) * 0.26),
+    size: vec3(0.11, 0.34, 0.11), color: colour,
+  });
+  box(solid, {
+    center: vec3(x, shoulder + 0.14, z), size: vec3(0.20, 0.24, 0.20), color: SKIN,
+  });
+}
+
 /** The viewscreen: a dark rectangle in the forward wall with a lit surround. */
 function viewscreen3d(solid, glow, vs) {
   const [x, z] = vs.at;
@@ -471,7 +547,12 @@ export function roomMeshes(roomId) {
   if (room.shape.kind === 'ring') ringShell(solid, glow, room);
   else boxShell(solid, glow, room);
 
-  (room.stations ?? []).forEach((s, i) => console3d(solid, glow, s, i));
+  (room.stations ?? []).forEach((s, i) => {
+    console3d(solid, glow, s, i);
+    // Crewed, if the station belongs to a department. A bridge with ten empty
+    // consoles is a museum.
+    if (s.crew) officer3d(solid, s);
+  });
   for (const p of room.props ?? []) prop3d(solid, glow, p);
   if (room.viewscreen) viewscreen3d(solid, glow, room.viewscreen);
 
