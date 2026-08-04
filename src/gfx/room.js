@@ -524,6 +524,93 @@ function viewscreen3d(solid, glow, vs) {
     at(w, h, inset + 0.01), at(-w, h, inset + 0.01), [0.05, 0.06, 0.09]);
 }
 
+// ------------------------------------------------------------- occlusion
+
+/**
+ * Bake ambient occlusion into the vertex colours.
+ *
+ * The single largest perceptual gain available to this renderer, and it costs
+ * nothing per frame: corners, floor lines and the undersides of consoles get
+ * darker in the mesh itself, once, at build time.
+ *
+ * Why it matters more here than in the tactical view: a hull in space has one
+ * hard light and a black background, so its shape reads from the shading alone.
+ * A room lit almost flat — which is what a bridge with pale walls bouncing at
+ * each other actually is — has no such cue, and without contact shadows every
+ * surface floats. Consoles looked stuck onto the wall rather than set into it,
+ * and the floor met the bulkhead in a hard line with no join.
+ *
+ * This is a distance field, not a ray cast. Proximity to the room's own
+ * surfaces plus proximity to each solid object, which for boxes and circles is
+ * exact and for everything else is close enough that nobody has ever looked at
+ * a corner and thought about it.
+ */
+function bakeOcclusion(mb, room) {
+  const h = WALL_HEIGHT(room);
+  const isRing = room.shape.kind === 'ring';
+  const hw = isRing ? 0 : room.shape.width / 2;
+  const hd = isRing ? 0 : room.shape.depth / 2;
+  const R = isRing ? room.shape.radius : 0;
+
+  // Occluders: the solid furniture, as circles on the floor.
+  const occluders = [
+    ...(room.props ?? []).filter((p) => p.solid && p.radius > 0)
+      .map((p) => ({ x: p.at[0], z: p.at[1], r: p.radius })),
+    ...(room.stations ?? []).map((st) => ({ x: st.at[0], z: st.at[1], r: 0.55 })),
+  ];
+
+  const REACH = 0.85;        // how far a contact shadow spreads
+  const FLOOR = 0.55;        // and how far up a wall the floor darkens it
+
+  for (let i = 0; i < mb.positions.length; i += 3) {
+    const x = mb.positions[i];
+    const y = mb.positions[i + 1];
+    const z = mb.positions[i + 2];
+
+    let ao = 1;
+
+    // WHICH SURFACE THIS IS, from its normal. A wall must not occlude itself:
+    // every vertex of a flat wall sits at zero distance from the wall, so a
+    // naive distance term dimmed entire bulkheads by a third and the bright
+    // 1966 set went grey again. Horizontal surfaces are darkened by their
+    // distance to a WALL; vertical ones by their distance to the FLOOR. Each
+    // gets the shadow the other casts, and neither gets its own.
+    const up = Math.abs(mb.normals[i + 1]);
+    const horizontal = up > 0.7;
+
+    if (!horizontal) {
+      // A wall, a console face, a person: darkened where it meets the deck,
+      // and slightly where it meets the deckhead.
+      if (y < FLOOR) ao *= 0.66 + 0.34 * (y / FLOOR);
+      if (y > h - 0.35) ao *= 0.90 + 0.10 * ((h - y) / 0.35);
+    } else {
+      // Deck or deckhead: darkened where the bulkhead meets it.
+      const wall = isRing
+        ? R - Math.hypot(x, z)
+        : Math.min(hw - Math.abs(x), hd - Math.abs(z));
+      if (wall < REACH) ao *= 0.62 + 0.38 * Math.max(0, wall / REACH);
+    }
+
+    // Furniture, which darkens the deck around its base and itself near it.
+    for (const o of occluders) {
+      const d = Math.hypot(x - o.x, z - o.z) - o.r;
+      if (d < REACH && y < 1.3) {
+        const t = Math.max(0, d) / REACH;
+        // Strongest at the base and gone by console height, which is how a
+        // contact shadow behaves and why it reads as contact.
+        const height = 1 - Math.min(1, Math.max(0, y) / 1.3);
+        ao *= 1 - (1 - (0.55 + 0.45 * t)) * height;
+      }
+    }
+
+    ao = Math.max(0.42, ao);
+    mb.colors[i] *= ao;
+    mb.colors[i + 1] *= ao;
+    mb.colors[i + 2] *= ao;
+  }
+  return mb;
+}
+
 // -------------------------------------------------------------------- build
 
 const CACHE = new Map();
@@ -555,6 +642,11 @@ export function roomMeshes(roomId) {
   });
   for (const p of room.props ?? []) prop3d(solid, glow, p);
   if (room.viewscreen) viewscreen3d(solid, glow, room.viewscreen);
+
+  // Only the lit mesh. The glow mesh is self-lit by definition — a panel that
+  // ignores the light must also ignore the shadow, or a console in a corner has
+  // dim buttons for no reason anybody could point at.
+  bakeOcclusion(solid, room);
 
   const built = {
     solid: solid.build(),
