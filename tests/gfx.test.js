@@ -429,3 +429,73 @@ test('a normal camera is untouched by those guards', () => {
   assert.ok(Math.abs(m[10] - (40000 + 5) / (5 - 40000)) < 1e-12);
   assert.ok(Math.abs(m[14] - (2 * 40000 * 5) / (5 - 40000)) < 1e-9);
 });
+
+// ========================================================== the 1966 hull
+
+// `starfleet` is a generic archetype: saucer, neck, secondary hull, two
+// nacelles. That reads as "a Federation ship" and not as *this* one. Four
+// details do the identifying and every one was missing — so the Enterprise
+// was, visually, an anonymous saucer hull with the right dimensions.
+//
+// These assert the details exist in the geometry, not that the data table
+// mentions them.
+describe('the TOS Constitution', () => {
+  const P = paletteFor('federation');
+  const mesh = hullMesh('constitution', 'federation');
+
+  /** Vertices whose colour matches `rgb`, within tolerance. */
+  const coloured = (rgb, eps = 0.02) => {
+    const out = [];
+    for (let i = 0; i < mesh.vertexCount; i++) {
+      const o = i * mesh.stride;
+      const cr = mesh.data[o + 6]; const cg = mesh.data[o + 7]; const cb = mesh.data[o + 8];
+      if (Math.abs(cr - rgb[0]) < eps && Math.abs(cg - rgb[1]) < eps && Math.abs(cb - rgb[2]) < eps) {
+        out.push([mesh.data[o], mesh.data[o + 1], mesh.data[o + 2]]);
+      }
+    }
+    return out;
+  };
+
+  test('it uses its own archetype, not the generic one', () => {
+    assert.equal(BLUEPRINTS.constitution.form, 'tos_starfleet');
+  });
+
+  test('it has a deflector dish, in copper, at the bow of the secondary hull', () => {
+    assert.ok(P.dish, 'the federation palette carries no dish colour');
+    const dish = coloured(P.dish);
+    assert.ok(dish.length > 20, `only ${dish.length} vertices are dish-coloured`);
+    // Forward of the saucer's centre, and below it — where the dish sits.
+    const cx = dish.reduce((n, v) => n + v[0], 0) / dish.length;
+    const cy = dish.reduce((n, v) => n + v[1], 0) / dish.length;
+    assert.ok(cx > 0.25, `the dish sits at x=${cx.toFixed(2)}, not at the bow`);
+    assert.ok(cy < 0, `the dish sits at y=${cy.toFixed(2)}, not on the secondary hull`);
+  });
+
+  test('the bussard domes are at the front of both nacelles, and glow', () => {
+    const glow = coloured(P.glow);
+    assert.ok(glow.length > 40, `only ${glow.length} vertices glow`);
+    // One cluster to port, one to starboard, both forward.
+    const port = glow.filter((v) => v[2] < 0);
+    const stbd = glow.filter((v) => v[2] > 0);
+    assert.ok(port.length > 15 && stbd.length > 15,
+      `bussards are lopsided: ${port.length} port, ${stbd.length} starboard`);
+    const meanY = glow.reduce((n, v) => n + v[1], 0) / glow.length;
+    assert.ok(meanY > 0.05, `the domes sit at y=${meanY.toFixed(2)}, not up on the nacelles`);
+  });
+
+  test('the hull is 1966 off-white, not 1979 refit grey', () => {
+    // The refit is a cool grey — blue channel highest. The original photographed
+    // warm, with red at least as high as blue.
+    assert.ok(P.hull[0] >= P.hull[2],
+      `hull is [${P.hull}], which is cooler than it is warm`);
+  });
+
+  test('it is more ship than the generic archetype, and still affordable', () => {
+    const generic = hullMesh('excelsior', 'federation');
+    const tris = mesh.vertexCount / 3;
+    assert.ok(tris > generic.vertexCount / 3,
+      'the TOS hull carries no more detail than the generic one');
+    // Six hostiles plus the player must stay inside the harness budget.
+    assert.ok(tris < 1200, `${tris} triangles is too much for one hull`);
+  });
+});

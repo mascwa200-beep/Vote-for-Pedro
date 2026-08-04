@@ -24,7 +24,13 @@ import { MeshBuilder, saucer, tube, box, sphere, mirrored } from './mesh.js';
 
 /** Hull plating by faction. Flat shading means these are the whole look. */
 export const PALETTE = {
-  federation: { hull: [0.74, 0.77, 0.82], trim: [0.52, 0.58, 0.66], glow: [0.45, 0.72, 1.0] },
+  // Warm off-white, not refit grey. The 1966 miniature photographed as a
+  // cream-white hull with darker grey detailing; [0.74, 0.77, 0.82] is the
+  // cool grey of the 1979 film refit, which is a different ship.
+  federation: {
+    hull: [0.82, 0.81, 0.77], trim: [0.56, 0.57, 0.60], glow: [0.45, 0.72, 1.0],
+    dish: [0.85, 0.55, 0.25],   // the copper deflector
+  },
   klingon: { hull: [0.42, 0.48, 0.44], trim: [0.28, 0.33, 0.30], glow: [0.95, 0.35, 0.25] },
   romulan: { hull: [0.44, 0.50, 0.44], trim: [0.30, 0.40, 0.32], glow: [0.55, 0.95, 0.60] },
   cardassian: { hull: [0.68, 0.62, 0.44], trim: [0.48, 0.43, 0.30], glow: [0.95, 0.75, 0.35] },
@@ -107,6 +113,135 @@ const FORMS = {
         segments: 8,
         rings: 5,
         color: p.glow,
+      });
+    });
+  },
+
+  /**
+   * The 1966 Constitution, which is a different ship from a generic saucer hull.
+   *
+   * `starfleet` gets the four masses right and stops there, which reads as
+   * "Federation ship" and not as *this* one. Four details do the identifying,
+   * and every one of them was missing:
+   *
+   *   THE DEFLECTOR DISH. The copper dish recessed in the bow of the secondary
+   *     hull. Probably the single most recognisable feature after the saucer,
+   *     and there was just a capped tube.
+   *   THE BUSSARD DOMES. Amber caps on the front of each nacelle — domes set
+   *     into a collar, not the bare spheres the generic form uses.
+   *   THIN SWEPT PYLONS. The 1966 struts are slender and raked back. Box slabs
+   *     read as the 1979 refit, which is a different ship.
+   *   THE HANGAR. A flat transom at the stern with the bay doors on it.
+   *
+   * Colour matters too: `[0.74, 0.77, 0.82]` is refit grey. The 1966 miniature
+   * was a warm off-white.
+   */
+  tos_starfleet(mb, p, b) {
+    const sr = b.saucerRadius ?? 0.46;
+    const sx = b.saucerX ?? 0.34;
+    const hullY = b.hullY ?? -0.17;
+
+    saucer(mb, {
+      origin: vec3(sx, b.saucerY ?? 0.02, 0),
+      radius: sr,
+      thickness: b.saucerThickness ?? 0.09,
+      domeRatio: b.domeRatio ?? 0.3,
+      domeHeight: b.domeHeight ?? 0.055,
+      segments: b.segments ?? 24,
+      color: p.hull,
+      rimColor: p.trim,
+    });
+
+    // The dorsal neck, raked rather than vertical.
+    box(mb, {
+      center: vec3(sx - sr * 0.6, hullY / 2 - 0.02, 0),
+      size: vec3(sr * 0.42, 0.26, 0.075),
+      sweep: 0.08,
+      color: p.hull,
+    });
+
+    // Secondary hull. Blunter at the bow than the generic taper, because the
+    // dish has to sit in something.
+    const hl = b.hullLength ?? 0.8;
+    tube(mb, {
+      origin: vec3(-0.46, hullY, 0),
+      length: hl,
+      r0: 0.105,
+      r1: 0.145,
+      segments: 14,
+      color: p.hull,
+      capAft: true,
+    });
+
+    // The deflector dish, recessed in a collar at the bow.
+    const dishX = -0.46 + hl;
+    tube(mb, {
+      origin: vec3(dishX - 0.03, hullY, 0),
+      length: 0.05,
+      r0: 0.145,
+      r1: 0.125,
+      segments: 14,
+      color: p.trim,
+    });
+    sphere(mb, {
+      origin: vec3(dishX + 0.035, hullY, 0),
+      radius: 0.108,
+      segments: 12,
+      rings: 6,
+      color: p.dish ?? p.glow,
+    });
+
+    // The hangar: a flat transom closing the stern.
+    box(mb, {
+      center: vec3(-0.47, hullY, 0),
+      size: vec3(0.05, 0.17, 0.15),
+      color: p.trim,
+    });
+
+    // Nacelles on slender raked pylons.
+    const nz = b.nacelleZ ?? 0.35;
+    const ny = b.nacelleY ?? 0.155;
+    const nx = b.nacelleX ?? -0.44;
+    const nl = b.nacelleLength ?? 0.9;
+    const nr = b.nacelleRadius ?? 0.072;
+    mirrored(mb, (m) => {
+      // Thin, and swept harder than the generic slab.
+      box(m, {
+        center: vec3(nx + nl * 0.3, (ny + hullY) / 2, nz * 0.55),
+        size: vec3(0.055, 0.35, nz * 0.92),
+        sweep: b.pylonSweep ?? 0.26,
+        color: p.trim,
+      });
+      tube(m, {
+        origin: vec3(nx, ny, nz),
+        length: nl,
+        r0: nr,
+        r1: nr * 0.9,
+        segments: 12,
+        color: p.hull,
+        capAft: true,
+      });
+      // The bussard collar, then the dome set into it.
+      tube(m, {
+        origin: vec3(nx + nl - 0.02, ny, nz),
+        length: 0.045,
+        r0: nr * 0.95,
+        r1: nr * 1.1,
+        segments: 12,
+        color: p.trim,
+      });
+      sphere(m, {
+        origin: vec3(nx + nl + 0.035, ny, nz),
+        radius: nr * 1.08,
+        segments: 10,
+        rings: 6,
+        color: p.glow,
+      });
+      // The blue intercooler grille along the outboard face.
+      box(m, {
+        center: vec3(nx + nl * 0.45, ny - nr * 0.55, nz),
+        size: vec3(nl * 0.42, 0.012, nr * 0.5),
+        color: p.trim,
       });
     });
   },
@@ -252,7 +387,7 @@ const FORMS = {
  */
 export const BLUEPRINTS = {
   // ---- Starfleet ----
-  constitution: { form: 'starfleet', length: 289, saucerRadius: 0.46, nacelleLength: 0.9 },
+  constitution: { form: 'tos_starfleet', length: 289, saucerRadius: 0.46, nacelleLength: 0.9 },
   constitution_refit: { form: 'starfleet', length: 305, saucerRadius: 0.45, nacelleRadius: 0.085, pylonSweep: 0.1 },
   miranda: { form: 'starfleet', length: 278, saucerRadius: 0.52, neck: false, hullLength: 0.5, nacelleX: -0.34, nacelleY: -0.02, nacelleLength: 0.62 },
   oberth: { form: 'starfleet', length: 120, saucerRadius: 0.38, hullY: -0.36, hullLength: 0.66, nacelleY: -0.3, nacelleLength: 0.6 },
