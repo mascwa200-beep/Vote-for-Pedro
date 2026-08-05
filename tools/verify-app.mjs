@@ -297,6 +297,14 @@ try {
       tabs: [...document.querySelectorAll('.nav button')].map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
     };
   });
+  // If the shader did not compile, say WHAT the driver said. A one-character
+  // GLSL typo used to be indistinguishable from a device with no WebGL: both
+  // returned a bare null and the message got thrown away.
+  const glError = await page.evaluate(async () => {
+    const { Renderer } = await import('./src/gfx/gl.js');
+    return Renderer.lastError ?? null;
+  });
+  check('the shader compiles and the program links', glError === null, String(glError));
   check('the bridge renders in first person', fp.fpv === true);
   check('it draws through the one shared renderer', fp.shared === true && fp.lost === false,
     JSON.stringify({ shared: fp.shared, lost: fp.lost }));
@@ -342,6 +350,94 @@ try {
   await page.screenshot({ path: join(SHOTS, '01c-helm-console.png') });
   await dismissModals(page);
   await page.evaluate(() => { globalThis.__app.game.takeChair(true); globalThis.__app.render(); });
+
+  // ---- The 3D view survives everything that used to replace it ----
+  //
+  // THE BUG THIS EXISTS FOR: an incoming hail replaced the bridge screen, which
+  // disposed the first-person view — and because WebGL keeps its drawing buffer
+  // between frames, the canvas went on showing a FROZEN photograph of a bridge
+  // nobody was rendering. It looked perfectly fine.
+  //
+  // A screenshot cannot tell the difference between a live frame and a frozen
+  // one. A frame COUNTER can, which is what this watches.
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+  await page.waitForTimeout(400);
+  const survives = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const framesBefore = app.fpv?.stats?.frames ?? 0;
+
+    // A rolled encounter may legitimately have no title — the quiet ones are
+    // filtered out of the UI by state.js — so keep rolling until one that the
+    // bridge is actually supposed to show turns up.
+    const { rollEncounter } = await import('./src/world/encounters.js');
+    let enc = null;
+    for (let i = 0; i < 200 && !enc?.title; i++) {
+      enc = rollEncounter(g.rng, g.locationId, { ledger: g.ledger });
+    }
+    if (!enc?.title) return { error: 'no titled encounter in 200 rolls' };
+    g.beginEncounter(enc);
+    await new Promise((r) => setTimeout(r, 700));
+
+    const rendered = [...document.querySelectorAll('.panel h2')].map((h) => h.textContent.trim());
+    const out = {
+      mode: g.mode,
+      screen: app.screen,
+      fpv: !!app.fpv,
+      framesBefore,
+      framesAfter: app.fpv?.stats?.frames ?? 0,
+      onBridge: rendered.includes('Main Bridge'),
+      title: enc.title,
+      rendered,
+      showsEncounter: rendered.some((t) => t === enc.title.trim()),
+      choices: document.querySelectorAll('.panel .btn').length,
+    };
+    g.endEncounter();
+    app.render();
+    return out;
+  });
+  check('a hail does not take you off the bridge',
+    survives.screen === 'bridge' && survives.onBridge === true, JSON.stringify(survives));
+  check('and does not dispose the first-person view', survives.fpv === true);
+  check('the view is still DRAWING, not showing a frozen frame',
+    survives.framesAfter > survives.framesBefore + 5,
+    `${survives.framesBefore} -> ${survives.framesAfter}`);
+  check('the contact and its choices appear on the bridge',
+    survives.showsEncounter === true && survives.choices > 0, JSON.stringify(survives));
+
+  // The same for being at warp, which replaced the bridge in exactly the same
+  // way and broke it in exactly the same way.
+  const underWay = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const before = app.fpv?.stats?.frames ?? 0;
+    // Somewhere that is not here. The harness has been flying this ship around
+    // for a hundred checks by now and hardcoding a destination gets "we are
+    // already there, Captain".
+    const elsewhere = g.galaxy.systems.find((sys) => sys.id !== g.locationId);
+    const r = g.setCourse(elsewhere.id);
+    if (!r.ok) return { error: r.error };
+    app.render();
+    await new Promise((res) => setTimeout(res, 700));
+    const titles = [...document.querySelectorAll('.panel h2')].map((h) => h.textContent.trim());
+    const out = {
+      mode: g.mode,
+      fpv: !!app.fpv,
+      drawing: (app.fpv?.stats?.frames ?? 0) > before + 5,
+      onBridge: titles.includes('Main Bridge'),
+      showsTransit: titles.includes('Under Way'),
+    };
+    g.transit = null;
+    g.mode = 'bridge';
+    app.render();
+    return out;
+  });
+  check('being at warp does not take you off the bridge either',
+    underWay.onBridge === true && underWay.showsTransit === true, JSON.stringify(underWay));
+  check('and the view keeps drawing under way',
+    underWay.fpv === true && underWay.drawing === true, JSON.stringify(underWay));
+  await dismissModals(page);
 
   // ---- The ship has an inside ----
   //

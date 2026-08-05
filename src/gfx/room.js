@@ -315,9 +315,17 @@ function console3d(solid, glow, station, index) {
   solid.quad(at(hw, 0, -hd), at(hw, 0, hd), at(hw, bodyTop, hd), at(hw, bodyTop, -hd), housing);
 
   // The angled working surface, rising away from whoever is standing at it.
+  //
+  // WOUND TO FACE THE OPERATOR. Going right-then-away puts the normal down and
+  // forward, so the whole surface is culled as a back face: the console renders
+  // as a box with an open top and the buttons on it vanish. That is what
+  // happened, on every console in the game, and it took the chair's arm caps
+  // failing the same way for anybody to notice — the jelly beans are the single
+  // most recognisable thing about this set and none of them were ever drawn.
   const near = bodyTop;
   const far = bodyTop + 0.30;
-  solid.quad(at(-hw, near, -hd), at(hw, near, -hd), at(hw, far, hd), at(-hw, far, hd), PALETTE.consoleTop);
+  solid.quad(at(-hw, near, -hd), at(-hw, far, hd), at(hw, far, hd), at(hw, near, -hd),
+    PALETTE.consoleTop);
 
   // And the buttons on it, which is the glow.
   const colour = PANEL_COLOURS[index % PANEL_COLOURS.length];
@@ -335,7 +343,8 @@ function console3d(solid, glow, station, index) {
       const shade = (r * cols + col) % 3 === 0
         ? PANEL_COLOURS[(index + 2) % PANEL_COLOURS.length]
         : colour;
-      glow.quad(at(u0, y0, f0), at(u1, y0, f0), at(u1, y1, f1), at(u0, y1, f1), shade);
+      // Same winding as the surface they sit on, for the same reason.
+      glow.quad(at(u0, y0, f0), at(u0, y1, f1), at(u1, y1, f1), at(u1, y0, f0), shade);
     }
   }
 }
@@ -346,24 +355,58 @@ function prop3d(solid, glow, prop) {
   const r = prop.radius || 0.3;
 
   switch (prop.kind) {
-    case 'chair':
-      // Seat, back, and the arm panels that carry the only three controls
-      // anybody ever used on the real prop.
-      box(solid, { center: vec3(x, 0.24, z), size: vec3(r * 1.5, 0.48, r * 1.5), color: PALETTE.chair });
-      box(solid, { center: vec3(x, 0.68, z - r * 0.6), size: vec3(r * 1.4, 0.42, 0.16), color: PALETTE.chair });
-      box(solid, { center: vec3(x - r * 0.85, 0.56, z), size: vec3(0.22, 0.12, r * 1.1), color: PALETTE.console });
-      box(solid, { center: vec3(x + r * 0.85, 0.56, z), size: vec3(0.22, 0.12, r * 1.1), color: PALETTE.console });
-      glow.quad(
-        vec3(x - r * 0.94, 0.622, z - r * 0.5), vec3(x - r * 0.76, 0.622, z - r * 0.5),
-        vec3(x - r * 0.76, 0.622, z + r * 0.5), vec3(x - r * 0.94, 0.622, z + r * 0.5),
-        PALETTE.panelRed,
+    case 'chair': {
+      // The command chair, built to be seen from IN it.
+      //
+      // The arm panels sit forward of the seat centre and at the height a
+      // forearm rests, so they come into the bottom of frame from the seated
+      // camera. Of every control on the real prop exactly three were ever given
+      // a function on screen — yellow alert, red alert, jettison the pod — and
+      // they are the three caps on the right arm.
+      // Height and reach chosen against the seated camera, not against a
+      // furniture catalogue: at eye height 1.18 with a 44-degree half-field,
+      // the bottom of frame at half a metre ahead is y=0.63. Arm panels below
+      // that are arm panels nobody in the chair ever sees.
+      const armY = 0.80;
+      const armF = r * 0.75;
+      box(solid, { center: vec3(x, 0.26, z), size: vec3(r * 1.6, 0.52, r * 1.6), color: PALETTE.chair });
+      box(solid, { center: vec3(x, 0.86, z - r * 0.72), size: vec3(r * 1.5, 0.70, 0.18), color: PALETTE.chair });
+      // A padded headrest, which the prop had and which frames the view.
+      box(solid, { center: vec3(x, 1.26, z - r * 0.72), size: vec3(r * 0.9, 0.22, 0.20), color: PALETTE.chair });
+
+      for (const side of [-1, 1]) {
+        box(solid, {
+          center: vec3(x + side * r * 0.92, armY - 0.10, z + armF),
+          size: vec3(0.26, 0.22, r * 1.3), color: PALETTE.chair,
+        });
+        box(solid, {
+          center: vec3(x + side * r * 0.92, armY, z + armF),
+          size: vec3(0.30, 0.07, r * 1.4), color: PALETTE.console,
+        });
+      }
+
+      // The three that meant something, on the starboard arm.
+      // A cap lying on an arm rest faces UP, and the winding is what says so.
+      // Wound the other way round these were culled as back faces and the arms
+      // were two blank grey slabs — the same mistake as the deck fans, one
+      // prop further in.
+      const cap = (cx, cf, colour) => glow.quad(
+        vec3(cx - r * 0.12, armY + 0.032, z + cf - r * 0.16),
+        vec3(cx - r * 0.12, armY + 0.032, z + cf + r * 0.16),
+        vec3(cx + r * 0.12, armY + 0.032, z + cf + r * 0.16),
+        vec3(cx + r * 0.12, armY + 0.032, z + cf - r * 0.16),
+        colour,
       );
-      glow.quad(
-        vec3(x + r * 0.76, 0.622, z - r * 0.5), vec3(x + r * 0.94, 0.622, z - r * 0.5),
-        vec3(x + r * 0.94, 0.622, z + r * 0.5), vec3(x + r * 0.76, 0.622, z + r * 0.5),
-        PALETTE.panelGold,
-      );
+
+      const caps = [PALETTE.panelRed, PALETTE.panelGold, PALETTE.panelWhite];
+      caps.forEach((colour, i) => cap(x + r * 0.92, armF + (i - 1) * r * 0.38, colour));
+      // The port arm carries the viewer and intercom controls.
+      for (let i = 0; i < 3; i++) {
+        cap(x - r * 0.92, armF + (i - 1) * r * 0.38,
+          i === 1 ? PALETTE.panelTurquoise : PALETTE.panelBlue);
+      }
       break;
+    }
 
     case 'bed':
       box(solid, { center: vec3(x, 0.32, z), size: vec3(r * 1.4, 0.64, r * 2.2), color: PALETTE.bed });

@@ -4519,6 +4519,7 @@ uniform mat3 uNormalMatrix;
 varying vec3 vNormal;
 varying vec3 vColor;
 varying float vDepth;
+varying vec3 vWorld;
 
 void main() {
   vec4 world = uModel * vec4(aPosition, 1.0);
@@ -4526,6 +4527,7 @@ void main() {
   vNormal = normalize(uNormalMatrix * aNormal);
   vColor = aColor;
   vDepth = gl_Position.w;
+  vWorld = world.xyz;
 }
 `;
 
@@ -4538,6 +4540,7 @@ precision mediump float;
 varying vec3 vNormal;
 varying vec3 vColor;
 varying float vDepth;
+varying vec3 vWorld;
 
 uniform vec3 uKey;        // key light direction
 uniform vec3 uFill;       // fill light direction
@@ -4547,6 +4550,8 @@ uniform float uEmissive;  // 1.0 makes the surface ignore lighting entirely
 uniform float uFogFar;    // distance at which the haze reaches its floor
 uniform float uAmbient;   // how much light a surface facing away still gets
 uniform float uKeyPower;  // strength of the key
+uniform vec3 uEye;        // where the camera is, for the specular
+uniform float uGloss;     // 0 for matte, 1 for painted metal and moulded plastic
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -4561,6 +4566,20 @@ void main() {
   // at each other, has almost no true shadow in it. Hardcoding the vacuum value
   // rendered the interior as a black box with a few lit panels floating in it.
   vec3 lit = vColor * uTint * (uAmbient + key * uKeyPower + fill);
+
+  // A specular highlight, Blinn-Phong, one term.
+  //
+  // Painted metal and moulded plastic both have one, and neither reads as its
+  // material without it — a flat-shaded bulkhead with no highlight is a
+  // coloured polygon, and the same bulkhead with a soft sheen sliding across it
+  // as you turn your head is a wall. It is also the cheapest possible cue that
+  // the camera is MOVING through a real place rather than panning a picture.
+  if (uGloss > 0.001) {
+    vec3 v = normalize(uEye - vWorld);
+    vec3 halfway = normalize(normalize(uKey) + v);
+    float spec = pow(max(dot(n, halfway), 0.0), 24.0) * uGloss;
+    lit += vec3(spec);
+  }
   lit = mix(lit, vColor * uTint, uEmissive);
 
   // Fog toward the far plane, so a distant hull recedes rather than hanging
@@ -4627,11 +4646,24 @@ class Renderer {
     if (!gl) return null;
 
     try {
-      return new Renderer(canvas, gl);
-    } catch {
+      const r = new Renderer(canvas, gl);
+      if (r.lost) return null;
+      Renderer.lastError = null;
+      return r;
+    } catch (err) {
+      // A shader that fails to compile must not look like a device without
+      // WebGL. Both used to return a bare null, so a one-character GLSL typo
+      // silently downgraded the whole game to the 2D fallback with nothing
+      // anywhere saying why — and the message the driver went to the trouble of
+      // writing was thrown away.
+      Renderer.lastError = String(err?.message ?? err);
+      console.error('[gl] renderer unavailable:', Renderer.lastError);
       return null;
     }
   }
+
+  /** Why the last `create` failed, or null if it did not. For the harness. */
+  static lastError = null;
 
   constructor(canvas, gl) {
     this.canvas = canvas;
@@ -4659,6 +4691,8 @@ class Renderer {
       fogFar: gl.getUniformLocation(this.program, 'uFogFar'),
       ambient: gl.getUniformLocation(this.program, 'uAmbient'),
       keyPower: gl.getUniformLocation(this.program, 'uKeyPower'),
+      eye: gl.getUniformLocation(this.program, 'uEye'),
+      gloss: gl.getUniformLocation(this.program, 'uGloss'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -4702,8 +4736,10 @@ class Renderer {
         void v;
       }
       this.configure();
-    } catch {
+    } catch (err) {
       this.lost = true;
+      Renderer.lastError = String(err?.message ?? err);
+      throw err;
     }
   }
 
@@ -4732,6 +4768,7 @@ class Renderer {
     // Vacuum by default: one hard sun and nothing to bounce off.
     gl.uniform1f(this.uniform.ambient, 0.22);
     gl.uniform1f(this.uniform.keyPower, 0.85);
+    gl.uniform1f(this.uniform.gloss, 0);
     return true;
   }
 
@@ -4742,13 +4779,15 @@ class Renderer {
    * surface facing away from both still receives, which in a room is most of
    * the light and in space is almost none.
    */
-  setLighting({ key, fill, ambient = 0.22, keyPower = 0.85 } = {}) {
+  setLighting({ key, fill, ambient = 0.22, keyPower = 0.85, eye, gloss = 0 } = {}) {
     if (this.lost) return;
     const { gl } = this;
     if (key) gl.uniform3f(this.uniform.key, key[0], key[1], key[2]);
     if (fill) gl.uniform3f(this.uniform.fill, fill[0], fill[1], fill[2]);
+    if (eye) gl.uniform3f(this.uniform.eye, eye[0], eye[1], eye[2]);
     gl.uniform1f(this.uniform.ambient, ambient);
     gl.uniform1f(this.uniform.keyPower, keyPower);
+    gl.uniform1f(this.uniform.gloss, gloss);
   }
 
   /**
@@ -7745,9 +7784,17 @@ function console3d(solid, glow, station, index) {
   solid.quad(at(hw, 0, -hd), at(hw, 0, hd), at(hw, bodyTop, hd), at(hw, bodyTop, -hd), housing);
 
   // The angled working surface, rising away from whoever is standing at it.
+  //
+  // WOUND TO FACE THE OPERATOR. Going right-then-away puts the normal down and
+  // forward, so the whole surface is culled as a back face: the console renders
+  // as a box with an open top and the buttons on it vanish. That is what
+  // happened, on every console in the game, and it took the chair's arm caps
+  // failing the same way for anybody to notice — the jelly beans are the single
+  // most recognisable thing about this set and none of them were ever drawn.
   const near = bodyTop;
   const far = bodyTop + 0.30;
-  solid.quad(at(-hw, near, -hd), at(hw, near, -hd), at(hw, far, hd), at(-hw, far, hd), PALETTE.consoleTop);
+  solid.quad(at(-hw, near, -hd), at(-hw, far, hd), at(hw, far, hd), at(hw, near, -hd),
+    PALETTE.consoleTop);
 
   // And the buttons on it, which is the glow.
   const colour = PANEL_COLOURS[index % PANEL_COLOURS.length];
@@ -7765,7 +7812,8 @@ function console3d(solid, glow, station, index) {
       const shade = (r * cols + col) % 3 === 0
         ? PANEL_COLOURS[(index + 2) % PANEL_COLOURS.length]
         : colour;
-      glow.quad(at(u0, y0, f0), at(u1, y0, f0), at(u1, y1, f1), at(u0, y1, f1), shade);
+      // Same winding as the surface they sit on, for the same reason.
+      glow.quad(at(u0, y0, f0), at(u0, y1, f1), at(u1, y1, f1), at(u1, y0, f0), shade);
     }
   }
 }
@@ -7776,24 +7824,58 @@ function prop3d(solid, glow, prop) {
   const r = prop.radius || 0.3;
 
   switch (prop.kind) {
-    case 'chair':
-      // Seat, back, and the arm panels that carry the only three controls
-      // anybody ever used on the real prop.
-      box(solid, { center: vec3(x, 0.24, z), size: vec3(r * 1.5, 0.48, r * 1.5), color: PALETTE.chair });
-      box(solid, { center: vec3(x, 0.68, z - r * 0.6), size: vec3(r * 1.4, 0.42, 0.16), color: PALETTE.chair });
-      box(solid, { center: vec3(x - r * 0.85, 0.56, z), size: vec3(0.22, 0.12, r * 1.1), color: PALETTE.console });
-      box(solid, { center: vec3(x + r * 0.85, 0.56, z), size: vec3(0.22, 0.12, r * 1.1), color: PALETTE.console });
-      glow.quad(
-        vec3(x - r * 0.94, 0.622, z - r * 0.5), vec3(x - r * 0.76, 0.622, z - r * 0.5),
-        vec3(x - r * 0.76, 0.622, z + r * 0.5), vec3(x - r * 0.94, 0.622, z + r * 0.5),
-        PALETTE.panelRed,
+    case 'chair': {
+      // The command chair, built to be seen from IN it.
+      //
+      // The arm panels sit forward of the seat centre and at the height a
+      // forearm rests, so they come into the bottom of frame from the seated
+      // camera. Of every control on the real prop exactly three were ever given
+      // a function on screen — yellow alert, red alert, jettison the pod — and
+      // they are the three caps on the right arm.
+      // Height and reach chosen against the seated camera, not against a
+      // furniture catalogue: at eye height 1.18 with a 44-degree half-field,
+      // the bottom of frame at half a metre ahead is y=0.63. Arm panels below
+      // that are arm panels nobody in the chair ever sees.
+      const armY = 0.80;
+      const armF = r * 0.75;
+      box(solid, { center: vec3(x, 0.26, z), size: vec3(r * 1.6, 0.52, r * 1.6), color: PALETTE.chair });
+      box(solid, { center: vec3(x, 0.86, z - r * 0.72), size: vec3(r * 1.5, 0.70, 0.18), color: PALETTE.chair });
+      // A padded headrest, which the prop had and which frames the view.
+      box(solid, { center: vec3(x, 1.26, z - r * 0.72), size: vec3(r * 0.9, 0.22, 0.20), color: PALETTE.chair });
+
+      for (const side of [-1, 1]) {
+        box(solid, {
+          center: vec3(x + side * r * 0.92, armY - 0.10, z + armF),
+          size: vec3(0.26, 0.22, r * 1.3), color: PALETTE.chair,
+        });
+        box(solid, {
+          center: vec3(x + side * r * 0.92, armY, z + armF),
+          size: vec3(0.30, 0.07, r * 1.4), color: PALETTE.console,
+        });
+      }
+
+      // The three that meant something, on the starboard arm.
+      // A cap lying on an arm rest faces UP, and the winding is what says so.
+      // Wound the other way round these were culled as back faces and the arms
+      // were two blank grey slabs — the same mistake as the deck fans, one
+      // prop further in.
+      const cap = (cx, cf, colour) => glow.quad(
+        vec3(cx - r * 0.12, armY + 0.032, z + cf - r * 0.16),
+        vec3(cx - r * 0.12, armY + 0.032, z + cf + r * 0.16),
+        vec3(cx + r * 0.12, armY + 0.032, z + cf + r * 0.16),
+        vec3(cx + r * 0.12, armY + 0.032, z + cf - r * 0.16),
+        colour,
       );
-      glow.quad(
-        vec3(x + r * 0.76, 0.622, z - r * 0.5), vec3(x + r * 0.94, 0.622, z - r * 0.5),
-        vec3(x + r * 0.94, 0.622, z + r * 0.5), vec3(x + r * 0.76, 0.622, z + r * 0.5),
-        PALETTE.panelGold,
-      );
+
+      const caps = [PALETTE.panelRed, PALETTE.panelGold, PALETTE.panelWhite];
+      caps.forEach((colour, i) => cap(x + r * 0.92, armF + (i - 1) * r * 0.38, colour));
+      // The port arm carries the viewer and intercom controls.
+      for (let i = 0; i < 3; i++) {
+        cap(x - r * 0.92, armF + (i - 1) * r * 0.38,
+          i === 1 ? PALETTE.panelTurquoise : PALETTE.panelBlue);
+      }
       break;
+    }
 
     case 'bed':
       box(solid, { center: vec3(x, 0.32, z), size: vec3(r * 1.4, 0.64, r * 2.2), color: PALETTE.bed });
@@ -8233,10 +8315,24 @@ class FirstPersonView {
 
   // ---------------------------------------------------------------- camera
 
-  /** Where the eyes are: the walker's feet plus a person's height. */
+  /**
+   * Where the eyes are: the walker's feet plus a person's height.
+   *
+   * Seated, the eye sits BACK from the walker's position by a head's depth.
+   * That is not a fudge — a person in a chair has their eyes behind the seat
+   * centre, and the practical effect is that the chair's own arm panels come
+   * into the bottom of frame. Sitting in a chair you cannot see is the oldest
+   * tell that a first-person camera is a floating point rather than a body.
+   */
   eyeOf(walker, out = this._eye) {
+    if (walker.seated) {
+      out[0] = walker.x - Math.sin(walker.yaw) * 0.16;
+      out[1] = SEATED_HEIGHT;
+      out[2] = walker.z - Math.cos(walker.yaw) * 0.16;
+      return out;
+    }
     out[0] = walker.x;
-    out[1] = walker.seated ? SEATED_HEIGHT : EYE_HEIGHT;
+    out[1] = EYE_HEIGHT;
     out[2] = walker.z;
     return out;
   }
@@ -8280,6 +8376,7 @@ class FirstPersonView {
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
       ambient: 0.62, keyPower: 0.44,
+      eye: this.eyeOf(walker), gloss: 0.22,
     });
 
     // Pass one: space, inside the screen.
@@ -8293,6 +8390,7 @@ class FirstPersonView {
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
       ambient: 0.62, keyPower: 0.44,
+      eye: this.eyeOf(walker), gloss: 0.22,
     });
     this.renderer.setCamera(this._viewProj);
     this.drawRoom(room);
@@ -8360,7 +8458,10 @@ class FirstPersonView {
     r.setScissor(screen.x, screen.y, screen.w, screen.h);
     // Back to vacuum inside the screen: one hard sun, deep shadow, which is
     // what a hull a thousand kilometres away actually looks like.
-    r.setLighting({ key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5], ambient: 0.20, keyPower: 0.9 });
+    r.setLighting({
+      key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
+      ambient: 0.20, keyPower: 0.9, gloss: 0,
+    });
     // The far slice of the depth buffer, so the room drawn afterwards covers
     // everything except the aperture.
     r.setDepthRange(0.9990, 1.0);
@@ -20945,6 +21046,15 @@ function bridgeScreen(app) {
 
   side.append(panel(w.room.name, hand, walking ? 'accent' : ''));
 
+  // --- Somebody is calling, or we are under way ---
+  // These used to be whole screens that replaced the bridge. They are things
+  // that happen WHILE you are sitting in the chair, so they belong here.
+  if (g.mode === MODES.ENCOUNTER && g.encounter) {
+    side.append(encounterPanel(app));
+  } else if (g.mode === MODES.TRANSIT && g.transit) {
+    side.append(transitPanel(app));
+  }
+
   // --- The one thing that has to be visible without walking anywhere ---
   // Whether the ship is in danger. A captain does not have to consult a panel
   // to know the hull is failing, and hiding it behind a walk would be a
@@ -21152,24 +21262,33 @@ function positionPanel(app) {
 
 // ================================================================ TRANSIT
 function transitScreen(app) {
+  const root = el('div', { class: 'scroll' });
+  if (!app.game.transit) return root;
+  root.append(transitPanel(app));
+  root.append(panel('Ship’s Log', app.game.log.slice(-5).reverse().map(logLine)));
+  return root;
+}
+
+/**
+ * Under way, as a panel.
+ *
+ * Being at warp is something you are doing while sitting in the chair, not a
+ * different place to be — so this hangs on the bridge rather than replacing it.
+ */
+function transitPanel(app) {
   const g = app.game;
   const t = g.transit;
-  const root = el('div', { class: 'scroll' });
-  if (!t) return root;
+  const wrap = el('div', {});
+  if (!t) return wrap;
 
-  root.append(panel('Under Way', [
+  wrap.append(panel('Under Way', [
     el('p', { html: `Course: <b>${t.from.name}</b> → <b>${t.to.name}</b>` }),
     el('p', { class: 'muted', text: `Warp ${t.warpFactor.toFixed(1)} · ${t.route.lightYears.toFixed(1)} light-years · ${formatDuration(t.totalHours)} at this speed${t.route.charted ? '' : ' · uncharted course'}` }),
     readout('Progress', t.progress, `${Math.round(t.progress * 100)}%`),
     readout('ETA', 1 - t.progress, formatDuration(Math.max(0, t.remainingHours))),
   ], 'accent'));
 
-  root.append(panel('Ship Status', [
-    shieldDiagram(g.ship),
-    readout('Antimatter', g.ship.antimatter / 100, `${g.ship.antimatter.toFixed(0)}%`),
-  ]));
-
-  root.append(panel('Bridge', [
+  wrap.append(panel('Helm', [
     button('Drop out of warp', tap(() => {
       const near = t.nearestSystem(g.galaxy);
       g.locationId = near.id;
@@ -21182,8 +21301,7 @@ function transitScreen(app) {
     }, 'ui_back'), { color: 'ghost' }),
   ]));
 
-  root.append(panel('Ship’s Log', g.log.slice(-5).reverse().map(logLine)));
-  return root;
+  return wrap;
 }
 
 // ============================================================== VIEWSCREEN
@@ -22015,9 +22133,30 @@ function optionsScreen(app) {
 
 // ================================================================ ENCOUNTER
 function encounterScreen(app) {
+  const root = el('div', { class: 'scroll' });
+  if (!app.game.encounter) return root;
+  root.append(encounterPanel(app));
+  return root;
+}
+
+/**
+ * Somebody is calling, as a panel.
+ *
+ * A ship hailing you is something you see on the viewer and answer from the
+ * chair — not a different place to be. This used to be a whole screen that
+ * replaced the bridge, and replacing the bridge disposed the first-person view;
+ * because WebGL keeps its drawing buffer between frames, the canvas went on
+ * showing a FROZEN photograph of a bridge nobody was rendering. It looked
+ * perfectly fine, which is what made it worth a comment this long.
+ *
+ * Returns a container rather than a single panel: the pre-warp first-contact
+ * case adds a second one about General Order One, and that warning has to sit
+ * above the choices rather than inside them.
+ */
+function encounterPanel(app) {
   const g = app.game;
   const enc = g.encounter;
-  const root = el('div', { class: 'scroll' });
+  const root = el('div', {});
   if (!enc) return root;
 
   root.append(panel(enc.title, [
@@ -22361,6 +22500,7 @@ __exports.bridgeScreen = bridgeScreen;
 __exports.chairConsole = chairConsole;
 __exports.positionPanel = positionPanel;
 __exports.transitScreen = transitScreen;
+__exports.transitPanel = transitPanel;
 __exports.viewscreenScreen = viewscreenScreen;
 __exports.tacticalScreen = tacticalScreen;
 __exports.powerPanel = powerPanel;
@@ -22374,6 +22514,7 @@ __exports.logScreen = logScreen;
 __exports.referenceScreen = referenceScreen;
 __exports.optionsScreen = optionsScreen;
 __exports.encounterScreen = encounterScreen;
+__exports.encounterPanel = encounterPanel;
 __exports.missionScreen = missionScreen;
 __exports.hailOptions = hailOptions;
 __exports.newGameScreen = newGameScreen;
@@ -23269,7 +23410,10 @@ class App {
 
     on('transit:begin', () => { this.go('bridge'); });
     on('arrived', () => { audio.play('warp_drop'); audio.setAlertLevel('normal'); this.needsRender = true; });
-    on('encounter:begin', () => { this.go('encounter'); haptic('select'); });
+    // A hail brings you to the CHAIR, not to a separate screen. The encounter's
+    // panel appears in the bridge's own strip, and the Bridge tab carries a
+    // badge if you happen to be reading the roster when it comes in.
+    on('encounter:begin', () => { this.go('bridge'); haptic('select'); });
     on('mission:start', () => { this.go('mission'); });
     on('mission:stage', () => { this.needsRender = true; });
     on('game:over', () => { this.go('gameover'); });
@@ -23371,8 +23515,14 @@ class App {
     // same mistake in the other direction, and it left the tactical view never
     // built and the renderer reporting a mode it was not in.
     else if (g.mode === MODES.MISSION) screen = 'mission';
-    else if (g.mode === MODES.ENCOUNTER && screen === 'bridge') screen = 'encounter';
-    else if (g.mode === MODES.TRANSIT && screen === 'bridge') screen = 'transit';
+    // An ENCOUNTER and a TRANSIT no longer replace the bridge either. A ship
+    // hailing you is something you see on the viewer and answer from the chair,
+    // and being at warp is something you are doing while sitting in it — both
+    // used to swap the whole screen out, which disposed the first-person view
+    // and left the canvas showing a frozen frame of a bridge nobody was in.
+    // Their panels appear in the bridge's own strip instead.
+    //
+    // A MISSION still takes the screen, because a mission stage IS text.
 
     const old = this.screenEl;
     let node;

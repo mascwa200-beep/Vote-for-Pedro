@@ -110,6 +110,15 @@ export function bridgeScreen(app) {
 
   side.append(panel(w.room.name, hand, walking ? 'accent' : ''));
 
+  // --- Somebody is calling, or we are under way ---
+  // These used to be whole screens that replaced the bridge. They are things
+  // that happen WHILE you are sitting in the chair, so they belong here.
+  if (g.mode === MODES.ENCOUNTER && g.encounter) {
+    side.append(encounterPanel(app));
+  } else if (g.mode === MODES.TRANSIT && g.transit) {
+    side.append(transitPanel(app));
+  }
+
   // --- The one thing that has to be visible without walking anywhere ---
   // Whether the ship is in danger. A captain does not have to consult a panel
   // to know the hull is failing, and hiding it behind a walk would be a
@@ -318,24 +327,33 @@ export function positionPanel(app) {
 // ================================================================ TRANSIT
 
 export function transitScreen(app) {
+  const root = el('div', { class: 'scroll' });
+  if (!app.game.transit) return root;
+  root.append(transitPanel(app));
+  root.append(panel('Ship’s Log', app.game.log.slice(-5).reverse().map(logLine)));
+  return root;
+}
+
+/**
+ * Under way, as a panel.
+ *
+ * Being at warp is something you are doing while sitting in the chair, not a
+ * different place to be — so this hangs on the bridge rather than replacing it.
+ */
+export function transitPanel(app) {
   const g = app.game;
   const t = g.transit;
-  const root = el('div', { class: 'scroll' });
-  if (!t) return root;
+  const wrap = el('div', {});
+  if (!t) return wrap;
 
-  root.append(panel('Under Way', [
+  wrap.append(panel('Under Way', [
     el('p', { html: `Course: <b>${t.from.name}</b> → <b>${t.to.name}</b>` }),
     el('p', { class: 'muted', text: `Warp ${t.warpFactor.toFixed(1)} · ${t.route.lightYears.toFixed(1)} light-years · ${formatDuration(t.totalHours)} at this speed${t.route.charted ? '' : ' · uncharted course'}` }),
     readout('Progress', t.progress, `${Math.round(t.progress * 100)}%`),
     readout('ETA', 1 - t.progress, formatDuration(Math.max(0, t.remainingHours))),
   ], 'accent'));
 
-  root.append(panel('Ship Status', [
-    shieldDiagram(g.ship),
-    readout('Antimatter', g.ship.antimatter / 100, `${g.ship.antimatter.toFixed(0)}%`),
-  ]));
-
-  root.append(panel('Bridge', [
+  wrap.append(panel('Helm', [
     button('Drop out of warp', tap(() => {
       const near = t.nearestSystem(g.galaxy);
       g.locationId = near.id;
@@ -348,8 +366,7 @@ export function transitScreen(app) {
     }, 'ui_back'), { color: 'ghost' }),
   ]));
 
-  root.append(panel('Ship’s Log', g.log.slice(-5).reverse().map(logLine)));
-  return root;
+  return wrap;
 }
 
 // ============================================================== VIEWSCREEN
@@ -1191,9 +1208,30 @@ export function optionsScreen(app) {
 // ================================================================ ENCOUNTER
 
 export function encounterScreen(app) {
+  const root = el('div', { class: 'scroll' });
+  if (!app.game.encounter) return root;
+  root.append(encounterPanel(app));
+  return root;
+}
+
+/**
+ * Somebody is calling, as a panel.
+ *
+ * A ship hailing you is something you see on the viewer and answer from the
+ * chair — not a different place to be. This used to be a whole screen that
+ * replaced the bridge, and replacing the bridge disposed the first-person view;
+ * because WebGL keeps its drawing buffer between frames, the canvas went on
+ * showing a FROZEN photograph of a bridge nobody was rendering. It looked
+ * perfectly fine, which is what made it worth a comment this long.
+ *
+ * Returns a container rather than a single panel: the pre-warp first-contact
+ * case adds a second one about General Order One, and that warning has to sit
+ * above the choices rather than inside them.
+ */
+export function encounterPanel(app) {
   const g = app.game;
   const enc = g.encounter;
-  const root = el('div', { class: 'scroll' });
+  const root = el('div', {});
   if (!enc) return root;
 
   root.append(panel(enc.title, [
