@@ -5647,7 +5647,39 @@ function starfield(count = 260) {
       const size = R * (0.0016 + rnd() * 0.0032);
       const warm = rnd();
       const col = [0.7 + warm * 0.3, 0.72 + warm * 0.2, 0.9 - warm * 0.25];
-      box(mb, { center: c, size: vec3(size, size, size), color: col });
+
+      // ONE QUAD, facing the centre of the shell — which is a perfect billboard
+      // without any billboarding, because the shell is drawn centred on the eye
+      // and the eye is therefore always exactly at the middle of it. The camera
+      // turns; it never leaves the centre.
+      //
+      // This used to be a cube: twelve triangles apiece so that some face was
+      // always presented, which is a problem a quad aimed at the viewer does not
+      // have. 260 stars went from 3,120 triangles to 520, and it is that saving
+      // that pays for a world in orbit being a real sphere.
+      const n = vec3(-c[0] / R, -c[1] / R, -c[2] / R);
+      // Any direction not parallel to the normal seeds the basis; the cross
+      // products do the rest. |n·y| is at most 1, so the fallback is only for
+      // the two stars that happen to sit at the poles.
+      const t = Math.abs(n[1]) > 0.9 ? vec3(1, 0, 0) : vec3(0, 1, 0);
+      const ux = t[1] * n[2] - t[2] * n[1];
+      const uy = t[2] * n[0] - t[0] * n[2];
+      const uz = t[0] * n[1] - t[1] * n[0];
+      const ul = Math.hypot(ux, uy, uz) || 1;
+      const u1 = vec3(ux / ul * size, uy / ul * size, uz / ul * size);
+      // v = n × u, which makes u × v = n: the face looks at the centre.
+      const v1 = vec3(
+        (n[1] * u1[2] - n[2] * u1[1]),
+        (n[2] * u1[0] - n[0] * u1[2]),
+        (n[0] * u1[1] - n[1] * u1[0]),
+      );
+      mb.quad(
+        vec3(c[0] - u1[0] - v1[0], c[1] - u1[1] - v1[1], c[2] - u1[2] - v1[2]),
+        vec3(c[0] + u1[0] - v1[0], c[1] + u1[1] - v1[1], c[2] + u1[2] - v1[2]),
+        vec3(c[0] + u1[0] + v1[0], c[1] + u1[1] + v1[1], c[2] + u1[2] + v1[2]),
+        vec3(c[0] - u1[0] + v1[0], c[1] - u1[1] + v1[1], c[2] - u1[2] + v1[2]),
+        col,
+      );
     }
     return mb;
   });
@@ -5739,6 +5771,240 @@ function bodyMesh(kind = 'planet', seed = 0) {
       color: palettes[kind] ?? palettes.planet,
       banding: kind === 'star' ? 0 : 0.35,
     });
+    return mb;
+  });
+}
+
+// ------------------------------------------------------------------ orbit
+//
+// A world seen from standard orbit is a different object from a world seen on
+// approach, and it needs a different mesh: `bodyMesh` above is a 20-segment ball
+// that reads fine as a marble four thousand units away and reads as a polyhedron
+// from orbit. This is the same shape at the resolution the near view needs, with
+// a surface on it.
+//
+// The altitude decides everything about the mesh, and RESEARCH §10 has the
+// arithmetic. Standard orbit is a band, and the two ends of it are different
+// pictures. Down at 1,600 km the disc subtends 106° — wider than the viewer, so
+// there is no planet in frame, only ground and a horizon. Up at 11,300 km it
+// subtends 42°, which is the shot: a whole world across the lower half of the
+// screen with the terminator on it and stars above.
+//
+// The build takes the top of the band, for a reason that is not aesthetic. From
+// low orbit the only geometry worth drawing is the near cap — everything past
+// the horizon is invisible — and a cap has to be locked to the ship to stay
+// under it, which means the ground under you never changes as you travel. From
+// the top of the band the whole globe is in frame, so it can be locked to the
+// PLANET and turn on the planet's own axis, and the world moves because it is
+// actually moving.
+
+/**
+ * Deterministic 3D value noise. Lattice hash, trilinear blend.
+ *
+ * Not a texture. A texture is a file, and this project has none — but the
+ * reason to generate rather than load goes past that: the field is evaluated on
+ * a sphere, in three dimensions, where a flat image has a seam at the
+ * antimeridian and a pinch at each pole. There is nothing to wrap here.
+ */
+function latticeHash(x, y, z, seed) {
+  let h = Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x85ebca6b)
+    ^ Math.imul(z | 0, 0xc2b2ae35) ^ (seed | 0);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+}
+
+function valueNoise(x, y, z, seed) {
+  const xi = Math.floor(x); const yi = Math.floor(y); const zi = Math.floor(z);
+  const xf = x - xi; const yf = y - yi; const zf = z - zi;
+  // Smoothstep on each axis, so the field has no lattice-aligned creases.
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const w = zf * zf * (3 - 2 * zf);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const c = (dx, dy, dz) => latticeHash(xi + dx, yi + dy, zi + dz, seed);
+  return lerp(
+    lerp(lerp(c(0, 0, 0), c(1, 0, 0), u), lerp(c(0, 1, 0), c(1, 1, 0), u), v),
+    lerp(lerp(c(0, 0, 1), c(1, 0, 1), u), lerp(c(0, 1, 1), c(1, 1, 1), u), v),
+    w,
+  );
+}
+
+/** Four octaves, halving amplitude. Enough for coastlines that are not circles. */
+function terrain(x, y, z, seed, freq = 2.4) {
+  let sum = 0; let amp = 1; let norm = 0; let f = freq;
+  for (let o = 0; o < 4; o++) {
+    sum += valueNoise(x * f, y * f, z * f, seed + o * 7919) * amp;
+    norm += amp;
+    amp *= 0.5;
+    f *= 2.07;   // not exactly 2, so octaves never line up on the lattice
+  }
+  return sum / norm;
+}
+
+// Ocean, lowland, highland, peak — sampled by elevation. Every kind gets four
+// so the same lookup serves all of them, and a world is never one flat colour.
+const SURFACE = {
+  planet: [[0.09, 0.20, 0.42], [0.13, 0.31, 0.55], [0.26, 0.42, 0.24], [0.55, 0.52, 0.44]],
+  desert: [[0.46, 0.31, 0.18], [0.66, 0.48, 0.26], [0.80, 0.64, 0.38], [0.88, 0.78, 0.58]],
+  ice: [[0.42, 0.56, 0.68], [0.66, 0.78, 0.88], [0.84, 0.90, 0.95], [0.95, 0.97, 1.00]],
+  moon: [[0.24, 0.24, 0.26], [0.38, 0.37, 0.38], [0.52, 0.51, 0.50], [0.66, 0.65, 0.63]],
+  gas: [[0.42, 0.33, 0.24], [0.62, 0.50, 0.34], [0.78, 0.68, 0.50], [0.88, 0.83, 0.72]],
+  star: [[1.0, 0.72, 0.30], [1.0, 0.82, 0.42], [1.0, 0.90, 0.58], [1.0, 0.96, 0.78]],
+};
+
+/** Ice at the poles, cloud on top, banding on a gas giant. */
+function surfaceColor(kind, nx, ny, nz, seed) {
+  const bands = SURFACE[kind] ?? SURFACE.planet;
+  // A gas giant has no surface to have relief: its colour is latitude, pushed
+  // sideways by turbulence, which is what makes the bands wander instead of
+  // being stripes.
+  const e = kind === 'gas'
+    ? (Math.sin(ny * 11 + terrain(nx, ny, nz, seed, 1.6) * 3.4) * 0.5 + 0.5)
+    : terrain(nx, ny, nz, seed);
+
+  const i = e < 0.46 ? 0 : e < 0.54 ? 1 : e < 0.72 ? 2 : 3;
+  const c = bands[i];
+  let r = c[0]; let g = c[1]; let b = c[2];
+
+  // Ice toward the poles, and the edge of the cap is ragged rather than a
+  // circle drawn on the globe.
+  if (kind !== 'gas' && kind !== 'star') {
+    const lat = Math.abs(ny);
+    const edge = 0.68 + terrain(nx, ny, nz, seed + 4001, 5.5) * 0.22;
+    if (lat > edge) {
+      const t = Math.min(1, (lat - edge) / 0.2);
+      r += (0.94 - r) * t; g += (0.96 - g) * t; b += (0.99 - b) * t;
+    }
+  }
+
+  // Weather. A separate, coarser field at a different seed, thresholded high so
+  // it is broken cloud and not overcast — an unbroken white world reads as an
+  // ice world, which is a different thing the palette above already does.
+  if (kind === 'planet' || kind === 'gas') {
+    const cloud = terrain(nx, ny, nz, seed + 9173, 3.1);
+    if (cloud > 0.56) {
+      const t = Math.min(1, (cloud - 0.56) / 0.26) * 0.85;
+      r += (0.92 - r) * t; g += (0.94 - g) * t; b += (0.96 - b) * t;
+    }
+  }
+  return [r, g, b];
+}
+
+/**
+ * A world at the resolution orbit needs, with a surface on it.
+ *
+ * Unit radius, centred at the origin, +y is the pole — so the caller puts it at
+ * the body's position, scales it by the body's radius, and spins it about its
+ * own axis for the time of day. Colour is per quad from the noise field above.
+ *
+ * Nothing is displaced. Real relief is about a thousandth of a planetary radius
+ * — Everest against the Earth — and would be a fraction of a pixel from orbit.
+ * Mountains you could see from up here would be forty kilometres tall, which is
+ * inventing physics to decorate a picture.
+ */
+function worldMesh(kind = 'planet', seed = 0) {
+  return memo(`world:${kind}:${seed & 7}`, () => {
+    const mb = new MeshBuilder();
+    // 56 around and 28 down puts a facet at about 6.4°, which at the 21° disc
+    // this is seen as works out to roughly two degrees of frame per edge — the
+    // point where the silhouette stops reading as a polygon.
+    const SEG = 56;
+    const RINGS = 28;
+    const s = (seed & 7) * 1013 + 17;
+
+    for (let ring = 0; ring < RINGS; ring++) {
+      const a0 = (ring / RINGS) * Math.PI;
+      const a1 = ((ring + 1) / RINGS) * Math.PI;
+      const r0 = Math.sin(a0); const y0 = Math.cos(a0);
+      const r1 = Math.sin(a1); const y1 = Math.cos(a1);
+      for (let i = 0; i < SEG; i++) {
+        const t0 = (i / SEG) * Math.PI * 2;
+        const t1 = ((i + 1) / SEG) * Math.PI * 2;
+        const c0 = Math.cos(t0); const s0 = Math.sin(t0);
+        const c1 = Math.cos(t1); const s1 = Math.sin(t1);
+        const inner0 = vec3(c0 * r0, y0, s0 * r0);
+        const inner1 = vec3(c1 * r0, y0, s1 * r0);
+        const outer1 = vec3(c1 * r1, y1, s1 * r1);
+        const outer0 = vec3(c0 * r1, y1, s0 * r1);
+        // Centroid of the patch, normalised, is where the field is sampled.
+        const mx = (inner0[0] + outer1[0]) * 0.5;
+        const my = (inner0[1] + outer1[1]) * 0.5;
+        const mz = (inner0[2] + outer1[2]) * 0.5;
+        const len = Math.hypot(mx, my, mz) || 1;
+        const color = surfaceColor(kind, mx / len, my / len, mz / len, s);
+        // Wound so the face points AWAY from the centre — round the ring first
+        // and outward second. Culling is on: get this backwards and the planet
+        // is not dark, it is absent.
+        if (ring === 0) {
+          mb.tri(vec3(0, 1, 0), outer1, outer0, color);
+        } else if (ring === RINGS - 1) {
+          mb.tri(vec3(0, -1, 0), inner0, inner1, color);
+        } else {
+          mb.quad(inner0, inner1, outer1, outer0, color);
+        }
+      }
+    }
+    return mb;
+  });
+}
+
+/**
+ * The limb: the bright rim of atmosphere around a world's edge.
+ *
+ * An atmosphere is only ever SEEN from orbit at the edge of the disc, because
+ * that is the one line of sight that runs lengthwise through hundreds of
+ * kilometres of it rather than straight down through ten. Overhead there is
+ * nothing to see; at the limb it is a bright band. So this is a rim and not a
+ * shell over the world.
+ *
+ * It is a flat annulus in the plane through the planet's centre, square to the
+ * camera — the caller turns it. Which makes the inner edge take care of itself:
+ * an annulus in that plane is exactly as far away as the centre of the world,
+ * the near surface is closer, and the depth buffer therefore hides every part of
+ * the ring that falls inside the silhouette. Nothing has to work out where the
+ * silhouette is, at any distance or angle. The sphere masks its own halo.
+ *
+ * Built in the xz plane facing +y, which is the convention `quatFromTo` wants.
+ */
+function limbMesh(kind = 'planet') {
+  return memo(`limb:${kind}`, () => {
+    const mb = new MeshBuilder();
+    const SEG = 56;
+    const BANDS = 3;
+    // Blue for a world with air. A moon has none, so it gets a dim grey line
+    // and nothing that glows — the absence is the point.
+    const air = kind === 'moon' ? [0.34, 0.34, 0.36]
+      : kind === 'ice' ? [0.66, 0.80, 0.92]
+        : kind === 'desert' ? [0.86, 0.70, 0.50]
+          : kind === 'gas' ? [0.80, 0.72, 0.56] : [0.40, 0.62, 1.00];
+    // Starts inside the silhouette, so the visible band begins already bright
+    // rather than fading up from the edge of the world.
+    const INNER = 0.93;
+    const OUTER = 1.19;
+
+    for (let band = 0; band < BANDS; band++) {
+      const f0 = band / BANDS;
+      const f1 = (band + 1) / BANDS;
+      const r0 = INNER + (OUTER - INNER) * f0;
+      const r1 = INNER + (OUTER - INNER) * f1;
+      // Squared falloff outward: air thins with height and the glow has to go
+      // to nothing before the outer edge, or the ring ends in a visible line.
+      const fade = (1 - (f0 + f1) * 0.5) ** 2;
+      const c = [air[0] * fade, air[1] * fade, air[2] * fade];
+      for (let i = 0; i < SEG; i++) {
+        const t0 = (i / SEG) * Math.PI * 2;
+        const t1 = ((i + 1) / SEG) * Math.PI * 2;
+        // Round the ring, then outward — which is what puts the face on +y.
+        mb.quad(
+          vec3(Math.cos(t0) * r0, 0, Math.sin(t0) * r0),
+          vec3(Math.cos(t1) * r0, 0, Math.sin(t1) * r0),
+          vec3(Math.cos(t1) * r1, 0, Math.sin(t1) * r1),
+          vec3(Math.cos(t0) * r1, 0, Math.sin(t0) * r1),
+          c,
+        );
+      }
+    }
     return mb;
   });
 }
@@ -5864,6 +6130,8 @@ __exports.starfield = starfield;
 __exports.WARP_LENGTH = WARP_LENGTH;
 __exports.warpfield = warpfield;
 __exports.bodyMesh = bodyMesh;
+__exports.worldMesh = worldMesh;
+__exports.limbMesh = limbMesh;
 __exports.gridMesh = gridMesh;
 __exports.beamMesh = beamMesh;
 __exports.torpedoMesh = torpedoMesh;
@@ -6205,6 +6473,12 @@ function vistaFor(systemId, type = 'colony') {
     const kind = pool[Math.floor(rnd() * pool.length)];
     bodies.push({
       id: `${systemId}:body:${i}`,
+      // Worlds are numbered outward from the primary, which is how they are
+      // named — "Rigel VII" is the seventh planet and not a codename. The
+      // vista deals bearings evenly and distances randomly, so the ordinal is
+      // assigned here in placement order rather than sorted by distance: a
+      // world's number must not change because a later one was rolled closer.
+      ordinal: i + 1,
       kind,
       x: Math.cos(bearing) * dist,
       y: height * dist,
@@ -6239,6 +6513,23 @@ function vistaFor(systemId, type = 'colony') {
   return { systemId, type, bodies, focus };
 }
 
+const ROMAN = [
+  '', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X',
+];
+
+/**
+ * What the crew calls a world out loud: "Rigel VII", or "the primary".
+ *
+ * Roman numerals rather than names, because the vista is generated and a
+ * generated proper noun is a name nobody wrote — "Rigel VII" is a real way to
+ * refer to a place the ship has never been, and "Zyrothrax" is a slot machine.
+ */
+function worldLabel(systemName, body) {
+  if (!body) return systemName;
+  if (body.kind === 'star') return `the ${systemName} primary`;
+  return `${systemName} ${ROMAN[body.ordinal] ?? body.ordinal}`;
+}
+
 /** The render-space compass bearing of a point, in radians. */
 function bearingOf(body) {
   return Math.atan2(body.z, body.x);
@@ -6264,6 +6555,7 @@ __exports.fovFor = fovFor;
 __exports.horizontalFov = horizontalFov;
 __exports.noseOf = noseOf;
 __exports.vistaFor = vistaFor;
+__exports.worldLabel = worldLabel;
 __exports.bearingOf = bearingOf;
 __exports.vista = vista;
 
@@ -8283,6 +8575,206 @@ __exports.allRoomMeshes = allRoomMeshes;
 
 });
 
+__define("src/world/orbit.js", function (__exports, __require) {
+// Standard orbit: where the ship is when it is at a planet rather than near one.
+//
+// RESEARCH §10 has the sourcing. The short version is that "standard orbit" is
+// a band — roughly 1,000 to 7,000 miles up — and not a figure, and that the low
+// end of that band is the interesting one, because it is the altitude at which
+// the world stops being an object in the window and becomes the ground.
+//
+// This file is pure arithmetic with no renderer in it, for the same reason
+// `gfx/vista.js` is: the view that uses it cannot be imported outside a browser,
+// and a camera you cannot test is a camera you find out about in a screenshot.
+//
+// Two things it deliberately does not do:
+//
+//   It never touches `Game.rng`. The orbital plane is hashed from the body's
+//   id, so entering orbit is observationally free and a save file cannot be
+//   desynchronised by looking out of the window.
+//
+//   It invents no physics. The period below is Kepler's third law with an
+//   assumed density, and the altitude is the bottom of the documented band.
+
+const { vec3 } = __require("src/gfx/math.js");
+const { hashSeed } = __require("src/core/rng.js");
+
+/**
+ * Orbital altitude as a fraction of the world's radius.
+ *
+ * The documented band runs from about 1,600 km up to about 11,300 km, and this
+ * is the top of it: 11,300 km over an Earth-sized world is 1.77 radii. A
+ * fraction rather than a distance, because the game's worlds are not all
+ * Earth-sized and a fixed altitude would put the ship inside a moon.
+ *
+ * The top of the band is chosen for what it does to the picture, and the
+ * reasoning is in `gfx/scene.js` next to the mesh. Low down, the world is wider
+ * than the window and there is no planet in frame at all — only ground. Up here
+ * the whole disc subtends 42° against a 74° viewer, which is a world in the
+ * screen with a terminator across it.
+ */
+const ORBIT_ALTITUDE = 1.77;
+
+/**
+ * Seconds of orbit per second of watching.
+ *
+ * A real circuit takes hours, so at 1:1 nothing appears to move and the view is
+ * a photograph. This is a stated compression and not invented physics — the
+ * game already runs a twelve-day transit in twenty-two seconds, which is nearly
+ * fifty thousand to one. Sixty to one is gentle by comparison and puts a full
+ * orbit at about six minutes.
+ */
+const ORBIT_TIME_SCALE = 60;
+
+const G = 6.674e-11;
+
+/**
+ * Bulk density in kg/m³, by world type. Solar-system figures.
+ *
+ * These are here because of a pleasant consequence of Kepler's third law: for a
+ * body of uniform density, the period of a circular orbit at a fixed MULTIPLE
+ * of the radius does not depend on the radius at all. μ = (4/3)πGρR³ and a =
+ * (1+h)R, so R cancels completely and the period falls out of the density
+ * alone. A gas giant is orbited slowly and a moon quickly, whatever their size,
+ * and nothing had to be made up to get there.
+ */
+const DENSITY = {
+  planet: 5514,   // Earth
+  desert: 5514,   // Mars is lighter, but a desert world here is a rocky one
+  moon: 3340,     // Luna
+  ice: 1600,      // Europa and its neighbours
+  gas: 1326,      // Jupiter
+  star: 1408,     // the Sun, for completeness — nothing orbits one this close
+};
+
+/**
+ * How long one circuit takes, in seconds.
+ *
+ * T = 2π √(a³/μ) with a = (1 + ORBIT_ALTITUDE)R and μ = (4/3)πGρR³.
+ * Works out to about six and a half hours over a rocky world and thirteen over
+ * a gas giant, which is the far end of the documented band and correct for it.
+ */
+function orbitPeriod(kind = 'planet') {
+  const rho = DENSITY[kind] ?? DENSITY.planet;
+  const a = 1 + ORBIT_ALTITUDE;
+  return 2 * Math.PI * Math.sqrt((a * a * a) / ((4 / 3) * Math.PI * G * rho));
+}
+
+/**
+ * How long the world takes to turn once on its own axis, in seconds.
+ *
+ * Solar-system figures again, and they are more characterful than the orbital
+ * period: a gas giant goes round in ten hours and a moon is tide-locked and
+ * barely turns at all. Watching from orbit, that difference is visible.
+ */
+const DAY = {
+  planet: 86400,      // Earth
+  desert: 88775,      // Mars
+  moon: 2360591,      // Luna, locked to its primary — 27 days
+  ice: 306822,        // Europa, likewise locked, 3.5 days
+  gas: 35730,         // Jupiter, under ten hours
+  star: 2160000,      // the Sun at its equator
+};
+function rotationPeriod(kind = 'planet') {
+  return DAY[kind] ?? DAY.planet;
+}
+
+/** Unit vector, in place. Returns the zero-safe result. */
+function unit(x, y, z, out) {
+  const L = Math.hypot(x, y, z) || 1;
+  out[0] = x / L; out[1] = y / L; out[2] = z / L;
+  return out;
+}
+
+/**
+ * The orbital plane's normal, hashed from the body's id.
+ *
+ * Every world gets its own inclination and it never changes, which is the same
+ * rule the vista follows and for the same reason: a plane that is different on
+ * each visit makes the place a screensaver.
+ */
+function orbitAxis(bodyId, out = vec3()) {
+  const h = hashSeed(`orbit:${bodyId}`);
+  const a = Number(h & 0xffffn) / 65536 * Math.PI * 2;
+  // Inclinations stay within about 35° of the system's plane. Polar orbits are
+  // legal and look wrong here — the vista lays its worlds out around a disc,
+  // and a ship crossing it at right angles reads as an error rather than a
+  // choice.
+  const tilt = (Number((h >> 16n) & 0xffffn) / 65536 - 0.5) * 1.2;
+  return unit(Math.sin(tilt) * Math.cos(a), Math.cos(tilt), Math.sin(tilt) * Math.sin(a), out);
+}
+
+/**
+ * Where the ship is, and which way it is pointing, at this point in the orbit.
+ *
+ * @param {object} body   a vista body: {id, x, y, z, radius}
+ * @param {number} phase  radians around the orbit
+ * @returns {{position: Float64Array, up: Float64Array, forward: Float64Array, radius: number}}
+ *          `up` points from the world's centre at the ship — so the surface is
+ *          straight down `-up` — and `forward` is the direction of travel.
+ */
+function orbitFrame(body, phase = 0) {
+  const axis = orbitAxis(body.id);
+  // Any vector not parallel to the axis will do for the first basis direction;
+  // the cross product fixes the rest. Picking the world axis furthest from the
+  // orbital normal is what keeps that "not parallel" true near the poles.
+  const ax = Math.abs(axis[0]); const ay = Math.abs(axis[1]); const az = Math.abs(axis[2]);
+  const seedVec = ay <= ax && ay <= az ? vec3(0, 1, 0)
+    : ax <= az ? vec3(1, 0, 0) : vec3(0, 0, 1);
+  const e1 = unit(
+    axis[1] * seedVec[2] - axis[2] * seedVec[1],
+    axis[2] * seedVec[0] - axis[0] * seedVec[2],
+    axis[0] * seedVec[1] - axis[1] * seedVec[0],
+    vec3(),
+  );
+  const e2 = unit(
+    axis[1] * e1[2] - axis[2] * e1[1],
+    axis[2] * e1[0] - axis[0] * e1[2],
+    axis[0] * e1[1] - axis[1] * e1[0],
+    vec3(),
+  );
+
+  const c = Math.cos(phase); const s = Math.sin(phase);
+  const up = unit(e1[0] * c + e2[0] * s, e1[1] * c + e2[1] * s, e1[2] * c + e2[2] * s, vec3());
+  const r = body.radius * (1 + ORBIT_ALTITUDE);
+  const position = vec3(
+    body.x + up[0] * r,
+    body.y + up[1] * r,
+    body.z + up[2] * r,
+  );
+  // Travel is along the orbit, which is the axis crossed into the radius.
+  const forward = unit(
+    axis[1] * up[2] - axis[2] * up[1],
+    axis[2] * up[0] - axis[0] * up[2],
+    axis[0] * up[1] - axis[1] * up[0],
+    vec3(),
+  );
+  return { position, up, forward, axis, radius: r };
+}
+
+/**
+ * How wide the world looks from orbit: the angular RADIUS of the disc, in
+ * radians.
+ *
+ * asin(R / (R + h)) — 21° at the standard altitude, so a 42° disc against a
+ * viewer that is 74° across. That is the number the framing is built on, and
+ * the reason the camera has to look down rather than along the track: the world
+ * is directly beneath the ship, not ahead of it.
+ */
+function angularRadius(altitude = ORBIT_ALTITUDE) {
+  return Math.asin(1 / (1 + altitude));
+}
+
+__exports.ORBIT_ALTITUDE = ORBIT_ALTITUDE;
+__exports.ORBIT_TIME_SCALE = ORBIT_TIME_SCALE;
+__exports.orbitPeriod = orbitPeriod;
+__exports.rotationPeriod = rotationPeriod;
+__exports.orbitAxis = orbitAxis;
+__exports.orbitFrame = orbitFrame;
+__exports.angularRadius = angularRadius;
+
+});
+
 __define("src/ui/firstperson.js", function (__exports, __require) {
 // The bridge, from where you are standing in it.
 //
@@ -8312,9 +8804,10 @@ __define("src/ui/firstperson.js", function (__exports, __require) {
 // The order matters and so does the depth range: clearing depth between passes
 // instead would let the forward bulkhead paint over the screen.
 
-const { vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project, quatFromTo } = __require("src/gfx/math.js");
+const { vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project, quatFromTo, quatAxisAngle } = __require("src/gfx/math.js");
 const { roomMeshes, PALETTE } = __require("src/gfx/room.js");
-const { starfield, bodyMesh, warpfield, WARP_LENGTH, VOLUME } = __require("src/gfx/scene.js");
+const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME } = __require("src/gfx/scene.js");
+const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
 const { hullMesh, hullScale } = __require("src/gfx/blueprint.js");
 const { vista, fovFor, noseOf } = __require("src/gfx/vista.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
@@ -8362,6 +8855,15 @@ class FirstPersonView {
     // How far the warp field has streamed past. Wraps every WARP_LENGTH, which
     // is why the mesh carries a twin of every streak one period away.
     this.warpPhase = 0;
+    // Where the ship is around the world it is orbiting, in radians, and how
+    // far that world has turned on its own axis. Both advance in real time and
+    // neither is saved: the ship is somewhere on a circle it has been going
+    // round for hours, and which point of that circle is not a fact worth
+    // keeping. The ORBIT they are about is saved, in `Game.orbit`.
+    this.orbitPhase = 0;
+    this.worldSpin = 0;
+    this._up = vec3();
+    this._look = vec3();
 
     this.attachGestures();
   }
@@ -8490,7 +8992,7 @@ class FirstPersonView {
     // Pass one: space, inside the screen.
     const screen = room.viewscreen ? this.screenRect(room, width, height) : null;
     this.stats.screenRect = screen;
-    if (screen) this.drawThroughScreen(game, screen, aspect);
+    if (screen) this.drawThroughScreen(game, screen, aspect, height);
 
     // Pass two: the room, over the top of it.
     this.renderer.clearScissor();
@@ -8561,7 +9063,54 @@ class FirstPersonView {
    * whatever angle you are standing at, which is also what makes it legible
    * from the chair. So this camera is the SHIP's, not the captain's.
    */
-  drawThroughScreen(game, screen, aspect) {
+  /**
+   * The world the ship is orbiting, and where it has got to around it.
+   *
+   * Both phases advance here rather than in `render`, because this is the only
+   * place that knows whether the orbit is being drawn at all — and a phase that
+   * kept advancing behind an engagement would jump when the fight ended.
+   */
+  orbitWorld(game) {
+    const body = game.orbitBody;
+    if (!body) return null;
+    const dt = this.lastDt * ORBIT_TIME_SCALE;
+    const TAU = Math.PI * 2;
+    this.orbitPhase = (this.orbitPhase + TAU * dt / orbitPeriod(body.kind)) % TAU;
+    this.worldSpin = (this.worldSpin + TAU * dt / rotationPeriod(body.kind)) % TAU;
+    return { body, frame: orbitFrame(body, this.orbitPhase) };
+  }
+
+  /**
+   * Where the ship is and what the screen is pointed at, in orbit.
+   *
+   * The world is DIRECTLY BELOW, not ahead: a camera looking along the orbital
+   * track sees nothing but stars. So the axis is tipped down to near straight
+   * down, and by a fraction of the world's own angular radius rather than by a
+   * fixed number of degrees — which keeps the composition identical whatever
+   * the lens is doing. Half a radius puts the top of the limb a quarter of the
+   * way up the frame and runs the world off the bottom of it.
+   */
+  orbitCamera(world, eye, at, tilt) {
+    const { frame, body } = world;
+    const phi = tilt;
+    const cs = Math.cos(phi); const sn = Math.sin(phi);
+    for (let i = 0; i < 3; i++) {
+      eye[i] = frame.position[i];
+      // Down is -up; tipped toward the direction of travel by phi.
+      this._look[i] = -frame.up[i] * cs + frame.forward[i] * sn;
+      // Camera up is the same rotation applied a quarter turn round: always
+      // perpendicular to the view axis, so the picture never gimbals when the
+      // ship passes over a pole. `lookAt` with a fixed world up does exactly
+      // that, and this camera spends its whole time pointing at the ground.
+      this._up[i] = frame.up[i] * sn + frame.forward[i] * cs;
+    }
+    const reach = body.radius * 8;
+    at[0] = eye[0] + this._look[0] * reach;
+    at[1] = eye[1] + this._look[1] * reach;
+    at[2] = eye[2] + this._look[2] * reach;
+  }
+
+  drawThroughScreen(game, screen, aspect, height = 0) {
     const r = this.renderer;
     r.setScissor(screen.x, screen.y, screen.w, screen.h);
     // Back to vacuum inside the screen: one hard sun, deep shadow, which is
@@ -8579,20 +9128,66 @@ class FirstPersonView {
     const nose = noseOf(ship, this._nose);
     const origin = ship ? [ship.x, ship.z ?? 0, ship.y] : [0, 0, 0];
 
-    const eye = vec3(
-      origin[0] + nose[0] * 140,
-      origin[1] + nose[1] * 140 + 12,
-      origin[2] + nose[2] * 140,
-    );
-    const at = vec3(
-      eye[0] + nose[0] * 8000,
-      eye[1] + nose[1] * 8000,
-      eye[2] + nose[2] * 8000,
-    );
-    perspective(fovFor(aspect, 74), aspect, 2, 40000, this._proj);
-    lookAt(eye, at, vec3(0, 1, 0), this._view);
+    // In orbit, and only when nobody is shooting. During an engagement the
+    // camera belongs to the fight — hostiles are placed around the origin, and
+    // moving the eye ten thousand units out to a planet would take them off the
+    // screen at the moment they matter most.
+    const world = eng ? null : this.orbitWorld(game);
+
+    // How wide the lens is. The projection is built for the whole canvas and
+    // then scissored down to the aperture, so what the player sees is a slice
+    // of it — which means the aperture's field of view is a fraction of the
+    // canvas's, and the fraction is exactly `screen.h / height`.
+    //
+    // In orbit that has to be solved rather than assumed. The world's angular
+    // radius is fixed by the altitude at 21°, and the picture wants that disc
+    // to come out about half the height of the aperture, so the lens is chosen
+    // to put it there: tan(V/2) = tan(θ) · (height/2) / (wanted pixels). Which
+    // is the ship widening its field to look at a world, and not the ship
+    // parking somewhere the show never put it.
+    let fovy = fovFor(aspect, 74);
+    let tilt = 0;
+    if (world && height > 0 && screen.h > 0) {
+      const theta = angularRadius();
+      fovy = Math.min(2.9, 2 * Math.atan(Math.tan(theta) * (height / 2) / (0.78 * screen.h)));
+      tilt = theta * 0.34;
+    }
+
+    const eye = vec3();
+    const at = vec3();
+    if (world) {
+      this.orbitCamera(world, eye, at, tilt);
+    } else {
+      eye[0] = origin[0] + nose[0] * 140;
+      eye[1] = origin[1] + nose[1] * 140 + 12;
+      eye[2] = origin[2] + nose[2] * 140;
+      at[0] = eye[0] + nose[0] * 8000;
+      at[1] = eye[1] + nose[1] * 8000;
+      at[2] = eye[2] + nose[2] * 8000;
+      this._up[0] = 0; this._up[1] = 1; this._up[2] = 0;
+    }
+    perspective(fovy, aspect, 2, 40000, this._proj);
+    lookAt(eye, at, this._up, this._view);
     multiply(this._proj, this._view, this._screenVP);
     r.setCamera(this._screenVP);
+
+    // The key light is the system's own primary, not a studio lamp. Which is
+    // the whole terminator: the line between day and night on the world below
+    // is not drawn, it is where pointing the light at the actual star puts it.
+    const sun = game.location ? vista(game.location.id, game.location.type).bodies[0] : null;
+    if (sun && world) {
+      const dx = sun.x - world.body.x;
+      const dy = sun.y - world.body.y;
+      const dz = sun.z - world.body.z;
+      const L = Math.hypot(dx, dy, dz) || 1;
+      r.setLighting({
+        key: [dx / L, dy / L, dz / L], fill: [-dx / L, -dy / L, -dz / L],
+        // Night is dark, and this is the one place in the game where that is
+        // the point rather than a problem. 0.06 leaves the unlit half readable
+        // as a shape against the stars without lighting it.
+        ambient: 0.06, keyPower: 1.0, gloss: 0,
+      });
+    }
 
     // AT WARP, the stars are streaks — the same stars, drawn out along the
     // course. This is the most recognisable thing a viewscreen ever showed, and
@@ -8629,17 +9224,49 @@ class FirstPersonView {
       });
     }
 
-    // The system's worlds, culled to what is actually ahead.
+    // The world underneath, at the resolution being this close to it needs.
+    // Spun about its own axis for the time of day, which is what carries the
+    // terminator across the ground while the ship watches.
+    if (world) {
+      const { body, frame } = world;
+      this._pos[0] = body.x; this._pos[1] = body.y; this._pos[2] = body.z;
+      quatAxisAngle(frame.axis, this.worldSpin, this._quat);
+      compose(this._pos, this._quat, body.radius, this._model);
+      r.draw(`world:${body.kind}`, worldMesh(body.kind, body.ordinal ?? 0), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 0,
+        tint: [1, 1, 1],
+        fogFar: 1e9,
+      });
+      // The halo, square to the camera. `frame.up` IS the direction from the
+      // world to the ship, so it is the direction the ring has to face.
+      quatFromTo(vec3(0, 1, 0), frame.up, this._quat);
+      compose(this._pos, this._quat, body.radius, this._model);
+      r.draw(`limb:${body.kind}`, limbMesh(body.kind), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        tint: [1, 1, 1],
+        alpha: 0.8,
+        fogFar: 1e9,
+      });
+    }
+
+    // The rest of the system's worlds, culled to what is actually ahead —
+    // which in orbit is where the camera is pointed and not where the bow is.
     const sys = game.location;
     if (sys) {
       const v = vista(sys.id, sys.type);
+      const ahead = world ? this._look : nose;
       let drawn = 0;
       for (const b of v.bodies) {
         if (drawn >= 3) break;
+        if (world && b.id === world.body.id) continue;
         const dx = b.x - eye[0]; const dy = b.y - eye[1]; const dz = b.z - eye[2];
         const d = Math.hypot(dx, dy, dz) || 1;
         const slack = Math.min(0.75, b.radius / d);
-        if ((dx * nose[0] + dy * nose[1] + dz * nose[2]) / d < 0.2 - slack) continue;
+        if ((dx * ahead[0] + dy * ahead[1] + dz * ahead[2]) / d < 0.2 - slack) continue;
         this._pos[0] = b.x; this._pos[1] = b.y; this._pos[2] = b.z;
         compose(this._pos, quat(), b.radius, this._model);
         r.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
@@ -11916,7 +12543,8 @@ const { fold, readNumber } = __require("src/lang/normalize.js");
 /** Departments an order can be aimed at, used to break ties. */
 const STATION_AFFINITY = {
   helm: ['set_course', 'warp_factor', 'throttle', 'come_about', 'heading',
-    'evasive', 'warp_out', 'dock', 'all_stop', 'pitch', 'turn'],
+    'evasive', 'warp_out', 'dock', 'all_stop', 'pitch', 'turn',
+    'enter_orbit', 'break_orbit'],
   tactical: ['fire', 'cease_fire', 'target_nearest', 'cycle_target',
     'target_subsystem', 'shields', 'reinforce', 'alert', 'cloak'],
   engineering: ['power', 'preset', 'eject_core', 'reinforce'],
@@ -11981,6 +12609,36 @@ const INTENTS = [
     }),
   },
   {
+    id: 'enter_orbit',
+    help: 'Standard orbit / take us into orbit of <world>',
+    phrases: [
+      'standard orbit', 'assume standard orbit', 'take us into orbit',
+      'take us into standard orbit', 'enter orbit', 'enter standard orbit',
+      'establish orbit', 'establish standard orbit', 'make orbit',
+      'assume orbit', 'put us in orbit', 'get us into orbit', 'go into orbit',
+      'take up orbit', 'move into orbit', 'orbit the planet', 'orbit that world',
+      'bring us into orbit', 'settle into orbit', 'hold orbit',
+      'maintain standard orbit', 'close to orbital distance',
+    ],
+    keywords: { orbit: 3, orbital: 2 },
+    // "Break orbit" is the opposite order and shares every other word in the
+    // sentence, so the two are separated on the one word that differs.
+    veto: ['break', 'leave', 'out'],
+    build: () => ({ action: 'orbit' }),
+  },
+  {
+    id: 'break_orbit',
+    help: 'Break orbit',
+    phrases: [
+      'break orbit', 'break out of orbit', 'leave orbit', 'leave the orbit',
+      'out of orbit', 'take us out of orbit', 'get us out of orbit',
+      'depart orbit', 'abandon orbit', 'climb out of orbit',
+      'stop orbiting', 'end the orbit', 'break us out of orbit',
+    ],
+    keywords: { orbit: 2, break: 2, leave: 1 },
+    build: () => ({ action: 'break_orbit' }),
+  },
+  {
     id: 'warp_factor',
     help: 'Warp <n> / maximum warp',
     phrases: [
@@ -12012,7 +12670,8 @@ const INTENTS = [
       'maintain position', 'hold us here', 'stand still',
     ],
     keywords: { stop: 2, halt: 2, hold: 1 },
-    veto: ['fire', 'firing'],
+    // "Hold orbit" is holding something specific, not holding still.
+    veto: ['fire', 'firing', 'orbit'],
     build: () => ({ action: 'throttle', value: 0 }),
   },
   {
@@ -12170,6 +12829,9 @@ const INTENTS = [
       'i want out', 'lets get out of here', 'no more of this',
     ],
     keywords: { retreat: 3, withdraw: 3, flee: 3, escape: 2.5, disengage: 3, run: 1.5 },
+    // "Get us out of orbit" is a helm order about altitude and this intent runs
+    // from the system entirely. They share "get us out" and nothing else.
+    veto: ['orbit'],
     build: () => ({ action: 'warp_out' }),
   },
   {
@@ -19776,6 +20438,10 @@ const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, REC
 const { resolveHail, STANDING_EFFECTS } = __require("src/sim/diplomacy.js");
 
 const { Galaxy, plotTransit } = __require("src/world/galaxy.js");
+// Placement only, and deterministic from the system id — see gfx/vista.js. The
+// state needs it to answer "orbit of what", which is a question about the world
+// and not about the renderer.
+const { vista, worldLabel } = __require("src/gfx/vista.js");
 const { rollEncounter, environmentalHazard } = __require("src/world/encounters.js");
 const { buildRoster, ERAS } = __require("src/world/crews.data.js");
 const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
@@ -19877,6 +20543,10 @@ class Game {
     this.engagement = null;
     this.encounter = null;
     this.awayTeam = null;
+    // Which world the ship is in standard orbit of, if any: {systemId, bodyId}.
+    // A place, not a label — the view is drawn from it and a landing party is
+    // put down from it.
+    this.orbit = null;
     this.alert = 'normal';
     // What "engage" means until the helm is told otherwise. The eight flip
     // switches on the console set it; six is the cruise the game has always
@@ -20192,6 +20862,65 @@ class Game {
     return { ok: true, factor: set, limited: set < want - 1e-9, max };
   }
 
+  // ------------------------------------------------------------------ orbit
+
+  /** The vista body the ship is in orbit of, or null. */
+  get orbitBody() {
+    if (!this.orbit || this.orbit.systemId !== this.locationId) return null;
+    const sys = this.location;
+    if (!sys) return null;
+    return vista(sys.id, sys.type).bodies.find((b) => b.id === this.orbit.bodyId) ?? null;
+  }
+
+  /** What the crew calls the world below. */
+  get orbitLabel() {
+    const b = this.orbitBody;
+    return b ? worldLabel(this.location?.name ?? 'the system', b) : null;
+  }
+
+  /**
+   * Standard orbit.
+   *
+   * Given no world it takes the nearest one, which is what the order means when
+   * a captain gives it without naming anything: there is one obvious thing you
+   * came here to look at. Naming a world is how you pick a different one.
+   */
+  enterOrbit(bodyId = null) {
+    if (this.transit) return { ok: false, error: 'We are still at warp, Captain.' };
+    const sys = this.location;
+    if (!sys) return { ok: false, error: 'We are nowhere in particular.' };
+
+    const v = vista(sys.id, sys.type);
+    const worlds = v.bodies.filter((b) => b.kind !== 'star');
+    if (!worlds.length) {
+      const err = `There is nothing to orbit at ${sys.name}, Captain.`;
+      this.officerSays('helm', err, 'object');
+      return { ok: false, error: err };
+    }
+
+    const body = (bodyId && worlds.find((b) => b.id === bodyId)) || v.focus || worlds[0];
+    const label = worldLabel(sys.name, body);
+    if (this.orbit?.bodyId === body.id && this.orbit.systemId === sys.id) {
+      return { ok: true, body, label, already: true };
+    }
+
+    this.orbit = { systemId: sys.id, bodyId: body.id };
+    this.officerSays('helm', `Standard orbit around ${label}, Captain.`);
+    this.pushLog(`Assumed standard orbit of ${label}.`, 'helm');
+    emit('orbit:enter', { body, label, system: sys });
+    return { ok: true, body, label };
+  }
+
+  /** Out of orbit and back to station-keeping. */
+  breakOrbit() {
+    if (!this.orbit) return { ok: false, error: 'We are not in orbit, Captain.' };
+    const label = this.orbitLabel;
+    this.orbit = null;
+    if (label) this.officerSays('helm', `Breaking orbit of ${label}.`);
+    emit('orbit:leave', { label });
+    return { ok: true, label };
+  }
+
   setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
     const plan = plotTransit(
@@ -20204,6 +20933,10 @@ class Game {
     }
 
     this.transit = plan.transit;
+    // You cannot hold an orbit and leave the system. Cleared silently: the helm
+    // announcing a break the captain did not order is noise, and the course
+    // report immediately after says where the ship is going instead.
+    this.orbit = null;
     this.mode = MODES.TRANSIT;
     this.ship.antimatter = Math.max(0, this.ship.antimatter - plan.fuel);
 
@@ -20221,6 +20954,9 @@ class Game {
     this.locationId = t.to.id;
     this.clock.advanceStardate(t.totalHours / 24);
     this.transit = null;
+    // Arriving somewhere new is not arriving in orbit. The order to make orbit
+    // is a separate one and the captain gives it.
+    this.orbit = null;
     this.mode = MODES.BRIDGE;
 
     const isNew = this.galaxy.markVisited(this.locationId);
@@ -20813,6 +21549,10 @@ class Game {
       podJettisoned: this.podJettisoned === true,
       warpFactor: this.warpFactor,
       walk: this.walk.save(),
+      // Two ids, not a position. The vista is regenerated from the system id on
+      // load and is identical every time, so the world is still exactly where
+      // it was — saving coordinates would only give them a chance to disagree.
+      orbit: this.orbit ? { systemId: this.orbit.systemId, bodyId: this.orbit.bodyId } : null,
       firstStrike: this.firstStrike === true,
       inKobayashi: this.inKobayashi === true,
       gambitOpen: this.gambitOpen === true,
@@ -21053,6 +21793,14 @@ class Game {
     // which is where every commission starts anyway.
     g.walk = Walker.load(data.walk ?? {});
     g.walkOrder = null;
+    // An orbit only survives if it belongs to where the ship actually is. A
+    // record saved mid-transit, or one carrying a body that no longer exists,
+    // restores to station-keeping rather than to an orbit of nothing.
+    const orb = data.orbit;
+    g.orbit = orb && typeof orb.bodyId === 'string' && orb.systemId === g.locationId
+      ? { systemId: orb.systemId, bodyId: orb.bodyId }
+      : null;
+    if (g.orbit && !g.orbitBody) g.orbit = null;
     g.firstStrike = data.firstStrike === true;
     g.inKobayashi = data.inKobayashi === true;
     g.gambitOpen = data.gambitOpen === true;
@@ -21095,6 +21843,7 @@ const { STATIONS, ERA_LIST, SPECIES } = __require("src/world/crews.data.js");
 const { FACTIONS, standingTier } = __require("src/world/factions.data.js");
 const { distanceLy } = __require("src/world/systems.data.js");
 const { travelHours, fuelCost } = __require("src/world/galaxy.js");
+const { orbitPeriod, rotationPeriod } = __require("src/world/orbit.js");
 const { formatDuration } = __require("src/core/time.js");
 const { commandableAt } = __require("src/world/ships.data.js");
 
@@ -21187,6 +21936,8 @@ function bridgeScreen(app) {
     side.append(encounterPanel(app));
   } else if (g.mode === MODES.TRANSIT && g.transit) {
     side.append(transitPanel(app));
+  } else if (g.orbit && g.orbitBody) {
+    side.append(orbitPanel(app));
   }
 
   // --- The one thing that has to be visible without walking anywhere ---
@@ -21434,6 +22185,43 @@ function transitPanel(app) {
       app.render();
     }, 'ui_back'), { color: 'ghost' }),
   ]));
+
+  return wrap;
+}
+
+/**
+ * In orbit, as a panel.
+ *
+ * Says what is out of the window and how long a circuit takes, because both are
+ * real numbers the game computes rather than flavour: the period comes out of
+ * the world's density, and a captain who is about to send people down deserves
+ * to know how long the ship is over them.
+ */
+function orbitPanel(app) {
+  const g = app.game;
+  const body = g.orbitBody;
+  const wrap = el('div', {});
+  if (!body) return wrap;
+
+  const period = orbitPeriod(body.kind) / 3600;
+  const day = rotationPeriod(body.kind) / 3600;
+  const KIND = {
+    planet: 'Class M — atmosphere, surface water, life',
+    desert: 'Class K — thin air, arid, survivable in a suit',
+    moon: 'Airless satellite — no atmosphere, no weather',
+    ice: 'Class P — frozen surface, subsurface liquid possible',
+    gas: 'Class J — gas giant, no surface to stand on',
+  };
+
+  wrap.append(panel('Standard Orbit', [
+    el('p', { html: `Holding station over <b>${g.orbitLabel}</b>` }),
+    el('p', { class: 'muted', text: KIND[body.kind] ?? 'Survey incomplete' }),
+    el('div', { class: 'meta' }, [
+      pill(`orbit ${period < 24 ? `${period.toFixed(1)} h` : `${(period / 24).toFixed(1)} d`}`),
+      pill(`day ${day < 48 ? `${day.toFixed(1)} h` : `${(day / 24).toFixed(0)} d`}`),
+    ]),
+    el('p', { class: 'hint', text: 'She is on the viewer. Say “break orbit” when you want to be somewhere else.' }),
+  ], 'accent'));
 
   return wrap;
 }
@@ -22635,6 +23423,7 @@ __exports.chairConsole = chairConsole;
 __exports.positionPanel = positionPanel;
 __exports.transitScreen = transitScreen;
 __exports.transitPanel = transitPanel;
+__exports.orbitPanel = orbitPanel;
 __exports.viewscreenScreen = viewscreenScreen;
 __exports.tacticalScreen = tacticalScreen;
 __exports.powerPanel = powerPanel;
@@ -24340,6 +25129,18 @@ class App {
         const r = g.setCourse(order.system, order.warp);
         if (r.ok) { audio.play('warp_engage'); haptic('warp'); audio.setAlertLevel('warp'); }
         else audio.play('ui_deny');
+        break;
+      }
+      case 'orbit': {
+        const r = g.enterOrbit();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else audio.play('ui_deny');
+        break;
+      }
+      case 'break_orbit': {
+        const r = g.breakOrbit();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); g.pushLog(r.error, 'helm'); }
         break;
       }
       case 'warp_factor': {

@@ -449,6 +449,56 @@ try {
     underWay.warpPhase > 0, JSON.stringify(underWay));
   await dismissModals(page);
 
+  // ---- Standard orbit ----
+  //
+  // Driven through the order line rather than by calling the method, because
+  // "say it and the ship does it" is the whole interface. The parser has to
+  // separate this from "break orbit", which shares every word but one, and from
+  // "get us out of here", which shares three.
+  await page.fill('.orderbar input', 'helm, take us into standard orbit');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(900);
+
+  const inOrbit = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const g = app.game;
+    return {
+      orbit: !!g.orbit,
+      label: g.orbitLabel,
+      kind: g.orbitBody?.kind ?? null,
+      phase: app.fpv?.orbitPhase ?? 0,
+      tris: app.fpv?.stats?.triangles ?? 0,
+      draws: app.fpv?.stats?.drawCalls ?? 0,
+      shown: [...document.querySelectorAll('.panel h2')].map((h) => h.textContent.trim())
+        .includes('Standard Orbit'),
+    };
+  });
+  check('a typed order puts the ship in standard orbit',
+    inOrbit.orbit === true, JSON.stringify(inOrbit));
+  check('and never around the system\'s own star',
+    inOrbit.kind !== null && inOrbit.kind !== 'star', String(inOrbit.kind));
+  check('the bridge says what the ship is over', inOrbit.shown === true, inOrbit.label ?? '');
+  // The world is drawn from the ship's position around it, and that position
+  // advances in real time — a phase stuck at zero is a photograph of a planet.
+  check('the ship is actually going round it', inOrbit.phase > 0, String(inOrbit.phase));
+  // A globe at orbital resolution is 3,024 triangles on its own. This is the
+  // check that says the budget survived it.
+  check('the orbital scene stays inside the frame budget',
+    inOrbit.tris > 0 && inOrbit.tris <= 8000 && inOrbit.draws <= 60,
+    `${inOrbit.tris} triangles in ${inOrbit.draws} draws`);
+  await page.screenshot({ path: join(SHOTS, '03c-orbit.png') });
+
+  await page.fill('.orderbar input', 'break orbit');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(700);
+  const broken = await page.evaluate(() => ({
+    orbit: !!globalThis.__app.game.orbit,
+    drawing: (globalThis.__app.fpv?.stats?.frames ?? 0) > 0,
+  }));
+  check('and "break orbit" gets the ship out of it again',
+    broken.orbit === false && broken.drawing === true, JSON.stringify(broken));
+  await dismissModals(page);
+
   // ---- The ship has an inside ----
   //
   // Driven through the order line, because "type it and actually arrive" is

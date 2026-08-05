@@ -16,6 +16,10 @@ import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RE
 import { resolveHail, STANDING_EFFECTS } from '../sim/diplomacy.js';
 
 import { Galaxy, plotTransit } from '../world/galaxy.js';
+// Placement only, and deterministic from the system id — see gfx/vista.js. The
+// state needs it to answer "orbit of what", which is a question about the world
+// and not about the renderer.
+import { vista, worldLabel } from '../gfx/vista.js';
 import { rollEncounter, environmentalHazard } from '../world/encounters.js';
 import { buildRoster, ERAS } from '../world/crews.data.js';
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
@@ -121,6 +125,10 @@ export class Game {
     this.engagement = null;
     this.encounter = null;
     this.awayTeam = null;
+    // Which world the ship is in standard orbit of, if any: {systemId, bodyId}.
+    // A place, not a label — the view is drawn from it and a landing party is
+    // put down from it.
+    this.orbit = null;
     this.alert = 'normal';
     // What "engage" means until the helm is told otherwise. The eight flip
     // switches on the console set it; six is the cruise the game has always
@@ -436,6 +444,65 @@ export class Game {
     return { ok: true, factor: set, limited: set < want - 1e-9, max };
   }
 
+  // ------------------------------------------------------------------ orbit
+
+  /** The vista body the ship is in orbit of, or null. */
+  get orbitBody() {
+    if (!this.orbit || this.orbit.systemId !== this.locationId) return null;
+    const sys = this.location;
+    if (!sys) return null;
+    return vista(sys.id, sys.type).bodies.find((b) => b.id === this.orbit.bodyId) ?? null;
+  }
+
+  /** What the crew calls the world below. */
+  get orbitLabel() {
+    const b = this.orbitBody;
+    return b ? worldLabel(this.location?.name ?? 'the system', b) : null;
+  }
+
+  /**
+   * Standard orbit.
+   *
+   * Given no world it takes the nearest one, which is what the order means when
+   * a captain gives it without naming anything: there is one obvious thing you
+   * came here to look at. Naming a world is how you pick a different one.
+   */
+  enterOrbit(bodyId = null) {
+    if (this.transit) return { ok: false, error: 'We are still at warp, Captain.' };
+    const sys = this.location;
+    if (!sys) return { ok: false, error: 'We are nowhere in particular.' };
+
+    const v = vista(sys.id, sys.type);
+    const worlds = v.bodies.filter((b) => b.kind !== 'star');
+    if (!worlds.length) {
+      const err = `There is nothing to orbit at ${sys.name}, Captain.`;
+      this.officerSays('helm', err, 'object');
+      return { ok: false, error: err };
+    }
+
+    const body = (bodyId && worlds.find((b) => b.id === bodyId)) || v.focus || worlds[0];
+    const label = worldLabel(sys.name, body);
+    if (this.orbit?.bodyId === body.id && this.orbit.systemId === sys.id) {
+      return { ok: true, body, label, already: true };
+    }
+
+    this.orbit = { systemId: sys.id, bodyId: body.id };
+    this.officerSays('helm', `Standard orbit around ${label}, Captain.`);
+    this.pushLog(`Assumed standard orbit of ${label}.`, 'helm');
+    emit('orbit:enter', { body, label, system: sys });
+    return { ok: true, body, label };
+  }
+
+  /** Out of orbit and back to station-keeping. */
+  breakOrbit() {
+    if (!this.orbit) return { ok: false, error: 'We are not in orbit, Captain.' };
+    const label = this.orbitLabel;
+    this.orbit = null;
+    if (label) this.officerSays('helm', `Breaking orbit of ${label}.`);
+    emit('orbit:leave', { label });
+    return { ok: true, label };
+  }
+
   setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
     const plan = plotTransit(
@@ -448,6 +515,10 @@ export class Game {
     }
 
     this.transit = plan.transit;
+    // You cannot hold an orbit and leave the system. Cleared silently: the helm
+    // announcing a break the captain did not order is noise, and the course
+    // report immediately after says where the ship is going instead.
+    this.orbit = null;
     this.mode = MODES.TRANSIT;
     this.ship.antimatter = Math.max(0, this.ship.antimatter - plan.fuel);
 
@@ -465,6 +536,9 @@ export class Game {
     this.locationId = t.to.id;
     this.clock.advanceStardate(t.totalHours / 24);
     this.transit = null;
+    // Arriving somewhere new is not arriving in orbit. The order to make orbit
+    // is a separate one and the captain gives it.
+    this.orbit = null;
     this.mode = MODES.BRIDGE;
 
     const isNew = this.galaxy.markVisited(this.locationId);
@@ -1057,6 +1131,10 @@ export class Game {
       podJettisoned: this.podJettisoned === true,
       warpFactor: this.warpFactor,
       walk: this.walk.save(),
+      // Two ids, not a position. The vista is regenerated from the system id on
+      // load and is identical every time, so the world is still exactly where
+      // it was — saving coordinates would only give them a chance to disagree.
+      orbit: this.orbit ? { systemId: this.orbit.systemId, bodyId: this.orbit.bodyId } : null,
       firstStrike: this.firstStrike === true,
       inKobayashi: this.inKobayashi === true,
       gambitOpen: this.gambitOpen === true,
@@ -1297,6 +1375,14 @@ export class Game {
     // which is where every commission starts anyway.
     g.walk = Walker.load(data.walk ?? {});
     g.walkOrder = null;
+    // An orbit only survives if it belongs to where the ship actually is. A
+    // record saved mid-transit, or one carrying a body that no longer exists,
+    // restores to station-keeping rather than to an orbit of nothing.
+    const orb = data.orbit;
+    g.orbit = orb && typeof orb.bodyId === 'string' && orb.systemId === g.locationId
+      ? { systemId: orb.systemId, bodyId: orb.bodyId }
+      : null;
+    if (g.orbit && !g.orbitBody) g.orbit = null;
     g.firstStrike = data.firstStrike === true;
     g.inKobayashi = data.inKobayashi === true;
     g.gambitOpen = data.gambitOpen === true;

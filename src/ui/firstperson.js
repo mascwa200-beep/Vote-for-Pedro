@@ -28,10 +28,15 @@
 
 import {
   vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project,
-  quatFromTo,
+  quatFromTo, quatAxisAngle,
 } from '../gfx/math.js';
 import { roomMeshes, PALETTE } from '../gfx/room.js';
-import { starfield, bodyMesh, warpfield, WARP_LENGTH, VOLUME } from '../gfx/scene.js';
+import {
+  starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME,
+} from '../gfx/scene.js';
+import {
+  orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE,
+} from '../world/orbit.js';
 import { hullMesh, hullScale } from '../gfx/blueprint.js';
 import { vista, fovFor, noseOf } from '../gfx/vista.js';
 import { ROOMS } from '../world/interiors.data.js';
@@ -80,6 +85,15 @@ export class FirstPersonView {
     // How far the warp field has streamed past. Wraps every WARP_LENGTH, which
     // is why the mesh carries a twin of every streak one period away.
     this.warpPhase = 0;
+    // Where the ship is around the world it is orbiting, in radians, and how
+    // far that world has turned on its own axis. Both advance in real time and
+    // neither is saved: the ship is somewhere on a circle it has been going
+    // round for hours, and which point of that circle is not a fact worth
+    // keeping. The ORBIT they are about is saved, in `Game.orbit`.
+    this.orbitPhase = 0;
+    this.worldSpin = 0;
+    this._up = vec3();
+    this._look = vec3();
 
     this.attachGestures();
   }
@@ -208,7 +222,7 @@ export class FirstPersonView {
     // Pass one: space, inside the screen.
     const screen = room.viewscreen ? this.screenRect(room, width, height) : null;
     this.stats.screenRect = screen;
-    if (screen) this.drawThroughScreen(game, screen, aspect);
+    if (screen) this.drawThroughScreen(game, screen, aspect, height);
 
     // Pass two: the room, over the top of it.
     this.renderer.clearScissor();
@@ -279,7 +293,54 @@ export class FirstPersonView {
    * whatever angle you are standing at, which is also what makes it legible
    * from the chair. So this camera is the SHIP's, not the captain's.
    */
-  drawThroughScreen(game, screen, aspect) {
+  /**
+   * The world the ship is orbiting, and where it has got to around it.
+   *
+   * Both phases advance here rather than in `render`, because this is the only
+   * place that knows whether the orbit is being drawn at all — and a phase that
+   * kept advancing behind an engagement would jump when the fight ended.
+   */
+  orbitWorld(game) {
+    const body = game.orbitBody;
+    if (!body) return null;
+    const dt = this.lastDt * ORBIT_TIME_SCALE;
+    const TAU = Math.PI * 2;
+    this.orbitPhase = (this.orbitPhase + TAU * dt / orbitPeriod(body.kind)) % TAU;
+    this.worldSpin = (this.worldSpin + TAU * dt / rotationPeriod(body.kind)) % TAU;
+    return { body, frame: orbitFrame(body, this.orbitPhase) };
+  }
+
+  /**
+   * Where the ship is and what the screen is pointed at, in orbit.
+   *
+   * The world is DIRECTLY BELOW, not ahead: a camera looking along the orbital
+   * track sees nothing but stars. So the axis is tipped down to near straight
+   * down, and by a fraction of the world's own angular radius rather than by a
+   * fixed number of degrees — which keeps the composition identical whatever
+   * the lens is doing. Half a radius puts the top of the limb a quarter of the
+   * way up the frame and runs the world off the bottom of it.
+   */
+  orbitCamera(world, eye, at, tilt) {
+    const { frame, body } = world;
+    const phi = tilt;
+    const cs = Math.cos(phi); const sn = Math.sin(phi);
+    for (let i = 0; i < 3; i++) {
+      eye[i] = frame.position[i];
+      // Down is -up; tipped toward the direction of travel by phi.
+      this._look[i] = -frame.up[i] * cs + frame.forward[i] * sn;
+      // Camera up is the same rotation applied a quarter turn round: always
+      // perpendicular to the view axis, so the picture never gimbals when the
+      // ship passes over a pole. `lookAt` with a fixed world up does exactly
+      // that, and this camera spends its whole time pointing at the ground.
+      this._up[i] = frame.up[i] * sn + frame.forward[i] * cs;
+    }
+    const reach = body.radius * 8;
+    at[0] = eye[0] + this._look[0] * reach;
+    at[1] = eye[1] + this._look[1] * reach;
+    at[2] = eye[2] + this._look[2] * reach;
+  }
+
+  drawThroughScreen(game, screen, aspect, height = 0) {
     const r = this.renderer;
     r.setScissor(screen.x, screen.y, screen.w, screen.h);
     // Back to vacuum inside the screen: one hard sun, deep shadow, which is
@@ -297,20 +358,66 @@ export class FirstPersonView {
     const nose = noseOf(ship, this._nose);
     const origin = ship ? [ship.x, ship.z ?? 0, ship.y] : [0, 0, 0];
 
-    const eye = vec3(
-      origin[0] + nose[0] * 140,
-      origin[1] + nose[1] * 140 + 12,
-      origin[2] + nose[2] * 140,
-    );
-    const at = vec3(
-      eye[0] + nose[0] * 8000,
-      eye[1] + nose[1] * 8000,
-      eye[2] + nose[2] * 8000,
-    );
-    perspective(fovFor(aspect, 74), aspect, 2, 40000, this._proj);
-    lookAt(eye, at, vec3(0, 1, 0), this._view);
+    // In orbit, and only when nobody is shooting. During an engagement the
+    // camera belongs to the fight — hostiles are placed around the origin, and
+    // moving the eye ten thousand units out to a planet would take them off the
+    // screen at the moment they matter most.
+    const world = eng ? null : this.orbitWorld(game);
+
+    // How wide the lens is. The projection is built for the whole canvas and
+    // then scissored down to the aperture, so what the player sees is a slice
+    // of it — which means the aperture's field of view is a fraction of the
+    // canvas's, and the fraction is exactly `screen.h / height`.
+    //
+    // In orbit that has to be solved rather than assumed. The world's angular
+    // radius is fixed by the altitude at 21°, and the picture wants that disc
+    // to come out about half the height of the aperture, so the lens is chosen
+    // to put it there: tan(V/2) = tan(θ) · (height/2) / (wanted pixels). Which
+    // is the ship widening its field to look at a world, and not the ship
+    // parking somewhere the show never put it.
+    let fovy = fovFor(aspect, 74);
+    let tilt = 0;
+    if (world && height > 0 && screen.h > 0) {
+      const theta = angularRadius();
+      fovy = Math.min(2.9, 2 * Math.atan(Math.tan(theta) * (height / 2) / (0.78 * screen.h)));
+      tilt = theta * 0.34;
+    }
+
+    const eye = vec3();
+    const at = vec3();
+    if (world) {
+      this.orbitCamera(world, eye, at, tilt);
+    } else {
+      eye[0] = origin[0] + nose[0] * 140;
+      eye[1] = origin[1] + nose[1] * 140 + 12;
+      eye[2] = origin[2] + nose[2] * 140;
+      at[0] = eye[0] + nose[0] * 8000;
+      at[1] = eye[1] + nose[1] * 8000;
+      at[2] = eye[2] + nose[2] * 8000;
+      this._up[0] = 0; this._up[1] = 1; this._up[2] = 0;
+    }
+    perspective(fovy, aspect, 2, 40000, this._proj);
+    lookAt(eye, at, this._up, this._view);
     multiply(this._proj, this._view, this._screenVP);
     r.setCamera(this._screenVP);
+
+    // The key light is the system's own primary, not a studio lamp. Which is
+    // the whole terminator: the line between day and night on the world below
+    // is not drawn, it is where pointing the light at the actual star puts it.
+    const sun = game.location ? vista(game.location.id, game.location.type).bodies[0] : null;
+    if (sun && world) {
+      const dx = sun.x - world.body.x;
+      const dy = sun.y - world.body.y;
+      const dz = sun.z - world.body.z;
+      const L = Math.hypot(dx, dy, dz) || 1;
+      r.setLighting({
+        key: [dx / L, dy / L, dz / L], fill: [-dx / L, -dy / L, -dz / L],
+        // Night is dark, and this is the one place in the game where that is
+        // the point rather than a problem. 0.06 leaves the unlit half readable
+        // as a shape against the stars without lighting it.
+        ambient: 0.06, keyPower: 1.0, gloss: 0,
+      });
+    }
 
     // AT WARP, the stars are streaks — the same stars, drawn out along the
     // course. This is the most recognisable thing a viewscreen ever showed, and
@@ -347,17 +454,49 @@ export class FirstPersonView {
       });
     }
 
-    // The system's worlds, culled to what is actually ahead.
+    // The world underneath, at the resolution being this close to it needs.
+    // Spun about its own axis for the time of day, which is what carries the
+    // terminator across the ground while the ship watches.
+    if (world) {
+      const { body, frame } = world;
+      this._pos[0] = body.x; this._pos[1] = body.y; this._pos[2] = body.z;
+      quatAxisAngle(frame.axis, this.worldSpin, this._quat);
+      compose(this._pos, this._quat, body.radius, this._model);
+      r.draw(`world:${body.kind}`, worldMesh(body.kind, body.ordinal ?? 0), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 0,
+        tint: [1, 1, 1],
+        fogFar: 1e9,
+      });
+      // The halo, square to the camera. `frame.up` IS the direction from the
+      // world to the ship, so it is the direction the ring has to face.
+      quatFromTo(vec3(0, 1, 0), frame.up, this._quat);
+      compose(this._pos, this._quat, body.radius, this._model);
+      r.draw(`limb:${body.kind}`, limbMesh(body.kind), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        tint: [1, 1, 1],
+        alpha: 0.8,
+        fogFar: 1e9,
+      });
+    }
+
+    // The rest of the system's worlds, culled to what is actually ahead —
+    // which in orbit is where the camera is pointed and not where the bow is.
     const sys = game.location;
     if (sys) {
       const v = vista(sys.id, sys.type);
+      const ahead = world ? this._look : nose;
       let drawn = 0;
       for (const b of v.bodies) {
         if (drawn >= 3) break;
+        if (world && b.id === world.body.id) continue;
         const dx = b.x - eye[0]; const dy = b.y - eye[1]; const dz = b.z - eye[2];
         const d = Math.hypot(dx, dy, dz) || 1;
         const slack = Math.min(0.75, b.radius / d);
-        if ((dx * nose[0] + dy * nose[1] + dz * nose[2]) / d < 0.2 - slack) continue;
+        if ((dx * ahead[0] + dy * ahead[1] + dz * ahead[2]) / d < 0.2 - slack) continue;
         this._pos[0] = b.x; this._pos[1] = b.y; this._pos[2] = b.z;
         compose(this._pos, quat(), b.radius, this._model);
         r.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {

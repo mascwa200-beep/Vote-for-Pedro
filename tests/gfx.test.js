@@ -21,9 +21,13 @@ import {
 import { MeshBuilder, saucer, tube, box, sphere, mirrored } from '../src/gfx/mesh.js';
 import { BLUEPRINTS, hullMesh, hullScale, paletteFor } from '../src/gfx/blueprint.js';
 import {
-  sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, WARP_LENGTH, VOLUME,
+  sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, worldMesh, limbMesh,
+  WARP_LENGTH, VOLUME,
 } from '../src/gfx/scene.js';
-import { vistaFor, bearingOf, fovFor, horizontalFov, noseOf } from '../src/gfx/vista.js';
+import { vistaFor, bearingOf, fovFor, horizontalFov, noseOf, worldLabel } from '../src/gfx/vista.js';
+import {
+  orbitFrame, orbitPeriod, rotationPeriod, angularRadius, orbitAxis, ORBIT_ALTITUDE,
+} from '../src/world/orbit.js';
 import { roomMeshes, allRoomMeshes } from '../src/gfx/room.js';
 import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
 import { RNG } from '../src/core/rng.js';
@@ -1057,5 +1061,195 @@ describe('the view at warp', () => {
     }
     assert.ok(maxZ - minZ > (maxX - minX) * 1.5,
       'the field is wider than it is long — these are not streaks');
+  });
+});
+
+describe('the view from standard orbit', () => {
+  const outwardness = (mesh) => {
+    // For each vertex, how much its normal agrees with the direction from the
+    // centre. A closed shape has all of them pointing out; culling is on, so a
+    // shape that has them pointing in is not a dark planet, it is no planet.
+    const { data, vertexCount, stride } = mesh;
+    const floats = stride / 4;
+    let worst = Infinity;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const L = Math.hypot(data[o], data[o + 1], data[o + 2]) || 1;
+      const d = (data[o] * data[o + 3] + data[o + 1] * data[o + 4] + data[o + 2] * data[o + 5]) / L;
+      worst = Math.min(worst, d);
+    }
+    return worst;
+  };
+
+  test('a world is a closed shape with every face pointing out', () => {
+    for (const kind of ['planet', 'desert', 'moon', 'ice', 'gas']) {
+      assert.ok(outwardness(worldMesh(kind, 2)) > 0.3,
+        `${kind} has faces pointing inward — it will render as a hole`);
+    }
+  });
+
+  test('a world has more than one colour on it', () => {
+    // The whole reason for a second planet mesh is that this one has a SURFACE.
+    // A single flat colour means the noise field is dead and the mesh is an
+    // expensive way to draw the cheap one.
+    const { data, vertexCount, stride } = worldMesh('planet', 1);
+    const floats = stride / 4;
+    const seen = new Set();
+    for (let i = 0; i < vertexCount; i += 3) {
+      const o = i * floats;
+      seen.add(`${data[o + 6].toFixed(2)},${data[o + 7].toFixed(2)},${data[o + 8].toFixed(2)}`);
+    }
+    assert.ok(seen.size > 12, `only ${seen.size} distinct colours — the surface is flat`);
+  });
+
+  test('two worlds of the same kind are not the same world', () => {
+    const a = worldMesh('planet', 1);
+    const b = worldMesh('planet', 5);
+    let same = 0; let total = 0;
+    for (let i = 0; i < a.vertexCount; i++) {
+      const o = i * (a.stride / 4);
+      total++;
+      if (a.data[o + 6] === b.data[o + 6] && a.data[o + 7] === b.data[o + 7]) same++;
+    }
+    assert.ok(same < total * 0.8, 'the seed does not change the surface');
+  });
+
+  test('the limb is a flat ring facing one way, not a shell', () => {
+    // It is drawn square to the camera and masked by the planet's own depth.
+    // A shell would cover the whole disc in haze instead of rimming it.
+    const { data, vertexCount, stride } = limbMesh('planet');
+    const floats = stride / 4;
+    let flat = 0;
+    let maxY = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      if (data[o + 4] > 0.99) flat++;
+      maxY = Math.max(maxY, Math.abs(data[o + 1]));
+    }
+    assert.equal(flat, vertexCount, 'some of the ring does not face +y');
+    assert.equal(maxY, 0, 'the ring has thickness — it is a shell, not an annulus');
+  });
+
+  test('the limb starts inside the world and fades to nothing outside it', () => {
+    const { data, vertexCount, stride } = limbMesh('planet');
+    const floats = stride / 4;
+    let minR = Infinity; let maxR = 0;
+    let brightestAtInner = 0; let brightestAtOuter = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const rad = Math.hypot(data[o], data[o + 2]);
+      minR = Math.min(minR, rad); maxR = Math.max(maxR, rad);
+      const lum = data[o + 6] + data[o + 7] + data[o + 8];
+      if (rad < 1.0) brightestAtInner = Math.max(brightestAtInner, lum);
+      if (rad > 1.15) brightestAtOuter = Math.max(brightestAtOuter, lum);
+    }
+    assert.ok(minR < 1, `the ring starts at ${minR.toFixed(3)} — outside the world, so the edge shows`);
+    assert.ok(maxR > 1, 'the ring never reaches past the world, so nothing of it is visible');
+    assert.ok(brightestAtOuter < brightestAtInner * 0.35,
+      'the outer edge is still bright — the halo will end in a hard line');
+  });
+
+  test('the sky costs a fifth of what it used to', () => {
+    // Stars were cubes: twelve triangles each so that some face always pointed
+    // at you. A quad aimed at the centre of the shell does not have that
+    // problem, because the eye is always exactly at the centre of the shell.
+    // The saving is what pays for a real sphere in orbit.
+    const tris = starfield().vertexCount / 3;
+    assert.ok(tris <= 600, `${tris} triangles of starfield`);
+
+    const { data, vertexCount, stride } = starfield();
+    const floats = stride / 4;
+    let facingCentre = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const L = Math.hypot(data[o], data[o + 1], data[o + 2]) || 1;
+      const d = -(data[o] * data[o + 3] + data[o + 1] * data[o + 4] + data[o + 2] * data[o + 5]) / L;
+      if (d > 0.99) facingCentre++;
+    }
+    assert.equal(facingCentre, vertexCount, 'some stars are edge-on to the camera and will vanish');
+  });
+
+  test('the whole orbital scene fits in the frame budget', () => {
+    const tris = worldMesh('planet', 0).vertexCount / 3
+      + limbMesh('planet').vertexCount / 3
+      + starfield().vertexCount / 3
+      + bodyMesh('star', 0).vertexCount / 3;
+    assert.ok(tris < 5000, `${tris} triangles of sky before the room is drawn`);
+  });
+
+  test('the ship is above the world and pointing along its track', () => {
+    const body = { id: 'sol:body:1', x: 4000, y: 0, z: 0, radius: 800 };
+    const f = orbitFrame(body, 0.7);
+    const alt = Math.hypot(f.position[0] - body.x, f.position[1] - body.y, f.position[2] - body.z);
+    assert.ok(Math.abs(alt - body.radius * (1 + ORBIT_ALTITUDE)) < 1e-6,
+      'the ship is not at the orbital radius');
+
+    // `up` points from the world at the ship, `forward` is the direction of
+    // travel, and travel in a circular orbit is at right angles to the radius.
+    // If those two ever stop being perpendicular the ship is falling.
+    const dotUpFwd = f.up[0] * f.forward[0] + f.up[1] * f.forward[1] + f.up[2] * f.forward[2];
+    assert.ok(Math.abs(dotUpFwd) < 1e-9, `up and forward are ${dotUpFwd} apart from square`);
+    assert.ok(Math.abs(Math.hypot(...f.forward) - 1) < 1e-9, 'forward is not a unit vector');
+  });
+
+  test('the orbit is a circle, and it closes', () => {
+    const body = { id: 'vulcan:body:2', x: -1200, y: 300, z: 5000, radius: 640 };
+    const start = orbitFrame(body, 0);
+    const round = orbitFrame(body, Math.PI * 2);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(start.position[i] - round.position[i]) < 1e-6,
+        'a full circuit does not return the ship to where it started');
+    }
+    // Every point on it is the same distance out — that is what circular means,
+    // and an orbit that breathes is an orbit that is wrong.
+    for (const phase of [0, 1, 2.5, 4, 5.9]) {
+      const f = orbitFrame(body, phase);
+      const d = Math.hypot(f.position[0] - body.x, f.position[1] - body.y, f.position[2] - body.z);
+      assert.ok(Math.abs(d - body.radius * (1 + ORBIT_ALTITUDE)) < 1e-6, `radius drifts at phase ${phase}`);
+    }
+  });
+
+  test('the plane a world is orbited in never changes', () => {
+    const a = orbitAxis('sol:body:1');
+    const b = orbitAxis('sol:body:1');
+    const other = orbitAxis('sol:body:2');
+    assert.deepEqual([...a], [...b], 'the same world is orbited differently on each visit');
+    assert.notDeepEqual([...a], [...other], 'every world is orbited in the same plane');
+  });
+
+  test('a denser world is orbited faster, and nothing else matters', () => {
+    // Kepler with a uniform density: μ = (4/3)πGρR³ and a = (1+h)R, so the
+    // radius cancels and the period depends on density alone. A gas giant is
+    // slow, a rock is quick, and the size of either is irrelevant.
+    assert.ok(orbitPeriod('planet') < orbitPeriod('ice'), 'rock is not quicker than ice');
+    assert.ok(orbitPeriod('ice') < orbitPeriod('gas'), 'ice is not quicker than a gas giant');
+
+    // And the figures are the documented ones: six and a half hours over an
+    // Earth-sized world at the top of the standard band.
+    const hours = orbitPeriod('planet') / 3600;
+    assert.ok(hours > 5 && hours < 8, `${hours.toFixed(1)} h is not a standard orbit`);
+
+    // A tide-locked moon barely turns; a gas giant is round in under a day.
+    assert.ok(rotationPeriod('moon') > rotationPeriod('planet') * 10, 'the moon is not tide-locked');
+    assert.ok(rotationPeriod('gas') < rotationPeriod('planet'), 'the gas giant turns too slowly');
+  });
+
+  test('the world is smaller than the window, which is the whole reason for the altitude', () => {
+    // Down at the bottom of the band the disc is 106° across against a 74°
+    // viewer and there is no planet in frame at all, only ground. Up here it
+    // fits, which is what makes it the shot.
+    const deg = angularRadius() * 2 * 180 / Math.PI;
+    assert.ok(deg > 30 && deg < 60, `the world subtends ${deg.toFixed(0)}°`);
+    assert.ok(deg < horizontalFov(1.78, 74) * 180 / Math.PI, 'the world is wider than the viewer');
+  });
+
+  test('worlds are named for where they are, not at random', () => {
+    const v = vistaFor('rigel', 'core');
+    const worlds = v.bodies.filter((b) => b.kind !== 'star');
+    assert.ok(worlds.length > 0);
+    assert.equal(worldLabel('Rigel', worlds[0]), 'Rigel I');
+    assert.match(worldLabel('Rigel', v.bodies[0]), /primary/);
+    // Stable across calls, which is the point of numbering in placement order.
+    assert.equal(worldLabel('Rigel', vistaFor('rigel', 'core').bodies[1]), 'Rigel I');
   });
 });

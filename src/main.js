@@ -1126,6 +1126,18 @@ class App {
         else audio.play('ui_deny');
         break;
       }
+      case 'orbit': {
+        const r = g.enterOrbit();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else audio.play('ui_deny');
+        break;
+      }
+      case 'break_orbit': {
+        const r = g.breakOrbit();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); g.pushLog(r.error, 'helm'); }
+        break;
+      }
       case 'warp_factor': {
         // This used to be an acknowledgement and nothing else — the helm said
         // "warp eight standing by" and the next course still went out at six.

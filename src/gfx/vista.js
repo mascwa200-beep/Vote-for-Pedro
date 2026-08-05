@@ -179,6 +179,12 @@ export function vistaFor(systemId, type = 'colony') {
     const kind = pool[Math.floor(rnd() * pool.length)];
     bodies.push({
       id: `${systemId}:body:${i}`,
+      // Worlds are numbered outward from the primary, which is how they are
+      // named — "Rigel VII" is the seventh planet and not a codename. The
+      // vista deals bearings evenly and distances randomly, so the ordinal is
+      // assigned here in placement order rather than sorted by distance: a
+      // world's number must not change because a later one was rolled closer.
+      ordinal: i + 1,
       kind,
       x: Math.cos(bearing) * dist,
       y: height * dist,
@@ -211,6 +217,23 @@ export function vistaFor(systemId, type = 'colony') {
     : bodies[0] ?? null;
 
   return { systemId, type, bodies, focus };
+}
+
+const ROMAN = [
+  '', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X',
+];
+
+/**
+ * What the crew calls a world out loud: "Rigel VII", or "the primary".
+ *
+ * Roman numerals rather than names, because the vista is generated and a
+ * generated proper noun is a name nobody wrote — "Rigel VII" is a real way to
+ * refer to a place the ship has never been, and "Zyrothrax" is a slot machine.
+ */
+export function worldLabel(systemName, body) {
+  if (!body) return systemName;
+  if (body.kind === 'star') return `the ${systemName} primary`;
+  return `${systemName} ${ROMAN[body.ordinal] ?? body.ordinal}`;
 }
 
 /** The render-space compass bearing of a point, in radians. */
