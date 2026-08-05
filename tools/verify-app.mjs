@@ -488,6 +488,86 @@ try {
     `${inOrbit.tris} triangles in ${inOrbit.draws} draws`);
   await page.screenshot({ path: join(SHOTS, '03c-orbit.png') });
 
+  // ---- And down onto it ----
+  //
+  // The refusal is checked before the success, because it is the more important
+  // of the two: there is no button in this game that teleports the captain out
+  // of the chair. You walk to the transporter room first.
+  const fromTheChair = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    g.walk.enter('bridge');
+    const r = g.beamDown();
+    return { ok: r.ok, error: r.error ?? '', room: g.walk.roomId };
+  });
+  check('the captain cannot beam down from the bridge',
+    fromTheChair.ok === false && /transporter room/i.test(fromTheChair.error),
+    JSON.stringify(fromTheChair));
+
+  const ashore = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    g.walk.enter('transporter');
+    app.render();
+    return new Promise((res) => {
+      // Through the order line, like everything else.
+      const input = document.querySelector('.orderbar input');
+      input.value = 'two to beam down';
+      document.querySelector('.orderbar button.send').click();
+      setTimeout(() => {
+        res({
+          ashore: g.ashore,
+          room: g.walk.roomId,
+          name: g.walk.room?.name ?? null,
+          props: g.walk.room?.props?.length ?? 0,
+          tris: app.fpv?.stats?.triangles ?? 0,
+          frames: app.fpv?.stats?.frames ?? 0,
+          // A planet has no viewscreen in it, and the aperture code must not
+          // assume every room has one.
+          screen: app.fpv?.stats?.screenRect ?? null,
+          // And nothing aboard is within arm's reach of a planet.
+          reaching: g.walk.looking?.label ?? null,
+        });
+      }, 1200);
+    });
+  });
+  check('a typed order puts the captain on the surface',
+    ashore.ashore === true && ashore.room === 'surface', JSON.stringify(ashore));
+  check('and the surface is somewhere, with things on it',
+    ashore.props > 5 && ashore.tris > 500, JSON.stringify(ashore));
+  check('the first-person view survives having no viewscreen in the room',
+    ashore.screen === null && ashore.frames > 0, JSON.stringify(ashore));
+  check('and no console from the ship is still under the reticle',
+    ashore.reaching === null, String(ashore.reaching));
+  await page.screenshot({ path: join(SHOTS, '03d-surface.png') });
+
+  const backAboard = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const before = app.fpv?.stats?.frames ?? 0;
+    const r = g.beamUp();
+    app.render();
+    await new Promise((res) => setTimeout(res, 500));
+    return {
+      ok: r.ok,
+      room: g.walk.roomId,
+      ashore: g.ashore,
+      drawing: (app.fpv?.stats?.frames ?? 0) > before,
+    };
+  });
+  check('and energising brings them back to the pads',
+    backAboard.ok === true && backAboard.room === 'transporter' && backAboard.ashore === false
+      && backAboard.drawing === true, JSON.stringify(backAboard));
+  // Back to the chair. Everything after this point assumes the captain is where
+  // a commission starts, and leaving them on deck seven fails three checks that
+  // have nothing to do with the transporter.
+  await page.evaluate(() => {
+    const app = globalThis.__app;
+    app.game.walk.enter('bridge');
+    app.game.walk.sit(true);
+    app.render();
+  });
+  await dismissModals(page);
+
   await page.fill('.orderbar input', 'break orbit');
   await page.click('.orderbar button.send');
   await page.waitForTimeout(700);

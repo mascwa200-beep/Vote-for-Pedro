@@ -879,6 +879,27 @@ export const INTENTS = [
     }),
   },
   {
+    id: 'beam_down',
+    help: 'Beam down / two to beam down',
+    phrases: [
+      'beam down', 'beam me down', 'beam us down', 'beam me to the surface',
+      'two to beam down', 'three to beam down', 'four to beam down',
+      'send down a landing party', 'send a landing party down',
+      'form a landing party', 'put me on the surface',
+      'down to the surface', 'transport me to the surface', 'energize for the surface',
+      'lets go down', 'i am going down', 'beam down to the planet',
+    ],
+    keywords: { beam: 2.5, down: 1.6, surface: 2, landing: 2 },
+    // The other half of the pair. "Beam up" and "beam down" differ by one word
+    // and mean opposite things, so each vetoes the other's.
+    veto: ['up', 'aboard', 'back'],
+    // "Take me down to sickbay" is a walk down a deck, not a transport to a
+    // planet. Naming a compartment stands this intent aside, the same way it
+    // stands `set_course` aside — a room is never a destination off the ship.
+    vetoSlots: ['room'],
+    build: () => ({ action: 'beam_down' }),
+  },
+  {
     id: 'transport',
     help: 'Energize',
     phrases: [

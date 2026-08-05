@@ -97,6 +97,155 @@ function face(mb, a, b, c, d, colour, flip = false) {
  * has to have HOLES in it — a doorway is a gap, and a room whose only exit is
  * painted on is a room you can see out of and not leave.
  */
+/**
+ * Ground, a ridge line, and a sky. The one room that is not a room.
+ *
+ * An interior is a box you cannot see out of, which is why every other shell in
+ * this file is walls and a ceiling. A planet is the opposite problem: there is
+ * nothing overhead but sky and nothing in the distance but more of the same, so
+ * what has to be built is a horizon that closes the space without being a wall.
+ *
+ * Three pieces, and each one is doing a different job:
+ *
+ *   FLAT GROUND out to the walkable radius. The walker is two-dimensional and
+ *   the eye is a fixed height above the floor, so ground that undulated where
+ *   you can stand would put the camera through it or a metre above it. Relief
+ *   is drawn where nobody can walk and read from where everybody stands, which
+ *   is the honest way round.
+ *
+ *   A RIDGE beyond it, rising out of the flat, with height from the same noise
+ *   field the world's surface uses. That is the horizon, and it is what stops
+ *   the ground looking like a stage.
+ *
+ *   A SKY dome over the lot, self-lit and graded from the horizon up, because a
+ *   sky is not a colour — it is brighter and paler where you look through more
+ *   air, which is the same fact the orbital limb is drawn from.
+ */
+function surfaceShell(solid, glow, room) {
+  const R = room.shape.radius;          // walkable
+  const FAR = R * 2.0;                  // out to the foot of the ridge
+  const SEG = 40;
+  const RINGS = 7;
+  const ground = room.palette?.ground ?? [0.44, 0.40, 0.34];
+  const rock = room.palette?.rock ?? [0.34, 0.31, 0.28];
+  const sky = room.palette?.sky ?? [0.34, 0.52, 0.78];
+  const haze = room.palette?.haze ?? [0.76, 0.82, 0.90];
+  const seed = room.shape.seed ?? 1;
+
+  const rnd = (i, salt) => {
+    let h = Math.imul(i + 1, 0x27d4eb2d) ^ Math.imul(seed + salt * 7919, 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+    return ((h ^ (h >>> 13)) >>> 0) / 4294967296;
+  };
+  const ring = (i, r, y) => {
+    const a = (i / SEG) * Math.PI * 2;
+    return vec3(Math.sin(a) * r, y, Math.cos(a) * r);
+  };
+  const shade = (base, t) => [base[0] * t, base[1] * t, base[2] * t];
+
+  // ---- the ground ----
+  // Patches, not wedges. A fan of triangles from the centre out shades in
+  // radial stripes, and radial stripes on a flat plain read as a pie chart
+  // rather than as dirt — the eye finds the common vertex immediately. Cutting
+  // it into rings as well breaks that up for the cost of a few hundred
+  // triangles, and the tone of each patch comes from its own hash.
+  //
+  // Dead flat, and deliberately. The walker is two-dimensional and the eye
+  // rides at a fixed height above the floor, so ground that rose and fell where
+  // you can stand would put the camera through it or leave you walking on air.
+  // Relief goes where nobody walks.
+  const radiusAt = (k) => R * (k / RINGS) ** 0.8;
+  for (let k = 0; k < RINGS; k++) {
+    const r0 = radiusAt(k);
+    const r1 = radiusAt(k + 1);
+    for (let i = 0; i < SEG; i++) {
+      const c = shade(ground, 0.88 + rnd(i * 13 + k, 3) * 0.26);
+      // OUTWARD first, then round the ring. That order is what puts the normal
+      // up, and the other order — which is the one the curved shells in this
+      // file use — puts it down. Culling is on, so the first version of this
+      // had no ground at all: what showed through the hole was the sky's own
+      // skirt, which is ground-coloured, which is why it took a screenshot and
+      // not a glance to notice.
+      if (k === 0) solid.tri(vec3(0, 0, 0), ring(i, r1, 0), ring(i + 1, r1, 0), c);
+      else solid.quad(ring(i, r0, 0), ring(i, r1, 0), ring(i + 1, r1, 0), ring(i + 1, r0, 0), c);
+    }
+  }
+  // The flat between the walkable circle and the foot of the ridge.
+  for (let i = 0; i < SEG; i++) {
+    const c = shade(ground, 0.80 + rnd(i, 5) * 0.24);
+    solid.quad(ring(i, R, 0), ring(i, FAR, 0), ring(i + 1, FAR, 0), ring(i + 1, R, 0), c);
+  }
+
+  // ---- the ridge ----
+  // Tall enough to be a horizon. The first version topped out at five metres
+  // thirty away, which subtends about five degrees — a dark thread across the
+  // bottom of the sky rather than a skyline. These are hills you would have to
+  // climb, and their height varies per segment so the top is a profile.
+  const crest = [];
+  for (let i = 0; i <= SEG; i++) {
+    const a = i % SEG;
+    crest.push(6 + rnd(a, 7) * 18 + rnd(a, 9) * rnd(a, 11) * 10);
+  }
+  for (let i = 0; i < SEG; i++) {
+    // Brighter than the palette says on purpose: these faces stand nearly
+    // vertical, the key light comes from overhead, and a hillside taking the
+    // rock colour at face value renders as a silhouette. This is the tone that
+    // makes it read as sunlit rock rather than as a hole in the sky.
+    const c = shade(rock, 1.15 + rnd(i, 17) * 0.5);
+    solid.quad(
+      ring(i, FAR, 0), ring(i + 1, FAR, 0),
+      ring(i + 1, FAR * 1.28, crest[i + 1]), ring(i, FAR * 1.28, crest[i]),
+      c,
+    );
+    // A back face falling away behind the crest, so a gap between two peaks
+    // shows more hill and not the sky through the ridge.
+    solid.quad(
+      ring(i, FAR * 1.28, crest[i]), ring(i + 1, FAR * 1.28, crest[i + 1]),
+      ring(i + 1, FAR * 1.7, 0), ring(i, FAR * 1.7, 0),
+      shade(rock, 0.52 + rnd(i, 19) * 0.16),
+    );
+  }
+
+  // ---- the sky ----
+  // Drawn into the glow mesh: it is the light source, not a lit surface, and a
+  // sky that took a shadow from the sun would be a contradiction.
+  //
+  // The dome starts BELOW the horizon, not at it. Ending it level with the
+  // ground left a band of clear colour between the top of the ridge and the
+  // bottom of the sky — black, on a world with a blue sky, which is the sort of
+  // thing that looks like a rendering failure because it is one.
+  const DOME = FAR * 4.0;
+  const BANDS = 11;
+  const START = -0.30;                        // radians below level
+  const mix = (f) => [
+    haze[0] + (sky[0] - haze[0]) * f,
+    haze[1] + (sky[1] - haze[1]) * f,
+    haze[2] + (sky[2] - haze[2]) * f,
+  ];
+  for (let b = 0; b < BANDS; b++) {
+    const f0 = b / BANDS;
+    const f1 = (b + 1) / BANDS;
+    // Paler at the horizon, deeper overhead — more air along the line of sight
+    // near the ground, and that is the whole of why a sky has a gradient. The
+    // curve is squared so the change is concentrated where it belongs, low
+    // down, instead of banding evenly all the way to the zenith.
+    const c = mix((((f0 + f1) * 0.5) ** 2));
+    const a0 = START + f0 * (Math.PI / 2 - START);
+    const a1 = START + f1 * (Math.PI / 2 - START);
+    const r0 = Math.cos(a0) * DOME; const y0 = Math.sin(a0) * DOME;
+    const r1 = Math.cos(a1) * DOME; const y1 = Math.sin(a1) * DOME;
+    for (let i = 0; i < SEG; i++) {
+      // Seen from INSIDE, so this one is wound the other way round from
+      // everything above — the dome faces the middle of itself.
+      if (b === BANDS - 1) {
+        glow.tri(vec3(0, DOME, 0), ring(i, r0, y0), ring(i + 1, r0, y0), c);
+      } else {
+        glow.quad(ring(i, r0, y0), ring(i, r1, y1), ring(i + 1, r1, y1), ring(i + 1, r0, y0), c);
+      }
+    }
+  }
+}
+
 function ringShell(solid, glow, room) {
   const R = room.shape.radius;
   const h = WALL_HEIGHT(room);
@@ -508,6 +657,24 @@ function prop3d(solid, glow, prop) {
       box(solid, { center: vec3(x, 0.9, z), size: vec3(r * 1.6, 1.4, 0.14), color: PALETTE.trim });
       break;
 
+    case 'rock': {
+      // A boulder, as two stacked and offset boxes rather than one. Two is the
+      // difference between a rock and a crate, and it costs twelve triangles.
+      // Colour comes from the prop rather than the ship's palette — a rock on
+      // an ice world and a rock in a desert are not the same grey.
+      const c = prop.color ?? PALETTE.console;
+      const dark = [c[0] * 0.78, c[1] * 0.78, c[2] * 0.78];
+      box(solid, {
+        center: vec3(x, r * 0.45, z),
+        size: vec3(r * 2, r * 0.9, r * 1.7), color: c,
+      });
+      box(solid, {
+        center: vec3(x + r * 0.22, r * 1.05, z - r * 0.18),
+        size: vec3(r * 1.2, r * 0.6, r * 1.0), color: dark,
+      });
+      break;
+    }
+
     case 'wallpanel':
       glow.quad(
         vec3(x - 0.02, 1.1, z - 0.4), vec3(x - 0.02, 1.1, z + 0.4),
@@ -643,6 +810,11 @@ function viewscreen3d(solid, glow, vs) {
  * a corner and thought about it.
  */
 function bakeOcclusion(mb, room) {
+  // Outdoors there is nothing to occlude against. The bake darkens a floor by
+  // its distance to a wall, and a planet has no walls — run it anyway and the
+  // whole plain reads as one enormous contact shadow with a hard ring in it
+  // where the geometry that is not a wall crosses the radius that is not one.
+  if (room.shape.kind === 'surface') return;
   const h = WALL_HEIGHT(room);
   const isRing = room.shape.kind === 'ring';
   const hw = isRing ? 0 : room.shape.width / 2;
@@ -719,16 +891,21 @@ const CACHE = new Map();
  *          two built meshes, ready for `Renderer.draw`
  */
 export function roomMeshes(roomId) {
-  const cached = CACHE.get(roomId);
-  if (cached) return cached;
-
   const room = ROOMS[roomId];
   if (!room) return null;
+
+  // Every room aboard is fixed, so its id is a good enough cache key. A planet
+  // surface is not: the same id carries a different world every time a landing
+  // party goes down, so it says which one it is and gets its own entry.
+  const key = room.cacheKey ?? roomId;
+  const cached = CACHE.get(key);
+  if (cached) return cached;
 
   const solid = new MeshBuilder();
   const glow = new MeshBuilder();
 
-  if (room.shape.kind === 'ring') ringShell(solid, glow, room);
+  if (room.shape.kind === 'surface') surfaceShell(solid, glow, room);
+  else if (room.shape.kind === 'ring') ringShell(solid, glow, room);
   else boxShell(solid, glow, room);
 
   (room.stations ?? []).forEach((s, i) => {
@@ -750,7 +927,13 @@ export function roomMeshes(roomId) {
     glow: glow.build(),
     triangles: solid.triangleCount + glow.triangleCount,
   };
-  CACHE.set(roomId, built);
+  // Two worlds' surfaces is already two more meshes than the ship has rooms,
+  // and a five-year commission visits a lot of planets. The cap is small
+  // because a surface is only ever needed for the one you are standing on.
+  if (CACHE.size > 24) {
+    for (const k of [...CACHE.keys()]) if (String(k).startsWith('surface:')) CACHE.delete(k);
+  }
+  CACHE.set(key, built);
   return built;
 }
 

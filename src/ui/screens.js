@@ -26,6 +26,7 @@ import { FACTIONS, standingTier } from '../world/factions.data.js';
 import { distanceLy } from '../world/systems.data.js';
 import { travelHours, fuelCost } from '../world/galaxy.js';
 import { orbitPeriod, rotationPeriod } from '../world/orbit.js';
+import { surfaceReport } from '../world/surface.js';
 import { formatDuration } from '../core/time.js';
 import { commandableAt } from '../world/ships.data.js';
 
@@ -92,6 +93,13 @@ export function bridgeScreen(app) {
   } else if (w.seated) {
     hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
     hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }), { color: 'blue' }));
+  } else if (w.room.surface) {
+    hand.push(el('p', { class: 'muted', text: `On the surface of ${w.room.name}. ${surfaceReport(w.room.kind)}.` }));
+    hand.push(button('Energise — beam up', tap(() => {
+      const r = g.beamUp();
+      if (r.ok) audio.play('transporter');
+      app.render();
+    }), { color: 'orange', sub: 'Back aboard' }));
   } else {
     hand.push(el('p', { class: 'muted', text: 'Drag to look. Walk to a station to use it.' }));
     if (w.roomId === 'bridge') {

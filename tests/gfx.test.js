@@ -30,6 +30,7 @@ import {
 } from '../src/world/orbit.js';
 import { roomMeshes, allRoomMeshes } from '../src/gfx/room.js';
 import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
+import { makeSurface } from '../src/world/surface.js';
 import { RNG } from '../src/core/rng.js';
 import { SHIP_CLASSES } from '../src/world/ships.data.js';
 
@@ -1251,5 +1252,94 @@ describe('the view from standard orbit', () => {
     assert.match(worldLabel('Rigel', v.bodies[0]), /primary/);
     // Stable across calls, which is the point of numbering in placement order.
     assert.equal(worldLabel('Rigel', vistaFor('rigel', 'core').bodies[1]), 'Rigel I');
+  });
+});
+
+describe('the ground under a landing party', () => {
+  const build = (kind = 'desert') => {
+    makeSurface({ id: `test:${kind}`, kind, ordinal: 3 }, 'Test III');
+    return roomMeshes('surface');
+  };
+
+  test('the ground faces UP', () => {
+    // This is not a hypothetical. The first version wound the ground rings the
+    // way every curved shell in room.js is wound — round the ring, then outward
+    // — which is correct on a sphere and upside down on a plain. Culling
+    // deleted the whole plain, and what showed through the hole was the sky
+    // dome's own skirt, which is ground-coloured. It looked like ground. It was
+    // the sky.
+    const m = build();
+    const { data, vertexCount, stride } = m.solid;
+    const floats = stride / 4;
+    let flatUp = 0; let flatDown = 0;
+    // Boulders sit ON the ground and have undersides, which are legitimately
+    // face-down at y = 0. Skip anything standing on a rock.
+    const rocks = ROOMS.surface.props.map((p) => ({ x: p.at[0], z: p.at[1], r: p.radius * 1.6 }));
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      // Only the horizontal surfaces at ground level — the hillsides are not
+      // flat and the boulders have lids.
+      if (Math.abs(data[o + 1]) > 0.01) continue;
+      if (rocks.some((r) => Math.hypot(data[o] - r.x, data[o + 2] - r.z) < r.r)) continue;
+      if (data[o + 4] > 0.99) flatUp++;
+      else if (data[o + 4] < -0.99) flatDown++;
+    }
+    assert.ok(flatUp > 300, `only ${flatUp} ground vertices face up`);
+    assert.equal(flatDown, 0, `${flatDown} ground vertices face down — that much plain is invisible`);
+  });
+
+  test('the sky reaches below the horizon', () => {
+    // Ending the dome level with the ground left a band of clear colour between
+    // the top of the ridge and the bottom of the sky. On a world with a blue
+    // sky that band is black, and it reads as a rendering failure because it is
+    // one.
+    const { data, vertexCount, stride } = build().glow;
+    const floats = stride / 4;
+    let below = 0;
+    for (let i = 0; i < vertexCount; i++) if (data[i * floats + 1] < -1) below++;
+    assert.ok(below > 0, 'the sky stops at the horizon');
+  });
+
+  test('there is a skyline, not a thread', () => {
+    // A ridge five metres high thirty metres away subtends about five degrees,
+    // which is a dark line across the bottom of the sky rather than a horizon.
+    const { data, vertexCount, stride } = build().solid;
+    const floats = stride / 4;
+    let peak = 0;
+    for (let i = 0; i < vertexCount; i++) peak = Math.max(peak, data[i * floats + 1]);
+    assert.ok(peak > 6, `the tallest thing on this world is ${peak.toFixed(1)} m`);
+  });
+
+  test('every world type builds, and no two look alike', () => {
+    const seen = new Set();
+    for (const kind of ['planet', 'desert', 'ice', 'moon']) {
+      const m = build(kind);
+      assert.ok(m.triangles > 500 && m.triangles < 4000, `${kind}: ${m.triangles} triangles`);
+      // The sky colour is the quickest read on whether the palette took.
+      const g = m.glow;
+      seen.add([g.data[6], g.data[7], g.data[8]].map((v) => v.toFixed(2)).join(','));
+    }
+    assert.equal(seen.size, 4, 'two world types have the same sky');
+  });
+
+  test('an airless world has a black sky at noon', () => {
+    // The single most telling thing about standing on a body with no
+    // atmosphere, and it costs one palette entry.
+    const moon = build('moon').glow;
+    const rocky = build('planet').glow;
+    const lum = (m) => m.data[6] + m.data[7] + m.data[8];
+    assert.ok(lum(moon) < 0.3, `the moon's sky is ${lum(moon).toFixed(2)} bright`);
+    assert.ok(lum(rocky) > lum(moon) * 3, 'a world with air has the same sky as one without');
+  });
+
+  test('nobody materialises inside a boulder', () => {
+    for (const seedKind of ['planet', 'desert', 'ice', 'moon']) {
+      makeSurface({ id: `spawn:${seedKind}`, kind: seedKind, ordinal: 1 }, 'Spawn I');
+      for (const p of ROOMS.surface.props) {
+        const d = Math.hypot(p.at[0], p.at[1]);
+        assert.ok(d - p.radius > 0.9,
+          `${seedKind}: a boulder reaches within ${(d - p.radius).toFixed(2)} m of the beam-in point`);
+      }
+    }
   });
 });

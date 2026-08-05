@@ -1218,3 +1218,102 @@ test('"standard orbit" and "break orbit" are orders you can give', () => {
   assert.equal(parseOrder('get us out of here', g).action, 'warp_out');
   assert.equal(parseOrder('all stop', g).action, 'throttle');
 });
+
+// ---------------------------------------------------------- the transporter
+
+test('beaming down needs an orbit, a room, and a world to stand on', () => {
+  const g = new Game({ seed: 8080 });
+
+  // Not in orbit: refused, and for that reason.
+  let r = g.beamDown();
+  assert.ok(!r.ok);
+  assert.match(r.error, /orbit/i);
+
+  g.enterOrbit();
+  // In orbit but sitting on the bridge. This is the refusal that matters: the
+  // game has no button that teleports the captain out of the chair.
+  r = g.beamDown();
+  assert.ok(!r.ok, 'beamed down from the bridge');
+  assert.match(r.error, /transporter room/i);
+
+  g.walk.enter('transporter');
+  r = g.beamDown();
+  assert.ok(r.ok, r.error);
+  assert.ok(g.ashore, 'the order succeeded and the captain is still aboard');
+  assert.equal(g.walk.roomId, 'surface');
+  assert.equal(g.walk.room.name, r.label);
+});
+
+test('a gas giant has nothing to beam down to', async () => {
+  const g = new Game({ seed: 5 });
+  const sys = g.location;
+  const { vista } = await import('../src/gfx/vista.js');
+  const gas = vista(sys.id, sys.type).bodies.find((b) => b.kind === 'gas');
+  if (!gas) return;   // not every system has one; the check is conditional
+  g.enterOrbit(gas.id);
+  g.walk.enter('transporter');
+  const r = g.beamDown();
+  assert.ok(!r.ok, 'the captain stood on a gas giant');
+  assert.match(r.error, /no surface/i);
+});
+
+test('the surface is a real place, and it is the same place twice', () => {
+  const g = new Game({ seed: 3 });
+  g.enterOrbit();
+  g.walk.enter('transporter');
+  g.beamDown();
+
+  const room = g.walk.room;
+  assert.ok(room.surface === true);
+  assert.ok(room.props.length > 5, 'a planet with nothing on it');
+  assert.ok(room.exits.length === 0, 'the surface has a door in it');
+  // You arrive where you were put down, not by a doorway.
+  assert.ok(Math.hypot(g.walk.x, g.walk.z) < 1.5, 'materialised somewhere odd');
+
+  const before = room.props.map((p) => p.at.join(','));
+  g.beamUp();
+  g.beamDown();
+  assert.deepEqual(g.walk.room.props.map((p) => p.at.join(',')), before,
+    'the same world was generated differently on the second visit');
+});
+
+test('beaming up puts the captain back on the pads', () => {
+  const g = new Game({ seed: 61 });
+  g.enterOrbit();
+  g.walk.enter('transporter');
+  g.beamDown();
+  const r = g.beamUp();
+  assert.ok(r.ok, r.error);
+  assert.equal(g.walk.roomId, 'transporter');
+  const [px, pz] = g.walk.room.padCentre;
+  assert.ok(Math.hypot(g.walk.x - px, g.walk.z - pz) < 0.6, 'materialised by the door, not on the pads');
+  assert.ok(!g.beamUp().ok, 'beamed up from the ship');
+});
+
+test('a captain saved on a planet is still on it when the game comes back', () => {
+  const g = new Game({ seed: 77 });
+  g.enterOrbit();
+  g.walk.enter('transporter');
+  g.beamDown();
+  const label = g.walk.room.name;
+
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.ok(back.ashore, 'the save came back aboard');
+  assert.equal(back.walk.room.name, label);
+
+  // And a record that says "on the surface" without an orbit to hang it on
+  // comes back aboard rather than standing on nothing.
+  const raw = g.save();
+  raw.orbit = null;
+  assert.ok(!Game.load(JSON.parse(JSON.stringify(raw))).ashore);
+});
+
+test('"beam down" and "energize" are opposite orders', () => {
+  const g = new Game({ seed: 12 });
+  assert.equal(parseOrder('beam down', g).action, 'beam_down');
+  assert.equal(parseOrder('two to beam down', g).action, 'beam_down');
+  assert.equal(parseOrder('energize', g).action, 'transport');
+  assert.equal(parseOrder('beam us back', g).action, 'transport');
+  // And neither has eaten walking to a compartment.
+  assert.equal(parseOrder('take me down to sickbay', g).action, 'go_to_room');
+});
