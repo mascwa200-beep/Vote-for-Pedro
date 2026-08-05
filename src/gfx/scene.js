@@ -56,6 +56,74 @@ export function starfield(count = 260) {
   });
 }
 
+/**
+ * The view at warp: stars drawn out into streaks.
+ *
+ * The single most recognisable thing a viewscreen ever showed, and it is not a
+ * particle system — it is the SAME stars, elongated along the direction of
+ * travel. So the geometry is a tube of long thin boxes lying parallel to the
+ * ship's course, spread through a cylinder around it, and the illusion of speed
+ * comes from sliding the whole thing past the camera and wrapping it.
+ *
+ * Built in a local frame where the course runs along +z and the camera sits at
+ * the origin looking down it. The caller orients and cycles it.
+ *
+ * `LENGTH` is the wrap period: translate by anything and take it modulo this,
+ * and the field is seamless because every streak has an identical twin one
+ * period away. That is why the count is doubled below rather than the mesh
+ * being drawn twice — one buffer, one draw call, no seam.
+ */
+export const WARP_LENGTH = 2400;
+
+export function warpfield(count = 230) {
+  return memo(`warp:${count}`, () => {
+    const mb = new MeshBuilder();
+    let h = 0x2545f491;
+    const rnd = () => {
+      h ^= h << 13; h ^= h >>> 17; h ^= h << 5; h |= 0;
+      return (h >>> 0) / 4294967296;
+    };
+
+    for (let i = 0; i < count; i++) {
+      // Spread across an annulus: nothing dead ahead, because a streak coming
+      // straight at the camera is a dot and reads as a dead pixel.
+      const a = rnd() * Math.PI * 2;
+      const r = 90 + rnd() * 900;
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r * 0.72;   // flattened, so it reads as a course
+      const z = rnd() * WARP_LENGTH;
+
+      // Longer and brighter nearer the axis, which is what perspective does to
+      // a real streak and what makes the middle of the screen feel fast.
+      const near = 1 - Math.min(1, r / 1000);
+      const len = 130 + near * 560 + rnd() * 160;
+      const w = 1.8 + near * 3.0;
+      const warm = rnd();
+      const c = [0.80 + warm * 0.20, 0.84 + warm * 0.14, 1.0 - warm * 0.18];
+
+      // TWO CROSSED QUADS, not a box. A streak is a glowing line: there is no
+      // side of it you are ever meant to see shaded, so the eight faces of a
+      // box are six wasted. Four triangles instead of twelve, which is the
+      // difference between fitting in the frame budget and not — the box
+      // version came to 5,280 triangles against a budget of 8,000 for the whole
+      // scene, ships included.
+      for (const dz of [0, WARP_LENGTH]) {
+        const z0 = z + dz;
+        const z1 = z0 + len;
+        // Vertical blade.
+        mb.quad(
+          vec3(x, y - w, z0), vec3(x, y - w, z1), vec3(x, y + w, z1), vec3(x, y + w, z0), c,
+        );
+        // Horizontal blade, so it holds up from any angle without billboarding.
+        mb.quad(
+          vec3(x - w, y, z0), vec3(x + w, y, z0), vec3(x + w, y, z1), vec3(x - w, y, z1), c,
+        );
+      }
+    }
+    return mb;
+  });
+}
+
 /** A star or planet. `kind` picks the palette; `seed` varies the banding. */
 export function bodyMesh(kind = 'planet', seed = 0) {
   return memo(`body:${kind}:${seed & 7}`, () => {

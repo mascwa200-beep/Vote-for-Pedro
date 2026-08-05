@@ -419,6 +419,9 @@ try {
     const r = g.setCourse(elsewhere.id);
     if (!r.ok) return { error: r.error };
     app.render();
+    // Zeroed here rather than read, so the measurement below is of this transit
+    // and not of one the harness flew forty checks ago.
+    if (app.fpv) app.fpv.warpPhase = 0;
     await new Promise((res) => setTimeout(res, 700));
     const titles = [...document.querySelectorAll('.panel h2')].map((h) => h.textContent.trim());
     const out = {
@@ -427,6 +430,11 @@ try {
       drawing: (app.fpv?.stats?.frames ?? 0) > before + 5,
       onBridge: titles.includes('Main Bridge'),
       showsTransit: titles.includes('Under Way'),
+      // The stars are streaks, not points. `warpPhase` is how far the field has
+      // streamed past, and it is only ever touched inside the warp branch of
+      // drawThroughScreen — so it moving is proof the viewer took that branch,
+      // for the same reason a frame counter moving proves the view is alive.
+      warpPhase: app.fpv?.warpPhase ?? 0,
     };
     g.transit = null;
     g.mode = 'bridge';
@@ -437,6 +445,8 @@ try {
     underWay.onBridge === true && underWay.showsTransit === true, JSON.stringify(underWay));
   check('and the view keeps drawing under way',
     underWay.fpv === true && underWay.drawing === true, JSON.stringify(underWay));
+  check('and the stars streak at warp',
+    underWay.warpPhase > 0, JSON.stringify(underWay));
   await dismissModals(page);
 
   // ---- The ship has an inside ----
