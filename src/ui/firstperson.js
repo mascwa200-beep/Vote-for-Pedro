@@ -28,9 +28,10 @@
 
 import {
   vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project,
+  quatFromTo,
 } from '../gfx/math.js';
 import { roomMeshes, PALETTE } from '../gfx/room.js';
-import { starfield, bodyMesh, VOLUME } from '../gfx/scene.js';
+import { starfield, bodyMesh, warpfield, WARP_LENGTH, VOLUME } from '../gfx/scene.js';
 import { hullMesh, hullScale } from '../gfx/blueprint.js';
 import { vista, fovFor, noseOf } from '../gfx/vista.js';
 import { ROOMS } from '../world/interiors.data.js';
@@ -76,6 +77,9 @@ export class FirstPersonView {
     this._quat = quat();
     this._nose = vec3();
     this._screenVP = mat4();
+    // How far the warp field has streamed past. Wraps every WARP_LENGTH, which
+    // is why the mesh carries a twin of every streak one period away.
+    this.warpPhase = 0;
 
     this.attachGestures();
   }
@@ -170,7 +174,9 @@ export class FirstPersonView {
   // ------------------------------------------------------------------ draw
 
   render(game, dt = 1 / 60) {
-    void dt;
+    // Kept because the warp field streams in real time and needs to know how
+    // much of it has passed since the last frame.
+    this.lastDt = Math.min(0.1, Math.max(0, dt));
     const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
     const rect = this.canvas.getBoundingClientRect();
     const dpr = globalThis.devicePixelRatio ?? 1;
@@ -306,15 +312,40 @@ export class FirstPersonView {
     multiply(this._proj, this._view, this._screenVP);
     r.setCamera(this._screenVP);
 
-    // Stars ride with the camera so they never come into reach.
-    compose(eye, quat(), 1, this._model);
-    r.draw('stars', starfield(), {
-      model: this._model,
-      normalMatrix: normalMatrix(this._model),
-      emissive: 1,
-      tint: [1, 1, 1],
-      fogFar: 1e9,
-    });
+    // AT WARP, the stars are streaks — the same stars, drawn out along the
+    // course. This is the most recognisable thing a viewscreen ever showed, and
+    // it replaces the starfield rather than joining it: both at once is 4,400
+    // triangles of sky before a single ship is drawn.
+    const warp = game.transit?.warpFactor ?? 0;
+    if (warp > 0) {
+      // Speed rises with the factor, and the field wraps rather than resetting
+      // so there is never a frame where every streak jumps.
+      this.warpPhase = (this.warpPhase + warp * warp * 26 * this.lastDt) % WARP_LENGTH;
+      // Laid along the ship's course, starting behind the camera so streaks
+      // arrive from ahead and pass you rather than appearing out of nothing.
+      const along = quatFromTo(vec3(0, 0, 1), nose, this._quat);
+      this._pos[0] = eye[0] - nose[0] * this.warpPhase;
+      this._pos[1] = eye[1] - nose[1] * this.warpPhase;
+      this._pos[2] = eye[2] - nose[2] * this.warpPhase;
+      compose(this._pos, along, 1, this._model);
+      r.draw('warp', warpfield(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        tint: [1, 1, 1],
+        fogFar: 1e9,
+      });
+    } else {
+      // Stars ride with the camera so they never come into reach.
+      compose(eye, quat(), 1, this._model);
+      r.draw('stars', starfield(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        emissive: 1,
+        tint: [1, 1, 1],
+        fogFar: 1e9,
+      });
+    }
 
     // The system's worlds, culled to what is actually ahead.
     const sys = game.location;

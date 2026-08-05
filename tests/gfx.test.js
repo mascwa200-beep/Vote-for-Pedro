@@ -20,7 +20,9 @@ import {
 } from '../src/gfx/math.js';
 import { MeshBuilder, saucer, tube, box, sphere, mirrored } from '../src/gfx/mesh.js';
 import { BLUEPRINTS, hullMesh, hullScale, paletteFor } from '../src/gfx/blueprint.js';
-import { sceneMeshes, starfield, gridMesh, bodyMesh, VOLUME } from '../src/gfx/scene.js';
+import {
+  sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, WARP_LENGTH, VOLUME,
+} from '../src/gfx/scene.js';
 import { vistaFor, bearingOf, fovFor, horizontalFov, noseOf } from '../src/gfx/vista.js';
 import { roomMeshes, allRoomMeshes } from '../src/gfx/room.js';
 import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
@@ -980,5 +982,80 @@ describe('the jelly beans', () => {
     const counts = ROOMS.bridge.stations.map((st) => capsNear(glow, st).length);
     assert.ok(counts.some((n) => n % 2 === 1),
       `every console has an even triangle count (${counts.join(', ')}) — these are still rectangles`);
+  });
+});
+
+describe('the view at warp', () => {
+  test('the field is seamless, because every streak has a twin', () => {
+    // The illusion is the whole field sliding past and WRAPPING. That only
+    // works if a streak leaving the far end has an identical twin arriving at
+    // the near end — otherwise every wrap is a frame where the entire sky
+    // jumps. Two copies in one buffer is also why it is one draw call and not
+    // two, with no seam between them.
+    const { data, vertexCount, stride } = warpfield();
+    const floats = stride / 4;
+    // Keyed on x and y EXACTLY, with a tolerance on z alone.
+    //
+    // The two copies of a streak are emitted from the same `x` and `y`
+    // variables, so those match bitwise; only `z` differs, and it differs by
+    // arithmetic — `z + PERIOD + len/2` against `z + len/2` — which in Float32
+    // lands about half a millimetre out. Rounding all three to a fixed number
+    // of places puts a handful of vertices on a bucket boundary and reports a
+    // seam that is not there.
+    const byColumn = new Map();
+    const near = [];
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const x = data[o]; const y = data[o + 1]; const z = data[o + 2];
+      const col = `${x},${y}`;
+      if (!byColumn.has(col)) byColumn.set(col, []);
+      byColumn.get(col).push(z);
+      if (z <= WARP_LENGTH) near.push([col, z]);
+    }
+    let twinned = 0;
+    const total = near.length;
+    for (const [col, z] of near) {
+      const want = z + WARP_LENGTH;
+      if (byColumn.get(col).some((other) => Math.abs(other - want) < 0.05)) twinned++;
+    }
+
+    assert.ok(total > 100, `only ${total} streak vertices in the near period`);
+    assert.equal(twinned, total, `${total - twinned} streaks have no twin — the field will jump on every wrap`);
+  });
+
+  test('nothing sits dead ahead, where a streak would be a dead pixel', () => {
+    // A streak coming straight at the camera projects to a stationary dot, and
+    // a stationary bright dot in the middle of a warp effect reads as a stuck
+    // pixel rather than as a star.
+    const { data, vertexCount, stride } = warpfield();
+    const floats = stride / 4;
+    let onAxis = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      if (Math.hypot(data[o], data[o + 1]) < 40) onAxis++;
+    }
+    assert.equal(onAxis, 0, `${onAxis} vertices sit on the course axis`);
+  });
+
+  test('a streak is a line, not a box', () => {
+    // Two crossed quads, four triangles. The box version was twelve, which put
+    // the field at 5,280 triangles against a budget of 8,000 for the whole
+    // scene — ships, room and all.
+    const tris = warpfield().vertexCount / 3;
+    assert.ok(tris < 2400, `${tris} triangles of warp field leaves nothing for the ship`);
+
+    // And it runs ALONG the course, not across it: every streak must be far
+    // longer in z than it is wide.
+    const { data, vertexCount, stride } = warpfield();
+    const floats = stride / 4;
+    let minZ = Infinity; let maxZ = -Infinity;
+    let minX = Infinity; let maxX = -Infinity;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      minZ = Math.min(minZ, data[o + 2]); maxZ = Math.max(maxZ, data[o + 2]);
+      minX = Math.min(minX, data[o]); maxX = Math.max(maxX, data[o]);
+    }
+    assert.ok(maxZ - minZ > (maxX - minX) * 1.5,
+      'the field is wider than it is long — these are not streaks');
   });
 });
