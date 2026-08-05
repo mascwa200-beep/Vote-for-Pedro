@@ -25,6 +25,7 @@ import { STATIONS, ERA_LIST, SPECIES } from '../world/crews.data.js';
 import { FACTIONS, standingTier } from '../world/factions.data.js';
 import { distanceLy } from '../world/systems.data.js';
 import { travelHours, fuelCost } from '../world/galaxy.js';
+import { orbitPeriod, rotationPeriod } from '../world/orbit.js';
 import { formatDuration } from '../core/time.js';
 import { commandableAt } from '../world/ships.data.js';
 
@@ -117,6 +118,8 @@ export function bridgeScreen(app) {
     side.append(encounterPanel(app));
   } else if (g.mode === MODES.TRANSIT && g.transit) {
     side.append(transitPanel(app));
+  } else if (g.orbit && g.orbitBody) {
+    side.append(orbitPanel(app));
   }
 
   // --- The one thing that has to be visible without walking anywhere ---
@@ -365,6 +368,43 @@ export function transitPanel(app) {
       app.render();
     }, 'ui_back'), { color: 'ghost' }),
   ]));
+
+  return wrap;
+}
+
+/**
+ * In orbit, as a panel.
+ *
+ * Says what is out of the window and how long a circuit takes, because both are
+ * real numbers the game computes rather than flavour: the period comes out of
+ * the world's density, and a captain who is about to send people down deserves
+ * to know how long the ship is over them.
+ */
+export function orbitPanel(app) {
+  const g = app.game;
+  const body = g.orbitBody;
+  const wrap = el('div', {});
+  if (!body) return wrap;
+
+  const period = orbitPeriod(body.kind) / 3600;
+  const day = rotationPeriod(body.kind) / 3600;
+  const KIND = {
+    planet: 'Class M — atmosphere, surface water, life',
+    desert: 'Class K — thin air, arid, survivable in a suit',
+    moon: 'Airless satellite — no atmosphere, no weather',
+    ice: 'Class P — frozen surface, subsurface liquid possible',
+    gas: 'Class J — gas giant, no surface to stand on',
+  };
+
+  wrap.append(panel('Standard Orbit', [
+    el('p', { html: `Holding station over <b>${g.orbitLabel}</b>` }),
+    el('p', { class: 'muted', text: KIND[body.kind] ?? 'Survey incomplete' }),
+    el('div', { class: 'meta' }, [
+      pill(`orbit ${period < 24 ? `${period.toFixed(1)} h` : `${(period / 24).toFixed(1)} d`}`),
+      pill(`day ${day < 48 ? `${day.toFixed(1)} h` : `${(day / 24).toFixed(0)} d`}`),
+    ]),
+    el('p', { class: 'hint', text: 'She is on the viewer. Say “break orbit” when you want to be somewhere else.' }),
+  ], 'accent'));
 
   return wrap;
 }

@@ -1133,3 +1133,88 @@ test('a record written before the switches existed still cruises at six', () => 
   delete data.warpFactor;
   assert.equal(Game.load(data).warpFactor, 6);
 });
+
+// ---------------------------------------------------------------- orbit
+
+test('standard orbit is a place the ship actually is', () => {
+  const g = new Game({ seed: 4242 });
+  assert.equal(g.orbit, null, 'a commission does not start in orbit');
+  assert.equal(g.orbitBody, null);
+
+  const r = g.enterOrbit();
+  assert.ok(r.ok, r.error);
+  assert.ok(g.orbitBody, 'the order succeeded and the ship is orbiting nothing');
+  assert.equal(g.orbitBody.id, r.body.id);
+  assert.match(g.orbitLabel, /Sol/, `the crew calls it "${g.orbitLabel}"`);
+  // Never the star. You do not make standard orbit around a sun.
+  assert.notEqual(g.orbitBody.kind, 'star');
+
+  const again = g.enterOrbit();
+  assert.ok(again.already, 'the order was taken twice and moved the ship');
+
+  assert.ok(g.breakOrbit().ok);
+  assert.equal(g.orbit, null);
+  assert.ok(!g.breakOrbit().ok, 'breaking an orbit the ship is not in reported success');
+});
+
+test('a course cancels the orbit, and arriving does not restore it', () => {
+  const g = new Game({ seed: 99 });
+  g.enterOrbit();
+  assert.ok(g.orbit);
+
+  const dest = g.galaxy.systems.find((s) => s.id !== g.locationId);
+  assert.ok(g.setCourse(dest.id).ok);
+  assert.equal(g.orbit, null, 'the ship went to warp still holding an orbit');
+
+  g.transit.elapsedReal = g.transit.realSeconds;
+  g.arrive();
+  assert.equal(g.orbit, null, 'arriving somewhere put the ship in orbit nobody ordered');
+});
+
+test('an orbit survives the save, and a stale one does not come back', () => {
+  const g = new Game({ seed: 7 });
+  g.enterOrbit();
+  const wanted = g.orbit.bodyId;
+
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.equal(back.orbit?.bodyId, wanted, 'the ship came out of the save somewhere else');
+  assert.equal(back.orbitBody?.id, wanted);
+
+  // A record whose orbit belongs to a system the ship is not in restores to
+  // station-keeping rather than to an orbit of a world light-years away.
+  const raw = g.save();
+  raw.orbit = { systemId: 'somewhere-else', bodyId: wanted };
+  assert.equal(Game.load(JSON.parse(JSON.stringify(raw))).orbit, null);
+
+  // As does one naming a body that does not exist.
+  const bogus = g.save();
+  bogus.orbit = { systemId: g.locationId, bodyId: 'sol:body:99' };
+  assert.equal(Game.load(JSON.parse(JSON.stringify(bogus))).orbit, null);
+});
+
+test('the ship cannot make orbit at warp', () => {
+  const g = new Game({ seed: 31 });
+  const dest = g.galaxy.systems.find((s) => s.id !== g.locationId);
+  g.setCourse(dest.id);
+  const r = g.enterOrbit();
+  assert.ok(!r.ok, 'the helm made orbit while the ship was between stars');
+  assert.match(r.error, /warp/i);
+});
+
+test('"standard orbit" and "break orbit" are orders you can give', () => {
+  const g = new Game({ seed: 11 });
+  const enter = parseOrder('standard orbit', g);
+  assert.equal(enter.action, 'orbit', JSON.stringify(enter));
+
+  const leave = parseOrder('break orbit', g);
+  assert.equal(leave.action, 'break_orbit', JSON.stringify(leave));
+
+  // The two share every word but one, so this is the pair most at risk of
+  // collapsing into each other.
+  assert.equal(parseOrder('take us into orbit', g).action, 'orbit');
+  assert.equal(parseOrder('get us out of orbit', g).action, 'break_orbit');
+
+  // And neither has eaten the orders that were already there.
+  assert.equal(parseOrder('get us out of here', g).action, 'warp_out');
+  assert.equal(parseOrder('all stop', g).action, 'throttle');
+});

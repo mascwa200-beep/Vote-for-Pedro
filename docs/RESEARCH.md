@@ -374,6 +374,65 @@ Sources: [CineMontage — Douglas Grindstaff's sound effects for the original St
 
 ---
 
+## 10. Standard orbit, and what it looks like out of the window
+
+"Standard orbit, Mr. Sulu" is the most-given order in the show after "engage",
+and it is the one that turns a system from a dot on a chart into a place you are
+actually at. It is also the order everything else at a planet hangs off: it is
+the position from which orbital scans are run, from which the surface is hailed,
+and — the part that matters most for this game — from which a landing party can
+be put down and taken back.
+
+**The altitude is a band, not a number.** Standard orbit runs roughly one to
+seven thousand miles up: **2,600 to 11,300 km**. That is a range because it is
+supposed to be — the altitude is chosen for the world, the scan and the
+transporter, and a starship holds it rather than being fixed at one figure.
+
+### What that band means, arithmetically
+
+The show does not have to answer this and the renderer does. For an Earth-sized
+world (R = 6,371 km, μ = 3.986 × 10¹⁴ m³/s²), the two ends of the band are two
+completely different pictures:
+
+| | bottom of the band | top of the band |
+|---|---|---|
+| Altitude | 1,600 km = **0.25 R** | 11,300 km = **1.77 R** |
+| Period | ≈ 2 hours | ≈ **6½ hours** |
+| Angular radius of the disc | asin(1/1.25) = **53°** | asin(1/2.77) = **21°** |
+| Disc across | **106°** | **42°** |
+
+**Low down, the world is wider than the window.** At 106° across against a 74°
+viewer there is no planet in frame at all — only ground, a horizon 37° below
+local level, and space above it. **From the top of the band the whole world
+fits**, with room around it, which is the shot everyone pictures: a disc across
+the lower half of the screen with a terminator on it.
+
+**Either way the camera has to look down.** The world is directly beneath the
+ship and not ahead of it, so a viewscreen pointed along the orbital track sees
+nothing but stars. The axis has to be tipped to within a few degrees of straight
+down before there is anything on the screen at all.
+
+**A pleasant consequence of Kepler.** For a body of uniform density the period
+of a circular orbit at a fixed *multiple* of the radius does not depend on the
+radius: μ = (4/3)πGρR³ and a = (1+h)R, so R cancels and the period falls out of
+the **density alone**. A gas giant is orbited slowly and a rock quickly whatever
+their sizes, and nothing had to be invented to get there.
+
+**What the build takes from this.** Orbit becomes a real state the ship is in
+and not a label: an order to enter it, an order to break it, the top of the
+documented band for its altitude, an orbital position advancing in real time on
+a period computed from the world's density, and the world turning on its own
+axis at the rate its type actually turns — ten hours for a gas giant, twenty-seven
+days for a tide-locked moon. The terminator is not drawn: the key light is
+pointed from the world at the system's own primary, and the terminator is
+wherever that puts it.
+
+Sources: [Memory Alpha — Standard orbit](https://memory-alpha.fandom.com/wiki/Standard_orbit),
+[Memory Alpha — Orbit](https://memory-alpha.fandom.com/wiki/Orbit),
+[The Physics of Science Fiction — Star Trek: Orbits](https://physicsofscifi.blogspot.com/2012/07/star-trek-orbits.html)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

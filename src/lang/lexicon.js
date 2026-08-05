@@ -20,7 +20,8 @@ import { fold, readNumber } from './normalize.js';
 /** Departments an order can be aimed at, used to break ties. */
 export const STATION_AFFINITY = {
   helm: ['set_course', 'warp_factor', 'throttle', 'come_about', 'heading',
-    'evasive', 'warp_out', 'dock', 'all_stop', 'pitch', 'turn'],
+    'evasive', 'warp_out', 'dock', 'all_stop', 'pitch', 'turn',
+    'enter_orbit', 'break_orbit'],
   tactical: ['fire', 'cease_fire', 'target_nearest', 'cycle_target',
     'target_subsystem', 'shields', 'reinforce', 'alert', 'cloak'],
   engineering: ['power', 'preset', 'eject_core', 'reinforce'],
@@ -85,6 +86,36 @@ export const INTENTS = [
     }),
   },
   {
+    id: 'enter_orbit',
+    help: 'Standard orbit / take us into orbit of <world>',
+    phrases: [
+      'standard orbit', 'assume standard orbit', 'take us into orbit',
+      'take us into standard orbit', 'enter orbit', 'enter standard orbit',
+      'establish orbit', 'establish standard orbit', 'make orbit',
+      'assume orbit', 'put us in orbit', 'get us into orbit', 'go into orbit',
+      'take up orbit', 'move into orbit', 'orbit the planet', 'orbit that world',
+      'bring us into orbit', 'settle into orbit', 'hold orbit',
+      'maintain standard orbit', 'close to orbital distance',
+    ],
+    keywords: { orbit: 3, orbital: 2 },
+    // "Break orbit" is the opposite order and shares every other word in the
+    // sentence, so the two are separated on the one word that differs.
+    veto: ['break', 'leave', 'out'],
+    build: () => ({ action: 'orbit' }),
+  },
+  {
+    id: 'break_orbit',
+    help: 'Break orbit',
+    phrases: [
+      'break orbit', 'break out of orbit', 'leave orbit', 'leave the orbit',
+      'out of orbit', 'take us out of orbit', 'get us out of orbit',
+      'depart orbit', 'abandon orbit', 'climb out of orbit',
+      'stop orbiting', 'end the orbit', 'break us out of orbit',
+    ],
+    keywords: { orbit: 2, break: 2, leave: 1 },
+    build: () => ({ action: 'break_orbit' }),
+  },
+  {
     id: 'warp_factor',
     help: 'Warp <n> / maximum warp',
     phrases: [
@@ -116,7 +147,8 @@ export const INTENTS = [
       'maintain position', 'hold us here', 'stand still',
     ],
     keywords: { stop: 2, halt: 2, hold: 1 },
-    veto: ['fire', 'firing'],
+    // "Hold orbit" is holding something specific, not holding still.
+    veto: ['fire', 'firing', 'orbit'],
     build: () => ({ action: 'throttle', value: 0 }),
   },
   {
@@ -274,6 +306,9 @@ export const INTENTS = [
       'i want out', 'lets get out of here', 'no more of this',
     ],
     keywords: { retreat: 3, withdraw: 3, flee: 3, escape: 2.5, disengage: 3, run: 1.5 },
+    // "Get us out of orbit" is a helm order about altitude and this intent runs
+    // from the system entirely. They share "get us out" and nothing else.
+    veto: ['orbit'],
     build: () => ({ action: 'warp_out' }),
   },
   {
