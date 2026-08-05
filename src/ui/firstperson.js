@@ -135,10 +135,24 @@ export class FirstPersonView {
 
   // ---------------------------------------------------------------- camera
 
-  /** Where the eyes are: the walker's feet plus a person's height. */
+  /**
+   * Where the eyes are: the walker's feet plus a person's height.
+   *
+   * Seated, the eye sits BACK from the walker's position by a head's depth.
+   * That is not a fudge — a person in a chair has their eyes behind the seat
+   * centre, and the practical effect is that the chair's own arm panels come
+   * into the bottom of frame. Sitting in a chair you cannot see is the oldest
+   * tell that a first-person camera is a floating point rather than a body.
+   */
   eyeOf(walker, out = this._eye) {
+    if (walker.seated) {
+      out[0] = walker.x - Math.sin(walker.yaw) * 0.16;
+      out[1] = SEATED_HEIGHT;
+      out[2] = walker.z - Math.cos(walker.yaw) * 0.16;
+      return out;
+    }
     out[0] = walker.x;
-    out[1] = walker.seated ? SEATED_HEIGHT : EYE_HEIGHT;
+    out[1] = EYE_HEIGHT;
     out[2] = walker.z;
     return out;
   }
@@ -182,6 +196,7 @@ export class FirstPersonView {
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
       ambient: 0.62, keyPower: 0.44,
+      eye: this.eyeOf(walker), gloss: 0.22,
     });
 
     // Pass one: space, inside the screen.
@@ -195,6 +210,7 @@ export class FirstPersonView {
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
       ambient: 0.62, keyPower: 0.44,
+      eye: this.eyeOf(walker), gloss: 0.22,
     });
     this.renderer.setCamera(this._viewProj);
     this.drawRoom(room);
@@ -262,7 +278,10 @@ export class FirstPersonView {
     r.setScissor(screen.x, screen.y, screen.w, screen.h);
     // Back to vacuum inside the screen: one hard sun, deep shadow, which is
     // what a hull a thousand kilometres away actually looks like.
-    r.setLighting({ key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5], ambient: 0.20, keyPower: 0.9 });
+    r.setLighting({
+      key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
+      ambient: 0.20, keyPower: 0.9, gloss: 0,
+    });
     // The far slice of the depth buffer, so the room drawn afterwards covers
     // everything except the aperture.
     r.setDepthRange(0.9990, 1.0);

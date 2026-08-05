@@ -30,6 +30,7 @@ uniform mat3 uNormalMatrix;
 varying vec3 vNormal;
 varying vec3 vColor;
 varying float vDepth;
+varying vec3 vWorld;
 
 void main() {
   vec4 world = uModel * vec4(aPosition, 1.0);
@@ -37,6 +38,7 @@ void main() {
   vNormal = normalize(uNormalMatrix * aNormal);
   vColor = aColor;
   vDepth = gl_Position.w;
+  vWorld = world.xyz;
 }
 `;
 
@@ -49,6 +51,7 @@ precision mediump float;
 varying vec3 vNormal;
 varying vec3 vColor;
 varying float vDepth;
+varying vec3 vWorld;
 
 uniform vec3 uKey;        // key light direction
 uniform vec3 uFill;       // fill light direction
@@ -58,6 +61,8 @@ uniform float uEmissive;  // 1.0 makes the surface ignore lighting entirely
 uniform float uFogFar;    // distance at which the haze reaches its floor
 uniform float uAmbient;   // how much light a surface facing away still gets
 uniform float uKeyPower;  // strength of the key
+uniform vec3 uEye;        // where the camera is, for the specular
+uniform float uGloss;     // 0 for matte, 1 for painted metal and moulded plastic
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -72,6 +77,20 @@ void main() {
   // at each other, has almost no true shadow in it. Hardcoding the vacuum value
   // rendered the interior as a black box with a few lit panels floating in it.
   vec3 lit = vColor * uTint * (uAmbient + key * uKeyPower + fill);
+
+  // A specular highlight, Blinn-Phong, one term.
+  //
+  // Painted metal and moulded plastic both have one, and neither reads as its
+  // material without it — a flat-shaded bulkhead with no highlight is a
+  // coloured polygon, and the same bulkhead with a soft sheen sliding across it
+  // as you turn your head is a wall. It is also the cheapest possible cue that
+  // the camera is MOVING through a real place rather than panning a picture.
+  if (uGloss > 0.001) {
+    vec3 v = normalize(uEye - vWorld);
+    vec3 halfway = normalize(normalize(uKey) + v);
+    float spec = pow(max(dot(n, halfway), 0.0), 24.0) * uGloss;
+    lit += vec3(spec);
+  }
   lit = mix(lit, vColor * uTint, uEmissive);
 
   // Fog toward the far plane, so a distant hull recedes rather than hanging
@@ -139,11 +158,24 @@ export class Renderer {
     if (!gl) return null;
 
     try {
-      return new Renderer(canvas, gl);
-    } catch {
+      const r = new Renderer(canvas, gl);
+      if (r.lost) return null;
+      Renderer.lastError = null;
+      return r;
+    } catch (err) {
+      // A shader that fails to compile must not look like a device without
+      // WebGL. Both used to return a bare null, so a one-character GLSL typo
+      // silently downgraded the whole game to the 2D fallback with nothing
+      // anywhere saying why — and the message the driver went to the trouble of
+      // writing was thrown away.
+      Renderer.lastError = String(err?.message ?? err);
+      console.error('[gl] renderer unavailable:', Renderer.lastError);
       return null;
     }
   }
+
+  /** Why the last `create` failed, or null if it did not. For the harness. */
+  static lastError = null;
 
   constructor(canvas, gl) {
     this.canvas = canvas;
@@ -171,6 +203,8 @@ export class Renderer {
       fogFar: gl.getUniformLocation(this.program, 'uFogFar'),
       ambient: gl.getUniformLocation(this.program, 'uAmbient'),
       keyPower: gl.getUniformLocation(this.program, 'uKeyPower'),
+      eye: gl.getUniformLocation(this.program, 'uEye'),
+      gloss: gl.getUniformLocation(this.program, 'uGloss'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -214,8 +248,10 @@ export class Renderer {
         void v;
       }
       this.configure();
-    } catch {
+    } catch (err) {
       this.lost = true;
+      Renderer.lastError = String(err?.message ?? err);
+      throw err;
     }
   }
 
@@ -244,6 +280,7 @@ export class Renderer {
     // Vacuum by default: one hard sun and nothing to bounce off.
     gl.uniform1f(this.uniform.ambient, 0.22);
     gl.uniform1f(this.uniform.keyPower, 0.85);
+    gl.uniform1f(this.uniform.gloss, 0);
     return true;
   }
 
@@ -254,13 +291,15 @@ export class Renderer {
    * surface facing away from both still receives, which in a room is most of
    * the light and in space is almost none.
    */
-  setLighting({ key, fill, ambient = 0.22, keyPower = 0.85 } = {}) {
+  setLighting({ key, fill, ambient = 0.22, keyPower = 0.85, eye, gloss = 0 } = {}) {
     if (this.lost) return;
     const { gl } = this;
     if (key) gl.uniform3f(this.uniform.key, key[0], key[1], key[2]);
     if (fill) gl.uniform3f(this.uniform.fill, fill[0], fill[1], fill[2]);
+    if (eye) gl.uniform3f(this.uniform.eye, eye[0], eye[1], eye[2]);
     gl.uniform1f(this.uniform.ambient, ambient);
     gl.uniform1f(this.uniform.keyPower, keyPower);
+    gl.uniform1f(this.uniform.gloss, gloss);
   }
 
   /**

@@ -23,6 +23,7 @@ import { BLUEPRINTS, hullMesh, hullScale, paletteFor } from '../src/gfx/blueprin
 import { sceneMeshes, starfield, gridMesh, bodyMesh, VOLUME } from '../src/gfx/scene.js';
 import { vistaFor, bearingOf, fovFor, horizontalFov, noseOf } from '../src/gfx/vista.js';
 import { roomMeshes, allRoomMeshes } from '../src/gfx/room.js';
+import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
 import { RNG } from '../src/core/rng.js';
 import { SHIP_CLASSES } from '../src/world/ships.data.js';
 
@@ -770,5 +771,160 @@ describe('the rooms are lit like places', () => {
       assert.ok(room.triangles < 4000, `${room.id} is ${room.triangles} triangles`);
       assert.ok(room.solid.vertexCount > 0, `${room.id} has no lit geometry`);
     }
+  });
+});
+
+describe('the command chair is built to be sat in', () => {
+  // Sitting in a chair you cannot see is the oldest tell that a first-person
+  // camera is a floating point rather than a body. The arm panels have to be
+  // in frame from the seated eye, and "in frame" is arithmetic, not taste.
+  const EYE_Y = 1.18;          // SEATED_HEIGHT in ui/firstperson.js
+  const EYE_BACK = 0.16;       // a head's depth behind the seat centre
+  const HALF_FOV = 44 * Math.PI / 180;
+
+  const chairProp = () => ROOMS.bridge.props.find((p) => p.id === 'chair');
+
+  test('the chair has geometry inside the seated field of view', () => {
+    const chair = chairProp();
+    const eyeZ = chair.at[1] - EYE_BACK;
+    const { data, vertexCount, stride } = roomMeshes('bridge').solid;
+    const floats = stride / 4;
+
+    let inFrame = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const x = data[o]; const y = data[o + 1]; const z = data[o + 2];
+      // Belonging to the chair: within its footprint, below the eye.
+      if (Math.hypot(x - chair.at[0], z - chair.at[1]) > chair.radius * 2.2) continue;
+      if (y > EYE_Y) continue;
+
+      const ahead = z - eyeZ;
+      if (ahead < 0.08) continue;                       // behind, or at, the eye
+      const down = Math.atan2(EYE_Y - y, ahead);        // angle below level
+      const across = Math.atan2(Math.abs(x - chair.at[0]), ahead);
+      if (down < HALF_FOV && across < HALF_FOV) inFrame++;
+    }
+
+    assert.ok(inFrame > 12,
+      `only ${inFrame} chair vertices fall inside the seated view — the captain is sitting on nothing`);
+  });
+
+  test('the arm panels carry the three controls that meant something', () => {
+    // docs/RESEARCH.md §4: of every button on the prop, exactly three were ever
+    // given a function on screen. They are lit caps on the starboard arm, and
+    // they belong to the glow mesh because a lit cap must ignore the shadow.
+    const chair = chairProp();
+    const { data, vertexCount, stride } = roomMeshes('bridge').glow;
+    const floats = stride / 4;
+
+    const starboard = new Set();
+    const port = new Set();
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const x = data[o]; const y = data[o + 1]; const z = data[o + 2];
+      if (y < 0.6 || y > 1.0) continue;
+      if (Math.abs(z - chair.at[1]) > chair.radius * 2) continue;
+      const key = `${data[o + 6].toFixed(2)},${data[o + 7].toFixed(2)},${data[o + 8].toFixed(2)}`;
+      if (x > chair.at[0] + 0.3) starboard.add(key);
+      else if (x < chair.at[0] - 0.3) port.add(key);
+    }
+
+    assert.ok(starboard.size >= 3,
+      `the starboard arm carries ${starboard.size} distinct lit caps, not three`);
+    assert.ok(port.size >= 1, 'the port arm carries no controls at all');
+
+    // AND THEY FACE UP.
+    let capVerts = 0;
+    let facingUp = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const y = data[o + 1]; const z = data[o + 2];
+      if (y < 0.6 || y > 1.0) continue;
+      if (Math.abs(z - chair.at[1]) > chair.radius * 2) continue;
+      capVerts++;
+      // Roughly up, not exactly up: a console's working surface is ANGLED, so
+      // its normal is about 0.88 vertical and 0.47 forward. Demanding 0.9
+      // failed geometry that was correct.
+      if (data[o + 4] > 0.3) facingUp++;
+    }
+    assert.ok(capVerts > 0, 'no cap geometry at all');
+    assert.equal(facingUp, capVerts,
+      `${capVerts - facingUp} of ${capVerts} cap vertices face away from the captain`);
+  });
+
+  test('every console in the ship has a working surface you can see', () => {
+    // THE GENERAL FORM, and the bug that found it.
+    //
+    // A working surface angled away from its operator, wound right-then-away,
+    // puts its normal DOWN and forward — so back-face culling removes it and
+    // the console renders as a box with an open top and no buttons on it. That
+    // was true of every console in the game, and the colour-only check above
+    // passed straight through it: the geometry was there, the data was right,
+    // and none of it was ever drawn.
+    //
+    // Asserted as PRESENCE rather than absence, because "no down-facing
+    // geometry" is not the rule — every box in the ship has a bottom, and a
+    // bottom faces down. What must be true is that each console has an
+    // up-facing surface at working height where the operator would look.
+    const missing = [];
+    for (const room of ROOM_LIST) {
+      const { data, vertexCount, stride } = roomMeshes(room.id).solid;
+      const glowMesh = roomMeshes(room.id).glow;
+      const floats = stride / 4;
+
+      for (const station of room.stations ?? []) {
+        const near = (mesh) => {
+          const d = mesh.data;
+          const n = mesh.vertexCount;
+          const fl = mesh.stride / 4;
+          let hits = 0;
+          for (let i = 0; i < n; i++) {
+            const o = i * fl;
+            const y = d[o + 1];
+            if (y < 0.7 || y > 1.25) continue;
+            if (Math.hypot(d[o] - station.at[0], d[o + 2] - station.at[1]) > 0.9) continue;
+            if (d[o + 4] > 0.3) hits++;
+          }
+          return hits;
+        };
+        void data; void vertexCount; void floats;
+        if (near(roomMeshes(room.id).solid) === 0) {
+          missing.push(`${room.id}/${station.id}: no lit-side working surface`);
+        }
+        if (near(glowMesh) === 0) {
+          missing.push(`${room.id}/${station.id}: no visible buttons`);
+        }
+      }
+    }
+    assert.deepEqual(missing, [], 'consoles whose working surface is culled');
+  });
+
+  test('nothing on the chair blocks the main viewer', () => {
+    // The first placement put the helm officer's headrest across the middle of
+    // the screen. The chair itself must not repeat that: from the seated eye,
+    // no chair geometry may rise into the cone that contains the aperture.
+    const chair = chairProp();
+    const vs = ROOMS.bridge.viewscreen;
+    const eyeZ = chair.at[1] - EYE_BACK;
+    // The bottom of the aperture, as an angle above level from the eye.
+    const apertureBottom = Math.atan2(0.74 - EYE_Y, vs.at[1] - eyeZ);
+
+    const { data, vertexCount, stride } = roomMeshes('bridge').solid;
+    const floats = stride / 4;
+    let blocking = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      const x = data[o]; const y = data[o + 1]; const z = data[o + 2];
+      // Belonging to the chair means near it in plan AND at chair height. The
+      // ceiling fan's apex vertex sits directly above the chair at 2.6 m, and a
+      // plan-distance filter alone accuses the deckhead of blocking the viewer.
+      if (y > 1.6) continue;
+      if (Math.hypot(x - chair.at[0], z - chair.at[1]) > chair.radius * 2.2) continue;
+      const ahead = z - eyeZ;
+      if (ahead < 0.08) continue;
+      if (Math.abs(x - chair.at[0]) > vs.width / 2) continue;
+      if (Math.atan2(y - EYE_Y, ahead) > apertureBottom) blocking++;
+    }
+    assert.equal(blocking, 0, `${blocking} chair vertices sit in front of the viewer`);
   });
 });

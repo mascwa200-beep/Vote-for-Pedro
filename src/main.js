@@ -328,7 +328,10 @@ class App {
 
     on('transit:begin', () => { this.go('bridge'); });
     on('arrived', () => { audio.play('warp_drop'); audio.setAlertLevel('normal'); this.needsRender = true; });
-    on('encounter:begin', () => { this.go('encounter'); haptic('select'); });
+    // A hail brings you to the CHAIR, not to a separate screen. The encounter's
+    // panel appears in the bridge's own strip, and the Bridge tab carries a
+    // badge if you happen to be reading the roster when it comes in.
+    on('encounter:begin', () => { this.go('bridge'); haptic('select'); });
     on('mission:start', () => { this.go('mission'); });
     on('mission:stage', () => { this.needsRender = true; });
     on('game:over', () => { this.go('gameover'); });
@@ -430,8 +433,14 @@ class App {
     // same mistake in the other direction, and it left the tactical view never
     // built and the renderer reporting a mode it was not in.
     else if (g.mode === MODES.MISSION) screen = 'mission';
-    else if (g.mode === MODES.ENCOUNTER && screen === 'bridge') screen = 'encounter';
-    else if (g.mode === MODES.TRANSIT && screen === 'bridge') screen = 'transit';
+    // An ENCOUNTER and a TRANSIT no longer replace the bridge either. A ship
+    // hailing you is something you see on the viewer and answer from the chair,
+    // and being at warp is something you are doing while sitting in it — both
+    // used to swap the whole screen out, which disposed the first-person view
+    // and left the canvas showing a frozen frame of a bridge nobody was in.
+    // Their panels appear in the bridge's own strip instead.
+    //
+    // A MISSION still takes the screen, because a mission stage IS text.
 
     const old = this.screenEl;
     let node;
