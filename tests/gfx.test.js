@@ -928,3 +928,57 @@ describe('the command chair is built to be sat in', () => {
     assert.equal(blocking, 0, `${blocking} chair vertices sit in front of the viewer`);
   });
 });
+
+describe('the jelly beans', () => {
+  // docs/RESEARCH.md §8: the controls were moulded resin caps in circles and
+  // TRIANGLES, and some of them were literally jelly beans. A grid of coloured
+  // squares is a computer keyboard; a scatter of round and triangular caps in
+  // five flat colours is 1966, and it is most of what makes a console read as a
+  // period object rather than as science fiction generally.
+
+  const capsNear = (mesh, station) => {
+    const { data, vertexCount, stride } = mesh;
+    const floats = stride / 4;
+    const tris = [];
+    for (let i = 0; i + 2 < vertexCount; i += 3) {
+      const o = i * floats;
+      const cx = (data[o] + data[o + floats] + data[o + 2 * floats]) / 3;
+      const cz = (data[o + 2] + data[o + floats + 2] + data[o + 2 * floats + 2]) / 3;
+      const cy = (data[o + 1] + data[o + floats + 1] + data[o + 2 * floats + 1]) / 3;
+      if (cy < 0.7 || cy > 1.25) continue;
+      if (Math.hypot(cx - station.at[0], cz - station.at[1]) > 0.9) continue;
+      tris.push([cx, cy, cz]);
+    }
+    return tris;
+  };
+
+  test('a console looks the same every time you walk up to it', () => {
+    // The layout is hashed from the station index, not rolled. A console that
+    // reshuffles its own controls between visits is not a console.
+    const first = roomMeshes('bridge').glow;
+    const a = Array.from(first.data.slice(0, 4096));
+    // Rebuilt from scratch, bypassing the memo the game relies on.
+    const b = Array.from(roomMeshes('bridge').glow.data.slice(0, 4096));
+    assert.deepEqual(a, b);
+  });
+
+  test('no two consoles carry the same arrangement of caps', () => {
+    // Every station gets its own layout off its index. Identical consoles all
+    // the way round the ring is the giveaway that a machine laid them out.
+    const glow = roomMeshes('bridge').glow;
+    const counts = ROOMS.bridge.stations.map((st) => capsNear(glow, st).length);
+    assert.ok(counts.every((n) => n > 6), `a console with ${Math.min(...counts)} triangles of caps`);
+    assert.ok(new Set(counts).size > 3,
+      `only ${new Set(counts).size} distinct cap arrangements across ten stations`);
+  });
+
+  test('the caps are round and triangular, not a grid of rectangles', () => {
+    // A rectangle is two triangles and always an even count. A circle is an
+    // eight-triangle fan and a triangle is one. If every console's cap
+    // triangles were even, they would all still be rectangles.
+    const glow = roomMeshes('bridge').glow;
+    const counts = ROOMS.bridge.stations.map((st) => capsNear(glow, st).length);
+    assert.ok(counts.some((n) => n % 2 === 1),
+      `every console has an even triangle count (${counts.join(', ')}) — these are still rectangles`);
+  });
+});

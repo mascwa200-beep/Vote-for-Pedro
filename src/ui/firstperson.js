@@ -371,6 +371,7 @@ export class FirstPersonView {
     this.renderer.draw(`room:${room.id}:glow`, m.glow, {
       model: this._model, normalMatrix: nm, emissive: 1, fogFar: 1e6,
     });
+
   }
 
   // -------------------------------------------------------------- overlay
