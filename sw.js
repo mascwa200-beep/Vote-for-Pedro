@@ -45,6 +45,7 @@ const PRECACHE = [
   './src/world/crews.data.js',
   './src/world/galaxy.js',
   './src/world/orbit.js',
+  './src/world/surface.js',
   './src/world/encounters.js',
   './src/missions/engine.js',
   './src/missions/episodes/index.js',

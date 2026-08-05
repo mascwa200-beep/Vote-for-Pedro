@@ -7907,6 +7907,155 @@ function face(mb, a, b, c, d, colour, flip = false) {
  * has to have HOLES in it — a doorway is a gap, and a room whose only exit is
  * painted on is a room you can see out of and not leave.
  */
+/**
+ * Ground, a ridge line, and a sky. The one room that is not a room.
+ *
+ * An interior is a box you cannot see out of, which is why every other shell in
+ * this file is walls and a ceiling. A planet is the opposite problem: there is
+ * nothing overhead but sky and nothing in the distance but more of the same, so
+ * what has to be built is a horizon that closes the space without being a wall.
+ *
+ * Three pieces, and each one is doing a different job:
+ *
+ *   FLAT GROUND out to the walkable radius. The walker is two-dimensional and
+ *   the eye is a fixed height above the floor, so ground that undulated where
+ *   you can stand would put the camera through it or a metre above it. Relief
+ *   is drawn where nobody can walk and read from where everybody stands, which
+ *   is the honest way round.
+ *
+ *   A RIDGE beyond it, rising out of the flat, with height from the same noise
+ *   field the world's surface uses. That is the horizon, and it is what stops
+ *   the ground looking like a stage.
+ *
+ *   A SKY dome over the lot, self-lit and graded from the horizon up, because a
+ *   sky is not a colour — it is brighter and paler where you look through more
+ *   air, which is the same fact the orbital limb is drawn from.
+ */
+function surfaceShell(solid, glow, room) {
+  const R = room.shape.radius;          // walkable
+  const FAR = R * 2.0;                  // out to the foot of the ridge
+  const SEG = 40;
+  const RINGS = 7;
+  const ground = room.palette?.ground ?? [0.44, 0.40, 0.34];
+  const rock = room.palette?.rock ?? [0.34, 0.31, 0.28];
+  const sky = room.palette?.sky ?? [0.34, 0.52, 0.78];
+  const haze = room.palette?.haze ?? [0.76, 0.82, 0.90];
+  const seed = room.shape.seed ?? 1;
+
+  const rnd = (i, salt) => {
+    let h = Math.imul(i + 1, 0x27d4eb2d) ^ Math.imul(seed + salt * 7919, 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+    return ((h ^ (h >>> 13)) >>> 0) / 4294967296;
+  };
+  const ring = (i, r, y) => {
+    const a = (i / SEG) * Math.PI * 2;
+    return vec3(Math.sin(a) * r, y, Math.cos(a) * r);
+  };
+  const shade = (base, t) => [base[0] * t, base[1] * t, base[2] * t];
+
+  // ---- the ground ----
+  // Patches, not wedges. A fan of triangles from the centre out shades in
+  // radial stripes, and radial stripes on a flat plain read as a pie chart
+  // rather than as dirt — the eye finds the common vertex immediately. Cutting
+  // it into rings as well breaks that up for the cost of a few hundred
+  // triangles, and the tone of each patch comes from its own hash.
+  //
+  // Dead flat, and deliberately. The walker is two-dimensional and the eye
+  // rides at a fixed height above the floor, so ground that rose and fell where
+  // you can stand would put the camera through it or leave you walking on air.
+  // Relief goes where nobody walks.
+  const radiusAt = (k) => R * (k / RINGS) ** 0.8;
+  for (let k = 0; k < RINGS; k++) {
+    const r0 = radiusAt(k);
+    const r1 = radiusAt(k + 1);
+    for (let i = 0; i < SEG; i++) {
+      const c = shade(ground, 0.88 + rnd(i * 13 + k, 3) * 0.26);
+      // OUTWARD first, then round the ring. That order is what puts the normal
+      // up, and the other order — which is the one the curved shells in this
+      // file use — puts it down. Culling is on, so the first version of this
+      // had no ground at all: what showed through the hole was the sky's own
+      // skirt, which is ground-coloured, which is why it took a screenshot and
+      // not a glance to notice.
+      if (k === 0) solid.tri(vec3(0, 0, 0), ring(i, r1, 0), ring(i + 1, r1, 0), c);
+      else solid.quad(ring(i, r0, 0), ring(i, r1, 0), ring(i + 1, r1, 0), ring(i + 1, r0, 0), c);
+    }
+  }
+  // The flat between the walkable circle and the foot of the ridge.
+  for (let i = 0; i < SEG; i++) {
+    const c = shade(ground, 0.80 + rnd(i, 5) * 0.24);
+    solid.quad(ring(i, R, 0), ring(i, FAR, 0), ring(i + 1, FAR, 0), ring(i + 1, R, 0), c);
+  }
+
+  // ---- the ridge ----
+  // Tall enough to be a horizon. The first version topped out at five metres
+  // thirty away, which subtends about five degrees — a dark thread across the
+  // bottom of the sky rather than a skyline. These are hills you would have to
+  // climb, and their height varies per segment so the top is a profile.
+  const crest = [];
+  for (let i = 0; i <= SEG; i++) {
+    const a = i % SEG;
+    crest.push(6 + rnd(a, 7) * 18 + rnd(a, 9) * rnd(a, 11) * 10);
+  }
+  for (let i = 0; i < SEG; i++) {
+    // Brighter than the palette says on purpose: these faces stand nearly
+    // vertical, the key light comes from overhead, and a hillside taking the
+    // rock colour at face value renders as a silhouette. This is the tone that
+    // makes it read as sunlit rock rather than as a hole in the sky.
+    const c = shade(rock, 1.15 + rnd(i, 17) * 0.5);
+    solid.quad(
+      ring(i, FAR, 0), ring(i + 1, FAR, 0),
+      ring(i + 1, FAR * 1.28, crest[i + 1]), ring(i, FAR * 1.28, crest[i]),
+      c,
+    );
+    // A back face falling away behind the crest, so a gap between two peaks
+    // shows more hill and not the sky through the ridge.
+    solid.quad(
+      ring(i, FAR * 1.28, crest[i]), ring(i + 1, FAR * 1.28, crest[i + 1]),
+      ring(i + 1, FAR * 1.7, 0), ring(i, FAR * 1.7, 0),
+      shade(rock, 0.52 + rnd(i, 19) * 0.16),
+    );
+  }
+
+  // ---- the sky ----
+  // Drawn into the glow mesh: it is the light source, not a lit surface, and a
+  // sky that took a shadow from the sun would be a contradiction.
+  //
+  // The dome starts BELOW the horizon, not at it. Ending it level with the
+  // ground left a band of clear colour between the top of the ridge and the
+  // bottom of the sky — black, on a world with a blue sky, which is the sort of
+  // thing that looks like a rendering failure because it is one.
+  const DOME = FAR * 4.0;
+  const BANDS = 11;
+  const START = -0.30;                        // radians below level
+  const mix = (f) => [
+    haze[0] + (sky[0] - haze[0]) * f,
+    haze[1] + (sky[1] - haze[1]) * f,
+    haze[2] + (sky[2] - haze[2]) * f,
+  ];
+  for (let b = 0; b < BANDS; b++) {
+    const f0 = b / BANDS;
+    const f1 = (b + 1) / BANDS;
+    // Paler at the horizon, deeper overhead — more air along the line of sight
+    // near the ground, and that is the whole of why a sky has a gradient. The
+    // curve is squared so the change is concentrated where it belongs, low
+    // down, instead of banding evenly all the way to the zenith.
+    const c = mix((((f0 + f1) * 0.5) ** 2));
+    const a0 = START + f0 * (Math.PI / 2 - START);
+    const a1 = START + f1 * (Math.PI / 2 - START);
+    const r0 = Math.cos(a0) * DOME; const y0 = Math.sin(a0) * DOME;
+    const r1 = Math.cos(a1) * DOME; const y1 = Math.sin(a1) * DOME;
+    for (let i = 0; i < SEG; i++) {
+      // Seen from INSIDE, so this one is wound the other way round from
+      // everything above — the dome faces the middle of itself.
+      if (b === BANDS - 1) {
+        glow.tri(vec3(0, DOME, 0), ring(i, r0, y0), ring(i + 1, r0, y0), c);
+      } else {
+        glow.quad(ring(i, r0, y0), ring(i, r1, y1), ring(i + 1, r1, y1), ring(i + 1, r0, y0), c);
+      }
+    }
+  }
+}
+
 function ringShell(solid, glow, room) {
   const R = room.shape.radius;
   const h = WALL_HEIGHT(room);
@@ -8318,6 +8467,24 @@ function prop3d(solid, glow, prop) {
       box(solid, { center: vec3(x, 0.9, z), size: vec3(r * 1.6, 1.4, 0.14), color: PALETTE.trim });
       break;
 
+    case 'rock': {
+      // A boulder, as two stacked and offset boxes rather than one. Two is the
+      // difference between a rock and a crate, and it costs twelve triangles.
+      // Colour comes from the prop rather than the ship's palette — a rock on
+      // an ice world and a rock in a desert are not the same grey.
+      const c = prop.color ?? PALETTE.console;
+      const dark = [c[0] * 0.78, c[1] * 0.78, c[2] * 0.78];
+      box(solid, {
+        center: vec3(x, r * 0.45, z),
+        size: vec3(r * 2, r * 0.9, r * 1.7), color: c,
+      });
+      box(solid, {
+        center: vec3(x + r * 0.22, r * 1.05, z - r * 0.18),
+        size: vec3(r * 1.2, r * 0.6, r * 1.0), color: dark,
+      });
+      break;
+    }
+
     case 'wallpanel':
       glow.quad(
         vec3(x - 0.02, 1.1, z - 0.4), vec3(x - 0.02, 1.1, z + 0.4),
@@ -8453,6 +8620,11 @@ function viewscreen3d(solid, glow, vs) {
  * a corner and thought about it.
  */
 function bakeOcclusion(mb, room) {
+  // Outdoors there is nothing to occlude against. The bake darkens a floor by
+  // its distance to a wall, and a planet has no walls — run it anyway and the
+  // whole plain reads as one enormous contact shadow with a hard ring in it
+  // where the geometry that is not a wall crosses the radius that is not one.
+  if (room.shape.kind === 'surface') return;
   const h = WALL_HEIGHT(room);
   const isRing = room.shape.kind === 'ring';
   const hw = isRing ? 0 : room.shape.width / 2;
@@ -8529,16 +8701,21 @@ const CACHE = new Map();
  *          two built meshes, ready for `Renderer.draw`
  */
 function roomMeshes(roomId) {
-  const cached = CACHE.get(roomId);
-  if (cached) return cached;
-
   const room = ROOMS[roomId];
   if (!room) return null;
+
+  // Every room aboard is fixed, so its id is a good enough cache key. A planet
+  // surface is not: the same id carries a different world every time a landing
+  // party goes down, so it says which one it is and gets its own entry.
+  const key = room.cacheKey ?? roomId;
+  const cached = CACHE.get(key);
+  if (cached) return cached;
 
   const solid = new MeshBuilder();
   const glow = new MeshBuilder();
 
-  if (room.shape.kind === 'ring') ringShell(solid, glow, room);
+  if (room.shape.kind === 'surface') surfaceShell(solid, glow, room);
+  else if (room.shape.kind === 'ring') ringShell(solid, glow, room);
   else boxShell(solid, glow, room);
 
   (room.stations ?? []).forEach((s, i) => {
@@ -8560,7 +8737,13 @@ function roomMeshes(roomId) {
     glow: glow.build(),
     triangles: solid.triangleCount + glow.triangleCount,
   };
-  CACHE.set(roomId, built);
+  // Two worlds' surfaces is already two more meshes than the ship has rooms,
+  // and a five-year commission visits a lot of planets. The cap is small
+  // because a surface is only ever needed for the one you are standing on.
+  if (CACHE.size > 24) {
+    for (const k of [...CACHE.keys()]) if (String(k).startsWith('surface:')) CACHE.delete(k);
+  }
+  CACHE.set(key, built);
   return built;
 }
 
@@ -13402,6 +13585,27 @@ const INTENTS = [
     }),
   },
   {
+    id: 'beam_down',
+    help: 'Beam down / two to beam down',
+    phrases: [
+      'beam down', 'beam me down', 'beam us down', 'beam me to the surface',
+      'two to beam down', 'three to beam down', 'four to beam down',
+      'send down a landing party', 'send a landing party down',
+      'form a landing party', 'put me on the surface',
+      'down to the surface', 'transport me to the surface', 'energize for the surface',
+      'lets go down', 'i am going down', 'beam down to the planet',
+    ],
+    keywords: { beam: 2.5, down: 1.6, surface: 2, landing: 2 },
+    // The other half of the pair. "Beam up" and "beam down" differ by one word
+    // and mean opposite things, so each vetoes the other's.
+    veto: ['up', 'aboard', 'back'],
+    // "Take me down to sickbay" is a walk down a deck, not a transport to a
+    // planet. Naming a compartment stands this intent aside, the same way it
+    // stands `set_course` aside — a room is never a destination off the ship.
+    vetoSlots: ['room'],
+    build: () => ({ action: 'beam_down' }),
+  },
+  {
     id: 'transport',
     help: 'Energize',
     phrases: [
@@ -17796,6 +18000,13 @@ class Walker {
 
     this.roomId = roomId;
     this.seated = false;
+    // What was within reach is not within reach any more — it is on another
+    // deck, or on a ship a thousand kilometres up. These are only recomputed
+    // when the walker takes a step, so leaving them set meant beaming down to a
+    // planet and finding the helm console still under the reticle, labelled and
+    // offering to open.
+    this.atStation = null;
+    this.atExit = null;
 
     // The door back the way we came, if there is one — that is where we appear.
     const back = (next.exits ?? []).find((e) => e.to === this.previousRoomId);
@@ -18487,6 +18698,146 @@ __exports.fuelCost = fuelCost;
 __exports.Galaxy = Galaxy;
 __exports.Transit = Transit;
 __exports.plotTransit = plotTransit;
+
+});
+
+__define("src/world/surface.js", function (__exports, __require) {
+// The ground under a landing party.
+//
+// Every other room in this game is a fixed set that was measured off blueprints
+// and built once. A planet cannot be: there are forty systems, each with up to
+// four worlds, and the ship goes where the captain says. So the surface is
+// generated — from the world's own id, so it is the same place every time you
+// come back to it, and never from `Game.rng`, so walking around on it cannot
+// desynchronise a five-year commission from its own seed.
+//
+// It is shaped like every other room on purpose. The walker, the collision
+// resolver, the console dispatch and the renderer all take a room, and a planet
+// that was a special case in each of them would be four chances to get it
+// wrong. It is a room with a sky instead of a ceiling.
+
+const { ROOMS } = __require("src/world/interiors.data.js");
+const { hashSeed } = __require("src/core/rng.js");
+
+/** How far a landing party can walk from the beam-down point, in metres. */
+const SURFACE_RADIUS = 15;
+
+/**
+ * The look of each world type, in the two or three colours that decide it.
+ *
+ * `ground` and `rock` are lit; `sky` and `haze` are not, because a sky is the
+ * light source. The gas giant has an entry because a landing party can be put
+ * on a moon of one and see it overhead — not because anybody stands on it.
+ */
+const LOOK = {
+  planet: {
+    ground: [0.32, 0.40, 0.22], rock: [0.38, 0.35, 0.30],
+    sky: [0.26, 0.46, 0.80], haze: [0.72, 0.82, 0.92],
+    weather: 'thin cloud, and air you can breathe',
+  },
+  desert: {
+    ground: [0.62, 0.48, 0.28], rock: [0.48, 0.36, 0.24],
+    sky: [0.62, 0.50, 0.40], haze: [0.86, 0.74, 0.58],
+    weather: 'dust in the air, and not much of the air',
+  },
+  ice: {
+    ground: [0.80, 0.86, 0.92], rock: [0.60, 0.68, 0.76],
+    sky: [0.42, 0.56, 0.76], haze: [0.88, 0.93, 0.98],
+    weather: 'nothing moving, and nothing warm',
+  },
+  moon: {
+    // No atmosphere means no scattering, which means the sky is BLACK at noon.
+    // It is the single most telling thing about standing on an airless body and
+    // it costs one palette entry to get right.
+    ground: [0.44, 0.43, 0.42], rock: [0.32, 0.31, 0.31],
+    sky: [0.02, 0.02, 0.03], haze: [0.06, 0.06, 0.08],
+    weather: 'no atmosphere at all — suits, and the stars are out',
+  },
+  gas: {
+    ground: [0.46, 0.42, 0.36], rock: [0.34, 0.31, 0.28],
+    sky: [0.52, 0.44, 0.34], haze: [0.80, 0.72, 0.58],
+    weather: 'a sky with no floor under it',
+  },
+};
+
+/** What the sensors say before anybody steps off the pad. */
+function surfaceReport(kind) {
+  return (LOOK[kind] ?? LOOK.planet).weather;
+}
+
+/**
+ * Build the surface of one world as a room, and register it.
+ *
+ * @param {object} body   a vista body: {id, kind, ordinal}
+ * @param {string} label  what the crew calls it — "Vulcan IV"
+ * @returns {object} the room, already in ROOMS under the id `surface`
+ */
+function makeSurface(body, label) {
+  const look = LOOK[body.kind] ?? LOOK.planet;
+  const h = hashSeed(`surface:${body.id}`);
+  const seed = Number(h & 0x7fffffffn);
+
+  // A local stream, so the scatter is deterministic per world and costs the
+  // campaign's own RNG nothing.
+  let s = seed || 1;
+  const rnd = () => {
+    s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s |= 0;
+    return (s >>> 0) / 4294967296;
+  };
+
+  // Boulders, thrown outside the pad circle so nobody materialises inside one.
+  // Dealt from evenly spaced arcs rather than uniformly at random, which at
+  // these counts is the difference between scattered and clumped.
+  const count = 9 + Math.floor(rnd() * 5);
+  const arc = (Math.PI * 2) / count;
+  const props = Array.from({ length: count }, (_, i) => {
+    const a = i * arc + rnd() * arc;
+    const d = 3.4 + rnd() * (SURFACE_RADIUS - 5);
+    const tone = 0.82 + rnd() * 0.34;
+    return {
+      id: `rock${i}`,
+      kind: 'rock',
+      label: 'A boulder',
+      at: [Math.sin(a) * d, Math.cos(a) * d],
+      facing: rnd() * Math.PI * 2,
+      radius: 0.5 + rnd() * 1.1,
+      solid: true,
+      color: [look.rock[0] * tone, look.rock[1] * tone, look.rock[2] * tone],
+    };
+  });
+
+  const room = {
+    id: 'surface',
+    name: label,
+    // Not a deck. Nothing about a planet is on deck seven, and the turbolift
+    // must never offer it as a stop — which it cannot, because LIFT_STOPS is
+    // built from the rooms that have a lift door and this one has no doors.
+    deck: null,
+    surface: true,
+    world: body.id,
+    kind: body.kind,
+    shape: { kind: 'surface', radius: SURFACE_RADIUS, height: 2.4, seed },
+    palette: look,
+    stations: [],
+    props,
+    exits: [],
+    // Distinct per world, so the mesh cache does not hand back the last planet.
+    cacheKey: `surface:${body.id}`,
+  };
+
+  ROOMS.surface = room;
+  return room;
+}
+
+/** Take the surface back out of the world once the party is aboard. */
+function clearSurface() {
+  delete ROOMS.surface;
+}
+
+__exports.SURFACE_RADIUS = SURFACE_RADIUS;
+__exports.surfaceReport = surfaceReport;
+__exports.makeSurface = makeSurface;
+__exports.clearSurface = clearSurface;
 
 });
 
@@ -20442,6 +20793,8 @@ const { Galaxy, plotTransit } = __require("src/world/galaxy.js");
 // state needs it to answer "orbit of what", which is a question about the world
 // and not about the renderer.
 const { vista, worldLabel } = __require("src/gfx/vista.js");
+const { makeSurface, clearSurface, surfaceReport } = __require("src/world/surface.js");
+const { ROOMS } = __require("src/world/interiors.data.js");
 const { rollEncounter, environmentalHazard } = __require("src/world/encounters.js");
 const { buildRoster, ERAS } = __require("src/world/crews.data.js");
 const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
@@ -20553,6 +20906,13 @@ class Game {
     // assumed when nobody says.
     this.warpFactor = 6;
     // Where the captain physically is. A commission starts in the chair.
+    //
+    // The surface is cleared FIRST. It is the one room that lives in the global
+    // room table without belonging there, and a new game — or a loaded one —
+    // that inherited the last game's planet would put its captain on a world
+    // this commission has never been to. `Walker` resolves its room out of that
+    // table, so leaving it lying around is the whole bug.
+    clearSurface();
     this.walk = new Walker();
     this.walkOrder = null;
     this.log = [];
@@ -20918,6 +21278,67 @@ class Game {
     this.orbit = null;
     if (label) this.officerSays('helm', `Breaking orbit of ${label}.`);
     emit('orbit:leave', { label });
+    return { ok: true, label };
+  }
+
+  // ------------------------------------------------------------ transporter
+
+  /** True when the captain is standing on a world rather than aboard. */
+  get ashore() { return this.walk.roomId === 'surface'; }
+
+  /**
+   * Beam down.
+   *
+   * Four things have to be true, and each of them is a different refusal: the
+   * ship has to be in orbit of somewhere, nobody can be shooting, the captain
+   * has to be standing in the transporter room, and the world has to be one a
+   * person can stand on. The third is the one that matters most — this game
+   * does not have a button that teleports you from the chair. You walk to the
+   * transporter room and you stand on the pad, because that is what the room is
+   * for and because a command you can give from anywhere is a menu.
+   */
+  beamDown() {
+    if (this.ashore) return { ok: false, error: 'We are already on the surface, Captain.' };
+    if (this.mode === MODES.COMBAT) return { ok: false, error: 'Not while we are under fire, Captain.' };
+    const body = this.orbitBody;
+    if (!body) {
+      const err = 'We would have to make orbit first, Captain.';
+      this.officerSays('transporter', err, 'object');
+      return { ok: false, error: err };
+    }
+    if (body.kind === 'gas') {
+      const err = `${this.orbitLabel} has no surface to beam down to.`;
+      this.officerSays('science', err, 'object');
+      return { ok: false, error: err };
+    }
+    if (this.walk.roomId !== 'transporter') {
+      const err = 'You would have to be in the transporter room, Captain.';
+      this.officerSays('transporter', err, 'object');
+      return { ok: false, error: err };
+    }
+
+    const label = this.orbitLabel;
+    makeSurface(body, label);
+    this.walkOrder = null;
+    this.walk.enter('surface');
+    this.pushLog(`Beamed down to ${label}. ${surfaceReport(body.kind)}.`, 'transporter');
+    emit('beam', { down: true, label, body });
+    return { ok: true, label, body };
+  }
+
+  /** And back. Always possible — the ship does not leave people behind. */
+  beamUp() {
+    if (!this.ashore) return { ok: false, error: 'We are aboard, Captain.' };
+    const label = this.walk.room?.name ?? 'the surface';
+    this.walkOrder = null;
+    this.walk.enter('transporter');
+    // On the pads, not by the door. `enter` puts you a step inside the way you
+    // came, which is right for walking and wrong for materialising.
+    const pad = ROOMS.transporter.padCentre;
+    [this.walk.x, this.walk.z] = pad;
+    clearSurface();
+    this.pushLog(`Beamed up from ${label}.`, 'transporter');
+    emit('beam', { down: false, label });
     return { ok: true, label };
   }
 
@@ -21801,6 +22222,15 @@ class Game {
       ? { systemId: orb.systemId, bodyId: orb.bodyId }
       : null;
     if (g.orbit && !g.orbitBody) g.orbit = null;
+    // A record saved with the captain on a planet has to rebuild the planet
+    // before it can put them back on it. `Walker.load` has already fallen back
+    // to the bridge, because the room did not exist a moment ago — the position
+    // it read out of the save is still the one it was standing at, so restoring
+    // the id is enough to put the boots back in the same footprints.
+    if (data.walk?.roomId === 'surface' && g.orbitBody) {
+      makeSurface(g.orbitBody, g.orbitLabel);
+      g.walk.roomId = 'surface';
+    }
     g.firstStrike = data.firstStrike === true;
     g.inKobayashi = data.inKobayashi === true;
     g.gambitOpen = data.gambitOpen === true;
@@ -21844,6 +22274,7 @@ const { FACTIONS, standingTier } = __require("src/world/factions.data.js");
 const { distanceLy } = __require("src/world/systems.data.js");
 const { travelHours, fuelCost } = __require("src/world/galaxy.js");
 const { orbitPeriod, rotationPeriod } = __require("src/world/orbit.js");
+const { surfaceReport } = __require("src/world/surface.js");
 const { formatDuration } = __require("src/core/time.js");
 const { commandableAt } = __require("src/world/ships.data.js");
 
@@ -21910,6 +22341,13 @@ function bridgeScreen(app) {
   } else if (w.seated) {
     hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
     hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }), { color: 'blue' }));
+  } else if (w.room.surface) {
+    hand.push(el('p', { class: 'muted', text: `On the surface of ${w.room.name}. ${surfaceReport(w.room.kind)}.` }));
+    hand.push(button('Energise — beam up', tap(() => {
+      const r = g.beamUp();
+      if (r.ok) audio.play('transporter');
+      app.render();
+    }), { color: 'orange', sub: 'Back aboard' }));
   } else {
     hand.push(el('p', { class: 'muted', text: 'Drag to look. Walk to a station to use it.' }));
     if (w.roomId === 'bridge') {
@@ -24637,6 +25075,33 @@ class App {
         body.push(warpSwitches(this));
         body.push(el('p', { class: 'hint', text: 'Throw a switch to set the standing warp factor. Every course is plotted at it.' }));
         break;
+      case 'transport': {
+        // The one console that puts you somewhere else. It refuses for reasons
+        // rather than being absent, because "why can I not beam down" is a
+        // question the room should answer standing in it.
+        const g2 = this.game;
+        const world = g2.orbitLabel;
+        body.push(el('p', {
+          text: world
+            ? `Transporter ready. ${world} is below us.`
+            : 'Transporter ready. The ship is not in orbit of anything.',
+        }));
+        if (g2.ashore) {
+          body.push(button('Energise — beam up', () => {
+            this.closeModal();
+            this.executeOrder({ action: 'transport' }, 'energize');
+          }, { color: 'blue' }));
+        } else {
+          body.push(button('Energise — beam down', () => {
+            this.closeModal();
+            this.executeOrder({ action: 'beam_down' }, 'beam down');
+          }, { color: world ? 'blue' : 'ghost' }));
+          if (!world) {
+            body.push(el('p', { class: 'hint', text: 'Make standard orbit first, and there will be somewhere to go.' }));
+          }
+        }
+        break;
+      }
       case 'turbolift':
       default:
         body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
@@ -25461,9 +25926,23 @@ class App {
         ack('comms', 'Away team assembled and standing by in the transporter room.');
         break;
       }
+      case 'beam_down': {
+        const r = g.beamDown();
+        if (r.ok) { audio.play('transporter'); haptic('confirm'); }
+        else { audio.play('ui_deny'); g.pushLog(r.error, 'transporter'); }
+        break;
+      }
       case 'transport':
-        audio.play('transporter');
-        ack('comms', 'Energising.');
+        // "Energise" means bring us back when the captain is the one standing
+        // on the planet, and means the usual acknowledgement when they are not.
+        if (g.ashore) {
+          const r = g.beamUp();
+          if (r.ok) { audio.play('transporter'); haptic('confirm'); }
+          else audio.play('ui_deny');
+        } else {
+          audio.play('transporter');
+          ack('comms', 'Energising.');
+        }
         break;
       default:
         audio.play('ui_deny');

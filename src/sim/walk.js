@@ -257,6 +257,13 @@ export class Walker {
 
     this.roomId = roomId;
     this.seated = false;
+    // What was within reach is not within reach any more — it is on another
+    // deck, or on a ship a thousand kilometres up. These are only recomputed
+    // when the walker takes a step, so leaving them set meant beaming down to a
+    // planet and finding the helm console still under the reticle, labelled and
+    // offering to open.
+    this.atStation = null;
+    this.atExit = null;
 
     // The door back the way we came, if there is one — that is where we appear.
     const back = (next.exits ?? []).find((e) => e.to === this.previousRoomId);

@@ -632,6 +632,33 @@ class App {
         body.push(warpSwitches(this));
         body.push(el('p', { class: 'hint', text: 'Throw a switch to set the standing warp factor. Every course is plotted at it.' }));
         break;
+      case 'transport': {
+        // The one console that puts you somewhere else. It refuses for reasons
+        // rather than being absent, because "why can I not beam down" is a
+        // question the room should answer standing in it.
+        const g2 = this.game;
+        const world = g2.orbitLabel;
+        body.push(el('p', {
+          text: world
+            ? `Transporter ready. ${world} is below us.`
+            : 'Transporter ready. The ship is not in orbit of anything.',
+        }));
+        if (g2.ashore) {
+          body.push(button('Energise — beam up', () => {
+            this.closeModal();
+            this.executeOrder({ action: 'transport' }, 'energize');
+          }, { color: 'blue' }));
+        } else {
+          body.push(button('Energise — beam down', () => {
+            this.closeModal();
+            this.executeOrder({ action: 'beam_down' }, 'beam down');
+          }, { color: world ? 'blue' : 'ghost' }));
+          if (!world) {
+            body.push(el('p', { class: 'hint', text: 'Make standard orbit first, and there will be somewhere to go.' }));
+          }
+        }
+        break;
+      }
       case 'turbolift':
       default:
         body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
@@ -1456,9 +1483,23 @@ class App {
         ack('comms', 'Away team assembled and standing by in the transporter room.');
         break;
       }
+      case 'beam_down': {
+        const r = g.beamDown();
+        if (r.ok) { audio.play('transporter'); haptic('confirm'); }
+        else { audio.play('ui_deny'); g.pushLog(r.error, 'transporter'); }
+        break;
+      }
       case 'transport':
-        audio.play('transporter');
-        ack('comms', 'Energising.');
+        // "Energise" means bring us back when the captain is the one standing
+        // on the planet, and means the usual acknowledgement when they are not.
+        if (g.ashore) {
+          const r = g.beamUp();
+          if (r.ok) { audio.play('transporter'); haptic('confirm'); }
+          else audio.play('ui_deny');
+        } else {
+          audio.play('transporter');
+          ack('comms', 'Energising.');
+        }
         break;
       default:
         audio.play('ui_deny');

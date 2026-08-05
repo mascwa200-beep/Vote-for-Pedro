@@ -20,6 +20,8 @@ import { Galaxy, plotTransit } from '../world/galaxy.js';
 // state needs it to answer "orbit of what", which is a question about the world
 // and not about the renderer.
 import { vista, worldLabel } from '../gfx/vista.js';
+import { makeSurface, clearSurface, surfaceReport } from '../world/surface.js';
+import { ROOMS } from '../world/interiors.data.js';
 import { rollEncounter, environmentalHazard } from '../world/encounters.js';
 import { buildRoster, ERAS } from '../world/crews.data.js';
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
@@ -135,6 +137,13 @@ export class Game {
     // assumed when nobody says.
     this.warpFactor = 6;
     // Where the captain physically is. A commission starts in the chair.
+    //
+    // The surface is cleared FIRST. It is the one room that lives in the global
+    // room table without belonging there, and a new game — or a loaded one —
+    // that inherited the last game's planet would put its captain on a world
+    // this commission has never been to. `Walker` resolves its room out of that
+    // table, so leaving it lying around is the whole bug.
+    clearSurface();
     this.walk = new Walker();
     this.walkOrder = null;
     this.log = [];
@@ -500,6 +509,67 @@ export class Game {
     this.orbit = null;
     if (label) this.officerSays('helm', `Breaking orbit of ${label}.`);
     emit('orbit:leave', { label });
+    return { ok: true, label };
+  }
+
+  // ------------------------------------------------------------ transporter
+
+  /** True when the captain is standing on a world rather than aboard. */
+  get ashore() { return this.walk.roomId === 'surface'; }
+
+  /**
+   * Beam down.
+   *
+   * Four things have to be true, and each of them is a different refusal: the
+   * ship has to be in orbit of somewhere, nobody can be shooting, the captain
+   * has to be standing in the transporter room, and the world has to be one a
+   * person can stand on. The third is the one that matters most — this game
+   * does not have a button that teleports you from the chair. You walk to the
+   * transporter room and you stand on the pad, because that is what the room is
+   * for and because a command you can give from anywhere is a menu.
+   */
+  beamDown() {
+    if (this.ashore) return { ok: false, error: 'We are already on the surface, Captain.' };
+    if (this.mode === MODES.COMBAT) return { ok: false, error: 'Not while we are under fire, Captain.' };
+    const body = this.orbitBody;
+    if (!body) {
+      const err = 'We would have to make orbit first, Captain.';
+      this.officerSays('transporter', err, 'object');
+      return { ok: false, error: err };
+    }
+    if (body.kind === 'gas') {
+      const err = `${this.orbitLabel} has no surface to beam down to.`;
+      this.officerSays('science', err, 'object');
+      return { ok: false, error: err };
+    }
+    if (this.walk.roomId !== 'transporter') {
+      const err = 'You would have to be in the transporter room, Captain.';
+      this.officerSays('transporter', err, 'object');
+      return { ok: false, error: err };
+    }
+
+    const label = this.orbitLabel;
+    makeSurface(body, label);
+    this.walkOrder = null;
+    this.walk.enter('surface');
+    this.pushLog(`Beamed down to ${label}. ${surfaceReport(body.kind)}.`, 'transporter');
+    emit('beam', { down: true, label, body });
+    return { ok: true, label, body };
+  }
+
+  /** And back. Always possible — the ship does not leave people behind. */
+  beamUp() {
+    if (!this.ashore) return { ok: false, error: 'We are aboard, Captain.' };
+    const label = this.walk.room?.name ?? 'the surface';
+    this.walkOrder = null;
+    this.walk.enter('transporter');
+    // On the pads, not by the door. `enter` puts you a step inside the way you
+    // came, which is right for walking and wrong for materialising.
+    const pad = ROOMS.transporter.padCentre;
+    [this.walk.x, this.walk.z] = pad;
+    clearSurface();
+    this.pushLog(`Beamed up from ${label}.`, 'transporter');
+    emit('beam', { down: false, label });
     return { ok: true, label };
   }
 
@@ -1383,6 +1453,15 @@ export class Game {
       ? { systemId: orb.systemId, bodyId: orb.bodyId }
       : null;
     if (g.orbit && !g.orbitBody) g.orbit = null;
+    // A record saved with the captain on a planet has to rebuild the planet
+    // before it can put them back on it. `Walker.load` has already fallen back
+    // to the bridge, because the room did not exist a moment ago — the position
+    // it read out of the save is still the one it was standing at, so restoring
+    // the id is enough to put the boots back in the same footprints.
+    if (data.walk?.roomId === 'surface' && g.orbitBody) {
+      makeSurface(g.orbitBody, g.orbitLabel);
+      g.walk.roomId = 'surface';
+    }
     g.firstStrike = data.firstStrike === true;
     g.inKobayashi = data.inKobayashi === true;
     g.gambitOpen = data.gambitOpen === true;
