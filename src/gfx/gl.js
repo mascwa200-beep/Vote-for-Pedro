@@ -33,9 +33,10 @@ varying float vDepth;
 varying vec3 vWorld;
 
 void main() {
+  vec3 n = normalize(uNormalMatrix * aNormal);
   vec4 world = uModel * vec4(aPosition, 1.0);
   gl_Position = uViewProj * world;
-  vNormal = normalize(uNormalMatrix * aNormal);
+  vNormal = n;
   vColor = aColor;
   vDepth = gl_Position.w;
   vWorld = world.xyz;

@@ -327,24 +327,78 @@ function console3d(solid, glow, station, index) {
   solid.quad(at(-hw, near, -hd), at(-hw, far, hd), at(hw, far, hd), at(hw, near, -hd),
     PALETTE.consoleTop);
 
-  // And the buttons on it, which is the glow.
+  // And the buttons on it — the jelly beans, which is the glow.
+  //
+  // CIRCLES AND TRIANGLES, not rectangles. docs/RESEARCH.md §8 is explicit:
+  // the controls were moulded resin caps in circles and triangles, and some of
+  // them were literally jelly beans. A grid of coloured squares is a computer
+  // keyboard; a scatter of round and triangular caps in five flat colours is
+  // 1966, and it is most of what makes the console read as a period object
+  // rather than as science fiction generally.
+  //
+  // The shapes are deterministic per station index, so a console looks the same
+  // every time you walk up to it. A console that reshuffles its own controls
+  // between visits is not a console.
   const colour = PANEL_COLOURS[index % PANEL_COLOURS.length];
-  const rows = 2;
-  const cols = 4;
+  const rows = 3;
+  const cols = 6;
+  const lerp = (t) => [near + (far - near) * t + 0.008, -hd + (hd * 2) * t];
+
+  // A tiny fixed hash, so the layout is stable and every console differs.
+  let h = (index + 1) * 0x9e3779b9;
+  const rnd = () => {
+    h ^= h << 13; h >>>= 0;
+    h ^= h >>> 17;
+    h ^= h << 5; h >>>= 0;
+    return h / 4294967296;
+  };
+
   for (let r = 0; r < rows; r++) {
     for (let col = 0; col < cols; col++) {
-      const u0 = -hw + 0.10 + (col * (hw * 2 - 0.20)) / cols;
-      const u1 = u0 + (hw * 2 - 0.20) / cols - 0.05;
-      const t0 = r / rows;
-      const t1 = t0 + 1 / rows - 0.18;
-      const lerp = (t) => [near + (far - near) * t + 0.008, -hd + (hd * 2) * t];
-      const [y0, f0] = lerp(t0);
-      const [y1, f1] = lerp(t1);
-      const shade = (r * cols + col) % 3 === 0
-        ? PANEL_COLOURS[(index + 2) % PANEL_COLOURS.length]
-        : colour;
-      // Same winding as the surface they sit on, for the same reason.
-      glow.quad(at(u0, y0, f0), at(u0, y1, f1), at(u1, y1, f1), at(u1, y0, f0), shade);
+      const pick = rnd();
+      // Not every position carries a cap. A fully populated grid is the
+      // giveaway that a machine laid it out.
+      if (pick < 0.22) continue;
+
+      const cu = -hw + 0.11 + ((col + 0.5) * (hw * 2 - 0.22)) / cols;
+      const ct = (r + 0.5) / rows;
+      const [cy, cf] = lerp(ct);
+      const rad = 0.028 + rnd() * 0.014;
+      // The cap sits ON the angled surface, so a step across it moves in y and
+      // in f together — the same lerp the grid uses, one row-fraction wide.
+      const [dy, df] = (() => {
+        const [ay, af] = lerp(ct - 0.5 / rows);
+        const [by, bf] = lerp(ct + 0.5 / rows);
+        return [(by - ay) * 0.5, (bf - af) * 0.5];
+      })();
+
+      const shade = PANEL_COLOURS[Math.floor(rnd() * PANEL_COLOURS.length)]
+        ?? colour;
+
+      // A point on the cap's rim, `k` of the way round.
+      const rim = (k, scale = 1) => {
+        const a = k * Math.PI * 2;
+        const su = Math.cos(a) * rad * scale;
+        const sv = Math.sin(a) * scale;
+        return at(cu + su, cy + dy * sv, cf + df * sv);
+      };
+
+      if (pick < 0.62) {
+        // A circle, as an octagon. At phone size nobody counts the sides, and
+        // eight is the point where a disc stops reading as a polygon.
+        // Wound so the fan faces UP the slope. Walking the rim the other way
+        // round points every one of these at the deck, and the winding check in
+        // tests/gfx.test.js caught exactly that the first time this ran — which
+        // is the whole reason that check exists.
+        const centre = at(cu, cy, cf);
+        for (let k = 0; k < 8; k++) {
+          glow.tri(centre, rim((k + 1) / 8), rim(k / 8), shade);
+        }
+      } else {
+        // A triangle, pointing up the slope — away from the operator, which is
+        // how they sit on the prop.
+        glow.tri(rim(0.25, 1.15), rim(0.9167, 1.15), rim(0.5833, 1.15), shade);
+      }
     }
   }
 }
