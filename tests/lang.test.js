@@ -722,3 +722,30 @@ describe('orders are the primary interface', () => {
     assert.equal(parseText('scan for ships').action, 'scan');
   });
 });
+
+describe('the phrases printed on the buttons are real orders', () => {
+  test('every phrase a button teaches actually parses to something', () => {
+    // The button labels carry a `say:` that claims "this phrase does what this
+    // button does". A phrase that does not parse is worse than no phrase at
+    // all: it teaches a language the game does not speak.
+    //
+    // Kept as a list rather than scraped out of the DOM because screens.js
+    // cannot be imported outside a browser — so the discipline is that a new
+    // `say:` gets a line here, and the parity check above covers the rest.
+    const printed = [
+      'stand up', 'take the chair', 'all stop', 'energise', 'use it',
+      'survey that', 'two to beam down', 'break orbit', 'through the door',
+      'scan the system', 'magnify', 'on screen', 'come about', 'climb',
+      'level off', 'dive', 'fire phasers', 'next target', 'open a channel',
+      'steady as she goes', 'request docking', 'get us out of here',
+      'target their weapons', 'target their shields', 'target their engines',
+      'take me to the sickbay',
+    ];
+    const dud = [];
+    for (const phrase of printed) {
+      const r = parseText(phrase);
+      if (r.unknown || (!r.action && !r.order?.action)) dud.push(phrase);
+    }
+    assert.deepEqual(dud, []);
+  });
+});

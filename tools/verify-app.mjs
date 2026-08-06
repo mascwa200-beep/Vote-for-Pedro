@@ -1235,8 +1235,12 @@ try {
   const climbed = await page.evaluate(async () => {
     const app = globalThis.__app;
     const before = app.game.ship.desiredPitch;
+    // Matched on the button's own LABEL rather than its whole text content:
+    // every button that has an order now prints the phrase underneath, so
+    // `textContent` is "Climb“climb”" and an anchored exact match finds
+    // nothing. `firstChild` is the label node.
     const btn = [...document.querySelectorAll('.btn')]
-      .find((b) => /^climb$/i.test(b.textContent.trim()));
+      .find((b) => /^climb$/i.test((b.firstChild?.textContent ?? '').trim()));
     if (!btn) return { error: 'no Climb control on the tactical screen' };
     btn.click();
     await new Promise((r) => setTimeout(r, 60));
@@ -1248,7 +1252,7 @@ try {
   const levelled = await page.evaluate(async () => {
     const app = globalThis.__app;
     const btn = [...document.querySelectorAll('.btn')]
-      .find((b) => /^level$/i.test(b.textContent.trim()));
+      .find((b) => /^level$/i.test((b.firstChild?.textContent ?? '').trim()));
     if (!btn) return { error: 'no Level control' };
     btn.click();
     await new Promise((r) => setTimeout(r, 60));

@@ -23598,14 +23598,14 @@ function chairConsole(app) {
       const r = g.dock();
       if (r.ok) { audio.play('dock'); haptic('confirm'); }
       app.render();
-    }, 'ui_confirm'), { color: 'green', sub: 'Full repair, resupply, and crew replacement' }));
+    }, 'ui_confirm'), { say: 'request docking', color: 'green', sub: 'Full repair, resupply, and crew replacement' }));
   }
   actions.push(button('Set course', tap(() => app.go('galaxy')), { color: 'blue', sub: 'Plot a course to another system' }));
   actions.push(button('Long-range scan', tap(() => {
     audio.play('scan');
     const enc = app.scanSystem();
     app.showMessage('Sensor Sweep', enc);
-  }, 'scan'), { color: 'ice' }));
+  }, 'scan'), { say: 'scan the system', color: 'ice' }));
 
   if (g.ship.hullPct < 1 && !g.canDock()) {
     actions.push(button('Effect repairs', tap(() => {
@@ -23739,7 +23739,7 @@ function transitPanel(app) {
       audio.play('warp_drop');
       g.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
       app.render();
-    }, 'ui_back'), { color: 'ghost' }),
+    }, 'ui_back'), { say: 'all stop', color: 'ghost' }),
   ]));
 
   return wrap;
@@ -23850,7 +23850,7 @@ function viewscreenScreen(app) {
     el('div', { class: 'grid-2' }, [
       button('Steady as she goes', tap(() => {
         app.tactical?.centreLook?.();
-      }), { color: 'blue', sub: 'Point the screen back down the bow' }),
+      }), { say: 'steady as she goes', color: 'blue', sub: 'Point the screen back down the bow' }),
       button('Magnify', tap(() => {
         const v = app.tactical;
         if (!v?.setMagnification) return;
@@ -23859,8 +23859,7 @@ function viewscreenScreen(app) {
         const next = v.magnification >= 8 ? 1 : Math.min(12, v.magnification * 2);
         v.setMagnification(next);
         app.render();
-      }), {
-        color: 'ice',
+      }), { say: 'magnify', color: 'ice',
         sub: app.tactical?.magnification > 1.05 ? `Now ${app.tactical.magnification.toFixed(0)}×` : 'Optical zoom',
       }),
     ]),
@@ -23925,7 +23924,7 @@ function tacticalScreen(app) {
       ])
       : el('p', { class: 'muted', text: 'No target locked.' }),
     eng.liveHostiles.length > 1
-      ? button('Next target', tap(() => { eng.cycleTarget(); app.render(); }), { color: 'ice' })
+      ? button('Next target', tap(() => { eng.cycleTarget(); app.render(); }), { say: 'next target', color: 'ice' })
       : null,
   ], 'danger'));
 
@@ -23938,7 +23937,10 @@ function tacticalScreen(app) {
       ...subs.map(([key, label]) => button(label, tap(() => {
         eng.targetSubsystem(eng.targetedSubsystem === key ? null : key);
         app.render();
-      }), { color: eng.targetedSubsystem === key ? 'red' : 'blue' })),
+      }), {
+        color: eng.targetedSubsystem === key ? 'red' : 'blue',
+        say: `target their ${label.toLowerCase()}`,
+      })),
     ]),
     el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor.' }),
   ]));
@@ -23955,7 +23957,7 @@ function tacticalScreen(app) {
         const n = eng.fireAll();
         if (n) { audio.play('phaser', { throttle: 120 }); haptic('hit_light'); }
         else { audio.play('ui_deny'); }
-      }, 'ui_tap'), { color: 'red' }),
+      }, 'ui_tap'), { say: 'fire phasers', color: 'red' }),
       button(eng.autoFire ? 'Auto: on' : 'Auto: off', tap(() => {
         eng.autoFire = !eng.autoFire;
         app.render();
@@ -23970,11 +23972,10 @@ function tacticalScreen(app) {
   side.append(panel('Helm', [
     // The way out to the forward view. It lives under Helm because pointing
     // the ship is what pointing the screen amounts to in a fight.
-    button('On screen', tap(() => app.go('viewscreen')), {
-      color: 'ice', sub: 'The forward view from the bridge',
+    button('On screen', tap(() => app.go('viewscreen')), { say: 'on screen', color: 'ice', sub: 'The forward view from the bridge',
     }),
     el('div', { class: 'grid-2' }, [
-      button('Come about', tap(() => eng.comeAboutTo(eng.target)), { color: 'blue' }),
+      button('Come about', tap(() => eng.comeAboutTo(eng.target)), { say: 'come about', color: 'blue' }),
       button(g.ship.evasive ? 'Evasive: on' : 'Evasive', tap(() => {
         eng.evasive(!g.ship.evasive); app.render();
       }), { color: g.ship.evasive ? 'green' : 'blue' }),
@@ -23987,18 +23988,18 @@ function tacticalScreen(app) {
     el('div', { class: 'grid-3' }, [
       button('Climb', tap(() => {
         eng.setPitch(g.ship.desiredPitch + 20); app.render();
-      }), { color: 'blue' }),
-      button('Level', tap(() => { eng.setPitch(0); app.render(); }), { color: 'blue' }),
+      }), { say: 'climb', color: 'blue' }),
+      button('Level', tap(() => { eng.setPitch(0); app.render(); }), { say: 'level off', color: 'blue' }),
       button('Dive', tap(() => {
         eng.setPitch(g.ship.desiredPitch - 20); app.render();
-      }), { color: 'blue' }),
+      }), { say: 'dive', color: 'blue' }),
     ]),
     readout('Elevation', (g.ship.pitch + 70) / 140,
       `${g.ship.pitch >= 0 ? '+' : ''}${Math.round(g.ship.pitch)}\u00B0`),
     button('Disengage — go to warp', tap(() => {
       if (!eng.beginWarpOut()) audio.play('ui_deny');
       app.render();
-    }), { color: 'peach', sub: 'Eight seconds at this heading. They get all eight.' }),
+    }), { say: 'get us out of here', color: 'peach', sub: 'Eight seconds at this heading. They get all eight.' }),
   ]));
 
   // --- Power ---
@@ -24034,7 +24035,7 @@ function tacticalScreen(app) {
   const factionId = eng.hostiles[0]?.faction;
   if (FACTIONS[factionId]?.hailable) {
     side.append(panel('Communications', [
-      button('Hail them', tap(() => app.openHail(factionId)), { color: 'lilac' }),
+      button('Hail them', tap(() => app.openHail(factionId)), { say: 'open a channel', color: 'lilac' }),
     ]));
   }
 
