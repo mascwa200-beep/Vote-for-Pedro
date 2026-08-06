@@ -1396,3 +1396,42 @@ test('you cannot survey from the bridge', () => {
   assert.ok(!r.ok);
   assert.match(r.error, /surface/i);
 });
+
+// ------------------------------------------------- episodes where you are
+
+test('a stage will not resolve from the wrong place', async () => {
+  // An episode used to be a screen you were teleported to. A stage that says it
+  // happens on the surface has to actually happen on the surface — otherwise
+  // "beam down and see" is a sentence in a text box rather than a thing you do.
+  const { INTENTS } = await import('../src/lang/lexicon.js');
+  const choice = INTENTS.find((i) => i.id === 'mission_choice');
+  assert.ok(choice, 'there is no way to pick a stage option by saying so');
+
+  // Ordinals before cardinals: "the second one" contains the word "one", and a
+  // single pass in order reads it as option one and picks the wrong thing in
+  // the middle of an episode.
+  assert.equal(choice.build({ text: 'option one' }).index, 0);
+  assert.equal(choice.build({ text: 'the second one' }).index, 1);
+  assert.equal(choice.build({ text: 'take the third' }).index, 2);
+  assert.equal(choice.build({ text: 'go with the first' }).index, 0);
+});
+
+test('picking an option by voice takes the same path as pressing it', () => {
+  const g = new Game({ seed: 4 });
+  const ep = g.missions.episodes[0];
+  assert.ok(ep);
+  // Through the game rather than the book: `MissionBook.start` takes the game
+  // as its second argument and a stage's effects reach for it.
+  g.startMission(ep.id);
+  const before = g.missions.active.stageId;
+  const choices = g.missions.active.choices();
+  assert.ok(choices.length > 0, 'a stage with nothing to decide');
+
+  // The order carries an INDEX, because the parser cannot know what an episode
+  // wrote in its labels — it can only count.
+  const picked = choices[0];
+  const r = g.chooseMission(picked.id);
+  assert.ok(r, 'the choice did nothing');
+  assert.notEqual(g.missions.active?.stageId ?? null, before,
+    'the episode did not move on');
+});

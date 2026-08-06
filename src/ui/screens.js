@@ -137,6 +137,10 @@ export function bridgeScreen(app) {
     side.append(orbitPanel(app));
   }
 
+  // An episode in progress is something happening around you, not a screen you
+  // were sent to. It hangs here for the same reason a hail does.
+  if (g.missions.active) side.append(missionPanel(app));
+
   // --- The one thing that has to be visible without walking anywhere ---
   // Whether the ship is in danger. A captain does not have to consult a panel
   // to know the hull is failing, and hiding it behind a walk would be a
@@ -1374,25 +1378,80 @@ export function encounterPanel(app) {
 
 // ================================================================ MISSION
 
-export function missionScreen(app) {
+/**
+ * Where a stage wants the captain to be before it will offer its choices.
+ *
+ * An episode used to be a screen you were teleported to: a wall of text and a
+ * column of buttons, regardless of whether you were in the chair, in a
+ * corridor, or standing on a planet. That is the last part of this game that
+ * happened in a box instead of in a room.
+ *
+ * `where` on a stage says where it belongs. A stage with no `where` is a bridge
+ * stage, because that is where most of an episode happens and defaulting the
+ * other way would strand every existing episode.
+ */
+function stageIsHere(g, stage) {
+  const where = stage?.where ?? 'bridge';
+  if (where === 'anywhere') return true;
+  if (where === 'surface') return g.ashore;
+  if (g.ashore) return false;
+  return g.walk?.roomId === where;
+}
+
+/** What to say when the captain is in the wrong place for it. */
+function stageElsewhere(g, stage) {
+  const where = stage?.where ?? 'bridge';
+  if (where === 'surface') return 'This is happening on the surface. Beam down.';
+  const room = ROOMS[where];
+  return `They are waiting for you in ${room?.name ?? where}.`;
+}
+
+/**
+ * An episode stage, as a panel.
+ *
+ * Same engine, same choices, same consequence ledger — the only thing that
+ * changed is that it hangs on the bridge you are standing on rather than
+ * replacing it.
+ */
+export function missionPanel(app) {
   const g = app.game;
   const m = g.missions.active;
-  const root = el('div', { class: 'scroll' });
-  if (!m) return root;
+  const wrap = el('div', {});
+  if (!m) return wrap;
 
   const stage = m.stage;
-  root.append(panel(m.title, [
+  wrap.append(panel(m.title, [
     stage.speaker ? el('div', { class: 'speaker', text: stage.speaker }) : null,
     el('p', { text: stage.text }),
   ], 'accent'));
 
-  root.append(panel('Orders', m.choices().map((c) =>
+  if (!stageIsHere(g, stage)) {
+    wrap.append(panel('Orders', [
+      el('p', { class: 'muted', text: stageElsewhere(g, stage) }),
+      el('p', { class: 'hint', text: 'An episode is something you are in, not something you read.' }),
+    ]));
+    return wrap;
+  }
+
+  // Numbered, so they can be spoken. The parser cannot know what an episode
+  // wrote in its choice labels, but it can count — and "option two" is how a
+  // captain picks one of three things somebody has just laid out for them.
+  const spoken = ['option one', 'option two', 'option three', 'option four', 'option five'];
+  wrap.append(panel('Orders', m.choices().map((c, i) =>
     button(c.label, tap(() => app.chooseMission(c.id), 'ui_select'), {
       color: c.locked ? 'ghost' : 'orange',
       sub: c.lockReason ?? c.description,
       locked: c.locked,
+      say: c.locked ? '' : spoken[i],
     }))));
 
+  return wrap;
+}
+
+/** The same thing as a screen, for the router and the harness. */
+export function missionScreen(app) {
+  const root = el('div', { class: 'scroll' });
+  root.append(missionPanel(app));
   return root;
 }
 

@@ -14341,6 +14341,40 @@ const INTENTS = [
     build: (c) => ({ action: 'go_to_room', room: c.room.id }),
   },
   {
+    id: 'mission_choice',
+    help: 'Option one / take the second one',
+    phrases: [
+      'option one', 'option two', 'option three', 'option four', 'option five',
+      'the first one', 'the second one', 'the third one', 'the fourth one',
+      'take the first', 'take the second', 'take the third',
+      'first option', 'second option', 'third option', 'fourth option',
+      'number one', 'number two', 'number three',
+      'go with the first', 'go with the second', 'go with the third',
+    ],
+    keywords: { option: 2.6, first: 1.4, second: 1.6, third: 1.6, fourth: 1.6 },
+    // A stage's choices are written by an episode and the parser cannot know
+    // what they say. It can count, though — and "option two" is how a captain
+    // picks one of three things somebody has just laid out for them.
+    veto: ['course', 'warp', 'fire', 'shields'],
+    build: (c) => {
+      const t = c.text;
+      const words = ['one', 'two', 'three', 'four', 'five'];
+      const ordinals = ['first', 'second', 'third', 'fourth', 'fifth'];
+      // ORDINALS FIRST, and it matters: "the second one" contains the word
+      // "one", so a single pass that checks the cardinals in order reads it as
+      // option one and picks the wrong thing in the middle of an episode.
+      for (let i = 0; i < ordinals.length; i++) {
+        if (new RegExp(`\\b${ordinals[i]}\\b`).test(t)) return { action: 'mission_choice', index: i };
+      }
+      for (let i = 0; i < words.length; i++) {
+        if (new RegExp(`\\b(?:${words[i]}|${i + 1})\\b`).test(t)) {
+          return { action: 'mission_choice', index: i };
+        }
+      }
+      return { action: 'mission_choice', index: 0 };
+    },
+  },
+  {
     id: 'use_console',
     help: 'Use it / open that console',
     phrases: [
@@ -23517,6 +23551,10 @@ function bridgeScreen(app) {
     side.append(orbitPanel(app));
   }
 
+  // An episode in progress is something happening around you, not a screen you
+  // were sent to. It hangs here for the same reason a hail does.
+  if (g.missions.active) side.append(missionPanel(app));
+
   // --- The one thing that has to be visible without walking anywhere ---
   // Whether the ship is in danger. A captain does not have to consult a panel
   // to know the hull is failing, and hiding it behind a walk would be a
@@ -24742,25 +24780,81 @@ function encounterPanel(app) {
 }
 
 // ================================================================ MISSION
-function missionScreen(app) {
+
+/**
+ * Where a stage wants the captain to be before it will offer its choices.
+ *
+ * An episode used to be a screen you were teleported to: a wall of text and a
+ * column of buttons, regardless of whether you were in the chair, in a
+ * corridor, or standing on a planet. That is the last part of this game that
+ * happened in a box instead of in a room.
+ *
+ * `where` on a stage says where it belongs. A stage with no `where` is a bridge
+ * stage, because that is where most of an episode happens and defaulting the
+ * other way would strand every existing episode.
+ */
+function stageIsHere(g, stage) {
+  const where = stage?.where ?? 'bridge';
+  if (where === 'anywhere') return true;
+  if (where === 'surface') return g.ashore;
+  if (g.ashore) return false;
+  return g.walk?.roomId === where;
+}
+
+/** What to say when the captain is in the wrong place for it. */
+function stageElsewhere(g, stage) {
+  const where = stage?.where ?? 'bridge';
+  if (where === 'surface') return 'This is happening on the surface. Beam down.';
+  const room = ROOMS[where];
+  return `They are waiting for you in ${room?.name ?? where}.`;
+}
+
+/**
+ * An episode stage, as a panel.
+ *
+ * Same engine, same choices, same consequence ledger — the only thing that
+ * changed is that it hangs on the bridge you are standing on rather than
+ * replacing it.
+ */
+function missionPanel(app) {
   const g = app.game;
   const m = g.missions.active;
-  const root = el('div', { class: 'scroll' });
-  if (!m) return root;
+  const wrap = el('div', {});
+  if (!m) return wrap;
 
   const stage = m.stage;
-  root.append(panel(m.title, [
+  wrap.append(panel(m.title, [
     stage.speaker ? el('div', { class: 'speaker', text: stage.speaker }) : null,
     el('p', { text: stage.text }),
   ], 'accent'));
 
-  root.append(panel('Orders', m.choices().map((c) =>
+  if (!stageIsHere(g, stage)) {
+    wrap.append(panel('Orders', [
+      el('p', { class: 'muted', text: stageElsewhere(g, stage) }),
+      el('p', { class: 'hint', text: 'An episode is something you are in, not something you read.' }),
+    ]));
+    return wrap;
+  }
+
+  // Numbered, so they can be spoken. The parser cannot know what an episode
+  // wrote in its choice labels, but it can count — and "option two" is how a
+  // captain picks one of three things somebody has just laid out for them.
+  const spoken = ['option one', 'option two', 'option three', 'option four', 'option five'];
+  wrap.append(panel('Orders', m.choices().map((c, i) =>
     button(c.label, tap(() => app.chooseMission(c.id), 'ui_select'), {
       color: c.locked ? 'ghost' : 'orange',
       sub: c.lockReason ?? c.description,
       locked: c.locked,
+      say: c.locked ? '' : spoken[i],
     }))));
 
+  return wrap;
+}
+
+/** The same thing as a screen, for the router and the harness. */
+function missionScreen(app) {
+  const root = el('div', { class: 'scroll' });
+  root.append(missionPanel(app));
   return root;
 }
 
@@ -25018,6 +25112,7 @@ __exports.referenceScreen = referenceScreen;
 __exports.optionsScreen = optionsScreen;
 __exports.encounterScreen = encounterScreen;
 __exports.encounterPanel = encounterPanel;
+__exports.missionPanel = missionPanel;
 __exports.missionScreen = missionScreen;
 __exports.hailOptions = hailOptions;
 __exports.newGameScreen = newGameScreen;
@@ -25929,7 +26024,10 @@ class App {
     // panel appears in the bridge's own strip, and the Bridge tab carries a
     // badge if you happen to be reading the roster when it comes in.
     on('encounter:begin', () => { this.go('bridge'); haptic('select'); });
-    on('mission:start', () => { this.go('mission'); });
+    // To the BRIDGE, not to a mission screen. The stage is a panel there now,
+    // the same way a hail and a transit are — an episode is something that
+    // happens around you rather than a place you are sent.
+    on('mission:start', () => { this.go('bridge'); });
     on('mission:stage', () => { this.needsRender = true; });
     on('game:over', () => { this.go('gameover'); });
     on('log', () => { this.needsRender = true; });
@@ -26041,7 +26139,9 @@ class App {
     // bridge you can walk to. Redirecting *away* from it during a fight was the
     // same mistake in the other direction, and it left the tactical view never
     // built and the renderer reporting a mode it was not in.
-    else if (g.mode === MODES.MISSION) screen = 'mission';
+    // MODES.MISSION no longer takes over the screen. The stage hangs on the
+    // bridge; overriding here is what used to dispose the first-person view
+    // mid-episode and leave a frozen photograph of a room nobody was drawing.
     // An ENCOUNTER and a TRANSIT no longer replace the bridge either. A ship
     // hailing you is something you see on the viewer and answer from the chair,
     // and being at warp is something you are doing while sitting in it — both
@@ -27119,6 +27219,18 @@ class App {
       case 'away_team': {
         g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
         ack('comms', 'Away team assembled and standing by in the transporter room.');
+        break;
+      }
+      case 'mission_choice': {
+        const m = g.missions.active;
+        const choices = m?.choices?.() ?? [];
+        const pick = choices[order.index ?? 0];
+        if (!m || !pick || pick.locked) {
+          audio.play('ui_deny');
+          g.pushLog('There is nothing to decide, Captain.', 'computer');
+          break;
+        }
+        this.chooseMission(pick.id);
         break;
       }
       case 'use':
