@@ -44,7 +44,7 @@ const ALERT_AMBIENCE = {
  *            harmonics; a cabin is muffled by soft furnishing.
  *   chirps — panel bleeps per second, 0 for rooms that had none.
  */
-const ROOM_AMBIENCE = {
+export const ROOM_AMBIENCE = {
   bridge: { pitch: 1.0, gain: 1.0, filter: 1.0, chirps: 0.7 },
   // Down an octave and half again as loud. The reactor room is the one
   // compartment where you can hear the ship being a ship.
@@ -58,7 +58,33 @@ const ROOM_AMBIENCE = {
   briefing: { pitch: 1.0, gain: 0.55, filter: 0.7, chirps: 0.1 },
   // A moving car in a shaft: the hum rises and there is nothing else in it.
   turbolift: { pitch: 1.25, gain: 0.85, filter: 1.15, chirps: 0 },
+
+  // Corridors take the deck they run through. All three are the same shape of
+  // sound — a bulkhead away from whatever is making it — and differ by what is
+  // on the other side of that bulkhead.
   corridor_a: { pitch: 0.85, gain: 0.7, filter: 0.9, chirps: 0.15 },
+  corridor_rec: { pitch: 0.9, gain: 0.62, filter: 0.8, chirps: 0.1 },
+  corridor_sec: { pitch: 0.8, gain: 0.75, filter: 0.95, chirps: 0.15 },
+
+  // The one room aboard nobody is on duty in. Warm, low and quiet, with the
+  // occasional food synthesiser rather than instruments.
+  rec: { pitch: 1.1, gain: 0.5, filter: 0.6, chirps: 0.08 },
+  crewquarters: { pitch: 1.0, gain: 0.42, filter: 0.5, chirps: 0 },
+
+  // Deck 7. The armoury is a locked steel room and sounds like one; the brig
+  // has the containment fields, which is a high steady note and nothing else.
+  armoury: { pitch: 0.95, gain: 0.7, filter: 1.4, chirps: 0.12 },
+  brig: { pitch: 2.6, gain: 0.55, filter: 1.6, chirps: 0 },
+  // Volume, and the emptiness that goes with it: a big cold space with the
+  // ship's structure ringing through it.
+  cargo: { pitch: 0.62, gain: 0.9, filter: 0.7, chirps: 0.06 },
+
+  // The hangar is the largest compartment in the game and open to the doors.
+  // Lowest note aboard, loudest, and almost nothing on top of it.
+  hangar: { pitch: 0.45, gain: 1.2, filter: 0.55, chirps: 0.05 },
+
+  // The bridge in miniature, so it sounds like the bridge in miniature.
+  auxcontrol: { pitch: 1.0, gain: 0.8, filter: 1.0, chirps: 0.5 },
 };
 
 const DEFAULT_ROOM = { pitch: 1.0, gain: 1.0, filter: 1.0, chirps: 0.2 };

@@ -1343,3 +1343,65 @@ describe('the ground under a landing party', () => {
     }
   });
 });
+
+describe('a room is a box you are inside', () => {
+  test('every bulkhead, deck and deckhead faces the room it encloses', () => {
+    // The check that was never written, and the cost of not writing it: every
+    // box compartment aboard had its four walls, its deck and its deckhead all
+    // wound facing OUT. Back-face culling deleted the lot. A box room was a
+    // void with furniture standing in it, and it survived because black where a
+    // bulkhead should be reads as an unlit bulkhead — until the hangar, at
+    // sixteen metres by twenty, made it impossible to mistake for lighting.
+    //
+    // The rule is one line: a surface enclosing a room has its normal pointing
+    // at the middle of that room.
+    const wrong = [];
+    for (const room of ROOM_LIST) {
+      const { data, vertexCount, stride } = roomMeshes(room.id).solid;
+      const floats = stride / 4;
+      const h = room.shape.height ?? 2.5;
+
+      for (let i = 0; i < vertexCount; i++) {
+        const o = i * floats;
+        const x = data[o]; const y = data[o + 1]; const z = data[o + 2];
+        const nx = data[o + 3]; const ny = data[o + 4]; const nz = data[o + 5];
+
+        // The deck. Anything else sitting at y = 0 is the underside of a prop,
+        // which is legitimately face-down, so only the shell itself counts —
+        // and the shell is what reaches the walls.
+        const onWall = room.shape.kind === 'box'
+          ? Math.abs(Math.abs(x) - room.shape.width / 2) < 1e-6
+            || Math.abs(Math.abs(z) - room.shape.depth / 2) < 1e-6
+          : Math.abs(Math.hypot(x, z) - room.shape.radius) < 0.02;
+
+        if (onWall && Math.abs(ny) < 0.5) {
+          // Inward means the normal agrees with the direction to the centre.
+          if (nx * -x + nz * -z < -1e-6) wrong.push(`${room.id}: a bulkhead faces out of the room`);
+        }
+        // The deckhead, which has to look down at the people under it.
+        if (Math.abs(y - h) < 1e-6 && ny > 0.9) {
+          wrong.push(`${room.id}: the ceiling faces up, into the deck above`);
+        }
+      }
+    }
+    assert.deepEqual([...new Set(wrong)], []);
+  });
+
+  test('every compartment has a deck you can see', () => {
+    // Separate from the winding check because a missing floor and an inverted
+    // floor look identical from inside — both are black — and only one of them
+    // is caught by asking about normals.
+    const floorless = [];
+    for (const room of ROOM_LIST) {
+      const { data, vertexCount, stride } = roomMeshes(room.id).solid;
+      const floats = stride / 4;
+      let up = 0;
+      for (let i = 0; i < vertexCount; i++) {
+        const o = i * floats;
+        if (Math.abs(data[o + 1]) < 1e-6 && data[o + 4] > 0.99) up++;
+      }
+      if (up < 3) floorless.push(`${room.id}: ${up} up-facing deck vertices`);
+    }
+    assert.deepEqual(floorless, []);
+  });
+});

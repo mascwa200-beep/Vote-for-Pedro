@@ -389,15 +389,29 @@ function boxShell(solid, glow, room) {
   const hd = room.shape.depth / 2;
   const h = WALL_HEIGHT(room);
 
-  solid.quad(vec3(-hw, 0, -hd), vec3(hw, 0, -hd), vec3(hw, 0, hd), vec3(-hw, 0, hd), PALETTE.floor);
-  solid.quad(vec3(-hw, h, hd), vec3(hw, h, hd), vec3(hw, h, -hd), vec3(-hw, h, -hd), PALETTE.ceiling);
+  // The deck faces UP and the deckhead faces DOWN, and both of these were the
+  // other way round for the whole life of this file. Back-face culling then
+  // deleted every floor and every ceiling in every box compartment aboard — and
+  // it went unnoticed because the rooms were small enough that walls filled the
+  // frame and the black where the deck should be read as dark carpet. The
+  // hangar is sixteen metres by twenty and made it impossible to miss.
+  solid.quad(vec3(-hw, 0, -hd), vec3(-hw, 0, hd), vec3(hw, 0, hd), vec3(hw, 0, -hd), PALETTE.floor);
+  solid.quad(vec3(-hw, h, -hd), vec3(hw, h, -hd), vec3(hw, h, hd), vec3(-hw, h, hd), PALETTE.ceiling);
 
   // Each wall is cut into panels so a doorway can be left out of one of them.
+  // Every one of these flips was inverted, so all four bulkheads of every box
+  // compartment aboard faced OUT and were culled. A box room was a void with
+  // furniture standing in it, and it survived this long because the black where
+  // a wall should be reads as an unlit bulkhead until you stand somewhere big
+  // enough to see there is nothing there.
+  //
+  // The rule, for the next one: a wall's normal points at the middle of the
+  // room. The wall at +z faces −z; the wall at −x faces +x.
   const walls = [
-    { axis: 'z', at: hd, from: -hw, to: hw, flip: false },
-    { axis: 'z', at: -hd, from: -hw, to: hw, flip: true },
-    { axis: 'x', at: hw, from: -hd, to: hd, flip: true },
-    { axis: 'x', at: -hw, from: -hd, to: hd, flip: false },
+    { axis: 'z', at: hd, from: -hw, to: hw, flip: true },
+    { axis: 'z', at: -hd, from: -hw, to: hw, flip: false },
+    { axis: 'x', at: hw, from: -hd, to: hd, flip: false },
+    { axis: 'x', at: -hw, from: -hd, to: hd, flip: true },
   ];
 
   for (const wall of walls) {

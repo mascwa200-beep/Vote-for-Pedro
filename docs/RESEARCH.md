@@ -433,6 +433,43 @@ Sources: [Memory Alpha — Standard orbit](https://memory-alpha.fandom.com/wiki/
 
 ---
 
+## 11. Where things are on the ship
+
+The game has eight compartments, which is a menu rather than a vessel. Before
+adding more, the question is where they actually go — and the honest answer is
+that the show never settled it. Deck numbers were assigned line by line across
+three seasons by people who were not keeping a plan, so several rooms have two
+or three canonical decks. What follows is what is documented, with the
+contradictions left visible rather than smoothed over.
+
+| Compartment | Deck | Note |
+|---|---|---|
+| Bridge | **1** | Never in dispute. |
+| Recreation room | **3** | "Recreation room 3", deck 3. |
+| Sickbay | **6** | Also placed on 5 and 7 elsewhere in the show. |
+| Briefing room | **7** | |
+| Main brig | **7** | **Adjoining the briefing room** — the one adjacency the show is explicit about. |
+| Armoury | **7** | Same deck as the brig. |
+| Hangar deck | secondary hull, aft | No deck number given. The secondary hull is stated as sixteen decks tall. |
+
+**The one fact worth building around** is that the brig adjoins the briefing
+room. It is the only interior adjacency the show states outright, and an
+adjacency is worth more to this game than a deck number: a deck number is a
+label on a turbolift button, while an adjacency is a door you can walk through.
+
+**What the build takes from this.** Deck numbers are used where documented and
+the ship's existing assignments are left alone where the show contradicts
+itself — moving sickbay between 5, 6 and 7 to chase an inconsistency the source
+material never resolved buys nothing. What is built is the *connectivity*: a
+corridor per populated deck, junctions where corridors meet, and the brig
+opening onto the briefing room because that is what the record says.
+
+Sources: [Memory Alpha — Constitution class decks](https://memory-alpha.fandom.com/wiki/Constitution_class_decks),
+[Memory Alpha — Constitution class](https://memory-alpha.fandom.com/wiki/Constitution_class),
+[Cygnus-X1 — Star Trek Blueprints: Constitution Class general plans](https://www.cygnus-x1.net/links/lcars/star-trek-blueprints.php)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
