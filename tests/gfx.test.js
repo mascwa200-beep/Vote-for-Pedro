@@ -24,7 +24,9 @@ import {
   sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, worldMesh, limbMesh,
   WARP_LENGTH, VOLUME,
 } from '../src/gfx/scene.js';
-import { vistaFor, bearingOf, fovFor, horizontalFov, noseOf, worldLabel } from '../src/gfx/vista.js';
+import {
+  vistaFor, bearingOf, fovFor, horizontalFov, noseOf, worldLabel, joltShake, joltTint,
+} from '../src/gfx/vista.js';
 import {
   orbitFrame, orbitPeriod, rotationPeriod, angularRadius, orbitAxis, ORBIT_ALTITUDE,
 } from '../src/world/orbit.js';
@@ -1480,5 +1482,43 @@ describe('a crew that can look at you', () => {
       if (data[o + 8] > data[o + 6] * 1.3 && data[o + 7] > data[o + 6]) chairish++;
     }
     assert.ok(chairish > 0, 'the crew chairs left with the officers');
+  });
+});
+
+describe('a hit you can see and feel', () => {
+  test('the shake starts hard and settles, rather than stopping', () => {
+    // Squared decay. Linear decay reads as a wobble somebody remembered to
+    // stop; this reads as a ship absorbing something.
+    const early = Math.abs(joltShake(0.95));
+    const late = Math.abs(joltShake(0.2));
+    assert.ok(early > late * 3, `early ${early.toFixed(4)} vs late ${late.toFixed(4)}`);
+    assert.equal(joltShake(0), 0, 'the deck is still moving after the hit is over');
+    assert.equal(joltShake(-1), 0);
+  });
+
+  test('a hull breach throws the deck harder than a shield hit', () => {
+    assert.ok(Math.abs(joltShake(0.8, true)) > Math.abs(joltShake(0.8, false)));
+  });
+
+  test('the deck moves centimetres, not metres', () => {
+    // A camera thrown half a metre by a phaser is a camera nobody can play
+    // through. The worst case has to stay inside what a person standing on a
+    // deck plate would actually experience.
+    let worst = 0;
+    for (let t = 0; t <= 1; t += 0.005) worst = Math.max(worst, Math.abs(joltShake(t, true)));
+    assert.ok(worst < 0.2, `the deck moves ${worst.toFixed(3)} m`);
+    assert.ok(worst > 0.02, `the deck barely moves at ${worst.toFixed(3)} m`);
+  });
+
+  test('the flash says whether it got through', () => {
+    // The one piece of information a captain wants out of a flash, and getting
+    // it from the colour means not reading it off a panel mid-fight.
+    const hull = joltTint(0.9, true);
+    const shield = joltTint(0.9, false);
+    assert.ok(hull[0] > hull[2], 'a hull breach does not read red');
+    assert.ok(shield[2] > shield[0], 'a shield hit does not read blue');
+    // Both brighten: a flash is a flash.
+    assert.ok(hull[0] > 1 && shield[2] > 1);
+    assert.deepEqual(joltTint(0), [1, 1, 1], 'the picture stays tinted after the hit');
   });
 });
