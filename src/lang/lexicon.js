@@ -712,6 +712,40 @@ export const INTENTS = [
     build: (c) => ({ action: 'go_to_room', room: c.room.id }),
   },
   {
+    id: 'mission_choice',
+    help: 'Option one / take the second one',
+    phrases: [
+      'option one', 'option two', 'option three', 'option four', 'option five',
+      'the first one', 'the second one', 'the third one', 'the fourth one',
+      'take the first', 'take the second', 'take the third',
+      'first option', 'second option', 'third option', 'fourth option',
+      'number one', 'number two', 'number three',
+      'go with the first', 'go with the second', 'go with the third',
+    ],
+    keywords: { option: 2.6, first: 1.4, second: 1.6, third: 1.6, fourth: 1.6 },
+    // A stage's choices are written by an episode and the parser cannot know
+    // what they say. It can count, though — and "option two" is how a captain
+    // picks one of three things somebody has just laid out for them.
+    veto: ['course', 'warp', 'fire', 'shields'],
+    build: (c) => {
+      const t = c.text;
+      const words = ['one', 'two', 'three', 'four', 'five'];
+      const ordinals = ['first', 'second', 'third', 'fourth', 'fifth'];
+      // ORDINALS FIRST, and it matters: "the second one" contains the word
+      // "one", so a single pass that checks the cardinals in order reads it as
+      // option one and picks the wrong thing in the middle of an episode.
+      for (let i = 0; i < ordinals.length; i++) {
+        if (new RegExp(`\\b${ordinals[i]}\\b`).test(t)) return { action: 'mission_choice', index: i };
+      }
+      for (let i = 0; i < words.length; i++) {
+        if (new RegExp(`\\b(?:${words[i]}|${i + 1})\\b`).test(t)) {
+          return { action: 'mission_choice', index: i };
+        }
+      }
+      return { action: 'mission_choice', index: 0 };
+    },
+  },
+  {
     id: 'use_console',
     help: 'Use it / open that console',
     phrases: [

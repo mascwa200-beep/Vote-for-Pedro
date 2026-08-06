@@ -449,6 +449,61 @@ try {
     underWay.warpPhase > 0, JSON.stringify(underWay));
   await dismissModals(page);
 
+  // ---- An episode happens where you are ----
+  //
+  // A stage used to teleport you to a screen: a wall of text and a column of
+  // buttons, whether you were in the chair, in a corridor or standing on a
+  // planet. It hangs on the bridge now, the same way a hail does — and a stage
+  // that belongs somewhere else says so instead of letting you resolve it from
+  // wherever you happen to be.
+  const episode = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const ep = g.missions.episodes[0];
+    if (!ep) return { error: 'no episodes' };
+
+    g.walk.enter('bridge');
+    g.walk.sit(true);
+    g.startMission?.(ep.id) ?? g.missions.start(ep.id);
+    app.render();
+    const titles = () => [...document.querySelectorAll('.panel h2')].map((h) => h.textContent.trim());
+    const onBridge = titles().includes('Main Bridge');
+    const showsStage = !!g.missions.active;
+    const choices = [...document.querySelectorAll('.panel')]
+      .find((p) => /^Orders$/i.test(p.querySelector('h2')?.textContent?.trim() ?? ''));
+    const buttons = choices ? choices.querySelectorAll('.btn').length : 0;
+
+    // And the phrase that picks one is printed on it.
+    const spoken = choices
+      ? [...choices.querySelectorAll('.btn small.say')].map((n) => n.textContent)
+      : [];
+
+    // The view must still be alive: an episode taking over the screen is what
+    // used to dispose the first-person view and leave a frozen photograph.
+    const frames = app.fpv?.stats?.frames ?? 0;
+    await new Promise((r) => setTimeout(r, 400));
+
+    const out = {
+      onBridge,
+      showsStage,
+      buttons,
+      spoken: spoken.length,
+      drawing: (app.fpv?.stats?.frames ?? 0) > frames,
+    };
+    g.missions.active = null;
+    g.mode = 'bridge';
+    app.render();
+    return out;
+  });
+  check('an episode plays on the bridge rather than replacing it',
+    episode.onBridge === true && episode.showsStage === true, JSON.stringify(episode));
+  check('its choices are offered where you are standing',
+    episode.buttons > 0, JSON.stringify(episode));
+  check('and each one prints the words that pick it',
+    episode.spoken > 0, JSON.stringify(episode));
+  check('the view keeps drawing through an episode',
+    episode.drawing === true, JSON.stringify(episode));
+
   // ---- Standard orbit ----
   //
   // Driven through the order line rather than by calling the method, because

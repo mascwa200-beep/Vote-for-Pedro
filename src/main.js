@@ -344,7 +344,10 @@ class App {
     // panel appears in the bridge's own strip, and the Bridge tab carries a
     // badge if you happen to be reading the roster when it comes in.
     on('encounter:begin', () => { this.go('bridge'); haptic('select'); });
-    on('mission:start', () => { this.go('mission'); });
+    // To the BRIDGE, not to a mission screen. The stage is a panel there now,
+    // the same way a hail and a transit are — an episode is something that
+    // happens around you rather than a place you are sent.
+    on('mission:start', () => { this.go('bridge'); });
     on('mission:stage', () => { this.needsRender = true; });
     on('game:over', () => { this.go('gameover'); });
     on('log', () => { this.needsRender = true; });
@@ -456,7 +459,9 @@ class App {
     // bridge you can walk to. Redirecting *away* from it during a fight was the
     // same mistake in the other direction, and it left the tactical view never
     // built and the renderer reporting a mode it was not in.
-    else if (g.mode === MODES.MISSION) screen = 'mission';
+    // MODES.MISSION no longer takes over the screen. The stage hangs on the
+    // bridge; overriding here is what used to dispose the first-person view
+    // mid-episode and leave a frozen photograph of a room nobody was drawing.
     // An ENCOUNTER and a TRANSIT no longer replace the bridge either. A ship
     // hailing you is something you see on the viewer and answer from the chair,
     // and being at warp is something you are doing while sitting in it — both
@@ -1534,6 +1539,18 @@ class App {
       case 'away_team': {
         g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
         ack('comms', 'Away team assembled and standing by in the transporter room.');
+        break;
+      }
+      case 'mission_choice': {
+        const m = g.missions.active;
+        const choices = m?.choices?.() ?? [];
+        const pick = choices[order.index ?? 0];
+        if (!m || !pick || pick.locked) {
+          audio.play('ui_deny');
+          g.pushLog('There is nothing to decide, Captain.', 'computer');
+          break;
+        }
+        this.chooseMission(pick.id);
         break;
       }
       case 'use':
