@@ -218,6 +218,10 @@ class App {
   // ------------------------------------------------------------ events
 
   wireEvents() {
+    // Somebody reported. Turn them round to say it — the event has carried the
+    // station since the day it was written and nothing had ever listened.
+    on('officer:speak', ({ station }) => { this.fpv?.speak(station); });
+
     on('alert', (level) => {
       document.documentElement.dataset.alert = level;
       audio.setAlertLevel(level === 'red' ? 'red' : level === 'yellow' ? 'yellow' : 'normal');

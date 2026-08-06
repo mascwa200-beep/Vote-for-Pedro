@@ -30,7 +30,7 @@ import {
   vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project,
   quatFromTo, quatAxisAngle,
 } from '../gfx/math.js';
-import { roomMeshes, PALETTE } from '../gfx/room.js';
+import { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } from '../gfx/room.js';
 import {
   starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME,
 } from '../gfx/scene.js';
@@ -92,6 +92,12 @@ export class FirstPersonView {
     // keeping. The ORBIT they are about is saved, in `Game.orbit`.
     this.orbitPhase = 0;
     this.worldSpin = 0;
+    // Who is mid-report, and how much of the turn is left. Keyed by station id
+    // and decayed every frame, so an order acknowledged three decks away has
+    // worn off by the time the captain walks back in.
+    this.speaking = new Map();
+    this.lastRoom = null;
+    this.lastWalker = null;
     this._up = vec3();
     this._look = vec3();
 
@@ -191,6 +197,15 @@ export class FirstPersonView {
     // Kept because the warp field streams in real time and needs to know how
     // much of it has passed since the last frame.
     this.lastDt = Math.min(0.1, Math.max(0, dt));
+    // A glance over the shoulder lasts about three seconds, which is roughly
+    // how long it takes to say "aye, Captain" and go back to work.
+    if (this.speaking.size) {
+      for (const [id, t] of this.speaking) {
+        const next = t - this.lastDt / 3.0;
+        if (next <= 0) this.speaking.delete(id);
+        else this.speaking.set(id, next);
+      }
+    }
     const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
     const rect = this.canvas.getBoundingClientRect();
     const dpr = globalThis.devicePixelRatio ?? 1;
@@ -202,6 +217,8 @@ export class FirstPersonView {
     const walker = game?.walk;
     const room = walker?.room;
     if (!room) return;
+    this.lastRoom = room;
+    this.lastWalker = walker;
 
     // Interior camera. A wider lens than the tactical plot, because a room at
     // arm's length through a 52-degree window is a keyhole.
@@ -542,6 +559,60 @@ export class FirstPersonView {
       model: this._model, normalMatrix: nm, emissive: 1, fogFar: 1e6,
     });
 
+    this.drawCrew(room);
+  }
+
+  /**
+   * The people, drawn one at a time so they can look at you.
+   *
+   * They used to be part of the room's mesh, which meant an officer faced their
+   * console for the entire five-year mission — including while reporting to the
+   * captain standing behind them. One draw call each and no extra triangles
+   * buys a bridge crew that turns round when it has something to say.
+   */
+  drawCrew(room) {
+    const walker = room === this.lastRoom ? this.lastWalker : null;
+    for (const st of room.stations ?? []) {
+      if (!st.crew) continue;
+      const [x, z] = officerStandsAt(st);
+      const base = officerFaces(st);
+
+      let yaw = base;
+      const turning = this.speaking.get(st.id);
+      if (turning > 0 && walker) {
+        // Toward whoever is being spoken to, which is the captain, which is
+        // wherever the camera is — not toward a hardcoded chair. An officer in
+        // engineering reporting to you in engineering turns to face you there.
+        const want = Math.atan2(walker.x - x, walker.z - z);
+        // Shortest way round, so nobody spins the long way to look over their
+        // shoulder.
+        let delta = (want - base + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+        // Eased, and capped: a person glances over their shoulder, they do not
+        // swivel their whole body through 180 degrees to answer a question.
+        delta = Math.max(-2.2, Math.min(2.2, delta));
+        yaw = base + delta * (turning * turning * (3 - 2 * turning));
+      }
+
+      quatAxisAngle(vec3(0, 1, 0), yaw, this._quat);
+      this._pos[0] = x; this._pos[1] = 0; this._pos[2] = z;
+      compose(this._pos, this._quat, 1, this._model);
+      this.renderer.draw(`crew:${st.crew}:${st.mounted}`, officerMesh(st.crew, st.mounted), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model),
+        fogFar: 1e6,
+      });
+    }
+  }
+
+  /**
+   * Somebody at this station just said something. Turn them round.
+   *
+   * Decays in `render`, so a report that arrives while the captain is on
+   * another deck has worn off by the time they walk back in.
+   */
+  speak(stationId) {
+    if (!stationId) return;
+    this.speaking.set(stationId, 1);
   }
 
   // -------------------------------------------------------------- overlay

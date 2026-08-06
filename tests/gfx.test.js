@@ -28,7 +28,7 @@ import { vistaFor, bearingOf, fovFor, horizontalFov, noseOf, worldLabel } from '
 import {
   orbitFrame, orbitPeriod, rotationPeriod, angularRadius, orbitAxis, ORBIT_ALTITUDE,
 } from '../src/world/orbit.js';
-import { roomMeshes, allRoomMeshes } from '../src/gfx/room.js';
+import { roomMeshes, allRoomMeshes, officerMesh, officerStandsAt } from '../src/gfx/room.js';
 import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
 import { makeSurface } from '../src/world/surface.js';
 import { RNG } from '../src/core/rng.js';
@@ -1405,5 +1405,80 @@ describe('a room is a box you are inside', () => {
       if (up < 3) floorless.push(`${room.id}: ${up} up-facing deck vertices`);
     }
     assert.deepEqual(floorless, []);
+  });
+});
+
+describe('a crew that can look at you', () => {
+  test('an officer is their own mesh, not part of the room', () => {
+    // Baked into the room an officer faces their console for the entire
+    // five-year mission, including while reporting to the captain standing
+    // behind them. Their own mesh and their own model matrix costs one draw
+    // call each and no extra triangles — these are the same triangles that
+    // used to be in the room mesh.
+    const m = officerMesh('helm', 'floor');
+    assert.ok(m.vertexCount > 0, 'the officer has no body');
+
+    // Built at the origin facing +z, which is what makes a single quaternion
+    // able to turn the whole figure.
+    const { data, vertexCount, stride } = m;
+    const floats = stride / 4;
+    let maxX = 0; let maxZ = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      maxX = Math.max(maxX, Math.abs(data[o]));
+      maxZ = Math.max(maxZ, Math.abs(data[o + 2]));
+    }
+    assert.ok(maxX < 0.6, `the figure reaches ${maxX.toFixed(2)} m off the origin in x`);
+    assert.ok(maxZ < 0.6, `the figure reaches ${maxZ.toFixed(2)} m off the origin in z`);
+  });
+
+  test('the divisions do not wear the same colour', () => {
+    // Scanned across the whole figure rather than off the first vertex: the
+    // first box built is the legs, and every division wears the same trousers.
+    const palette = (m) => {
+      const f = m.stride / 4;
+      const seenColours = new Set();
+      for (let i = 0; i < m.vertexCount; i++) {
+        const o = i * f;
+        seenColours.add([m.data[o + 6], m.data[o + 7], m.data[o + 8]].map((v) => v.toFixed(3)).join(','));
+      }
+      return [...seenColours].sort().join('|');
+    };
+    const seen = new Set(['helm', 'science', 'engineering', 'medical', 'tactical']
+      .map((c) => palette(officerMesh(c, 'wall'))));
+    assert.ok(seen.size >= 3, `only ${seen.size} distinct division colours`);
+  });
+
+  test('an officer stands on the near side of their console', () => {
+    // The side away from the bulkhead it is set into. Standing inside the wall
+    // is the failure this exists to prevent.
+    for (const room of ROOM_LIST) {
+      for (const st of room.stations ?? []) {
+        if (!st.crew) continue;
+        const [x, z] = officerStandsAt(st);
+        const inward = Math.hypot(x, z) <= Math.hypot(st.at[0], st.at[1]) + 1e-6;
+        assert.ok(inward, `${room.id}/${st.id}: the officer stands outside their own console`);
+        // And inside the room they are supposed to be working in.
+        if (room.shape.kind === 'box') {
+          assert.ok(Math.abs(x) < room.shape.width / 2 && Math.abs(z) < room.shape.depth / 2,
+            `${room.id}/${st.id}: the officer is standing inside the bulkhead`);
+        }
+      }
+    }
+  });
+
+  test('the chair stays behind when the officer turns', () => {
+    // A chair does not swivel because the person in it looked over their
+    // shoulder, so it belongs to the room and the person does not.
+    const bridge = roomMeshes('bridge').solid;
+    const { data, vertexCount, stride } = bridge;
+    const floats = stride / 4;
+    // The crew chairs are the one light-blue thing in the room.
+    let chairish = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      if (data[o + 8] > data[o + 6] * 1.3 && data[o + 7] > data[o + 6]) chairish++;
+    }
+    assert.ok(chairish > 0, 'the crew chairs left with the officers');
   });
 });
