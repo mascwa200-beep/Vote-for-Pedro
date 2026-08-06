@@ -202,6 +202,9 @@ class App {
     document.documentElement.dataset.era = this.game?.era ?? s.era ?? 'tos';
     document.documentElement.dataset.text = s.textSize ?? 'normal';
     document.documentElement.dataset.motion = s.reduceMotion ? 'reduced' : 'normal';
+    // Reduced motion stops the deck moving and leaves the flash doing the work:
+    // the hit is still visible, it just does not throw the camera about.
+    if (this.fpv) this.fpv.shake = !s.reduceMotion;
     configureTouch({ haptics: s.haptics, wakeLock: s.wakeLock });
     audio.voiceEnabled = s.voice;
     for (const key of ['master', 'sfx', 'ui', 'alert', 'ambience']) {
@@ -262,6 +265,9 @@ class App {
     });
 
     on('combat:player-hit', ({ severity, penetrated }) => {
+      // Seen as well as heard. The viewer is the whole interface now, so
+      // something arriving on the hull cannot be a sound effect alone.
+      this.fpv?.hit(severity, penetrated);
       if (penetrated) {
         audio.play('hull_impact', { severity, throttle: 110 });
         haptic(severity > 0.5 ? 'hit_heavy' : 'hit_light');
@@ -503,6 +509,9 @@ class App {
             this.fpv.look(0, dPitch);
           };
           this.fpv.onUse = () => this.useWhatIsInFront();
+          // The view is rebuilt whenever the canvas is, so the setting has to
+          // be applied here as well as when it is changed.
+          this.fpv.shake = !this.settings.reduceMotion;
         }
       }
     } else if (this.fpv) {

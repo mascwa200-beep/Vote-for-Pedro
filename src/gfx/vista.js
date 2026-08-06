@@ -256,3 +256,38 @@ export function vista(systemId, type) {
   }
   return v;
 }
+
+/**
+ * How far the deck is thrown by a hit, in metres, at a given point in the decay.
+ *
+ * Lives here rather than on the view for the same reason the camera arithmetic
+ * does: `ui/firstperson.js` cannot be imported outside a browser, and a shake
+ * you cannot test is a shake you find out about from a screenshot.
+ *
+ * Squared decay against a fast oscillation. The square is what makes the first
+ * shock most of it and the tail a settle — linear decay reads as a wobble that
+ * someone remembered to stop, rather than as a ship absorbing something.
+ *
+ * @param {number} level 1 at the moment of the hit, 0 when it is over
+ * @param {boolean} hull whether it came through the shields
+ */
+export function joltShake(level, hull = false) {
+  if (!(level > 0)) return 0;
+  return Math.sin(level * 46) * level * level * 0.09 * (hull ? 1.6 : 1);
+}
+
+/**
+ * The colour a hit pushes the viewer toward, as a per-channel multiplier.
+ *
+ * Red-white through the hull, blue-white off the shields. That distinction is
+ * the one piece of information a captain actually wants out of a flash, and
+ * getting it from the colour means not having to read it off a panel in the
+ * middle of a fight.
+ */
+export function joltTint(level, hull = false) {
+  if (!(level > 0)) return [1, 1, 1];
+  const f = level * level;
+  return hull
+    ? [1 + f * 2.4, 1 + f * 0.6, 1 + f * 0.35]
+    : [1 + f * 0.7, 1 + f * 1.5, 1 + f * 2.6];
+}

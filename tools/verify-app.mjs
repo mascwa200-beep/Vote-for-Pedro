@@ -624,6 +624,43 @@ try {
     broken.orbit === false && broken.drawing === true, JSON.stringify(broken));
   await dismissModals(page);
 
+  // ---- A hit is seen as well as heard ----
+  //
+  // The viewer is the whole interface, so something arriving on the hull cannot
+  // be a sound effect alone. Driven through the real event, because the chain is
+  // combat:player-hit -> listener -> fpv.hit -> decay and any link could be
+  // missing.
+  const struck = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const { emit } = await import('./src/core/events.js');
+    const fpv = app.fpv;
+    if (!fpv) return { error: 'no first-person view' };
+
+    fpv.jolt = { level: 0, hull: false };
+    emit('combat:player-hit', { severity: 0.9, penetrated: true });
+    const onHit = fpv.jolt.level;
+    const kick = Math.abs(fpv.joltOffset());
+
+    // And it goes away on its own rather than staying on the screen.
+    await new Promise((r) => setTimeout(r, 1200));
+    const after = fpv.jolt.level;
+
+    // Reduced motion stops the deck moving and leaves the flash doing the work.
+    fpv.jolt = { level: 0.9, hull: true };
+    fpv.shake = false;
+    const stilled = Math.abs(fpv.joltOffset());
+    fpv.shake = true;
+    fpv.jolt = { level: 0, hull: false };
+    return { onHit, kick, after, stilled };
+  });
+  check('a hit registers on the view rather than only in the speaker',
+    !struck.error && struck.onHit > 0.5 && struck.kick > 0, JSON.stringify(struck));
+  check('and it decays off the screen on its own',
+    struck.after === 0, JSON.stringify(struck));
+  check('reduced motion stills the deck without hiding the hit',
+    struck.stilled === 0, JSON.stringify(struck));
+
+
   // ---- The ship has an inside ----
   //
   // Driven through the order line, because "type it and actually arrive" is

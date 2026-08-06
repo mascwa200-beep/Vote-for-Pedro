@@ -6861,6 +6861,41 @@ function vista(systemId, type) {
   return v;
 }
 
+/**
+ * How far the deck is thrown by a hit, in metres, at a given point in the decay.
+ *
+ * Lives here rather than on the view for the same reason the camera arithmetic
+ * does: `ui/firstperson.js` cannot be imported outside a browser, and a shake
+ * you cannot test is a shake you find out about from a screenshot.
+ *
+ * Squared decay against a fast oscillation. The square is what makes the first
+ * shock most of it and the tail a settle — linear decay reads as a wobble that
+ * someone remembered to stop, rather than as a ship absorbing something.
+ *
+ * @param {number} level 1 at the moment of the hit, 0 when it is over
+ * @param {boolean} hull whether it came through the shields
+ */
+function joltShake(level, hull = false) {
+  if (!(level > 0)) return 0;
+  return Math.sin(level * 46) * level * level * 0.09 * (hull ? 1.6 : 1);
+}
+
+/**
+ * The colour a hit pushes the viewer toward, as a per-channel multiplier.
+ *
+ * Red-white through the hull, blue-white off the shields. That distinction is
+ * the one piece of information a captain actually wants out of a flash, and
+ * getting it from the colour means not having to read it off a panel in the
+ * middle of a fight.
+ */
+function joltTint(level, hull = false) {
+  if (!(level > 0)) return [1, 1, 1];
+  const f = level * level;
+  return hull
+    ? [1 + f * 2.4, 1 + f * 0.6, 1 + f * 0.35]
+    : [1 + f * 0.7, 1 + f * 1.5, 1 + f * 2.6];
+}
+
 __exports.fovFor = fovFor;
 __exports.horizontalFov = horizontalFov;
 __exports.noseOf = noseOf;
@@ -6868,6 +6903,8 @@ __exports.vistaFor = vistaFor;
 __exports.worldLabel = worldLabel;
 __exports.bearingOf = bearingOf;
 __exports.vista = vista;
+__exports.joltShake = joltShake;
+__exports.joltTint = joltTint;
 
 });
 
@@ -9705,7 +9742,7 @@ const { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } = __re
 const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME } = __require("src/gfx/scene.js");
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
 const { hullMesh, hullScale } = __require("src/gfx/blueprint.js");
-const { vista, fovFor, noseOf } = __require("src/gfx/vista.js");
+const { vista, fovFor, noseOf, joltShake, joltTint } = __require("src/gfx/vista.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
@@ -9716,6 +9753,14 @@ const EYE_HEIGHT = 1.62;
 
 /** Seated in the command chair, which is lower and a step down into the well. */
 const SEATED_HEIGHT = 1.18;
+
+/**
+ * How long a hit stays on the screen and in the deck plates.
+ *
+ * Half a second. A phaser strike is an event, not a weather condition — hold it
+ * for two and a running fight becomes a strobe with a bridge behind it.
+ */
+const JOLT_SECONDS = 0.55;
 
 /** How far the head can tilt. Enough to read a console, not enough to spin. */
 const PITCH_LIMIT = 1.05;
@@ -9764,6 +9809,12 @@ class FirstPersonView {
     this.speaking = new Map();
     this.lastRoom = null;
     this.lastWalker = null;
+    // The last hit, decaying. `level` runs 1 -> 0 over JOLT_SECONDS; `hull`
+    // says whether it got through the shields, which decides the colour.
+    // `shake` is honoured separately so a player who has asked for less motion
+    // still SEES the hit and simply is not thrown about by it.
+    this.jolt = { level: 0, hull: false };
+    this.shake = true;
     this._up = vec3();
     this._look = vec3();
 
@@ -9863,6 +9914,13 @@ class FirstPersonView {
     // Kept because the warp field streams in real time and needs to know how
     // much of it has passed since the last frame.
     this.lastDt = Math.min(0.1, Math.max(0, dt));
+    // A hit is over in half a second. Long enough to register, short enough
+    // that a running fight is not a strobe.
+    if (this.jolt.level > 0) {
+      this.jolt.level = Math.max(0, this.jolt.level - this.lastDt / JOLT_SECONDS);
+    }
+    this.stats.jolt = this.jolt.level;
+
     // A glance over the shoulder lasts about three seconds, which is roughly
     // how long it takes to say "aye, Captain" and go back to work.
     if (this.speaking.size) {
@@ -9889,7 +9947,20 @@ class FirstPersonView {
     // Interior camera. A wider lens than the tactical plot, because a room at
     // arm's length through a 52-degree window is a keyhole.
     perspective(fovFor(aspect, 88), aspect, 0.06, 400, this._proj);
-    lookAt(this.eyeOf(walker), this.lookAtOf(walker), vec3(0, 1, 0), this._view);
+    // The deck moves when the ship is hit. Applied to the eye and the target
+    // together, so the room lurches under a steady gaze rather than the head
+    // whipping round — the camera is a person standing on a floor that just
+    // shifted, not a person looking away.
+    const kick = this.joltOffset();
+    const eye = this.eyeOf(walker);
+    const at = this.lookAtOf(walker);
+    if (kick !== 0) {
+      eye[1] += kick;
+      at[1] += kick;
+      eye[0] += kick * 0.4;
+      at[0] += kick * 0.4;
+    }
+    lookAt(eye, at, vec3(0, 1, 0), this._view);
     multiply(this._proj, this._view, this._viewProj);
 
     // A room, not a vacuum. The ceiling ring is the light source, so the key
@@ -10036,6 +10107,21 @@ class FirstPersonView {
     // everything except the aperture.
     r.setDepthRange(0.9990, 1.0);
 
+    // A hit costs the picture its sync.
+    //
+    // Not a new renderer surface: `tint` and `emissive` are already per-draw
+    // uniforms, so the whole screen can be pushed toward a colour and toward
+    // self-lit for a moment without a framebuffer, a shader change or a second
+    // pass. Red-white when something came through the hull, blue-white when the
+    // shields took it — which is the one piece of information a captain wants
+    // out of a flash and would otherwise have to read off a panel.
+    const flash = this.jolt.level > 0 ? this.jolt.level * this.jolt.level : 0;
+    const burn = flash > 0 ? joltTint(this.jolt.level, this.jolt.hull) : null;
+    const tintOf = (base) => (burn
+      ? [base[0] * burn[0], base[1] * burn[1], base[2] * burn[2]]
+      : base);
+    const emisOf = (base) => (burn ? Math.min(1, base + flash * 0.65) : base);
+
     const eng = game.engagement;
     const ship = eng?.player;
     const nose = noseOf(ship, this._nose);
@@ -10122,7 +10208,7 @@ class FirstPersonView {
         model: this._model,
         normalMatrix: normalMatrix(this._model),
         emissive: 1,
-        tint: [1, 1, 1],
+        tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
       });
     } else {
@@ -10132,7 +10218,7 @@ class FirstPersonView {
         model: this._model,
         normalMatrix: normalMatrix(this._model),
         emissive: 1,
-        tint: [1, 1, 1],
+        tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
       });
     }
@@ -10148,8 +10234,8 @@ class FirstPersonView {
       r.draw(`world:${body.kind}`, worldMesh(body.kind, body.ordinal ?? 0), {
         model: this._model,
         normalMatrix: normalMatrix(this._model),
-        emissive: 0,
-        tint: [1, 1, 1],
+        emissive: emisOf(0),
+        tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
       });
       // The halo, square to the camera. `frame.up` IS the direction from the
@@ -10160,7 +10246,7 @@ class FirstPersonView {
         model: this._model,
         normalMatrix: normalMatrix(this._model),
         emissive: 1,
-        tint: [1, 1, 1],
+        tint: tintOf([1, 1, 1]),
         alpha: 0.8,
         fogFar: 1e9,
       });
@@ -10185,8 +10271,8 @@ class FirstPersonView {
         r.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
           model: this._model,
           normalMatrix: normalMatrix(this._model),
-          emissive: b.emissive,
-          tint: b.tint,
+          emissive: emisOf(b.emissive),
+          tint: tintOf(b.tint),
           fogFar: 90000,
         });
         drawn++;
@@ -10203,6 +10289,8 @@ class FirstPersonView {
         r.draw(`hull:${s.classId}:${s.faction}`, hullMesh(s.classId, s.faction), {
           model: this._model,
           normalMatrix: normalMatrix(this._model),
+          tint: tintOf([1, 1, 1]),
+          emissive: emisOf(0),
           alpha: s.cloaked ? 0.22 : 1,
           fogFar: VOLUME * 6,
         });
@@ -10281,6 +10369,36 @@ class FirstPersonView {
     this.speaking.set(stationId, 1);
   }
 
+  /**
+   * The ship just took one.
+   *
+   * A hit was audible and invisible: the viewer is the whole interface now, so
+   * something arriving on the hull has to be something you SEE. It shows up
+   * twice, because the two are different facts about the same event — the
+   * picture loses sync because the sensors did, and the deck moves because the
+   * ship did.
+   *
+   * The worse of two overlapping hits wins rather than the later one. A volley
+   * that lands a graze after a hull breach should not step the effect DOWN.
+   */
+  hit(severity = 0.5, penetrated = false) {
+    const level = Math.max(0.25, Math.min(1, severity));
+    if (level >= this.jolt.level) this.jolt = { level, hull: !!penetrated };
+  }
+
+  /**
+   * How far the deck has been thrown, in metres, at this instant.
+   *
+   * Decaying, and oscillating fast enough to read as an impact rather than as a
+   * sway. Returns zero flat when the player has asked for reduced motion, which
+   * leaves the flash on the viewer doing the work — the hit is still visible,
+   * it just does not move the camera.
+   */
+  joltOffset() {
+    if (!this.shake) return 0;
+    return joltShake(this.jolt.level, this.jolt.hull);
+  }
+
   // -------------------------------------------------------------- overlay
 
   /**
@@ -10329,6 +10447,7 @@ class FirstPersonView {
 
 __exports.EYE_HEIGHT = EYE_HEIGHT;
 __exports.SEATED_HEIGHT = SEATED_HEIGHT;
+__exports.JOLT_SECONDS = JOLT_SECONDS;
 __exports.PITCH_LIMIT = PITCH_LIMIT;
 __exports.FirstPersonView = FirstPersonView;
 
@@ -25591,6 +25710,9 @@ class App {
     document.documentElement.dataset.era = this.game?.era ?? s.era ?? 'tos';
     document.documentElement.dataset.text = s.textSize ?? 'normal';
     document.documentElement.dataset.motion = s.reduceMotion ? 'reduced' : 'normal';
+    // Reduced motion stops the deck moving and leaves the flash doing the work:
+    // the hit is still visible, it just does not throw the camera about.
+    if (this.fpv) this.fpv.shake = !s.reduceMotion;
     configureTouch({ haptics: s.haptics, wakeLock: s.wakeLock });
     audio.voiceEnabled = s.voice;
     for (const key of ['master', 'sfx', 'ui', 'alert', 'ambience']) {
@@ -25651,6 +25773,9 @@ class App {
     });
 
     on('combat:player-hit', ({ severity, penetrated }) => {
+      // Seen as well as heard. The viewer is the whole interface now, so
+      // something arriving on the hull cannot be a sound effect alone.
+      this.fpv?.hit(severity, penetrated);
       if (penetrated) {
         audio.play('hull_impact', { severity, throttle: 110 });
         haptic(severity > 0.5 ? 'hit_heavy' : 'hit_light');
@@ -25892,6 +26017,9 @@ class App {
             this.fpv.look(0, dPitch);
           };
           this.fpv.onUse = () => this.useWhatIsInFront();
+          // The view is rebuilt whenever the canvas is, so the setting has to
+          // be applied here as well as when it is changed.
+          this.fpv.shake = !this.settings.reduceMotion;
         }
       }
     } else if (this.fpv) {
