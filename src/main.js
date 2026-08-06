@@ -418,6 +418,18 @@ class App {
     this.shipNameEl.textContent = `${g.ship.name} ${g.ship.registry}`;
     this.stardateEl.textContent = `SD ${g.stardate}`;
 
+    // The room decides what the ship sounds like. Driven from render rather
+    // than from an event because there is no single place the captain's
+    // location changes — a walk finishes on a tick, a turbolift on a tap, a
+    // transporter on an order — and `setRoom` is a no-op when nothing moved.
+    const here = g.walk?.room;
+    if (here) {
+      audio.setRoom(here.id, {
+        outdoors: here.surface === true,
+        airless: here.surface === true && here.kind === 'moon',
+      });
+    }
+
     // Combat and missions take the screen outright — you do not get to browse
     // the crew roster mid-broadside. An encounter or a transit only replaces
     // the bridge, so the map, ship, and record stay reachable while you decide.

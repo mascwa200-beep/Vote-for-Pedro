@@ -235,3 +235,94 @@ describe('the context comes back', () => {
     assert.equal(ctx.resumeCalls, 0, 'a running context was needlessly resumed');
   });
 });
+
+describe('every set has its own sound', () => {
+  // docs/RESEARCH.md §9: the bridge was continuous panel bleeps over a bed,
+  // engineering was the same idea an octave down and louder, the transporter
+  // room had its own throb. The game had one drone everywhere, which is the
+  // sound of a ship with a single room in it.
+
+  const bedOf = (engine, roomId, opts = {}) => {
+    engine.setRoom(roomId, opts);
+    return engine.ambienceConfig();
+  };
+
+  test('the compartments do not sound alike', () => {
+    const { engine } = bootedEngine();
+    const bridge = bedOf(engine, 'bridge');
+    const eng = bedOf(engine, 'engineering');
+    const quarters = bedOf(engine, 'quarters');
+
+    // Engineering is bigger machinery: lower, louder, brighter with harmonics.
+    assert.ok(eng.pitch < bridge.pitch, 'engineering is not deeper than the bridge');
+    assert.ok(eng.gain > bridge.gain, 'engineering is not louder than the bridge');
+    // A cabin full of soft furnishing is the opposite on all three.
+    assert.ok(quarters.gain < bridge.gain, 'the captain sleeps in a machine room');
+    assert.ok(quarters.filter < bridge.filter, 'soft furnishing is not eating the high end');
+  });
+
+  test('the alert condition and the room compose rather than replace', () => {
+    const { engine } = bootedEngine();
+    engine.setRoom('engineering');
+    const calm = engine.ambienceConfig();
+    engine.setAlertLevel('red');
+    const alarmed = engine.ambienceConfig();
+    engine.setRoom('bridge');
+    const bridgeRed = engine.ambienceConfig();
+
+    assert.ok(alarmed.gain > calm.gain, 'red alert does not raise the bed');
+    // The point of multipliers: red alert in engineering is still engineering.
+    assert.ok(alarmed.pitch < bridgeRed.pitch,
+      'red alert downstairs sounds like red alert on the bridge');
+  });
+
+  test('a planet is weather, not machinery', () => {
+    const { engine } = bootedEngine();
+    engine.setRoom('bridge');
+    const shipVoices = [engine.ambience.engine, engine.ambience.air].filter(Boolean).length;
+
+    engine.setRoom('surface', { outdoors: true });
+    assert.ok(engine.ambience, 'the planet has no ambience at all');
+    // One voice, and it is a filtered noise source rather than oscillators.
+    assert.equal(engine.ambience.air, null, 'the planet still has the ship air layer');
+    assert.ok(engine.ambience.engine.src, 'the wind is not a noise source');
+    assert.ok(shipVoices > 1);
+    // And no panel bleeps: there are no panels on a planet, and the silence
+    // where they were is most of what says you are not aboard.
+    assert.equal(engine.chirpTimer, null, 'a planet is bleeping at you');
+  });
+
+  test('an airless world is silent, because there is nothing to carry sound', () => {
+    const { engine } = bootedEngine();
+    engine.setRoom('surface', { outdoors: true, airless: true });
+    assert.equal(engine.ambience, null, 'a vacuum has a room tone');
+    assert.equal(engine.chirpTimer, null);
+
+    // And coming back aboard restores it, rather than leaving the ship mute.
+    engine.setRoom('bridge');
+    assert.ok(engine.ambience?.engine, 'the ship stayed silent after a moonwalk');
+  });
+
+  test('the bridge bleeps, and the turbolift does not', () => {
+    const { engine } = bootedEngine();
+    assert.ok(bedOf(engine, 'bridge').chirps > 0, 'the bridge is a library');
+    assert.equal(bedOf(engine, 'turbolift').chirps, 0, 'the lift has a console in it now');
+    assert.equal(bedOf(engine, 'quarters').chirps, 0);
+  });
+
+  test('setting the same room twice does not rebuild the bed', () => {
+    // Called from render, which runs every frame. Rebuilding on each one would
+    // restart the drone sixty times a second and the ship would buzz.
+    const { engine } = bootedEngine();
+    engine.setRoom('bridge');
+    const first = engine.ambience.engine;
+    engine.setRoom('bridge');
+    assert.equal(engine.ambience.engine, first, 'the bed was rebuilt for no reason');
+  });
+
+  test('the panel bleep is on the ambience bus, not with the alarms', () => {
+    // It is the bed, so the ambience slider has to take it down with the room.
+    assert.equal(busFor('panel_chirp'), 'ambience');
+    assert.ok(CUES.panel_chirp, 'there is no panel bleep to play');
+  });
+});

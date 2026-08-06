@@ -1019,6 +1019,81 @@ try {
   check('the master runs at unity or better', mixer.master >= 1, JSON.stringify(mixer));
   check('the compressor has makeup gain', mixer.makeup > 1, JSON.stringify(mixer));
 
+  // ---- Every set has its own sound ----
+  //
+  // RESEARCH §9: the bridge was continuous panel bleeps over a bed, engineering
+  // the same idea an octave down and louder, and the game had one drone
+  // everywhere. The table and the voice graph are covered by the unit tests;
+  // what they cannot reach is the WIRING, which lives in App.render and only
+  // runs in a browser.
+  //
+  // So this reads the frequency off the live oscillator rather than asking the
+  // engine what it thinks it is set to. Audio has no screenshot — a check that
+  // a function was called would pass with the whole bed disconnected.
+  const beds = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const a = globalThis.__audio;
+    const read = () => ({
+      room: a.roomId,
+      hz: a.ambience?.engine?.oscA?.frequency?.value ?? null,
+      air: !!a.ambience?.air,
+      noise: !!a.ambience?.engine?.src,
+    });
+
+    app.game.walk.enter('bridge');
+    app.render();
+    const bridge = read();
+
+    app.game.walk.enter('engineering');
+    app.render();
+    const engineering = read();
+
+    // And a planet, which is a different instrument rather than a retuning.
+    //
+    // The fight from earlier in this run is still on the books, and the
+    // transporter is right to refuse while people are shooting — so it is
+    // stood down for the duration and PUT BACK afterwards. Everything after
+    // this point in the harness is still fighting it, and leaving the ship at
+    // peace here failed ten later checks that have nothing to do with audio.
+    const heldEngagement = app.game.engagement;
+    const heldMode = app.game.mode;
+    app.game.engagement = null;
+    app.game.mode = 'bridge';
+
+    app.game.enterOrbit();
+    app.game.walk.enter('transporter');
+    app.render();
+    const down = app.game.beamDown();
+    app.render();
+    const surface = { ...read(), ok: down.ok, error: down.error ?? '' };
+
+    app.game.beamUp();
+    app.game.breakOrbit();
+    app.game.walk.enter('bridge');
+    app.game.walk.sit(true);
+    app.render();
+    const back = read();
+
+    app.game.engagement = heldEngagement;
+    app.game.mode = heldMode;
+    app.render();
+    return { bridge, engineering, surface, back };
+  });
+  check('the ambience follows the captain from room to room',
+    beds.bridge.room === 'bridge' && beds.engineering.room === 'engineering',
+    JSON.stringify(beds));
+  // Engineering is an octave down. Read off the oscillator, not off the table.
+  check('and engineering actually sounds bigger than the bridge',
+    beds.bridge.hz > 0 && beds.engineering.hz > 0 && beds.engineering.hz < beds.bridge.hz * 0.75,
+    `bridge ${beds.bridge.hz} Hz, engineering ${beds.engineering.hz} Hz`);
+  check('a planet is weather rather than machinery',
+    beds.surface.ok === true && beds.surface.air === false && beds.surface.noise === true,
+    JSON.stringify(beds.surface));
+  check('and the ship gets its own sound back when you beam up',
+    beds.back.room === 'bridge' && beds.back.hz > 0 && beds.back.air === true,
+    JSON.stringify(beds.back));
+  await dismissModals(page);
+
   // ---- The warp core breach is audible ----
   //
   // The most dramatic thing that can happen to the ship, and it happened in

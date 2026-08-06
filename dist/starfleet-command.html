@@ -1720,6 +1720,81 @@ function drone(ctx, dest, {
   };
 }
 
+/**
+ * Wind: filtered noise that will not sit still.
+ *
+ * A steady band of noise is a hiss, and a hiss is what a broken speaker sounds
+ * like. What makes noise read as weather is that the band MOVES — gusts are the
+ * filter opening and closing over several seconds, not the level going up and
+ * down — so this runs a slow LFO on the cutoff and a slower, shallower one on
+ * the gain. Two oscillators of housekeeping, and the difference between a
+ * planet and a fault.
+ *
+ * Returns the same handle shape as `drone`, so the mixer can treat a bed of
+ * weather and a bed of machinery identically.
+ */
+function wind(ctx, dest, {
+  gain = 0.1, centre = 520, q = 0.9, gust = 0.13, gustRate = 0.07,
+} = {}) {
+  const src = ctx.createBufferSource();
+  src.buffer = pinkNoiseBuffer(ctx, 3);
+  src.loop = true;
+
+  const biq = ctx.createBiquadFilter();
+  biq.type = 'bandpass';
+  biq.frequency.value = centre;
+  biq.Q.value = q;
+
+  const amp = ctx.createGain();
+  amp.gain.value = 0;
+
+  // The gust. Depth is a fraction of the centre frequency rather than a fixed
+  // number of hertz, so a low moan and a high whistle gust by the same amount
+  // musically instead of the low one barely moving.
+  const lfo = ctx.createOscillator();
+  const lfoAmp = ctx.createGain();
+  lfo.type = 'sine';
+  lfo.frequency.value = gustRate;
+  lfoAmp.gain.value = centre * 0.55;
+  lfo.connect(lfoAmp).connect(biq.frequency);
+
+  const swell = ctx.createOscillator();
+  const swellAmp = ctx.createGain();
+  swell.type = 'sine';
+  swell.frequency.value = gustRate * 0.41;   // not a multiple, so they never lock
+  swellAmp.gain.value = gust;
+  swell.connect(swellAmp).connect(amp.gain);
+
+  src.connect(biq).connect(amp).connect(dest);
+  src.start(); lfo.start(); swell.start();
+
+  return {
+    amp, biq, src, lfo,
+    fadeTo(value, seconds = 1.2) {
+      const now = ctx.currentTime;
+      amp.gain.cancelScheduledValues(now);
+      amp.gain.setValueAtTime(Math.max(0.0001, amp.gain.value), now);
+      amp.gain.linearRampToValueAtTime(value, now + seconds);
+    },
+    setPitch(value, seconds = 1.0) {
+      const now = ctx.currentTime;
+      biq.frequency.cancelScheduledValues(now);
+      biq.frequency.setValueAtTime(biq.frequency.value, now);
+      biq.frequency.linearRampToValueAtTime(Math.max(20, value), now + seconds);
+      lfoAmp.gain.setValueAtTime(value * 0.55, now);
+    },
+    stop(fade = 0.8) {
+      const now = ctx.currentTime;
+      amp.gain.cancelScheduledValues(now);
+      amp.gain.setValueAtTime(Math.max(0.0001, amp.gain.value), now);
+      amp.gain.exponentialRampToValueAtTime(0.0001, now + fade);
+      src.stop(now + fade + 0.1);
+      lfo.stop(now + fade + 0.1);
+      swell.stop(now + fade + 0.1);
+    },
+  };
+}
+
 __exports.noiseBuffer = noiseBuffer;
 __exports.pinkNoiseBuffer = pinkNoiseBuffer;
 __exports.impulseResponse = impulseResponse;
@@ -1729,6 +1804,7 @@ __exports.beatPair = beatPair;
 __exports.noiseBurst = noiseBurst;
 __exports.fmTone = fmTone;
 __exports.drone = drone;
+__exports.wind = wind;
 
 });
 
@@ -1982,6 +2058,39 @@ const CUES = {
       tone(ctx, bus, { type: 'sine', pitch: n * 2, at: i * 0.16, duration: 0.2, gain: 0.08, release: 0.16 });
     });
   },
+
+  /**
+   * One panel bleep, of the sort that was continuously under every bridge
+   * scene. Deliberately not a fixed note: RESEARCH §9 records the bridge bed as
+   * "continuous panel bleeps and chirps", plural and varied, and a single
+   * repeated pitch reads as an alarm rather than as a room full of instruments
+   * working.
+   */
+  panel_chirp: (ctx, bus) => {
+    const base = 1200 + Math.random() * 1500;
+    const rising = Math.random() < 0.5;
+    fmTone(ctx, bus, {
+      carrier: base,
+      ratio: 2 + Math.random() * 2,
+      index: 120 + Math.random() * 220,
+      duration: 0.03 + Math.random() * 0.05,
+      // Quiet for a cue and still above the audibility floor the mixer tests
+      // enforce. A bed mixed under that floor is a bed nobody on a phone ever
+      // hears, which is the complaint this whole audio pass started from — and
+      // the bleeps were continuous on the show, not subliminal.
+      gain: 0.13 + Math.random() * 0.05,
+      release: 0.04,
+    });
+    // Half of them are a pair, a step apart, which is what makes the bed sound
+    // conversational instead of like one machine ticking.
+    if (Math.random() < 0.5) {
+      fmTone(ctx, bus, {
+        at: 0.06 + Math.random() * 0.05,
+        carrier: base * (rising ? 1.34 : 0.76),
+        ratio: 3, index: 180, duration: 0.04, gain: 0.12, release: 0.04,
+      });
+    }
+  },
 };
 const CUE_NAMES = Object.keys(CUES);
 
@@ -1992,6 +2101,9 @@ const CUE_BUS = {
   red_alert: 'alert', yellow_alert: 'alert', alert_clear: 'alert',
   intruder_alert: 'alert', hail_incoming: 'alert', boatswain: 'alert',
   core_breach_warning: 'alert', promotion: 'alert',
+  // The bed, not an event: it belongs with the drone it sits over, so the
+  // ambience slider takes it down with the rest of the room.
+  panel_chirp: 'ambience',
 };
 function busFor(cue) {
   return CUE_BUS[cue] ?? 'sfx';
@@ -2012,7 +2124,7 @@ __define("src/audio/engine.js", function (__exports, __require) {
 // just building an oscillator graph — microseconds, not a progress bar.
 
 const { CUES, busFor } = __require("src/audio/sfx.js");
-const { drone, impulseResponse } = __require("src/audio/synth.js");
+const { drone, wind, impulseResponse } = __require("src/audio/synth.js");
 
 // The bridge hum.
 //
@@ -2030,6 +2142,45 @@ const ALERT_AMBIENCE = {
   red: { pitch: 66, gain: 0.26, filter: 600 },
   warp: { pitch: 82, gain: 0.30, filter: 940 },
 };
+
+/**
+ * What each compartment sounds like, as multipliers on the alert bed.
+ *
+ * docs/RESEARCH.md §9: every set on that show had its own sonic identity, and
+ * the identities were not subtle. The bridge is continuous panel bleeps and
+ * chirps over a bed. Engineering is the same idea an octave down — heavy
+ * generators, loud. The transporter room has its own throb of power, distinct
+ * from the bridge. This game had ONE drone everywhere, which is the sound of a
+ * ship with a single room in it.
+ *
+ * Multipliers rather than absolute values, because the alert condition also
+ * moves this bed and the two have to compose: red alert in engineering is the
+ * engineering bed raised, not the bridge's red bed played downstairs.
+ *
+ *   pitch  — where the fundamental sits. Down is bigger machinery.
+ *   gain   — how loud the room is. Engineering is a room you shout in.
+ *   filter — how much high end survives. A machine space is bright with
+ *            harmonics; a cabin is muffled by soft furnishing.
+ *   chirps — panel bleeps per second, 0 for rooms that had none.
+ */
+const ROOM_AMBIENCE = {
+  bridge: { pitch: 1.0, gain: 1.0, filter: 1.0, chirps: 0.7 },
+  // Down an octave and half again as loud. The reactor room is the one
+  // compartment where you can hear the ship being a ship.
+  engineering: { pitch: 0.5, gain: 1.55, filter: 1.9, chirps: 0.25 },
+  // Its own throb: up a fifth, tighter, and a slow beat under it.
+  transporter: { pitch: 1.5, gain: 1.05, filter: 0.8, chirps: 0.35 },
+  // Medical monitors, quiet and high.
+  sickbay: { pitch: 2.0, gain: 0.62, filter: 1.3, chirps: 0.5 },
+  // Soft furnishing eats the high end and most of the level.
+  quarters: { pitch: 1.0, gain: 0.45, filter: 0.55, chirps: 0 },
+  briefing: { pitch: 1.0, gain: 0.55, filter: 0.7, chirps: 0.1 },
+  // A moving car in a shaft: the hum rises and there is nothing else in it.
+  turbolift: { pitch: 1.25, gain: 0.85, filter: 1.15, chirps: 0 },
+  corridor_a: { pitch: 0.85, gain: 0.7, filter: 0.9, chirps: 0.15 },
+};
+
+const DEFAULT_ROOM = { pitch: 1.0, gain: 1.0, filter: 1.0, chirps: 0.2 };
 class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -2042,6 +2193,12 @@ class AudioEngine {
     // difference between audible and not.
     this.volumes = { master: 1.0, ui: 1.0, sfx: 1.0, alert: 1.0, ambience: 0.8, voice: 1.0 };
     this.ambience = null;
+    // Where the captain is standing, which decides the bed. Null until told.
+    this.roomId = null;
+    this.roomKey = null;
+    this.outdoors = false;
+    this.airless = false;
+    this.chirpTimer = null;
     this.alertLevel = 'normal';
     this.lastPlayed = new Map();
     this.voiceEnabled = true;
@@ -2148,8 +2305,38 @@ class AudioEngine {
 
   startAmbience() {
     if (!this.ready || this.ambience) return;
+    this.rebuildAmbience();
+  }
+
+  /**
+   * Build the bed the current place asks for.
+   *
+   * Rebuilt rather than retuned when the PLACE changes, because a planet and a
+   * ship are not the same instrument: one is two detuned oscillators through a
+   * lowpass and the other is pink noise through a moving bandpass. Retuning
+   * cannot turn one into the other. Within a place — walking from the bridge to
+   * engineering, or going to red alert — the same voices are retuned, which is
+   * why the transition is a slide and not a cut.
+   */
+  rebuildAmbience() {
+    if (!this.ready) return;
+    this.stopAmbience();
     const bus = this.buses.ambience;
-    const cfg = ALERT_AMBIENCE.normal;
+
+    // No air, no sound. Nothing to start.
+    if (this.airless) { this.scheduleChirps(0); return; }
+
+    if (this.outdoors) {
+      // Weather, not machinery. No chirps either: there are no panels on a
+      // planet, and the silence where they were is most of what tells you that
+      // you are not aboard any more.
+      this.ambience = { engine: wind(this.ctx, bus, { centre: 430, gain: 0.14, q: 0.8 }), air: null };
+      this.ambience.engine.fadeTo(0.15, 2.5);
+      this.scheduleChirps(0);
+      return;
+    }
+
+    const cfg = this.ambienceConfig();
     this.ambience = {
       engine: drone(this.ctx, bus, { type: 'sawtooth', pitch: cfg.pitch, filterFreq: cfg.filter, detune: 7 }),
       air: drone(this.ctx, bus, { type: 'triangle', pitch: cfg.pitch * 3.1, filterFreq: 900, detune: 3, q: 0.5 }),
@@ -2160,31 +2347,106 @@ class AudioEngine {
     // the device is concerned, so mixing it as a faint garnish left the bridge
     // silent on exactly the hardware this game is built for.
     this.ambience.air.fadeTo(cfg.gain * 0.45, 2.0);
+    this.scheduleChirps(cfg.chirps);
   }
 
   /** normal | yellow | red | warp */
   setAlertLevel(level) {
     if (level === this.alertLevel) return;
     this.alertLevel = level;
+    this.retuneAmbience(1.2);
+  }
+
+  /**
+   * Which compartment the captain is standing in.
+   *
+   * `airless` is the one that is not a mixing decision. There is no medium on a
+   * moon, so there is no sound — not a quiet room tone, nothing. It is the most
+   * arresting thing about standing on an airless body and the game can have it
+   * for free, because silence is what you get by not starting anything.
+   */
+  setRoom(roomId, { outdoors = false, airless = false } = {}) {
+    const next = `${roomId}:${outdoors ? 'out' : 'in'}:${airless ? 'dead' : 'air'}`;
+    if (next === this.roomKey) return;
+    this.roomKey = next;
+    this.roomId = roomId;
+    this.outdoors = outdoors;
+    this.airless = airless;
+    if (!this.ready) return;
+    this.rebuildAmbience();
+  }
+
+  /** The bed the current room and alert condition ask for, as one object. */
+  ambienceConfig() {
+    const alert = ALERT_AMBIENCE[this.alertLevel] ?? ALERT_AMBIENCE.normal;
+    const room = ROOM_AMBIENCE[this.roomId] ?? DEFAULT_ROOM;
+    return {
+      pitch: alert.pitch * room.pitch,
+      gain: alert.gain * room.gain,
+      filter: alert.filter * room.filter,
+      chirps: room.chirps,
+    };
+  }
+
+  retuneAmbience(seconds = 1.2) {
     if (!this.ready || !this.ambience) return;
-    const cfg = ALERT_AMBIENCE[level] ?? ALERT_AMBIENCE.normal;
-    this.ambience.engine.setPitch(cfg.pitch, 1.2);
-    this.ambience.engine.fadeTo(cfg.gain, 1.2);
-    this.ambience.air.setPitch(cfg.pitch * 3.1, 1.2);
-    this.ambience.air.fadeTo(cfg.gain * 0.45, 1.2);
-    if (this.ambience.engine.biq) {
-      const now = this.ctx.currentTime;
-      const f = this.ambience.engine.biq.frequency;
-      f.cancelScheduledValues(now);
-      f.setValueAtTime(f.value, now);
-      f.linearRampToValueAtTime(cfg.filter, now + 1.2);
+    const cfg = this.ambienceConfig();
+    const { engine, air } = this.ambience;
+    if (engine) {
+      engine.setPitch(cfg.pitch, seconds);
+      engine.fadeTo(cfg.gain, seconds);
+      if (engine.biq) {
+        const now = this.ctx.currentTime;
+        const f = engine.biq.frequency;
+        f.cancelScheduledValues(now);
+        f.setValueAtTime(f.value, now);
+        f.linearRampToValueAtTime(cfg.filter, now + seconds);
+      }
     }
+    if (air) {
+      air.setPitch(cfg.pitch * 3.1, seconds);
+      air.fadeTo(cfg.gain * 0.45, seconds);
+    }
+    this.scheduleChirps(cfg.chirps);
+  }
+
+  /**
+   * Panel bleeps, at a rate the room decides.
+   *
+   * Scheduled one at a time rather than on a fixed interval: a bleep every
+   * exactly 1.4 seconds is a metronome, and a metronome is the one thing a
+   * background must never be. Each one books the next at a random distance, so
+   * the pattern never repeats and the ear stops tracking it.
+   */
+  scheduleChirps(rate) {
+    // `arm` rather than a bare setTimeout: a bed that reschedules itself
+    // forever will hold a Node process open forever, which is how a test run
+    // that passes still never exits. Browsers hand back a number and ignore
+    // this; Node hands back a Timeout and lets go of it.
+    const arm = (fn, ms) => {
+      const t = setTimeout(fn, ms);
+      t?.unref?.();
+      return t;
+    };
+    if (this.chirpTimer) { clearTimeout(this.chirpTimer); this.chirpTimer = null; }
+    if (!this.ready || !this.enabled || !(rate > 0)) return;
+    const tick = () => {
+      this.chirpTimer = null;
+      if (!this.ready || !this.enabled) return;
+      // Muted while somebody is talking to you or shooting at you: the bed is
+      // meant to be under everything, not competing with it.
+      if (this.alertLevel !== 'red') this.play('panel_chirp');
+      const mean = 1 / rate;
+      this.chirpTimer = arm(tick, mean * (0.45 + Math.random() * 1.4) * 1000);
+    };
+    this.chirpTimer = arm(tick, 300 + Math.random() * 900);
   }
 
   stopAmbience() {
+    if (this.chirpTimer) { clearTimeout(this.chirpTimer); this.chirpTimer = null; }
     if (!this.ambience) return;
-    this.ambience.engine.stop();
-    this.ambience.air.stop();
+    this.ambience.engine?.stop();
+    this.ambience.air?.stop();
     this.ambience = null;
   }
 
@@ -24881,6 +25143,18 @@ class App {
 
     this.shipNameEl.textContent = `${g.ship.name} ${g.ship.registry}`;
     this.stardateEl.textContent = `SD ${g.stardate}`;
+
+    // The room decides what the ship sounds like. Driven from render rather
+    // than from an event because there is no single place the captain's
+    // location changes — a walk finishes on a tick, a turbolift on a tap, a
+    // transporter on an order — and `setRoom` is a no-op when nothing moved.
+    const here = g.walk?.room;
+    if (here) {
+      audio.setRoom(here.id, {
+        outdoors: here.surface === true,
+        airless: here.surface === true && here.kind === 'moon',
+      });
+    }
 
     // Combat and missions take the screen outright — you do not get to browse
     // the crew roster mid-broadside. An encounter or a transit only replaces
