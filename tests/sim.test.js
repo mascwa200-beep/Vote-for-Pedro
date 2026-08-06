@@ -1317,3 +1317,82 @@ test('"beam down" and "energize" are opposite orders', () => {
   // And neither has eaten walking to a compartment.
   assert.equal(parseOrder('take me down to sickbay', g).action, 'go_to_room');
 });
+
+// --------------------------------------------------- something on the planet
+
+test('a world has things on it worth walking to', async () => {
+  const { makeSurface, FEATURE_KINDS } = await import('../src/world/surface.js');
+  const { ROOMS } = await import('../src/world/interiors.data.js');
+
+  for (const kind of ['planet', 'desert', 'ice', 'moon']) {
+    makeSurface({ id: `feat:${kind}`, kind, ordinal: 2 }, 'Test II');
+    const stations = ROOMS.surface.stations;
+    assert.ok(stations.length >= 2, `${kind}: only ${stations.length} features`);
+
+    for (const f of stations) {
+      // The three fields that turn scenery into gameplay.
+      assert.ok(FEATURE_KINDS.includes(f.kind), `${f.id}: ${f.kind} is not a feature kind`);
+      assert.ok(f.check, `${f.id} tests nothing`);
+      assert.ok(f.hazard, `${f.id} risks nothing`);
+      assert.ok(Object.keys(f.yield ?? {}).length > 0, `${f.id} gives nothing`);
+      assert.equal(f.panel, 'survey');
+      // Reachable: outside the pad, inside the walkable radius.
+      const d = Math.hypot(f.at[0], f.at[1]);
+      assert.ok(d > 3, `${f.id} is ${d.toFixed(1)} m from the beam-in point`);
+      assert.ok(d < 15, `${f.id} is out past the walkable ground at ${d.toFixed(1)} m`);
+    }
+  }
+});
+
+test('a gas giant has nothing to walk to, because there is nowhere to stand', async () => {
+  const { makeSurface } = await import('../src/world/surface.js');
+  const { ROOMS } = await import('../src/world/interiors.data.js');
+  makeSurface({ id: 'feat:gas', kind: 'gas', ordinal: 5 }, 'Test V');
+  assert.equal(ROOMS.surface.stations.length, 0);
+});
+
+test('the same world has the same things on it every visit', async () => {
+  const { makeSurface } = await import('../src/world/surface.js');
+  const { ROOMS } = await import('../src/world/interiors.data.js');
+  const shot = () => ROOMS.surface.stations.map((f) => `${f.kind}@${f.at.map((n) => n.toFixed(3))}`);
+  makeSurface({ id: 'feat:stable', kind: 'planet', ordinal: 1 }, 'Test I');
+  const first = shot();
+  makeSurface({ id: 'feat:other', kind: 'planet', ordinal: 1 }, 'Other I');
+  makeSurface({ id: 'feat:stable', kind: 'planet', ordinal: 1 }, 'Test I');
+  assert.deepEqual(shot(), first, 'the world rearranged itself between visits');
+});
+
+test('surveying takes a real check and pays out once', () => {
+  const g = new Game({ seed: 909 });
+  g.enterOrbit();
+  g.walk.enter('transporter');
+  assert.ok(g.beamDown().ok);
+
+  const feature = g.walk.room.stations[0];
+  assert.ok(feature, 'nothing to survey');
+  const before = { ...g.stores };
+
+  const r = g.surveyFeature(feature.id);
+  assert.ok(r.ok, r.error);
+  // A real resolution, with the arithmetic the rest of the game shows.
+  assert.ok(typeof r.result.success === 'boolean');
+  assert.ok(Array.isArray(r.result.parts) && r.result.parts.length > 0,
+    'the survey produced no itemised modifier');
+
+  if (r.result.success) {
+    const gained = Object.entries(feature.yield)
+      .some(([m, n]) => (g.stores[m] ?? 0) === (before[m] ?? 0) + n);
+    assert.ok(gained, 'a successful survey put nothing in the hold');
+  }
+
+  // And it is done. A seam you have already cut out is not a seam.
+  const again = g.surveyFeature(feature.id);
+  assert.ok(!again.ok && again.done, 'the same feature paid out twice');
+});
+
+test('you cannot survey from the bridge', () => {
+  const g = new Game({ seed: 12 });
+  const r = g.surveyFeature('feature0');
+  assert.ok(!r.ok);
+  assert.match(r.error, /surface/i);
+});
