@@ -1045,6 +1045,56 @@ export class Game {
     return this.awayTeam;
   }
 
+  /**
+   * Survey a thing on a planet you have walked up to.
+   *
+   * The whole of the away-team machinery already existed and was reachable only
+   * from a mission stage — a button in a text panel. This is the same machinery
+   * reached the way the rest of the game is reached: by being somewhere and
+   * using what is in front of you. The captain is on the surface, the captain
+   * is standing at the outcrop, so the captain is the one leading it.
+   *
+   * Each feature resolves once. A seam you have already cut out is not a seam.
+   */
+  surveyFeature(featureId) {
+    if (!this.ashore) return { ok: false, error: 'We are not on a surface, Captain.' };
+    const room = this.walk.room;
+    const feature = (room.stations ?? []).find((st) => st.id === featureId);
+    if (!feature) return { ok: false, error: 'There is nothing there, Captain.' };
+
+    this.surveyed = this.surveyed ?? {};
+    const key = `${room.world}:${featureId}`;
+    if (this.surveyed[key]) {
+      return { ok: false, error: 'We have already been over that one, Captain.', done: true };
+    }
+
+    const team = this.buildAwayTeam(['science', 'medical', 'tactical'], true);
+    const result = team.check(this.rng, feature.check, {
+      hazard: feature.hazard,
+      label: feature.label,
+    });
+
+    this.surveyed[key] = result.success ? 'found' : 'empty';
+
+    if (result.success) {
+      this.stores = this.stores ?? {};
+      for (const [material, amount] of Object.entries(feature.yield ?? {})) {
+        this.stores[material] = (this.stores[material] ?? 0) + amount;
+      }
+      this.pushLog(`${feature.label}: ${feature.found}`, 'science');
+      this.ledger.record('anomaly_catalogued', {
+        text: `Surveyed ${feature.label.toLowerCase()} on ${room.name}`,
+        system: this.locationId,
+      });
+      this.progress.addXP(60, { ledger: this.ledger });
+    } else {
+      this.pushLog(`${feature.label}: ${feature.failed}`, 'science');
+    }
+
+    emit('survey', { feature, result });
+    return { ok: true, feature, result };
+  }
+
   // ------------------------------------------------------------------ docking
 
   canDock() {

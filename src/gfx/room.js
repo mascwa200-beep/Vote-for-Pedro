@@ -154,12 +154,22 @@ function surfaceShell(solid, glow, room) {
   // rides at a fixed height above the floor, so ground that rose and fell where
   // you can stand would put the camera through it or leave you walking on air.
   // Relief goes where nobody walks.
+  // Tone comes from WHERE a patch is, not from which wedge and ring it is.
+  //
+  // Hashing the indices puts a different tone on every wedge, and every wedge
+  // meets every other at the middle of the disc — so the shading converges on
+  // the beam-in point and the ground reads as a pie chart. Hashing the patch's
+  // position in metres instead means two patches that are next to each other
+  // get similar tones wherever they are, the convergence disappears, and what
+  // is left is ground that varies the way ground does.
+  const toneAt = (x, z, salt) => 0.88 + rnd(Math.round(x + 64) * 131 + Math.round(z + 64), salt) * 0.26;
   const radiusAt = (k) => R * (k / RINGS) ** 0.8;
   for (let k = 0; k < RINGS; k++) {
     const r0 = radiusAt(k);
     const r1 = radiusAt(k + 1);
     for (let i = 0; i < SEG; i++) {
-      const c = shade(ground, 0.88 + rnd(i * 13 + k, 3) * 0.26);
+      const mid = ring(i + 0.5, (r0 + r1) / 2, 0);
+      const c = shade(ground, toneAt(mid[0], mid[2], 3));
       // OUTWARD first, then round the ring. That order is what puts the normal
       // up, and the other order — which is the one the curved shells in this
       // file use — puts it down. Culling is on, so the first version of this
@@ -172,8 +182,9 @@ function surfaceShell(solid, glow, room) {
   }
   // The flat between the walkable circle and the foot of the ridge.
   for (let i = 0; i < SEG; i++) {
-    const c = shade(ground, 0.80 + rnd(i, 5) * 0.24);
-    solid.quad(ring(i, R, 0), ring(i, FAR, 0), ring(i + 1, FAR, 0), ring(i + 1, R, 0), c);
+    const mid = ring(i + 0.5, (R + FAR) / 2, 0);
+    solid.quad(ring(i, R, 0), ring(i, FAR, 0), ring(i + 1, FAR, 0), ring(i + 1, R, 0),
+      shade(ground, toneAt(mid[0], mid[2], 5) - 0.06));
   }
 
   // ---- the ridge ----
@@ -689,6 +700,82 @@ function prop3d(solid, glow, prop) {
       break;
     }
 
+    // ---- things that are only ever found on a planet ----
+    //
+    // Each is a silhouette first. A landing party sees these from thirty metres
+    // across open ground before it sees any detail, so what matters is that a
+    // ruin does not read as an outcrop at that distance — one is stacked and
+    // square, the other is leaning and tapered.
+    case 'outcrop': {
+      const c = prop.color ?? [0.42, 0.39, 0.35];
+      const tall = r * 2.4;
+      box(solid, { center: vec3(x, tall * 0.45, z), size: vec3(r * 1.5, tall * 0.9, r * 1.3), color: c });
+      // Leaning cap, offset, so the whole thing is never a chimney.
+      box(solid, {
+        center: vec3(x + r * 0.3, tall * 1.02, z - r * 0.2),
+        size: vec3(r * 0.9, tall * 0.3, r * 0.8),
+        color: [c[0] * 1.18, c[1] * 1.18, c[2] * 1.18],
+      });
+      break;
+    }
+
+    case 'ruin': {
+      // Stacked and square, because that is what says somebody built it. Two
+      // standing courses and a fallen one — a wall that is still a wall reads
+      // as architecture, and the piece on the ground reads as time.
+      const c = prop.color ?? [0.60, 0.56, 0.48];
+      const dark = [c[0] * 0.8, c[1] * 0.8, c[2] * 0.8];
+      box(solid, { center: vec3(x - r * 0.5, r * 1.1, z), size: vec3(r * 0.7, r * 2.2, r * 1.6), color: c });
+      box(solid, { center: vec3(x + r * 0.6, r * 0.75, z + r * 0.2), size: vec3(r * 0.7, r * 1.5, r * 1.5), color: dark });
+      box(solid, { center: vec3(x, r * 0.16, z - r * 1.1), size: vec3(r * 1.9, r * 0.32, r * 0.7), color: dark });
+      break;
+    }
+
+    case 'wreck': {
+      // Nothing here is level. A hull that came down hard has no horizontal
+      // line left in it, and three boxes at three angles say that faster than
+      // any amount of detail on one.
+      const c = prop.color ?? [0.46, 0.47, 0.50];
+      box(solid, { center: vec3(x, r * 0.35, z), size: vec3(r * 2.2, r * 0.7, r * 1.4), color: c });
+      box(solid, {
+        center: vec3(x - r * 0.9, r * 0.9, z + r * 0.4),
+        size: vec3(r * 0.6, r * 1.8, r * 0.5),
+        color: [c[0] * 0.72, c[1] * 0.72, c[2] * 0.74],
+      });
+      // A lit panel still running on something, which is what makes a wreck a
+      // question rather than scenery.
+      glow.quad(
+        vec3(x - r * 0.4, r * 0.72, z - r * 0.71), vec3(x + r * 0.4, r * 0.72, z - r * 0.71),
+        vec3(x + r * 0.4, r * 0.72 + 0.18, z - r * 0.71), vec3(x - r * 0.4, r * 0.72 + 0.18, z - r * 0.71),
+        PALETTE.panelRed,
+      );
+      break;
+    }
+
+    case 'vent': {
+      // A fissure: low, wide, and lit from inside. The glow is the whole point
+      // — it is the one feature you can find in the dark.
+      const c = prop.color ?? [0.30, 0.27, 0.25];
+      box(solid, { center: vec3(x - r * 0.9, r * 0.3, z), size: vec3(r * 0.7, r * 0.6, r * 2.0), color: c });
+      box(solid, { center: vec3(x + r * 0.9, r * 0.3, z), size: vec3(r * 0.7, r * 0.6, r * 2.0), color: c });
+      glow.quad(
+        vec3(x - r * 0.55, 0.04, z - r), vec3(x + r * 0.55, 0.04, z - r),
+        vec3(x + r * 0.55, 0.04, z + r), vec3(x - r * 0.55, 0.04, z + r),
+        prop.glow ?? [1.0, 0.55, 0.18],
+      );
+      break;
+    }
+
+    case 'flora': {
+      // Alive, and shaped so it cannot be mistaken for rock: a thin stalk under
+      // a wide crown. The colour comes from the prop, because a plant on an ice
+      // world is not the green of one on a garden world.
+      const c = prop.color ?? [0.26, 0.52, 0.28];
+      box(solid, { center: vec3(x, r * 0.7, z), size: vec3(r * 0.24, r * 1.4, r * 0.24), color: [c[0] * 0.7, c[1] * 0.7, c[2] * 0.7] });
+      box(solid, { center: vec3(x, r * 1.55, z), size: vec3(r * 1.8, r * 0.4, r * 1.8), color: c });
+      break;
+    }
+
     case 'wallpanel':
       glow.quad(
         vec3(x - 0.02, 1.1, z - 0.4), vec3(x - 0.02, 1.1, z + 0.4),
@@ -923,7 +1010,15 @@ export function roomMeshes(roomId) {
   else boxShell(solid, glow, room);
 
   (room.stations ?? []).forEach((s, i) => {
-    console3d(solid, glow, s, i);
+    // A station is somewhere you stand to do something, and aboard ship that is
+    // always a console. On a planet it is an outcrop, a wreck, a vent — a thing
+    // in the landscape. Giving a station a `kind` swaps the geometry and keeps
+    // everything else: the walker still finds it, the reticle still names it,
+    // and using it still opens whatever its `panel` says. The alternative was a
+    // parallel "features" list that the walker, the collision resolver and the
+    // reticle would each have had to learn about separately.
+    if (s.kind) prop3d(solid, glow, { ...s, at: s.at, solid: s.solid !== false });
+    else console3d(solid, glow, s, i);
     // Crewed, if the station belongs to a department. A bridge with ten empty
     // consoles is a museum.
     if (s.crew) officer3d(solid, s);

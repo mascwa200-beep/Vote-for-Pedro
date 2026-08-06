@@ -538,6 +538,51 @@ try {
     ashore.screen === null && ashore.frames > 0, JSON.stringify(ashore));
   check('and no console from the ship is still under the reticle',
     ashore.reaching === null, String(ashore.reaching));
+
+  // ---- and something to do once you are down there ----
+  //
+  // A landing party on empty ground has not landed anywhere, it has changed
+  // skybox. Driven by walking the captain to a feature and using it, because
+  // the whole point is that it is a place you go rather than a button.
+  const survey = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const features = g.walk.room?.stations ?? [];
+    if (!features.length) return { error: 'nothing on this world' };
+
+    const f = features[0];
+    // Stand against it, the way walking into it would leave you: collision
+    // holds a walker at the feature's radius plus its own.
+    const d = Math.hypot(f.at[0], f.at[1]) || 1;
+    const stand = Math.max(0, d - (f.radius + 0.3));
+    g.walk.x = (f.at[0] / d) * stand;
+    g.walk.z = (f.at[1] / d) * stand;
+    g.walk.step({}, 1 / 30);
+    app.render();
+    const reaching = g.walk.looking?.id ?? null;
+
+    const before = { ...g.stores };
+    const r = g.surveyFeature(f.id);
+    const again = g.surveyFeature(f.id);
+    return {
+      reaching,
+      kind: f.kind,
+      ok: r.ok,
+      resolved: typeof r.result?.success === 'boolean',
+      itemised: (r.result?.parts ?? []).length,
+      paid: r.result?.success
+        ? Object.entries(f.yield).every(([m, n]) => (g.stores[m] ?? 0) >= (before[m] ?? 0) + n)
+        : true,
+      twice: again.ok,
+    };
+  });
+  check('a planet has things on it you can walk up to',
+    !survey.error && survey.reaching !== null, JSON.stringify(survey));
+  check('and surveying one is a real check with its arithmetic shown',
+    survey.ok === true && survey.resolved === true && survey.itemised > 0,
+    JSON.stringify(survey));
+  check('a successful survey puts something in the hold, and only once',
+    survey.paid === true && survey.twice === false, JSON.stringify(survey));
   await page.screenshot({ path: join(SHOTS, '03d-surface.png') });
 
   const backAboard = await page.evaluate(async () => {

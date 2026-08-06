@@ -57,6 +57,8 @@ const STATION_PANEL = {
   helm: 'helm', navigation: 'galaxy', comms: 'comms', power: 'power',
   weapons: 'tactical', science: 'science', damage: 'ship', medical: 'crew',
   transport: 'transport', fabrication: 'shop', missions: 'missions',
+  // Not a console anywhere on the ship — the panel a thing on a planet opens.
+  survey: 'survey',
   log: 'log', record: 'captain', turbolift: 'turbolift', crew: 'crew',
   galaxy: 'galaxy',
 };
@@ -668,6 +670,32 @@ class App {
           if (!world) {
             body.push(el('p', { class: 'hint', text: 'Make standard orbit first, and there will be somewhere to go.' }));
           }
+        }
+        break;
+      }
+      case 'survey': {
+        // Not a console. This is the away team going over something, so it
+        // shows the same auditable card every other check in the game shows —
+        // the margin, and every term that produced it.
+        const g3 = this.game;
+        const r = g3.surveyFeature(station?.id);
+        if (!r.ok) {
+          body.push(el('p', { class: 'muted', text: r.error }));
+          audio.play(r.done ? 'ui_back' : 'ui_deny');
+          break;
+        }
+        const { feature, result } = r;
+        audio.play(result.success ? 'scan_complete' : 'ui_deny');
+        haptic(result.success ? 'confirm' : 'hit_light');
+        body.push(rollCard(result));
+        body.push(el('p', { text: result.success ? feature.found : feature.failed }));
+        if (result.success) {
+          const got = Object.entries(feature.yield ?? {})
+            .map(([m, n]) => `${n} ${m}`).join(', ');
+          if (got) body.push(el('p', { class: 'hint', text: `Transported aboard: ${got}.` }));
+        }
+        for (const c of result.casualties ?? []) {
+          body.push(el('p', { class: 'hint', text: String(c) }));
         }
         break;
       }

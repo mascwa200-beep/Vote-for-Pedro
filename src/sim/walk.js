@@ -217,7 +217,13 @@ export class Walker {
     let best = null;
     let bestD = REACH;
     for (const s of room.stations ?? []) {
-      const d = Math.hypot(this.x - s.at[0], this.z - s.at[1]);
+      // Distance to the SURFACE of the thing, not to its centre. A console is
+      // thin and set into a bulkhead, so the two are the same and nothing about
+      // the ship changes. A boulder-sized outcrop on a planet is not: collision
+      // holds you at its radius plus your own, which for the larger features is
+      // further than reach — so the biggest thing on a world was the one thing
+      // you could never touch.
+      const d = Math.hypot(this.x - s.at[0], this.z - s.at[1]) - (s.radius ?? 0);
       if (d < bestD) { bestD = d; best = s; }
     }
     return best;

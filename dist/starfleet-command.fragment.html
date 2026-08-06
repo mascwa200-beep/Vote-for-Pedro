@@ -8489,12 +8489,22 @@ function surfaceShell(solid, glow, room) {
   // rides at a fixed height above the floor, so ground that rose and fell where
   // you can stand would put the camera through it or leave you walking on air.
   // Relief goes where nobody walks.
+  // Tone comes from WHERE a patch is, not from which wedge and ring it is.
+  //
+  // Hashing the indices puts a different tone on every wedge, and every wedge
+  // meets every other at the middle of the disc — so the shading converges on
+  // the beam-in point and the ground reads as a pie chart. Hashing the patch's
+  // position in metres instead means two patches that are next to each other
+  // get similar tones wherever they are, the convergence disappears, and what
+  // is left is ground that varies the way ground does.
+  const toneAt = (x, z, salt) => 0.88 + rnd(Math.round(x + 64) * 131 + Math.round(z + 64), salt) * 0.26;
   const radiusAt = (k) => R * (k / RINGS) ** 0.8;
   for (let k = 0; k < RINGS; k++) {
     const r0 = radiusAt(k);
     const r1 = radiusAt(k + 1);
     for (let i = 0; i < SEG; i++) {
-      const c = shade(ground, 0.88 + rnd(i * 13 + k, 3) * 0.26);
+      const mid = ring(i + 0.5, (r0 + r1) / 2, 0);
+      const c = shade(ground, toneAt(mid[0], mid[2], 3));
       // OUTWARD first, then round the ring. That order is what puts the normal
       // up, and the other order — which is the one the curved shells in this
       // file use — puts it down. Culling is on, so the first version of this
@@ -8507,8 +8517,9 @@ function surfaceShell(solid, glow, room) {
   }
   // The flat between the walkable circle and the foot of the ridge.
   for (let i = 0; i < SEG; i++) {
-    const c = shade(ground, 0.80 + rnd(i, 5) * 0.24);
-    solid.quad(ring(i, R, 0), ring(i, FAR, 0), ring(i + 1, FAR, 0), ring(i + 1, R, 0), c);
+    const mid = ring(i + 0.5, (R + FAR) / 2, 0);
+    solid.quad(ring(i, R, 0), ring(i, FAR, 0), ring(i + 1, FAR, 0), ring(i + 1, R, 0),
+      shade(ground, toneAt(mid[0], mid[2], 5) - 0.06));
   }
 
   // ---- the ridge ----
@@ -9024,6 +9035,82 @@ function prop3d(solid, glow, prop) {
       break;
     }
 
+    // ---- things that are only ever found on a planet ----
+    //
+    // Each is a silhouette first. A landing party sees these from thirty metres
+    // across open ground before it sees any detail, so what matters is that a
+    // ruin does not read as an outcrop at that distance — one is stacked and
+    // square, the other is leaning and tapered.
+    case 'outcrop': {
+      const c = prop.color ?? [0.42, 0.39, 0.35];
+      const tall = r * 2.4;
+      box(solid, { center: vec3(x, tall * 0.45, z), size: vec3(r * 1.5, tall * 0.9, r * 1.3), color: c });
+      // Leaning cap, offset, so the whole thing is never a chimney.
+      box(solid, {
+        center: vec3(x + r * 0.3, tall * 1.02, z - r * 0.2),
+        size: vec3(r * 0.9, tall * 0.3, r * 0.8),
+        color: [c[0] * 1.18, c[1] * 1.18, c[2] * 1.18],
+      });
+      break;
+    }
+
+    case 'ruin': {
+      // Stacked and square, because that is what says somebody built it. Two
+      // standing courses and a fallen one — a wall that is still a wall reads
+      // as architecture, and the piece on the ground reads as time.
+      const c = prop.color ?? [0.60, 0.56, 0.48];
+      const dark = [c[0] * 0.8, c[1] * 0.8, c[2] * 0.8];
+      box(solid, { center: vec3(x - r * 0.5, r * 1.1, z), size: vec3(r * 0.7, r * 2.2, r * 1.6), color: c });
+      box(solid, { center: vec3(x + r * 0.6, r * 0.75, z + r * 0.2), size: vec3(r * 0.7, r * 1.5, r * 1.5), color: dark });
+      box(solid, { center: vec3(x, r * 0.16, z - r * 1.1), size: vec3(r * 1.9, r * 0.32, r * 0.7), color: dark });
+      break;
+    }
+
+    case 'wreck': {
+      // Nothing here is level. A hull that came down hard has no horizontal
+      // line left in it, and three boxes at three angles say that faster than
+      // any amount of detail on one.
+      const c = prop.color ?? [0.46, 0.47, 0.50];
+      box(solid, { center: vec3(x, r * 0.35, z), size: vec3(r * 2.2, r * 0.7, r * 1.4), color: c });
+      box(solid, {
+        center: vec3(x - r * 0.9, r * 0.9, z + r * 0.4),
+        size: vec3(r * 0.6, r * 1.8, r * 0.5),
+        color: [c[0] * 0.72, c[1] * 0.72, c[2] * 0.74],
+      });
+      // A lit panel still running on something, which is what makes a wreck a
+      // question rather than scenery.
+      glow.quad(
+        vec3(x - r * 0.4, r * 0.72, z - r * 0.71), vec3(x + r * 0.4, r * 0.72, z - r * 0.71),
+        vec3(x + r * 0.4, r * 0.72 + 0.18, z - r * 0.71), vec3(x - r * 0.4, r * 0.72 + 0.18, z - r * 0.71),
+        PALETTE.panelRed,
+      );
+      break;
+    }
+
+    case 'vent': {
+      // A fissure: low, wide, and lit from inside. The glow is the whole point
+      // — it is the one feature you can find in the dark.
+      const c = prop.color ?? [0.30, 0.27, 0.25];
+      box(solid, { center: vec3(x - r * 0.9, r * 0.3, z), size: vec3(r * 0.7, r * 0.6, r * 2.0), color: c });
+      box(solid, { center: vec3(x + r * 0.9, r * 0.3, z), size: vec3(r * 0.7, r * 0.6, r * 2.0), color: c });
+      glow.quad(
+        vec3(x - r * 0.55, 0.04, z - r), vec3(x + r * 0.55, 0.04, z - r),
+        vec3(x + r * 0.55, 0.04, z + r), vec3(x - r * 0.55, 0.04, z + r),
+        prop.glow ?? [1.0, 0.55, 0.18],
+      );
+      break;
+    }
+
+    case 'flora': {
+      // Alive, and shaped so it cannot be mistaken for rock: a thin stalk under
+      // a wide crown. The colour comes from the prop, because a plant on an ice
+      // world is not the green of one on a garden world.
+      const c = prop.color ?? [0.26, 0.52, 0.28];
+      box(solid, { center: vec3(x, r * 0.7, z), size: vec3(r * 0.24, r * 1.4, r * 0.24), color: [c[0] * 0.7, c[1] * 0.7, c[2] * 0.7] });
+      box(solid, { center: vec3(x, r * 1.55, z), size: vec3(r * 1.8, r * 0.4, r * 1.8), color: c });
+      break;
+    }
+
     case 'wallpanel':
       glow.quad(
         vec3(x - 0.02, 1.1, z - 0.4), vec3(x - 0.02, 1.1, z + 0.4),
@@ -9258,7 +9345,15 @@ function roomMeshes(roomId) {
   else boxShell(solid, glow, room);
 
   (room.stations ?? []).forEach((s, i) => {
-    console3d(solid, glow, s, i);
+    // A station is somewhere you stand to do something, and aboard ship that is
+    // always a console. On a planet it is an outcrop, a wreck, a vent — a thing
+    // in the landscape. Giving a station a `kind` swaps the geometry and keeps
+    // everything else: the walker still finds it, the reticle still names it,
+    // and using it still opens whatever its `panel` says. The alternative was a
+    // parallel "features" list that the walker, the collision resolver and the
+    // reticle would each have had to learn about separately.
+    if (s.kind) prop3d(solid, glow, { ...s, at: s.at, solid: s.solid !== false });
+    else console3d(solid, glow, s, i);
     // Crewed, if the station belongs to a department. A bridge with ten empty
     // consoles is a museum.
     if (s.crew) officer3d(solid, s);
@@ -18499,7 +18594,13 @@ class Walker {
     let best = null;
     let bestD = REACH;
     for (const s of room.stations ?? []) {
-      const d = Math.hypot(this.x - s.at[0], this.z - s.at[1]);
+      // Distance to the SURFACE of the thing, not to its centre. A console is
+      // thin and set into a bulkhead, so the two are the same and nothing about
+      // the ship changes. A boulder-sized outcrop on a planet is not: collision
+      // holds you at its radius plus your own, which for the larger features is
+      // further than reach — so the biggest thing on a world was the one thing
+      // you could never touch.
+      const d = Math.hypot(this.x - s.at[0], this.z - s.at[1]) - (s.radius ?? 0);
       if (d < bestD) { bestD = d; best = s; }
     }
     return best;
@@ -19305,6 +19406,77 @@ function surfaceReport(kind) {
 }
 
 /**
+ * What is worth walking over to.
+ *
+ * A landing party that beams down onto empty ground has not landed anywhere —
+ * it has changed skybox. These are the things that make a world a place: a
+ * mineral seam, something somebody built, something alive, something that came
+ * down hard, and a fissure venting from below.
+ *
+ * Each carries the three fields that turn it from scenery into gameplay:
+ *
+ *   `check`   which of the away-team's competences it tests — the same
+ *             CHECK_TYPES the mission engine has always used.
+ *   `hazard`  how badly it can go, straight into HAZARD_LEVEL. A vent can
+ *             kill somebody; a seam of duranium cannot.
+ *   `yield`   what the ship gets out of it, in the materials the fabricator
+ *             already consumes. Beaming down is now how you restock.
+ *
+ * They are placed as STATIONS rather than props, because a station is already
+ * the thing the walker finds, the reticle names and the use-key opens. A
+ * parallel list of "features" would have to be taught to all three separately.
+ */
+const FEATURES = {
+  outcrop: {
+    kind: 'outcrop', label: 'A mineral outcrop', panel: 'survey',
+    check: 'science', hazard: 'routine',
+    yield: { duranium: 14 },
+    found: 'A seam of structural ore, close enough to the surface to cut out by hand.',
+    failed: 'The seam pinches out a metre in. Not worth the transporter power.',
+  },
+  ruin: {
+    kind: 'ruin', label: 'A standing ruin', panel: 'survey',
+    check: 'science', hazard: 'elevated',
+    yield: { isolinear: 12, salvage: 6 },
+    found: 'Cut stone, and something optical still threaded through it. Somebody was here first.',
+    failed: 'Weathered past reading. Whatever it said, it is not saying it now.',
+  },
+  wreck: {
+    kind: 'wreck', label: 'A crashed hull', panel: 'survey',
+    check: 'engineering', hazard: 'dangerous',
+    yield: { salvage: 18, duranium: 8, isolinear: 6 },
+    found: 'Her power cells are still live. Enough salvage to matter, and a registry to log.',
+    failed: 'The frame shifts as soon as it is touched. Nothing comes out of this one safely.',
+  },
+  vent: {
+    kind: 'vent', label: 'A thermal vent', panel: 'survey',
+    check: 'engineering', hazard: 'dangerous',
+    yield: { deuterium: 26 },
+    found: 'Hydrogen, hot and coming up fast. Tap it and the tanks come back full.',
+    failed: 'It surges before the intake is set. The party comes back without it.',
+  },
+  flora: {
+    kind: 'flora', label: 'Something growing', panel: 'survey',
+    check: 'medical', hazard: 'routine',
+    yield: { salvage: 9 },
+    found: 'Alive, and nothing like anything in the catalogue. That is a paper on its own.',
+    failed: 'It closes as soon as it is touched, and nothing usable comes back up.',
+  },
+};
+
+/** Which features a world type can have, and how many. */
+const FEATURE_POOLS = {
+  planet: { pool: ['flora', 'flora', 'ruin', 'outcrop', 'wreck'], count: [3, 5] },
+  desert: { pool: ['outcrop', 'outcrop', 'ruin', 'wreck', 'vent'], count: [3, 4] },
+  ice: { pool: ['outcrop', 'vent', 'wreck'], count: [2, 4] },
+  // No air, no weather, nothing to erode anything: a moon keeps what lands on
+  // it. Fewer features, and the ones there are skew to what fell out of the sky.
+  moon: { pool: ['outcrop', 'wreck', 'outcrop'], count: [2, 3] },
+  gas: { pool: [], count: [0, 0] },
+};
+const FEATURE_KINDS = Object.keys(FEATURES);
+
+/**
  * Build the surface of one world as a room, and register it.
  *
  * @param {object} body   a vista body: {id, kind, ordinal}
@@ -19345,6 +19517,40 @@ function makeSurface(body, label) {
     };
   });
 
+  // The things worth walking over to. Placed after the boulders and on their
+  // own ring of arcs, so a feature is never buried inside a rock and never
+  // dropped on the beam-in point.
+  const spec = FEATURE_POOLS[body.kind] ?? FEATURE_POOLS.planet;
+  const [lo, hi] = spec.count;
+  const featureCount = spec.pool.length
+    ? lo + Math.floor(rnd() * (hi - lo + 1))
+    : 0;
+  const fArc = (Math.PI * 2) / Math.max(1, featureCount);
+  const stations = Array.from({ length: featureCount }, (_, i) => {
+    const template = FEATURES[spec.pool[Math.floor(rnd() * spec.pool.length)]];
+    const a = i * fArc + rnd() * fArc * 0.8;
+    // Well outside the pad and inside the walkable radius, so every one of them
+    // is a walk rather than a step, and none of them is out on the ridge where
+    // the walker cannot reach it.
+    const d = 5.5 + rnd() * (SURFACE_RADIUS - 8);
+    const tone = 0.9 + rnd() * 0.24;
+    return {
+      ...template,
+      id: `feature${i}`,
+      at: [Math.sin(a) * d, Math.cos(a) * d],
+      facing: rnd() * Math.PI * 2,
+      radius: 0.9 + rnd() * 0.5,
+      // Free-standing: you walk around it to get at it, which is what makes it
+      // a place rather than a button that happens to have a mesh.
+      solid: true,
+      crew: null,
+      mounted: 'floor',
+      color: template.kind === 'flora'
+        ? [look.ground[0] * 0.7 + 0.10, look.ground[1] * 0.9 + 0.24, look.ground[2] * 0.7 + 0.08]
+        : [look.rock[0] * tone, look.rock[1] * tone, look.rock[2] * tone],
+    };
+  });
+
   const room = {
     id: 'surface',
     name: label,
@@ -19357,7 +19563,7 @@ function makeSurface(body, label) {
     kind: body.kind,
     shape: { kind: 'surface', radius: SURFACE_RADIUS, height: 2.4, seed },
     palette: look,
-    stations: [],
+    stations,
     props,
     exits: [],
     // Distinct per world, so the mesh cache does not hand back the last planet.
@@ -19375,6 +19581,7 @@ function clearSurface() {
 
 __exports.SURFACE_RADIUS = SURFACE_RADIUS;
 __exports.surfaceReport = surfaceReport;
+__exports.FEATURE_KINDS = FEATURE_KINDS;
 __exports.makeSurface = makeSurface;
 __exports.clearSurface = clearSurface;
 
@@ -22353,6 +22560,56 @@ class Game {
     return this.awayTeam;
   }
 
+  /**
+   * Survey a thing on a planet you have walked up to.
+   *
+   * The whole of the away-team machinery already existed and was reachable only
+   * from a mission stage — a button in a text panel. This is the same machinery
+   * reached the way the rest of the game is reached: by being somewhere and
+   * using what is in front of you. The captain is on the surface, the captain
+   * is standing at the outcrop, so the captain is the one leading it.
+   *
+   * Each feature resolves once. A seam you have already cut out is not a seam.
+   */
+  surveyFeature(featureId) {
+    if (!this.ashore) return { ok: false, error: 'We are not on a surface, Captain.' };
+    const room = this.walk.room;
+    const feature = (room.stations ?? []).find((st) => st.id === featureId);
+    if (!feature) return { ok: false, error: 'There is nothing there, Captain.' };
+
+    this.surveyed = this.surveyed ?? {};
+    const key = `${room.world}:${featureId}`;
+    if (this.surveyed[key]) {
+      return { ok: false, error: 'We have already been over that one, Captain.', done: true };
+    }
+
+    const team = this.buildAwayTeam(['science', 'medical', 'tactical'], true);
+    const result = team.check(this.rng, feature.check, {
+      hazard: feature.hazard,
+      label: feature.label,
+    });
+
+    this.surveyed[key] = result.success ? 'found' : 'empty';
+
+    if (result.success) {
+      this.stores = this.stores ?? {};
+      for (const [material, amount] of Object.entries(feature.yield ?? {})) {
+        this.stores[material] = (this.stores[material] ?? 0) + amount;
+      }
+      this.pushLog(`${feature.label}: ${feature.found}`, 'science');
+      this.ledger.record('anomaly_catalogued', {
+        text: `Surveyed ${feature.label.toLowerCase()} on ${room.name}`,
+        system: this.locationId,
+      });
+      this.progress.addXP(60, { ledger: this.ledger });
+    } else {
+      this.pushLog(`${feature.label}: ${feature.failed}`, 'science');
+    }
+
+    emit('survey', { feature, result });
+    return { ok: true, feature, result };
+  }
+
   // ------------------------------------------------------------------ docking
 
   canDock() {
@@ -25039,6 +25296,8 @@ const STATION_PANEL = {
   helm: 'helm', navigation: 'galaxy', comms: 'comms', power: 'power',
   weapons: 'tactical', science: 'science', damage: 'ship', medical: 'crew',
   transport: 'transport', fabrication: 'shop', missions: 'missions',
+  // Not a console anywhere on the ship — the panel a thing on a planet opens.
+  survey: 'survey',
   log: 'log', record: 'captain', turbolift: 'turbolift', crew: 'crew',
   galaxy: 'galaxy',
 };
@@ -25650,6 +25909,32 @@ class App {
           if (!world) {
             body.push(el('p', { class: 'hint', text: 'Make standard orbit first, and there will be somewhere to go.' }));
           }
+        }
+        break;
+      }
+      case 'survey': {
+        // Not a console. This is the away team going over something, so it
+        // shows the same auditable card every other check in the game shows —
+        // the margin, and every term that produced it.
+        const g3 = this.game;
+        const r = g3.surveyFeature(station?.id);
+        if (!r.ok) {
+          body.push(el('p', { class: 'muted', text: r.error }));
+          audio.play(r.done ? 'ui_back' : 'ui_deny');
+          break;
+        }
+        const { feature, result } = r;
+        audio.play(result.success ? 'scan_complete' : 'ui_deny');
+        haptic(result.success ? 'confirm' : 'hit_light');
+        body.push(rollCard(result));
+        body.push(el('p', { text: result.success ? feature.found : feature.failed }));
+        if (result.success) {
+          const got = Object.entries(feature.yield ?? {})
+            .map(([m, n]) => `${n} ${m}`).join(', ');
+          if (got) body.push(el('p', { class: 'hint', text: `Transported aboard: ${got}.` }));
+        }
+        for (const c of result.casualties ?? []) {
+          body.push(el('p', { class: 'hint', text: String(c) }));
         }
         break;
       }

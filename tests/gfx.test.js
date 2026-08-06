@@ -1272,9 +1272,11 @@ describe('the ground under a landing party', () => {
     const { data, vertexCount, stride } = m.solid;
     const floats = stride / 4;
     let flatUp = 0; let flatDown = 0;
-    // Boulders sit ON the ground and have undersides, which are legitimately
-    // face-down at y = 0. Skip anything standing on a rock.
-    const rocks = ROOMS.surface.props.map((p) => ({ x: p.at[0], z: p.at[1], r: p.radius * 1.6 }));
+    // Anything STANDING on the ground has an underside, which is legitimately
+    // face-down at y = 0 — boulders, and the features a landing party walks up
+    // to. Skip whatever is standing on something.
+    const rocks = [...ROOMS.surface.props, ...ROOMS.surface.stations]
+      .map((p) => ({ x: p.at[0], z: p.at[1], r: (p.radius ?? 0.5) * 1.8 }));
     for (let i = 0; i < vertexCount; i++) {
       const o = i * floats;
       // Only the horizontal surfaces at ground level — the hillsides are not

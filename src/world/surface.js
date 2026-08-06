@@ -62,6 +62,78 @@ export function surfaceReport(kind) {
 }
 
 /**
+ * What is worth walking over to.
+ *
+ * A landing party that beams down onto empty ground has not landed anywhere —
+ * it has changed skybox. These are the things that make a world a place: a
+ * mineral seam, something somebody built, something alive, something that came
+ * down hard, and a fissure venting from below.
+ *
+ * Each carries the three fields that turn it from scenery into gameplay:
+ *
+ *   `check`   which of the away-team's competences it tests — the same
+ *             CHECK_TYPES the mission engine has always used.
+ *   `hazard`  how badly it can go, straight into HAZARD_LEVEL. A vent can
+ *             kill somebody; a seam of duranium cannot.
+ *   `yield`   what the ship gets out of it, in the materials the fabricator
+ *             already consumes. Beaming down is now how you restock.
+ *
+ * They are placed as STATIONS rather than props, because a station is already
+ * the thing the walker finds, the reticle names and the use-key opens. A
+ * parallel list of "features" would have to be taught to all three separately.
+ */
+const FEATURES = {
+  outcrop: {
+    kind: 'outcrop', label: 'A mineral outcrop', panel: 'survey',
+    check: 'science', hazard: 'routine',
+    yield: { duranium: 14 },
+    found: 'A seam of structural ore, close enough to the surface to cut out by hand.',
+    failed: 'The seam pinches out a metre in. Not worth the transporter power.',
+  },
+  ruin: {
+    kind: 'ruin', label: 'A standing ruin', panel: 'survey',
+    check: 'science', hazard: 'elevated',
+    yield: { isolinear: 12, salvage: 6 },
+    found: 'Cut stone, and something optical still threaded through it. Somebody was here first.',
+    failed: 'Weathered past reading. Whatever it said, it is not saying it now.',
+  },
+  wreck: {
+    kind: 'wreck', label: 'A crashed hull', panel: 'survey',
+    check: 'engineering', hazard: 'dangerous',
+    yield: { salvage: 18, duranium: 8, isolinear: 6 },
+    found: 'Her power cells are still live. Enough salvage to matter, and a registry to log.',
+    failed: 'The frame shifts as soon as it is touched. Nothing comes out of this one safely.',
+  },
+  vent: {
+    kind: 'vent', label: 'A thermal vent', panel: 'survey',
+    check: 'engineering', hazard: 'dangerous',
+    yield: { deuterium: 26 },
+    found: 'Hydrogen, hot and coming up fast. Tap it and the tanks come back full.',
+    failed: 'It surges before the intake is set. The party comes back without it.',
+  },
+  flora: {
+    kind: 'flora', label: 'Something growing', panel: 'survey',
+    check: 'medical', hazard: 'routine',
+    yield: { salvage: 9 },
+    found: 'Alive, and nothing like anything in the catalogue. That is a paper on its own.',
+    failed: 'It closes as soon as it is touched, and nothing usable comes back up.',
+  },
+};
+
+/** Which features a world type can have, and how many. */
+const FEATURE_POOLS = {
+  planet: { pool: ['flora', 'flora', 'ruin', 'outcrop', 'wreck'], count: [3, 5] },
+  desert: { pool: ['outcrop', 'outcrop', 'ruin', 'wreck', 'vent'], count: [3, 4] },
+  ice: { pool: ['outcrop', 'vent', 'wreck'], count: [2, 4] },
+  // No air, no weather, nothing to erode anything: a moon keeps what lands on
+  // it. Fewer features, and the ones there are skew to what fell out of the sky.
+  moon: { pool: ['outcrop', 'wreck', 'outcrop'], count: [2, 3] },
+  gas: { pool: [], count: [0, 0] },
+};
+
+export const FEATURE_KINDS = Object.keys(FEATURES);
+
+/**
  * Build the surface of one world as a room, and register it.
  *
  * @param {object} body   a vista body: {id, kind, ordinal}
@@ -102,6 +174,40 @@ export function makeSurface(body, label) {
     };
   });
 
+  // The things worth walking over to. Placed after the boulders and on their
+  // own ring of arcs, so a feature is never buried inside a rock and never
+  // dropped on the beam-in point.
+  const spec = FEATURE_POOLS[body.kind] ?? FEATURE_POOLS.planet;
+  const [lo, hi] = spec.count;
+  const featureCount = spec.pool.length
+    ? lo + Math.floor(rnd() * (hi - lo + 1))
+    : 0;
+  const fArc = (Math.PI * 2) / Math.max(1, featureCount);
+  const stations = Array.from({ length: featureCount }, (_, i) => {
+    const template = FEATURES[spec.pool[Math.floor(rnd() * spec.pool.length)]];
+    const a = i * fArc + rnd() * fArc * 0.8;
+    // Well outside the pad and inside the walkable radius, so every one of them
+    // is a walk rather than a step, and none of them is out on the ridge where
+    // the walker cannot reach it.
+    const d = 5.5 + rnd() * (SURFACE_RADIUS - 8);
+    const tone = 0.9 + rnd() * 0.24;
+    return {
+      ...template,
+      id: `feature${i}`,
+      at: [Math.sin(a) * d, Math.cos(a) * d],
+      facing: rnd() * Math.PI * 2,
+      radius: 0.9 + rnd() * 0.5,
+      // Free-standing: you walk around it to get at it, which is what makes it
+      // a place rather than a button that happens to have a mesh.
+      solid: true,
+      crew: null,
+      mounted: 'floor',
+      color: template.kind === 'flora'
+        ? [look.ground[0] * 0.7 + 0.10, look.ground[1] * 0.9 + 0.24, look.ground[2] * 0.7 + 0.08]
+        : [look.rock[0] * tone, look.rock[1] * tone, look.rock[2] * tone],
+    };
+  });
+
   const room = {
     id: 'surface',
     name: label,
@@ -114,7 +220,7 @@ export function makeSurface(body, label) {
     kind: body.kind,
     shape: { kind: 'surface', radius: SURFACE_RADIUS, height: 2.4, seed },
     palette: look,
-    stations: [],
+    stations,
     props,
     exits: [],
     // Distinct per world, so the mesh cache does not hand back the last planet.
