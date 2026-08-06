@@ -36,13 +36,22 @@ export function panel(title, children, variant = '') {
 
 /** A full-width LCARS action button. */
 export function button(label, onClick, opts = {}) {
-  const { color = '', sub = '', disabled = false, locked = false } = opts;
+  const { color = '', sub = '', disabled = false, locked = false, say = '' } = opts;
   return el('button', {
     class: `btn ${color} ${locked ? 'locked' : ''}`.trim(),
     disabled: disabled || locked,
     onclick: disabled || locked ? null : onClick,
   }, [
     label,
+    // `say` is how this game teaches its own language.
+    //
+    // Everything worth doing is supposed to be doable by telling somebody to do
+    // it, and a player who never discovers that plays a game of buttons with an
+    // ignored text box at the bottom. Printing the phrase ON the button that
+    // does the same thing means the order line is learned by using the
+    // interface rather than by reading a manual — and the button is still
+    // there, for anyone who would rather press it.
+    say ? el('small', { class: 'say', text: `“${say}”` }) : null,
     sub ? el('small', { text: sub }) : null,
   ]);
 }

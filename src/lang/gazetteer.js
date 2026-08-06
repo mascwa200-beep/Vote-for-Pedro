@@ -136,8 +136,17 @@ const FACTION_NAMES = FACTION_LIST.flatMap((f) => {
  * @returns {{id: string, name: string, exact: boolean}|null}
  */
 export function findPlace(text, tokens) {
+  // On WORD boundaries, not as a substring.
+  //
+  // `text.includes('sol')` is true of "console". It is also true of "solar",
+  // "resolve" and "absolutely" — so "operate the console" was an exact match
+  // for the Sol system, and every intent that stands aside when a destination
+  // is named stood aside for it. A place name has to be a word somebody said,
+  // not a run of letters that happens to appear inside one.
   for (const p of PLACES) {
-    if (text.includes(p.name)) return { id: p.id, name: p.name, exact: true };
+    if (new RegExp(`\\b${p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text)) {
+      return { id: p.id, name: p.name, exact: true };
+    }
   }
 
   let best = null;

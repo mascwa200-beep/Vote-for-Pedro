@@ -288,6 +288,17 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   opacity: 0.8; margin-top: 3px; letter-spacing: 0;
 }
 
+/* The phrase that does the same thing as the button it is printed on.
+   Quieter than the sub-label and in the accent colour, because it is not an
+   instruction — it is the game teaching its own language to anybody who looks
+   down while pressing. */
+.btn small.say {
+  color: var(--accent);
+  opacity: 0.9;
+  font-style: italic;
+  text-transform: none;
+}
+
 .btn-row { display: flex; gap: 6px; }
 .btn-row .btn { flex: 1; border-radius: 4px; text-align: center; margin-bottom: 6px; }
 
@@ -1121,13 +1132,22 @@ function panel(title, children, variant = '') {
 
 /** A full-width LCARS action button. */
 function button(label, onClick, opts = {}) {
-  const { color = '', sub = '', disabled = false, locked = false } = opts;
+  const { color = '', sub = '', disabled = false, locked = false, say = '' } = opts;
   return el('button', {
     class: `btn ${color} ${locked ? 'locked' : ''}`.trim(),
     disabled: disabled || locked,
     onclick: disabled || locked ? null : onClick,
   }, [
     label,
+    // `say` is how this game teaches its own language.
+    //
+    // Everything worth doing is supposed to be doable by telling somebody to do
+    // it, and a player who never discovers that plays a game of buttons with an
+    // ignored text box at the bottom. Printing the phrase ON the button that
+    // does the same thing means the order line is learned by using the
+    // interface rather than by reading a manual — and the button is still
+    // there, for anyone who would rather press it.
+    say ? el('small', { class: 'say', text: `“${say}”` }) : null,
     sub ? el('small', { text: sub }) : null,
   ]);
 }
@@ -14300,6 +14320,44 @@ const INTENTS = [
     build: (c) => ({ action: 'go_to_room', room: c.room.id }),
   },
   {
+    id: 'use_console',
+    help: 'Use it / open that console',
+    phrases: [
+      'use it', 'use that', 'use this', 'use the console', 'use that console',
+      'open that console', 'open the console', 'open this console',
+      'work that console', 'work the console', 'work that panel',
+      'operate it', 'operate that', 'operate the console',
+      'bring it up', 'bring that up', 'have a look at that console',
+      'read it', 'read that', 'check that panel', 'what does that say',
+      'go through the door', 'through the door', 'open the door',
+    ],
+    keywords: { console: 2.4, panel: 2, operate: 2.4, use: 1.6 },
+    // "Open a channel" is the comms order and shares the verb. So does hailing
+    // frequencies. The whole point of this intent is the thing you are standing
+    // in front of, so anything naming a destination stands it aside too.
+    veto: ['channel', 'frequencies', 'hail', 'hailing'],
+    vetoSlots: ['place', 'room'],
+    build: () => ({ action: 'use' }),
+  },
+  {
+    id: 'survey',
+    help: 'Survey that / take a reading',
+    phrases: [
+      'survey it', 'survey that', 'survey this', 'survey the site',
+      'take a reading', 'take readings', 'get a reading',
+      'run a tricorder over it', 'tricorder reading', 'analyse it',
+      'analyse that', 'examine it', 'examine that', 'have a look at it',
+      'take a sample', 'collect a sample', 'work the site',
+      'see what it is', 'find out what it is', 'dig it out',
+    ],
+    keywords: { survey: 3, tricorder: 3, sample: 2.4, reading: 2, analyse: 2, examine: 1.8 },
+    // `scan` is the ship's sensors sweeping a system from orbit. This is a
+    // landing party crouched over one thing with a tricorder, and the two mean
+    // genuinely different actions in genuinely different places.
+    veto: ['system', 'sector', 'ship', 'vessel', 'sensors'],
+    build: () => ({ action: 'survey_here' }),
+  },
+  {
     id: 'stand_up',
     help: 'Stand up / take the chair',
     phrases: [
@@ -14722,8 +14780,17 @@ const FACTION_NAMES = FACTION_LIST.flatMap((f) => {
  * @returns {{id: string, name: string, exact: boolean}|null}
  */
 function findPlace(text, tokens) {
+  // On WORD boundaries, not as a substring.
+  //
+  // `text.includes('sol')` is true of "console". It is also true of "solar",
+  // "resolve" and "absolutely" — so "operate the console" was an exact match
+  // for the Sol system, and every intent that stands aside when a destination
+  // is named stood aside for it. A place name has to be a word somebody said,
+  // not a run of letters that happens to appear inside one.
   for (const p of PLACES) {
-    if (text.includes(p.name)) return { id: p.id, name: p.name, exact: true };
+    if (new RegExp(`\\b${p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text)) {
+      return { id: p.id, name: p.name, exact: true };
+    }
   }
 
   let best = null;
@@ -23375,27 +23442,34 @@ function bridgeScreen(app) {
   const hand = [];
   if (walking) {
     hand.push(el('p', { class: 'muted', text: `Under way to ${ROOMS[walking.toId]?.name ?? walking.toId}.` }));
-    hand.push(button('Stop here', tap(() => { g.walkOrder = null; app.render(); }), { color: 'ghost' }));
+    hand.push(button('Stop here', tap(() => { g.walkOrder = null; app.render(); }),
+      { color: 'ghost', say: 'all stop' }));
   } else if (target) {
     hand.push(button(
       target.panel || target.id ? `Use ${target.label ?? ROOMS[target.to]?.name}` : 'Use',
       tap(() => app.useWhatIsInFront()),
-      { color: 'orange', sub: target.panel ? 'Open this console' : 'Through the door' },
+      {
+        color: 'orange',
+        sub: target.panel ? 'Open this console' : 'Through the door',
+        say: target.check ? 'survey that' : target.panel ? 'use it' : 'through the door',
+      },
     ));
   } else if (w.seated) {
     hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
-    hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }), { color: 'blue' }));
+    hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }),
+      { color: 'blue', say: 'stand up' }));
   } else if (w.room.surface) {
     hand.push(el('p', { class: 'muted', text: `On the surface of ${w.room.name}. ${surfaceReport(w.room.kind)}.` }));
     hand.push(button('Energise — beam up', tap(() => {
       const r = g.beamUp();
       if (r.ok) audio.play('transporter');
       app.render();
-    }), { color: 'orange', sub: 'Back aboard' }));
+    }), { color: 'orange', sub: 'Back aboard', say: 'energise' }));
   } else {
     hand.push(el('p', { class: 'muted', text: 'Drag to look. Walk to a station to use it.' }));
     if (w.roomId === 'bridge') {
-      hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }), { color: 'orange' }));
+      hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }),
+        { color: 'orange', say: 'take the chair' }));
     }
   }
 
@@ -23405,7 +23479,7 @@ function bridgeScreen(app) {
     hand.push(el('div', { class: 'chip-row' }, doors.slice(0, 6).map((e) => button(
       ROOMS[e.to]?.name ?? e.to,
       tap(() => { if (g.goToRoom(e.to).ok) audio.play('door'); app.render(); }),
-      { color: 'blue' },
+      { color: 'blue', say: `take me to the ${(ROOMS[e.to]?.name ?? e.to).toLowerCase()}` },
     ))));
   }
 
@@ -23702,7 +23776,9 @@ function orbitPanel(app) {
       pill(`orbit ${period < 24 ? `${period.toFixed(1)} h` : `${(period / 24).toFixed(1)} d`}`),
       pill(`day ${day < 48 ? `${day.toFixed(1)} h` : `${(day / 24).toFixed(0)} d`}`),
     ]),
-    el('p', { class: 'hint', text: 'She is on the viewer. Say “break orbit” when you want to be somewhere else.' }),
+    el('p', { class: 'hint', text: 'She is on the viewer.' }),
+    button('Break orbit', tap(() => { g.breakOrbit(); app.render(); }),
+      { color: 'ghost', say: 'break orbit' }),
   ], 'accent'));
 
   return wrap;
@@ -26161,12 +26237,12 @@ class App {
           body.push(button('Energise — beam up', () => {
             this.closeModal();
             this.executeOrder({ action: 'transport' }, 'energize');
-          }, { color: 'blue' }));
+          }, { color: 'blue', say: 'energise' }));
         } else {
           body.push(button('Energise — beam down', () => {
             this.closeModal();
             this.executeOrder({ action: 'beam_down' }, 'beam down');
-          }, { color: world ? 'blue' : 'ghost' }));
+          }, { color: world ? 'blue' : 'ghost', say: 'two to beam down' }));
           if (!world) {
             body.push(el('p', { class: 'hint', text: 'Make standard orbit first, and there will be somewhere to go.' }));
           }
@@ -27021,6 +27097,23 @@ class App {
       case 'away_team': {
         g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
         ack('comms', 'Away team assembled and standing by in the transporter room.');
+        break;
+      }
+      case 'use':
+        // The whole physical-console interface, reachable by saying so. Walking
+        // to a station and pressing the button was the only way to operate
+        // anything on this ship, which made the order line an interface for
+        // half the game and a decoration for the other half.
+        this.useWhatIsInFront();
+        break;
+      case 'survey_here': {
+        const target = g.walk?.looking;
+        if (!g.ashore || !target?.check) {
+          audio.play('ui_deny');
+          g.pushLog('There is nothing in front of you to survey, Captain.', 'science');
+          break;
+        }
+        this.openConsole('survey', target);
         break;
       }
       case 'beam_down': {
