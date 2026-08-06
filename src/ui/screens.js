@@ -83,27 +83,34 @@ export function bridgeScreen(app) {
   const hand = [];
   if (walking) {
     hand.push(el('p', { class: 'muted', text: `Under way to ${ROOMS[walking.toId]?.name ?? walking.toId}.` }));
-    hand.push(button('Stop here', tap(() => { g.walkOrder = null; app.render(); }), { color: 'ghost' }));
+    hand.push(button('Stop here', tap(() => { g.walkOrder = null; app.render(); }),
+      { color: 'ghost', say: 'all stop' }));
   } else if (target) {
     hand.push(button(
       target.panel || target.id ? `Use ${target.label ?? ROOMS[target.to]?.name}` : 'Use',
       tap(() => app.useWhatIsInFront()),
-      { color: 'orange', sub: target.panel ? 'Open this console' : 'Through the door' },
+      {
+        color: 'orange',
+        sub: target.panel ? 'Open this console' : 'Through the door',
+        say: target.check ? 'survey that' : target.panel ? 'use it' : 'through the door',
+      },
     ));
   } else if (w.seated) {
     hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
-    hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }), { color: 'blue' }));
+    hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }),
+      { color: 'blue', say: 'stand up' }));
   } else if (w.room.surface) {
     hand.push(el('p', { class: 'muted', text: `On the surface of ${w.room.name}. ${surfaceReport(w.room.kind)}.` }));
     hand.push(button('Energise — beam up', tap(() => {
       const r = g.beamUp();
       if (r.ok) audio.play('transporter');
       app.render();
-    }), { color: 'orange', sub: 'Back aboard' }));
+    }), { color: 'orange', sub: 'Back aboard', say: 'energise' }));
   } else {
     hand.push(el('p', { class: 'muted', text: 'Drag to look. Walk to a station to use it.' }));
     if (w.roomId === 'bridge') {
-      hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }), { color: 'orange' }));
+      hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }),
+        { color: 'orange', say: 'take the chair' }));
     }
   }
 
@@ -113,7 +120,7 @@ export function bridgeScreen(app) {
     hand.push(el('div', { class: 'chip-row' }, doors.slice(0, 6).map((e) => button(
       ROOMS[e.to]?.name ?? e.to,
       tap(() => { if (g.goToRoom(e.to).ok) audio.play('door'); app.render(); }),
-      { color: 'blue' },
+      { color: 'blue', say: `take me to the ${(ROOMS[e.to]?.name ?? e.to).toLowerCase()}` },
     ))));
   }
 
@@ -411,7 +418,9 @@ export function orbitPanel(app) {
       pill(`orbit ${period < 24 ? `${period.toFixed(1)} h` : `${(period / 24).toFixed(1)} d`}`),
       pill(`day ${day < 48 ? `${day.toFixed(1)} h` : `${(day / 24).toFixed(0)} d`}`),
     ]),
-    el('p', { class: 'hint', text: 'She is on the viewer. Say “break orbit” when you want to be somewhere else.' }),
+    el('p', { class: 'hint', text: 'She is on the viewer.' }),
+    button('Break orbit', tap(() => { g.breakOrbit(); app.render(); }),
+      { color: 'ghost', say: 'break orbit' }),
   ], 'accent'));
 
   return wrap;

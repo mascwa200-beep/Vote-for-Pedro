@@ -712,6 +712,44 @@ export const INTENTS = [
     build: (c) => ({ action: 'go_to_room', room: c.room.id }),
   },
   {
+    id: 'use_console',
+    help: 'Use it / open that console',
+    phrases: [
+      'use it', 'use that', 'use this', 'use the console', 'use that console',
+      'open that console', 'open the console', 'open this console',
+      'work that console', 'work the console', 'work that panel',
+      'operate it', 'operate that', 'operate the console',
+      'bring it up', 'bring that up', 'have a look at that console',
+      'read it', 'read that', 'check that panel', 'what does that say',
+      'go through the door', 'through the door', 'open the door',
+    ],
+    keywords: { console: 2.4, panel: 2, operate: 2.4, use: 1.6 },
+    // "Open a channel" is the comms order and shares the verb. So does hailing
+    // frequencies. The whole point of this intent is the thing you are standing
+    // in front of, so anything naming a destination stands it aside too.
+    veto: ['channel', 'frequencies', 'hail', 'hailing'],
+    vetoSlots: ['place', 'room'],
+    build: () => ({ action: 'use' }),
+  },
+  {
+    id: 'survey',
+    help: 'Survey that / take a reading',
+    phrases: [
+      'survey it', 'survey that', 'survey this', 'survey the site',
+      'take a reading', 'take readings', 'get a reading',
+      'run a tricorder over it', 'tricorder reading', 'analyse it',
+      'analyse that', 'examine it', 'examine that', 'have a look at it',
+      'take a sample', 'collect a sample', 'work the site',
+      'see what it is', 'find out what it is', 'dig it out',
+    ],
+    keywords: { survey: 3, tricorder: 3, sample: 2.4, reading: 2, analyse: 2, examine: 1.8 },
+    // `scan` is the ship's sensors sweeping a system from orbit. This is a
+    // landing party crouched over one thing with a tricorder, and the two mean
+    // genuinely different actions in genuinely different places.
+    veto: ['system', 'sector', 'ship', 'vessel', 'sensors'],
+    build: () => ({ action: 'survey_here' }),
+  },
+  {
     id: 'stand_up',
     help: 'Stand up / take the chair',
     phrases: [

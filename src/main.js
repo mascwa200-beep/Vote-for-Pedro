@@ -674,12 +674,12 @@ class App {
           body.push(button('Energise — beam up', () => {
             this.closeModal();
             this.executeOrder({ action: 'transport' }, 'energize');
-          }, { color: 'blue' }));
+          }, { color: 'blue', say: 'energise' }));
         } else {
           body.push(button('Energise — beam down', () => {
             this.closeModal();
             this.executeOrder({ action: 'beam_down' }, 'beam down');
-          }, { color: world ? 'blue' : 'ghost' }));
+          }, { color: world ? 'blue' : 'ghost', say: 'two to beam down' }));
           if (!world) {
             body.push(el('p', { class: 'hint', text: 'Make standard orbit first, and there will be somewhere to go.' }));
           }
@@ -1534,6 +1534,23 @@ class App {
       case 'away_team': {
         g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
         ack('comms', 'Away team assembled and standing by in the transporter room.');
+        break;
+      }
+      case 'use':
+        // The whole physical-console interface, reachable by saying so. Walking
+        // to a station and pressing the button was the only way to operate
+        // anything on this ship, which made the order line an interface for
+        // half the game and a decoration for the other half.
+        this.useWhatIsInFront();
+        break;
+      case 'survey_here': {
+        const target = g.walk?.looking;
+        if (!g.ashore || !target?.check) {
+          audio.play('ui_deny');
+          g.pushLog('There is nothing in front of you to survey, Captain.', 'science');
+          break;
+        }
+        this.openConsole('survey', target);
         break;
       }
       case 'beam_down': {

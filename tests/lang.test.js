@@ -649,3 +649,76 @@ describe('the prose the game writes', () => {
     assert.deepEqual(hardcoded, [], 'an article is hardcoded in front of data');
   });
 });
+
+describe('orders are the primary interface', () => {
+  // The order line is supposed to be how this game is played, with buttons as
+  // the alternative rather than the other way round. That only holds if every
+  // capability the interface offers can also be SAID — a button with no phrase
+  // behind it quietly turns the text box into decoration.
+
+  test('every capability the buttons offer can also be spoken', () => {
+    const capability = [
+      // Where the ship goes.
+      ['set course for vulcan', 'course'],
+      ['warp 8', 'warp_factor'],
+      ['all stop', 'throttle'],
+      ['standard orbit', 'orbit'],
+      ['break orbit', 'break_orbit'],
+      ['get us out of here', 'warp_out'],
+      // Where the captain goes, and what they touch when they get there.
+      ['take me to the armoury', 'go_to_room'],
+      ['stand up', 'chair'],
+      ['use it', 'use'],
+      ['survey that', 'survey_here'],
+      ['two to beam down', 'beam_down'],
+      ['energise', 'transport'],
+      // Fighting.
+      ['fire phasers', 'fire'],
+      ['cease fire', 'cease_fire'],
+      ['shields up', 'shields'],
+      ['red alert', 'alert'],
+      ['evasive action', 'evasive'],
+      ['target their engines', 'target_subsystem'],
+      // Everything else with a panel behind it.
+      ['open a channel', 'hail'],
+      ['scan the system', 'scan'],
+      ['status report', 'status'],
+      ['captains log', 'log_entry'],
+    ];
+
+    const mute = [];
+    for (const [said, action] of capability) {
+      const r = parseText(said);
+      const got = r.action ?? r.order?.action ?? null;
+      if (got !== action) mute.push(`"${said}" -> ${got ?? 'nothing'}, wanted ${action}`);
+    }
+    assert.deepEqual(mute, []);
+  });
+
+  test('a place name has to be a word, not a run of letters inside one', () => {
+    // "console" contains "sol". So do "solar", "resolve" and "absolutely" —
+    // and an exact place match stands aside every intent that yields to a named
+    // destination, so "operate the console" was an order to fly to Earth.
+    assert.equal(parseText('operate the console').action, 'use');
+    assert.equal(parseText('use the console').action, 'use');
+
+    // And naming a real system still works, which is the half that matters.
+    assert.equal(parseText('set course for sol').system, 'sol');
+    assert.equal(parseText('take us to vulcan').system, 'vulcan');
+  });
+
+  test('using what is in front of you is not confused with opening a channel', () => {
+    // They share the verb, and one of them is the single most-used order in
+    // the game.
+    assert.equal(parseText('open a channel').action, 'hail');
+    assert.equal(parseText('open hailing frequencies').action, 'hail');
+    assert.equal(parseText('open that console').action, 'use');
+  });
+
+  test('a tricorder over one rock is not a sensor sweep of the system', () => {
+    assert.equal(parseText('survey that').action, 'survey_here');
+    assert.equal(parseText('take a reading').action, 'survey_here');
+    assert.equal(parseText('scan the system').action, 'scan');
+    assert.equal(parseText('scan for ships').action, 'scan');
+  });
+});
