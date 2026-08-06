@@ -247,6 +247,39 @@ export const CUES = {
       tone(ctx, bus, { type: 'sine', pitch: n * 2, at: i * 0.16, duration: 0.2, gain: 0.08, release: 0.16 });
     });
   },
+
+  /**
+   * One panel bleep, of the sort that was continuously under every bridge
+   * scene. Deliberately not a fixed note: RESEARCH §9 records the bridge bed as
+   * "continuous panel bleeps and chirps", plural and varied, and a single
+   * repeated pitch reads as an alarm rather than as a room full of instruments
+   * working.
+   */
+  panel_chirp: (ctx, bus) => {
+    const base = 1200 + Math.random() * 1500;
+    const rising = Math.random() < 0.5;
+    fmTone(ctx, bus, {
+      carrier: base,
+      ratio: 2 + Math.random() * 2,
+      index: 120 + Math.random() * 220,
+      duration: 0.03 + Math.random() * 0.05,
+      // Quiet for a cue and still above the audibility floor the mixer tests
+      // enforce. A bed mixed under that floor is a bed nobody on a phone ever
+      // hears, which is the complaint this whole audio pass started from — and
+      // the bleeps were continuous on the show, not subliminal.
+      gain: 0.13 + Math.random() * 0.05,
+      release: 0.04,
+    });
+    // Half of them are a pair, a step apart, which is what makes the bed sound
+    // conversational instead of like one machine ticking.
+    if (Math.random() < 0.5) {
+      fmTone(ctx, bus, {
+        at: 0.06 + Math.random() * 0.05,
+        carrier: base * (rising ? 1.34 : 0.76),
+        ratio: 3, index: 180, duration: 0.04, gain: 0.12, release: 0.04,
+      });
+    }
+  },
 };
 
 export const CUE_NAMES = Object.keys(CUES);
@@ -258,6 +291,9 @@ export const CUE_BUS = {
   red_alert: 'alert', yellow_alert: 'alert', alert_clear: 'alert',
   intruder_alert: 'alert', hail_incoming: 'alert', boatswain: 'alert',
   core_breach_warning: 'alert', promotion: 'alert',
+  // The bed, not an event: it belongs with the drone it sits over, so the
+  // ambience slider takes it down with the rest of the room.
+  panel_chirp: 'ambience',
 };
 
 export function busFor(cue) {

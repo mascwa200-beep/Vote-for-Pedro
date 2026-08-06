@@ -255,3 +255,78 @@ export function drone(ctx, dest, {
     },
   };
 }
+
+/**
+ * Wind: filtered noise that will not sit still.
+ *
+ * A steady band of noise is a hiss, and a hiss is what a broken speaker sounds
+ * like. What makes noise read as weather is that the band MOVES — gusts are the
+ * filter opening and closing over several seconds, not the level going up and
+ * down — so this runs a slow LFO on the cutoff and a slower, shallower one on
+ * the gain. Two oscillators of housekeeping, and the difference between a
+ * planet and a fault.
+ *
+ * Returns the same handle shape as `drone`, so the mixer can treat a bed of
+ * weather and a bed of machinery identically.
+ */
+export function wind(ctx, dest, {
+  gain = 0.1, centre = 520, q = 0.9, gust = 0.13, gustRate = 0.07,
+} = {}) {
+  const src = ctx.createBufferSource();
+  src.buffer = pinkNoiseBuffer(ctx, 3);
+  src.loop = true;
+
+  const biq = ctx.createBiquadFilter();
+  biq.type = 'bandpass';
+  biq.frequency.value = centre;
+  biq.Q.value = q;
+
+  const amp = ctx.createGain();
+  amp.gain.value = 0;
+
+  // The gust. Depth is a fraction of the centre frequency rather than a fixed
+  // number of hertz, so a low moan and a high whistle gust by the same amount
+  // musically instead of the low one barely moving.
+  const lfo = ctx.createOscillator();
+  const lfoAmp = ctx.createGain();
+  lfo.type = 'sine';
+  lfo.frequency.value = gustRate;
+  lfoAmp.gain.value = centre * 0.55;
+  lfo.connect(lfoAmp).connect(biq.frequency);
+
+  const swell = ctx.createOscillator();
+  const swellAmp = ctx.createGain();
+  swell.type = 'sine';
+  swell.frequency.value = gustRate * 0.41;   // not a multiple, so they never lock
+  swellAmp.gain.value = gust;
+  swell.connect(swellAmp).connect(amp.gain);
+
+  src.connect(biq).connect(amp).connect(dest);
+  src.start(); lfo.start(); swell.start();
+
+  return {
+    amp, biq, src, lfo,
+    fadeTo(value, seconds = 1.2) {
+      const now = ctx.currentTime;
+      amp.gain.cancelScheduledValues(now);
+      amp.gain.setValueAtTime(Math.max(0.0001, amp.gain.value), now);
+      amp.gain.linearRampToValueAtTime(value, now + seconds);
+    },
+    setPitch(value, seconds = 1.0) {
+      const now = ctx.currentTime;
+      biq.frequency.cancelScheduledValues(now);
+      biq.frequency.setValueAtTime(biq.frequency.value, now);
+      biq.frequency.linearRampToValueAtTime(Math.max(20, value), now + seconds);
+      lfoAmp.gain.setValueAtTime(value * 0.55, now);
+    },
+    stop(fade = 0.8) {
+      const now = ctx.currentTime;
+      amp.gain.cancelScheduledValues(now);
+      amp.gain.setValueAtTime(Math.max(0.0001, amp.gain.value), now);
+      amp.gain.exponentialRampToValueAtTime(0.0001, now + fade);
+      src.stop(now + fade + 0.1);
+      lfo.stop(now + fade + 0.1);
+      swell.stop(now + fade + 0.1);
+    },
+  };
+}
