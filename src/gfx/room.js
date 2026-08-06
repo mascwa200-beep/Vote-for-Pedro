@@ -820,50 +820,105 @@ const DIVISION_COLOUR = {
 };
 const SKIN = [0.78, 0.62, 0.50];
 
-function officer3d(solid, station) {
-  const colour = DIVISION_COLOUR[station.crew] ?? [0.6, 0.6, 0.62];
+/**
+ * Where an officer stands to work a station.
+ *
+ * On the near side of the console, which is the side away from the bulkhead it
+ * is set into. Exported because the officer is no longer part of the room's
+ * mesh and the renderer has to be told where to put them.
+ */
+export function officerStandsAt(station) {
+  // Toward the middle of the room, not backwards along the console's facing.
+  //
+  // Those are the same thing on the bridge, where a ring station's facing
+  // points out at the bay wall — and opposite everywhere else, because a wall
+  // console in a box room is written facing INTO the room. Stepping backwards
+  // along that put the officer at sickbay's biobed, engineering's boards and
+  // the transporter console three quarters of a metre INSIDE the bulkhead. It
+  // was invisible for as long as the bulkheads were.
+  if (station.mounted === 'wall') {
+    const len = Math.hypot(station.at[0], station.at[1]) || 1;
+    const t = 1 - 0.72 / len;
+    return [station.at[0] * t, station.at[1] * t];
+  }
+  // A floor console is furniture in the middle of the room and its operator
+  // sits behind it looking the same way it does — helm and navigation, facing
+  // the viewer.
   const yaw = station.facing ?? 0;
-  // Standing at the console, on the near side of it — which is the side away
-  // from the wall the console is set into.
-  const back = station.mounted === 'wall' ? -0.72 : -0.74;
-  const x = station.at[0] + Math.sin(yaw) * back;
-  const z = station.at[1] + Math.cos(yaw) * back;
+  return [station.at[0] - Math.sin(yaw) * 0.74, station.at[1] - Math.cos(yaw) * 0.74];
+}
 
-  // A seated officer at a floor console, standing at a wall one.
-  const seated = station.mounted === 'floor';
+/** Which way that officer is looking when nothing has their attention. */
+export function officerFaces(station) {
+  // At their console, which for a wall station is outward from the middle of
+  // the room whatever the station's own `facing` happens to say.
+  if (station.mounted === 'wall') return Math.atan2(station.at[0], station.at[1]);
+  return station.facing ?? 0;
+}
+
+const CREW_CACHE = new Map();
+
+/**
+ * One officer, built at the origin facing +z.
+ *
+ * Separate from the room, and that separation is the whole point. Baked into
+ * the room's mesh an officer can never move — they are welded to the console
+ * facing the wall, for the entire five-year mission, including while they are
+ * talking to you. Given their own mesh and their own model matrix they can turn
+ * round, which costs one draw call each and no triangles at all, because these
+ * are the same triangles that were in the room mesh a moment ago.
+ *
+ * Memoised on division and posture: a ship has four hundred and thirty people
+ * on it and about six ways of standing.
+ */
+export function officerMesh(crew = 'ops', mounted = 'wall') {
+  const key = `${crew}:${mounted}`;
+  if (CREW_CACHE.has(key)) return CREW_CACHE.get(key);
+
+  const colour = DIVISION_COLOUR[crew] ?? [0.6, 0.6, 0.62];
+  const seated = mounted === 'floor';
   const hip = seated ? 0.46 : 0.50;
   const shoulder = seated ? 1.06 : 1.34;
+  const mb = new MeshBuilder();
 
-  if (seated) {
-    // The chair under them: light blue, which is what the crew chairs were.
-    // The back stops below shoulder height — a tall back in front of the
-    // command chair is a wall across the viewscreen.
-    box(solid, {
-      center: vec3(x, 0.22, z), size: vec3(0.40, 0.44, 0.40), color: PALETTE.crewChair,
-    });
-    box(solid, {
-      center: vec3(x - Math.sin(yaw) * 0.21, 0.60, z - Math.cos(yaw) * 0.21),
-      size: vec3(0.40, 0.32, 0.09), color: PALETTE.crewChair,
-    });
-  } else {
-    box(solid, { center: vec3(x, hip / 2, z), size: vec3(0.24, hip, 0.20), color: [0.16, 0.16, 0.18] });
+  if (!seated) {
+    box(mb, { center: vec3(0, hip / 2, 0), size: vec3(0.24, hip, 0.20), color: [0.16, 0.16, 0.18] });
   }
-
-  // Torso, arms, head.
-  box(solid, {
-    center: vec3(x, (hip + shoulder) / 2, z),
+  // Torso.
+  box(mb, {
+    center: vec3(0, (hip + shoulder) / 2, 0),
     size: vec3(0.40, shoulder - hip, 0.24), color: colour,
   });
+  // Arms, out to either side. At yaw 0 that is ±x, which is what makes the
+  // whole figure rotatable by a single quaternion.
+  box(mb, { center: vec3(0.26, shoulder - 0.16, 0), size: vec3(0.11, 0.34, 0.11), color: colour });
+  box(mb, { center: vec3(-0.26, shoulder - 0.16, 0), size: vec3(0.11, 0.34, 0.11), color: colour });
+  box(mb, { center: vec3(0, shoulder + 0.14, 0), size: vec3(0.20, 0.24, 0.20), color: SKIN });
+
+  const built = mb.build();
+  CREW_CACHE.set(key, built);
+  return built;
+}
+
+/**
+ * What stays behind when the officer is drawn separately: the chair.
+ *
+ * A chair does not turn round when the person in it does.
+ */
+function officer3d(solid, station) {
+  const yaw = officerFaces(station);
+  const [x, z] = officerStandsAt(station);
+  if (station.mounted !== 'floor') return;
+
+  // Light blue, which is what the crew chairs were. The back stops below
+  // shoulder height — a tall back in front of the command chair is a wall
+  // across the viewscreen.
   box(solid, {
-    center: vec3(x + Math.cos(yaw) * 0.26, shoulder - 0.16, z - Math.sin(yaw) * 0.26),
-    size: vec3(0.11, 0.34, 0.11), color: colour,
+    center: vec3(x, 0.22, z), size: vec3(0.40, 0.44, 0.40), color: PALETTE.crewChair,
   });
   box(solid, {
-    center: vec3(x - Math.cos(yaw) * 0.26, shoulder - 0.16, z + Math.sin(yaw) * 0.26),
-    size: vec3(0.11, 0.34, 0.11), color: colour,
-  });
-  box(solid, {
-    center: vec3(x, shoulder + 0.14, z), size: vec3(0.20, 0.24, 0.20), color: SKIN,
+    center: vec3(x - Math.sin(yaw) * 0.21, 0.60, z - Math.cos(yaw) * 0.21),
+    size: vec3(0.40, 0.32, 0.09), color: PALETTE.crewChair,
   });
 }
 
