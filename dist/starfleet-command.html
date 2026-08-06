@@ -2177,7 +2177,33 @@ const ROOM_AMBIENCE = {
   briefing: { pitch: 1.0, gain: 0.55, filter: 0.7, chirps: 0.1 },
   // A moving car in a shaft: the hum rises and there is nothing else in it.
   turbolift: { pitch: 1.25, gain: 0.85, filter: 1.15, chirps: 0 },
+
+  // Corridors take the deck they run through. All three are the same shape of
+  // sound — a bulkhead away from whatever is making it — and differ by what is
+  // on the other side of that bulkhead.
   corridor_a: { pitch: 0.85, gain: 0.7, filter: 0.9, chirps: 0.15 },
+  corridor_rec: { pitch: 0.9, gain: 0.62, filter: 0.8, chirps: 0.1 },
+  corridor_sec: { pitch: 0.8, gain: 0.75, filter: 0.95, chirps: 0.15 },
+
+  // The one room aboard nobody is on duty in. Warm, low and quiet, with the
+  // occasional food synthesiser rather than instruments.
+  rec: { pitch: 1.1, gain: 0.5, filter: 0.6, chirps: 0.08 },
+  crewquarters: { pitch: 1.0, gain: 0.42, filter: 0.5, chirps: 0 },
+
+  // Deck 7. The armoury is a locked steel room and sounds like one; the brig
+  // has the containment fields, which is a high steady note and nothing else.
+  armoury: { pitch: 0.95, gain: 0.7, filter: 1.4, chirps: 0.12 },
+  brig: { pitch: 2.6, gain: 0.55, filter: 1.6, chirps: 0 },
+  // Volume, and the emptiness that goes with it: a big cold space with the
+  // ship's structure ringing through it.
+  cargo: { pitch: 0.62, gain: 0.9, filter: 0.7, chirps: 0.06 },
+
+  // The hangar is the largest compartment in the game and open to the doors.
+  // Lowest note aboard, loudest, and almost nothing on top of it.
+  hangar: { pitch: 0.45, gain: 1.2, filter: 0.55, chirps: 0.05 },
+
+  // The bridge in miniature, so it sounds like the bridge in miniature.
+  auxcontrol: { pitch: 1.0, gain: 0.8, filter: 1.0, chirps: 0.5 },
 };
 
 const DEFAULT_ROOM = { pitch: 1.0, gain: 1.0, filter: 1.0, chirps: 0.2 };
@@ -2483,6 +2509,7 @@ class AudioEngine {
 }
 const audio = new AudioEngine();
 
+__exports.ROOM_AMBIENCE = ROOM_AMBIENCE;
 __exports.AudioEngine = AudioEngine;
 __exports.audio = audio;
 
@@ -7732,10 +7759,13 @@ __define("src/world/interiors.data.js", function (__exports, __require) {
  */
 const DECKS = {
   1: 'Deck 1 — Bridge',
-  2: 'Deck 2 — Briefing and quarters',
+  2: 'Deck 2 — Briefing room',
+  3: 'Deck 3 — Recreation and crew quarters',
   5: 'Deck 5 — Sickbay',
-  7: 'Deck 7 — Transporters',
+  7: 'Deck 7 — Transporters, armoury and cargo',
+  8: 'Deck 8 — Auxiliary control',
   11: 'Deck 11 — Engineering',
+  19: 'Deck 19 — Hangar deck',
 };
 
 /**
@@ -8007,6 +8037,216 @@ const ROOMS = {
     ],
     exits: [
       { to: 'turbolift', at: [-2.9, -1.6], width: 1.2, label: 'Turbolift' },
+      // docs/RESEARCH.md §11: the brig adjoins the briefing room. It is the one
+      // interior adjacency the show states outright, and an adjacency is worth
+      // more to this game than a deck number — a deck number is a label on a
+      // lift button, a door is somewhere you can walk.
+      { to: 'brig', at: [2.9, 0.6], width: 1.1, label: 'Brig' },
+    ],
+  },
+
+  // ---------------------------------------------------------------- deck 3
+
+  corridor_rec: {
+    id: 'corridor_rec',
+    name: 'Deck 3 Corridor',
+    deck: 3,
+    shape: { kind: 'box', width: 2.6, depth: 12.0, height: 2.5 },
+    stations: [],
+    props: [
+      { id: 'rec_panel', kind: 'wallpanel', label: 'A wall panel', at: [1.15, 2.2], facing: -Math.PI / 2, radius: 0, solid: false },
+      { id: 'rec_locker', kind: 'locker', label: 'An emergency locker', at: [-1.15, -3.0], facing: Math.PI / 2, radius: 0.3, solid: false },
+    ],
+    exits: [
+      { to: 'turbolift', at: [0, -5.8], width: 1.2, label: 'Turbolift' },
+      { to: 'rec', at: [1.25, 1.0], width: 1.3, label: 'Recreation Room' },
+      { to: 'crewquarters', at: [-1.25, 3.2], width: 1.2, label: 'Crew Quarters' },
+    ],
+  },
+
+  rec: {
+    id: 'rec',
+    name: 'Recreation Room',
+    deck: 3,
+    // The one room aboard that is not for working in. Wide and low, with the
+    // furniture spread rather than ranked, because that is what makes a space
+    // read as somewhere people choose to be.
+    shape: { kind: 'box', width: 9.0, depth: 7.0, height: 2.6 },
+    stations: [
+      { id: 'rec_terminal', label: 'The wall terminal', crew: null, panel: 'crew', at: [0, 3.3], facing: 0, mounted: 'wall' },
+      { id: 'rec_food', label: 'The food synthesiser', crew: null, panel: 'shop', at: [-4.1, 0.6], facing: -Math.PI / 2, mounted: 'wall' },
+    ],
+    props: [
+      { id: 'rec_table_a', kind: 'table', label: 'A table', at: [-1.6, -0.4], facing: 0, radius: 0.85, solid: true },
+      { id: 'rec_table_b', kind: 'table', label: 'A table', at: [2.2, 1.2], facing: 0, radius: 0.85, solid: true },
+      { id: 'rec_table_c', kind: 'table', label: 'A table', at: [2.6, -2.0], facing: 0, radius: 0.75, solid: true },
+      { id: 'rec_chair_a', kind: 'chair', label: 'A chair', at: [-3.0, -1.8], facing: Math.PI / 2, radius: 0.34, solid: true },
+      { id: 'rec_chair_b', kind: 'chair', label: 'A chair', at: [0.4, 2.2], facing: Math.PI, radius: 0.34, solid: true },
+    ],
+    exits: [
+      { to: 'corridor_rec', at: [-4.4, -2.6], width: 1.3, label: 'Corridor' },
+    ],
+  },
+
+  crewquarters: {
+    id: 'crewquarters',
+    name: 'Crew Quarters',
+    deck: 3,
+    // Bigger than a bunkroom needs to be, and the reason is the walker rather
+    // than the furniture. A solid prop needs its own radius plus a walker's
+    // width of clearance from every wall, or there is a spot where the wall
+    // pushes you into the bunk, the bunk pushes you into the wall, and neither
+    // constraint can be met. Bunks shoved against a bulkhead failed exactly
+    // that, so the compartment grew until they are genuinely free-standing.
+    shape: { kind: 'box', width: 6.4, depth: 6.0, height: 2.4 },
+    stations: [
+      { id: 'crew_terminal', label: 'A desk terminal', crew: null, panel: 'log', at: [3.0, 0.4], facing: Math.PI / 2, mounted: 'wall' },
+    ],
+    props: [
+      { id: 'bunk_a', kind: 'bed', label: 'A bunk', at: [-1.9, 1.2], facing: 0, radius: 0.7, solid: true },
+      { id: 'bunk_b', kind: 'bed', label: 'A bunk', at: [-1.9, -1.2], facing: 0, radius: 0.7, solid: true },
+      { id: 'crew_locker', kind: 'locker', label: 'A locker', at: [0.4, 2.8], facing: 0, radius: 0.3, solid: false },
+    ],
+    exits: [
+      { to: 'corridor_rec', at: [3.1, -2.2], width: 1.2, label: 'Corridor' },
+    ],
+  },
+
+  // ---------------------------------------------------------------- deck 7
+
+  corridor_sec: {
+    id: 'corridor_sec',
+    name: 'Deck 7 Corridor',
+    deck: 7,
+    shape: { kind: 'box', width: 2.6, depth: 13.0, height: 2.5 },
+    stations: [],
+    props: [
+      { id: 'sec_panel', kind: 'wallpanel', label: 'A wall panel', at: [1.15, -1.6], facing: -Math.PI / 2, radius: 0, solid: false },
+      { id: 'sec_locker', kind: 'locker', label: 'An emergency locker', at: [-1.15, 3.4], facing: Math.PI / 2, radius: 0.3, solid: false },
+    ],
+    exits: [
+      { to: 'turbolift', at: [0, -6.3], width: 1.2, label: 'Turbolift' },
+      { to: 'armoury', at: [1.25, 1.4], width: 1.2, label: 'Armoury' },
+      { to: 'transporter', at: [-1.25, -3.2], width: 1.2, label: 'Transporter Room' },
+      { to: 'cargo', at: [0, 6.3], width: 1.4, label: 'Cargo Hold' },
+    ],
+  },
+
+  armoury: {
+    id: 'armoury',
+    name: 'Armoury',
+    deck: 7,
+    shape: { kind: 'box', width: 5.0, depth: 4.4, height: 2.4 },
+    stations: [
+      { id: 'weapons_locker', label: 'The weapons locker', crew: 'security', panel: 'tactical', at: [0, 2.0], facing: 0, mounted: 'wall' },
+      { id: 'issue_desk', label: 'The issue log', crew: 'security', panel: 'shop', at: [-2.3, -0.4], facing: -Math.PI / 2, mounted: 'wall' },
+    ],
+    props: [
+      { id: 'rack_a', kind: 'locker', label: 'A phaser rack', at: [2.3, 0.8], facing: Math.PI / 2, radius: 0.3, solid: false },
+      { id: 'rack_b', kind: 'locker', label: 'A phaser rack', at: [2.3, -0.8], facing: Math.PI / 2, radius: 0.3, solid: false },
+    ],
+    exits: [
+      { to: 'corridor_sec', at: [-2.4, -1.6], width: 1.2, label: 'Corridor' },
+    ],
+  },
+
+  brig: {
+    id: 'brig',
+    name: 'Brig',
+    deck: 7,
+    shape: { kind: 'box', width: 5.6, depth: 5.2, height: 2.4 },
+    stations: [
+      { id: 'brig_control', label: 'The detention console', crew: 'security', panel: 'damage', at: [0, -2.3], facing: Math.PI, mounted: 'wall' },
+    ],
+    props: [
+      // Three cells along the far bulkhead. The force fields are drawn as
+      // wall panels: a brig with nothing between you and the occupant is a
+      // room with a bed in it.
+      { id: 'cell_a', kind: 'wallpanel', label: 'A detention field', at: [-1.5, 2.4], facing: 0, radius: 0, solid: false },
+      { id: 'cell_b', kind: 'wallpanel', label: 'A detention field', at: [0, 2.4], facing: 0, radius: 0, solid: false },
+      { id: 'cell_c', kind: 'wallpanel', label: 'A detention field', at: [1.5, 2.4], facing: 0, radius: 0, solid: false },
+      { id: 'brig_bunk', kind: 'bed', label: 'A cell bunk', at: [-1.5, 1.0], facing: 0, radius: 0.6, solid: true },
+    ],
+    exits: [
+      { to: 'briefing', at: [-2.6, -1.3], width: 1.1, label: 'Briefing Room' },
+    ],
+  },
+
+  cargo: {
+    id: 'cargo',
+    name: 'Cargo Hold',
+    deck: 7,
+    // The biggest space aboard that is not the hangar, and the ceiling is what
+    // says so: three and a half metres against two and a half everywhere else.
+    shape: { kind: 'box', width: 10.0, depth: 8.0, height: 3.6 },
+    stations: [
+      { id: 'manifest', label: 'The cargo manifest', crew: 'ops', panel: 'shop', at: [-4.6, 1.0], facing: -Math.PI / 2, mounted: 'wall' },
+      { id: 'cargo_transporter', label: 'The cargo transporter', crew: 'transporter', panel: 'transport', at: [4.6, -1.0], facing: Math.PI / 2, mounted: 'wall' },
+    ],
+    props: [
+      { id: 'crate_a', kind: 'locker', label: 'A cargo container', at: [-1.4, 2.2], facing: 0, radius: 0.8, solid: true },
+      { id: 'crate_b', kind: 'locker', label: 'A cargo container', at: [1.2, 2.4], facing: 0, radius: 0.8, solid: true },
+      { id: 'crate_c', kind: 'locker', label: 'A cargo container', at: [2.6, -0.6], facing: 0, radius: 0.9, solid: true },
+      { id: 'crate_d', kind: 'locker', label: 'A cargo container', at: [-2.8, -1.8], facing: 0, radius: 0.7, solid: true },
+    ],
+    exits: [
+      { to: 'corridor_sec', at: [0, -3.8], width: 1.4, label: 'Corridor' },
+      { to: 'hangar', at: [0, 3.8], width: 1.6, label: 'Hangar Deck' },
+    ],
+  },
+
+  // ------------------------------------------------- secondary hull, aft
+
+  hangar: {
+    id: 'hangar',
+    name: 'Hangar Deck',
+    // §11: the show gives the hangar no deck number, only that it is aft in the
+    // secondary hull and that the hull is sixteen decks tall. So it gets a
+    // number that is honest about being low and aft rather than a false
+    // precision — and the turbolift reads this to sort its stops.
+    deck: 19,
+    shape: { kind: 'box', width: 16.0, depth: 20.0, height: 6.5 },
+    stations: [
+      { id: 'flight_control', label: 'Flight control', crew: 'shuttlebay', panel: 'galaxy', at: [-7.6, 4.0], facing: -Math.PI / 2, mounted: 'wall' },
+      { id: 'bay_doors', label: 'The bay door control', crew: 'shuttlebay', panel: 'damage', at: [7.6, 4.0], facing: Math.PI / 2, mounted: 'wall' },
+    ],
+    props: [
+      // Two shuttlecraft on the deck, parked square to the doors. Boxes rather
+      // than hulls: a shuttle at this scale is a shape you walk around, and the
+      // blueprint mesh is built for a viewscreen four thousand units away.
+      { id: 'shuttle_a', kind: 'table', label: 'A shuttlecraft', at: [-4.0, -3.0], facing: 0, radius: 2.4, solid: true },
+      { id: 'shuttle_b', kind: 'table', label: 'A shuttlecraft', at: [4.0, -3.0], facing: 0, radius: 2.4, solid: true },
+      { id: 'tug', kind: 'locker', label: 'A deck tractor', at: [0, 6.0], facing: 0, radius: 0.9, solid: true },
+    ],
+    exits: [
+      { to: 'cargo', at: [0, -9.6], width: 1.6, label: 'Cargo Hold' },
+      // Its own lift, and it has to have one. Without it deck 19 hangs off the
+      // cargo hold on deck 7, which means every trip to the hangar is a walk
+      // the length of the secondary hull — and a ship where a whole deck is
+      // reachable only through another compartment is not a ship, it is a
+      // corridor with rooms bolted to the end.
+      { to: 'turbolift', at: [-7.6, -9.6], width: 1.2, label: 'Turbolift' },
+    ],
+  },
+
+  // --------------------------------------------------------------- deck 8
+
+  auxcontrol: {
+    id: 'auxcontrol',
+    name: 'Auxiliary Control',
+    deck: 8,
+    // The bridge in miniature: the room the ship is fought from when the bridge
+    // is gone. Same stations, half the size, no viewer.
+    shape: { kind: 'box', width: 6.2, depth: 5.0, height: 2.5 },
+    stations: [
+      { id: 'aux_helm', label: 'The auxiliary helm', crew: 'helm', panel: 'helm', at: [-1.4, 2.1], facing: 0, mounted: 'wall' },
+      { id: 'aux_weapons', label: 'The auxiliary weapons board', crew: 'tactical', panel: 'weapons', at: [1.4, 2.1], facing: 0, mounted: 'wall' },
+      { id: 'aux_power', label: 'The auxiliary power board', crew: 'engineering', panel: 'power', at: [-3.0, -0.6], facing: -Math.PI / 2, mounted: 'wall' },
+      { id: 'aux_damage', label: 'The damage board', crew: 'damagecontrol', panel: 'damage', at: [3.0, -0.6], facing: Math.PI / 2, mounted: 'wall' },
+    ],
+    props: [],
+    exits: [
+      { to: 'turbolift', at: [0, -2.4], width: 1.2, label: 'Turbolift' },
     ],
   },
 };
@@ -8056,6 +8296,29 @@ const ROOM_ALIASES = {
   quarters: 'quarters', 'my quarters': 'quarters', 'captains quarters': 'quarters',
   'captain quarters': 'quarters', 'the captains quarters': 'quarters',
   corridor: 'corridor_a', 'the corridor': 'corridor_a', hallway: 'corridor_a',
+
+  // Deck 3.
+  'recreation room': 'rec', recreation: 'rec', 'rec room': 'rec',
+  'the rec room': 'rec', 'mess hall': 'rec', mess: 'rec', lounge: 'rec',
+  'crew quarters': 'crewquarters', 'the crew quarters': 'crewquarters',
+  bunkroom: 'crewquarters', 'crew berthing': 'crewquarters',
+  'deck 3 corridor': 'corridor_rec',
+
+  // Deck 7.
+  armoury: 'armoury', armory: 'armoury', 'the armoury': 'armoury',
+  'the armory': 'armoury', 'weapons locker': 'armoury',
+  brig: 'brig', 'the brig': 'brig', detention: 'brig',
+  'detention cells': 'brig', jail: 'brig',
+  'cargo hold': 'cargo', cargo: 'cargo', 'the cargo hold': 'cargo',
+  'cargo bay': 'cargo', hold: 'cargo',
+  'deck 7 corridor': 'corridor_sec',
+
+  // Deck 8 and the secondary hull.
+  'auxiliary control': 'auxcontrol', 'aux control': 'auxcontrol',
+  'the auxiliary control room': 'auxcontrol', 'secondary bridge': 'auxcontrol',
+  'hangar deck': 'hangar', hangar: 'hangar', 'the hangar': 'hangar',
+  'shuttle bay': 'hangar', shuttlebay: 'hangar', 'the shuttlebay': 'hangar',
+  'flight deck': 'hangar',
 };
 function findRoom(text) {
   if (!text) return null;
@@ -8482,15 +8745,29 @@ function boxShell(solid, glow, room) {
   const hd = room.shape.depth / 2;
   const h = WALL_HEIGHT(room);
 
-  solid.quad(vec3(-hw, 0, -hd), vec3(hw, 0, -hd), vec3(hw, 0, hd), vec3(-hw, 0, hd), PALETTE.floor);
-  solid.quad(vec3(-hw, h, hd), vec3(hw, h, hd), vec3(hw, h, -hd), vec3(-hw, h, -hd), PALETTE.ceiling);
+  // The deck faces UP and the deckhead faces DOWN, and both of these were the
+  // other way round for the whole life of this file. Back-face culling then
+  // deleted every floor and every ceiling in every box compartment aboard — and
+  // it went unnoticed because the rooms were small enough that walls filled the
+  // frame and the black where the deck should be read as dark carpet. The
+  // hangar is sixteen metres by twenty and made it impossible to miss.
+  solid.quad(vec3(-hw, 0, -hd), vec3(-hw, 0, hd), vec3(hw, 0, hd), vec3(hw, 0, -hd), PALETTE.floor);
+  solid.quad(vec3(-hw, h, -hd), vec3(hw, h, -hd), vec3(hw, h, hd), vec3(-hw, h, hd), PALETTE.ceiling);
 
   // Each wall is cut into panels so a doorway can be left out of one of them.
+  // Every one of these flips was inverted, so all four bulkheads of every box
+  // compartment aboard faced OUT and were culled. A box room was a void with
+  // furniture standing in it, and it survived this long because the black where
+  // a wall should be reads as an unlit bulkhead until you stand somewhere big
+  // enough to see there is nothing there.
+  //
+  // The rule, for the next one: a wall's normal points at the middle of the
+  // room. The wall at +z faces −z; the wall at −x faces +x.
   const walls = [
-    { axis: 'z', at: hd, from: -hw, to: hw, flip: false },
-    { axis: 'z', at: -hd, from: -hw, to: hw, flip: true },
-    { axis: 'x', at: hw, from: -hd, to: hd, flip: true },
-    { axis: 'x', at: -hw, from: -hd, to: hd, flip: false },
+    { axis: 'z', at: hd, from: -hw, to: hw, flip: true },
+    { axis: 'z', at: -hd, from: -hw, to: hw, flip: false },
+    { axis: 'x', at: hw, from: -hd, to: hd, flip: false },
+    { axis: 'x', at: -hw, from: -hd, to: hd, flip: true },
   ];
 
   for (const wall of walls) {

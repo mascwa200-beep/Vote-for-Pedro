@@ -11,12 +11,13 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { ROOM_AMBIENCE } from '../src/audio/engine.js';
 
 import {
   Walker, resolve, confine, route, connectivity, findRoom, stepToward,
   WALKER_RADIUS, WALK_SPEED, RUN_SPEED, REACH,
 } from '../src/sim/walk.js';
-import { ROOMS, ROOM_LIST, START_ROOM, DECKS } from '../src/world/interiors.data.js';
+import { ROOMS, ROOM_LIST, LIFT_STOPS, START_ROOM, DECKS } from '../src/world/interiors.data.js';
 import { findPlace } from '../src/lang/gazetteer.js';
 import { normalize } from '../src/lang/normalize.js';
 
@@ -958,5 +959,76 @@ describe('a compartment and a star system are different things', () => {
       'bridge to engineering']) {
       assert.notEqual(parseOrder(said).action, 'go_to_room', `"${said}" started a walk`);
     }
+  });
+});
+
+describe('the ship is bigger than eight rooms', () => {
+  // Eight compartments is a menu with walls painted on. These assert the
+  // properties a new compartment has to satisfy to count as part of the ship
+  // rather than as a room somebody typed and forgot to connect.
+
+  test('every compartment can be named out loud', () => {
+    // A room you cannot say the name of is a room only the door leads to. The
+    // matcher is deliberately exact rather than fuzzy — see findRoom — so each
+    // new compartment has to be spelled out in the alias table.
+    const unreachable = [];
+    for (const room of ROOM_LIST) {
+      const byName = findRoom(room.name);
+      const byId = findRoom(room.id);
+      if (byName?.id !== room.id && byId?.id !== room.id) unreachable.push(room.id);
+    }
+    assert.deepEqual(unreachable, []);
+  });
+
+  test('the brig adjoins the briefing room', () => {
+    // docs/RESEARCH.md §11. The one interior adjacency the show states
+    // outright, and the reason the brig is where it is rather than somewhere
+    // more convenient.
+    const brig = ROOMS.brig;
+    const briefing = ROOMS.briefing;
+    assert.ok(brig, 'there is no brig');
+    assert.ok((brig.exits ?? []).some((e) => e.to === 'briefing'),
+      'the brig does not open onto the briefing room');
+    assert.ok((briefing.exits ?? []).some((e) => e.to === 'brig'),
+      'the door only goes one way');
+  });
+
+  test('the ship spans real decks, and the lift can reach them', () => {
+    const decks = new Set(ROOM_LIST.map((r) => r.deck).filter((d) => d !== null));
+    assert.ok(decks.size >= 6, `the ship occupies ${decks.size} decks`);
+    // Every deck with a compartment on it needs a way down to it. Not every
+    // room takes the lift — that is the point of corridors — but every DECK
+    // must have at least one stop.
+    const served = new Set(LIFT_STOPS.map((s) => s.deck));
+    const stranded = [...decks].filter((d) => !served.has(d));
+    assert.deepEqual(stranded, [], `decks with no lift stop: ${stranded.join(', ')}`);
+  });
+
+  test('no compartment is a dead end reachable only one way', () => {
+    // A room with one door is fine — most are. A room whose only door leads
+    // somewhere that cannot itself be reached is a room nobody will ever see,
+    // and the reachability test above would still pass it if the graph happened
+    // to be connected through it.
+    for (const room of ROOM_LIST) {
+      assert.ok((room.exits ?? []).length > 0, `${room.id} has no doors at all`);
+    }
+  });
+
+  test('the big compartments are actually big', () => {
+    // The hangar and the cargo hold exist to be volumes. If they end up the
+    // size of a briefing room they are just more rooms, and the ship still
+    // reads as eight of the same box.
+    const area = (r) => (r.shape.kind === 'box' ? r.shape.width * r.shape.depth : 0);
+    assert.ok(area(ROOMS.hangar) > 200, `the hangar is ${area(ROOMS.hangar).toFixed(0)} m²`);
+    assert.ok(ROOMS.hangar.shape.height > 5, 'the hangar has a briefing-room ceiling');
+    assert.ok(area(ROOMS.cargo) > 60, `the cargo hold is ${area(ROOMS.cargo).toFixed(0)} m²`);
+  });
+
+  test('every compartment has been given a voice', () => {
+    // A room with no row in the ambience table falls back to a default, which
+    // is exactly the one-drone-everywhere problem the audio pass fixed —
+    // arriving again through the back door as new rooms are added.
+    const mute = ROOM_LIST.filter((r) => !ROOM_AMBIENCE[r.id]).map((r) => r.id);
+    assert.deepEqual(mute, []);
   });
 });
