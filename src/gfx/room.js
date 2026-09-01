@@ -590,7 +590,9 @@ function console3d(solid, glow, station, index) {
 /** Furniture, by kind. Deliberately blocky: the sets were, too. */
 function prop3d(solid, glow, prop) {
   const [x, z] = prop.at;
-  const r = prop.radius || 0.3;
+  // How big the thing IS. `radius` is how close you may get to it, which for
+  // a surface feature is deliberately much larger — see src/world/surface.js.
+  const r = prop.drawRadius ?? prop.radius ?? 0.3;
 
   switch (prop.kind) {
     case 'chair': {

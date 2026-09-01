@@ -2024,3 +2024,39 @@ describe('nothing in a room is drawn facing away from the room', () => {
     assert.ok(lit >= 20, `only ${lit} downward-facing triangles in the bridge ceiling`);
   });
 });
+
+
+describe('a landing party can see what it walked to', () => {
+  // The captain beams down, walks to the one thing on the horizon, and the
+  // screen fills with a flat green wall that has no top and no bottom. That
+  // was a two-metre plant with a crown wider than a person, and collision
+  // holding the walker at the plant's own size — so the away team stood UNDER
+  // the canopy and the survey panel described something nobody could see.
+  //
+  // A thing you walk up to has two sizes: how big it is, and how close you may
+  // get. For a console those are the same and nothing changes. For anything
+  // free-standing they are not.
+
+  test('every surface feature is smaller than the space you are held out of', async () => {
+    const { makeSurface } = await import('../src/world/surface.js');
+    const { WALKER_RADIUS } = await import('../src/sim/walk.js');
+    for (const kind of ['planet', 'desert', 'ice', 'moon']) {
+      makeSurface({ id: `see:${kind}`, kind, ordinal: 3 }, 'Test III');
+      for (const st of ROOMS.surface.stations) {
+        const draw = st.drawRadius ?? st.radius ?? 0;
+        const standoff = (st.radius ?? 0) + WALKER_RADIUS;
+        assert.ok(draw * 1.4 < standoff,
+          `${kind}/${st.kind}: drawn at ${draw.toFixed(2)} and approached to ${standoff.toFixed(2)}`);
+      }
+    }
+  });
+
+  test('and can still reach it', async () => {
+    // The other half. Standing back is only right if the thing is still
+    // usable from where you end up — reach is measured to the SURFACE, so it
+    // is the walker's own radius that has to fit inside it, not the feature's.
+    const { WALKER_RADIUS, REACH } = await import('../src/sim/walk.js');
+    assert.ok(WALKER_RADIUS < REACH,
+      `a walker of ${WALKER_RADIUS} cannot reach anything at ${REACH}`);
+  });
+});

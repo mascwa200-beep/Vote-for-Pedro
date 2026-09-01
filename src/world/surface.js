@@ -196,7 +196,20 @@ export function makeSurface(body, label) {
       id: `feature${i}`,
       at: [Math.sin(a) * d, Math.cos(a) * d],
       facing: rnd() * Math.PI * 2,
-      radius: 0.9 + rnd() * 0.5,
+      // Two radii, because a thing you walk up to has two sizes.
+      //
+      // `drawRadius` is how big it is. `radius` is how close collision lets you
+      // get, and it is deliberately much larger: a console is a flat panel and
+      // you stand at it, but a two-metre plant with a crown wider than your
+      // shoulders is something you stand BACK from, and being held at its own
+      // size put the away team's face in the leaves. On screen that was a flat
+      // green wall filling a third of the frame with no top and no bottom, on a
+      // world the captain had just beamed down to.
+      //
+      // Reach is measured to the surface, not the centre, so standing further
+      // out does not put anything out of arm's reach.
+      drawRadius: 0.9 + rnd() * 0.5,
+      radius: 2.2 + rnd() * 0.7,
       // Free-standing: you walk around it to get at it, which is what makes it
       // a place rather than a button that happens to have a mesh.
       solid: true,
