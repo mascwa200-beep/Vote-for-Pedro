@@ -172,8 +172,15 @@ const css = await readFile(join(ROOT, 'src', 'styles', 'lcars.css'), 'utf8');
 const icon = await readFile(join(ROOT, 'assets', 'icons', 'icon.svg'), 'utf8');
 const iconData = `data:image/svg+xml;base64,${Buffer.from(icon).toString('base64')}`;
 
-// `--fragment` emits the same bundle without the document wrapper, for hosts
-// that supply their own <head> and <body> (the Artifact publisher does).
+// `--fragment` emits ONLY the wrapperless bundle, for hosts that supply their
+// own <head> and <body>. Without it BOTH files are written.
+//
+// It used to emit only one or the other, so `npm run build` produced the page
+// and never the fragment — and CI checks both. The fragment therefore went
+// stale every time somebody built the way the project tells you to build, and
+// the red run said `dist/ is stale` about a file no documented command
+// generates. A build command that does not produce all of the build outputs is
+// a trap, not a shortcut.
 const FRAGMENT = process.argv.includes('--fragment');
 
 const fragment = `<title>Starfleet Command</title>
@@ -227,11 +234,14 @@ ${bundled}
 </html>
 `;
 
-const target = FRAGMENT ? join(OUT_DIR, 'starfleet-command.fragment.html') : OUT;
-const payload = FRAGMENT ? fragment : html;
+const outputs = FRAGMENT
+  ? [[join(OUT_DIR, 'starfleet-command.fragment.html'), fragment]]
+  : [[OUT, html], [join(OUT_DIR, 'starfleet-command.fragment.html'), fragment]];
 
 await mkdir(OUT_DIR, { recursive: true });
-await writeFile(target, payload);
+for (const [file, body] of outputs) await writeFile(file, body);
+
+const [target, payload] = outputs[0];
 
 const kb = (payload.length / 1024).toFixed(1);
 console.log(`Bundled ${order.length} modules -> ${relative(ROOT, target)} (${kb} KB, no external requests)`);

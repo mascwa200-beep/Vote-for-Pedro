@@ -2367,6 +2367,23 @@ try {
         inApk === current,
         inApk === current ? '' : 'rebuild it: ANDROID_HOME=... ./tools/build-apk.sh');
 
+      // The other committed build output, which nothing here ever looked at.
+      //
+      // `dist/starfleet-command.fragment.html` is the same bundle without the
+      // document wrapper, and it was written only when the builder was passed
+      // `--fragment` — which `npm run build` does not do. So building the way
+      // the project tells you to build left the fragment behind, CI diffed
+      // dist/ and failed with "dist/ is stale" about a file no documented
+      // command generates. The builder now writes both; this makes sure they
+      // stay the same bundle.
+      const fragment = readFileSync(join(ROOT, 'dist', 'starfleet-command.fragment.html'), 'utf8');
+      // The code, not the wrapper — the page carries a <noscript> the fragment
+      // has no business having.
+      const codeOf = (s) => s.slice(s.lastIndexOf('<script>'), s.lastIndexOf('</script>'));
+      check('the fragment build carries the same bundle as the page',
+        codeOf(fragment).length > 1000 && codeOf(fragment) === codeOf(current),
+        `fragment ${codeOf(fragment).length} bytes of script, page ${codeOf(current).length}`);
+
       const apkCtx = await browser.newContext({
         viewport: VIEWPORT, deviceScaleFactor: DPR, isMobile: true, hasTouch: true,
       });
