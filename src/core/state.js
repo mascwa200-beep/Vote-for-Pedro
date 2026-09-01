@@ -1099,6 +1099,10 @@ export class Game {
     if (result.endsCombat) {
       if (eng) { eng.end(result.outcome); }
       else this.endEncounter();
+      // `end` settles the fight on the spot — see Engagement.end — so by the
+      // line below there is no engagement left and the bridge is already back
+      // to normal. Setting the alert again is what makes the ENCOUNTER branch
+      // stand down too.
       this.setAlert('normal');
     }
     if (result.enraged && eng) {
@@ -1203,11 +1207,42 @@ export class Game {
     this.character?.refresh();
 
     this.setAlert('red');
-    this.engagement = new Engagement(this.ship, fleet, this.rng, opts);
+    // `onEnd` is how a fight settles itself the moment it ends, from wherever
+    // it ends. See Engagement.end.
+    this.engagement = new Engagement(this.ship, fleet, this.rng, {
+      ...opts, onEnd: () => this.resolveCombat(),
+    });
     this.mode = MODES.COMBAT;
     this.engagement.pushLog(`${fleet.length} hostile contact${fleet.length > 1 ? 's' : ''}.`, 'tactical');
     emit('combat:begin', this.engagement);
     return this.engagement;
+  }
+
+  /**
+   * Settle a fight that has ended, wherever it ended.
+   *
+   * The tick loop finishes fights that end during the engagement's own update
+   * — a ship blows up, the last hostile runs. But a fight can also stop
+   * because of something the captain SAID: a hail that is answered with a
+   * surrender, the Kobayashi gambit that talks the Klingons down. Those run
+   * from an order handler, outside the tick, and used to leave the game in
+   * combat mode with a finished engagement until the next frame ticked.
+   *
+   * One frame is not nothing. The renderer draws between ticks, so the tactical
+   * view painted a battle that was already over, the order bar still offered
+   * "fire all weapons" at nobody, and the watchdog — correctly — reported the
+   * game stuck in combat mode. This is the single place a finished fight is
+   * cleared, and everything that can end one calls it.
+   *
+   * It is a no-op unless there is genuinely a finished fight to settle, so it
+   * is safe to call speculatively. It must NOT be called from inside
+   * `Engagement.update`, which is why `combat:end` no longer resolves it.
+   */
+  resolveCombat() {
+    const eng = this.engagement;
+    if (!eng?.over || this.mode !== MODES.COMBAT) return false;
+    this.finishCombat(eng.outcome);
+    return true;
   }
 
   /** Called when Engagement emits combat:end. */
@@ -1532,7 +1567,7 @@ export class Game {
         // old listener nulled `this.engagement` while the engagement's own
         // update was still on the stack, one frame short of touching a field
         // on an object the game had already thrown away.
-        if (this.engagement?.over) this.finishCombat(this.engagement.outcome);
+        this.resolveCombat();
         break;
       }
 

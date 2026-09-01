@@ -111,6 +111,9 @@ export class TacticalView3D {
     // the helm can point the ship anywhere and there is nothing else to do.
     this.look = { yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0 };
     this.magnification = 1;
+    // Set by a pinch or a wheel, cleared by a new engagement — see frame().
+    this.userZoom = false;
+    this.framedEngagement = null;
     this.vistaSpin = 0;
     this.vistaSource = null;
 
@@ -247,8 +250,32 @@ export class TacticalView3D {
       .filter((s) => s && !s.destroyed);
     if (!ships.length) return;
 
+    // A new fight is framed afresh.
+    //
+    // Pinching the plot sets `userZoom`, which switches the framing camera off
+    // so it cannot fight the player's fingers. Nothing ever switched it back
+    // on, so one pinch — in the first skirmish of a five-year commission —
+    // disabled auto-framing permanently, and every later battle was drawn at
+    // whatever distance that pinch had left behind. The Borg cube that the
+    // camera is supposed to pull back for arrived and it did not move.
+    if (this.framedEngagement !== engagement) {
+      this.framedEngagement = engagement;
+      this.userZoom = false;
+    }
+
     let cx = 0; let cy = 0; let cz = 0;
-    let span = 400;
+    // The floor on how far back the camera will go used to be a flat 400 units,
+    // which was a reasonable number when every hull in the game drew about a
+    // hundred units across. At true scale it is the wrong KIND of number: it
+    // frames a Constitution well, holds a Danube runabout — six units of ship —
+    // at seventy times its own length, and is irrelevant next to a Borg cube.
+    //
+    // A camera distance is only ever meaningful in hull lengths, so the floor
+    // is one now. A duel between two runabouts closes right in; a fight with a
+    // cube in it still pulls all the way back, because the same rule says so.
+    let biggest = 0;
+    for (const s of ships) biggest = Math.max(biggest, hullScale(s.classId));
+    let span = Math.max(biggest * 3.2, 60);
     for (const s of ships) {
       cx += s.x; cy += (s.z ?? 0); cz += s.y;
     }
@@ -268,7 +295,9 @@ export class TacticalView3D {
     this.cam.focus[2] += (cz - this.cam.focus[2]) * 0.06;
 
     if (!this.userZoom) {
-      this.cam.wantDistance = clamp(span * 1.15, 500, VOLUME * 1.2);
+      // The lower bound keeps the near plane (5 units) clear of the nearest
+      // hull; the upper one keeps the whole fight inside the arena.
+      this.cam.wantDistance = clamp(span * 1.15, biggest * 2 + 40, VOLUME * 1.2);
     }
     this.cam.distance += (this.cam.wantDistance - this.cam.distance) * 0.07;
   }

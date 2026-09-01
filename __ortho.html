@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>hull ortho views</title>
+<style>
+  body { margin: 0; background: #0b0d12; }
+  canvas { display: block; }
+</style>
+<canvas id="c" width="1500" height="500"></canvas>
+<script type="module">
+import { Renderer } from '/src/gfx/gl.js';
+import { hullMesh } from '/src/gfx/blueprint.js';
+import { mat4, identity, multiply, lookAt, normalMatrix } from '/src/gfx/math.js';
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: true, alpha: false, preserveDrawingBuffer: true });
+const r = new Renderer(canvas, gl);
+r.configure();
+
+function ortho(w, h, near, far, out = mat4()) {
+  identity(out);
+  out[0] = 2 / w; out[5] = 2 / h; out[10] = -2 / (far - near);
+  out[14] = -(far + near) / (far - near);
+  return out;
+}
+
+// Plan (from above), profile (from port), head-on (from dead ahead).
+const VIEWS = [
+  { name: 'plan', eye: [0.0001, 5, 0], up: [1, 0, 0] },
+  { name: 'profile', eye: [0, 0, -5], up: [0, 1, 0] },
+  { name: 'bow', eye: [5, 0, 0], up: [0, 1, 0] },
+];
+
+const model = identity(mat4());
+const nrm = normalMatrix(model);
+
+globalThis.shoot = (classId, faction = 'federation') => {
+  const mesh = hullMesh(classId, faction);
+  const key = `hull:${classId}:${faction}`;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.043, 0.051, 0.071, 1);
+  r.beginFrame();
+
+  const cell = canvas.width / VIEWS.length;
+  for (let i = 0; i < VIEWS.length; i++) {
+    const v = VIEWS[i];
+    gl.viewport(i * cell, 0, cell, canvas.height);
+    r.setLighting({
+      key: [0.4, 0.8, 0.35], fill: [-0.5, -0.2, -0.6],
+      ambient: 0.45, keyPower: 0.8, eye: v.eye,
+    });
+    const view = lookAt(v.eye, [0, 0, 0], v.up, mat4());
+    // Hulls are built to about one unit long, so 1.5 across frames them all.
+    const proj = ortho(1.5, 1.5 * (canvas.height / cell), -20, 20);
+    r.setCamera(multiply(proj, view, mat4()));
+    r.draw(key, mesh, { model, normalMatrix: nrm, fogFar: 1e9 });
+  }
+  gl.finish();
+  return { triangles: mesh.vertexCount / 3 };
+};
+globalThis.ready = true;
+</script>
