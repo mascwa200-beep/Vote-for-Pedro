@@ -664,6 +664,9 @@ try {
     const app = globalThis.__app;
     app.game.walk.enter('bridge');
     app.game.walk.sit(true);
+    // Walking back onto your own bridge is what takes the con back, and
+    // teleporting there in a harness has to say so.
+    app.game.updateCon();
     app.render();
   });
   await dismissModals(page);
@@ -677,6 +680,75 @@ try {
   }));
   check('and "break orbit" gets the ship out of it again',
     broken.orbit === false && broken.drawing === true, JSON.stringify(broken));
+  await dismissModals(page);
+
+  // ---- The watch, and who has the con ----
+  //
+  // The bridge is never empty. Driven through the order bar and through a real
+  // walk rather than by calling the methods, because the whole point is that
+  // the con follows the captain around the ship without being asked to.
+  await page.fill('.orderbar input', 'number one, you have the con');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(400);
+  const handed = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return {
+      who: g.conOfficer?.name ?? null,
+      given: g.conGiven,
+      said: g.log.slice(-4).map((e) => e.text).join(' | '),
+    };
+  });
+  check('a typed order hands the con to the next ranking officer',
+    !!handed.who && handed.given === true, JSON.stringify(handed));
+  check('and the officer acknowledges it by name',
+    handed.said.includes(handed.who ?? ' '), handed.said);
+
+  const conButton = await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button')]
+      .find((x) => /has the con/i.test(x.firstChild?.textContent ?? ''));
+    return b?.firstChild?.textContent ?? null;
+  });
+  check('the button says who has it', !!conButton, String(conButton));
+
+  await page.fill('.orderbar input', 'i have the con');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(400);
+  const retaken = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return { held: g.conStation, said: g.log.slice(-3).map((e) => e.text).join(' | ') };
+  });
+  check('and "I have the con" is the opposite order, not the same one',
+    retaken.held === null, JSON.stringify(retaken));
+  check('taking it back gets a report from the watch',
+    /had the con for/i.test(retaken.said), retaken.said);
+
+  // Now walk away without saying anything. Somebody should relieve you.
+  await page.fill('.orderbar input', 'take me to engineering');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(1600);
+  const walkedOff = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return { room: g.walk.roomId, who: g.conOfficer?.name ?? null, given: g.conGiven };
+  });
+  check('walking off the bridge passes the con without being asked',
+    !!walkedOff.who && walkedOff.given === false, JSON.stringify(walkedOff));
+
+  // And back to the chair, which is where every check after this assumes the
+  // captain is. Coming back onto the bridge is what hands the con back.
+  await page.evaluate(() => {
+    const app = globalThis.__app;
+    app.game.walkOrder = null;
+    app.game.walk.enter('bridge');
+    app.game.walk.sit(true);
+    app.game.updateCon();
+    app.render();
+  });
+  const restored = await page.evaluate(() => ({
+    held: globalThis.__app.game.conStation,
+    seated: globalThis.__app.game.walk.seated,
+  }));
+  check('and returning to the bridge takes it back',
+    restored.held === null && restored.seated === true, JSON.stringify(restored));
   await dismissModals(page);
 
   // ---- A hit is seen as well as heard ----

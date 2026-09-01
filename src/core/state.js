@@ -12,6 +12,7 @@ import { Loadout, startingLoadout } from '../sim/loadout.js';
 import { Engagement } from '../sim/combat.js';
 import { AwayTeam } from '../sim/away.js';
 import { Walker, stepToward, findRoom } from '../sim/walk.js';
+import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import { resolveHail, STANDING_EFFECTS } from '../sim/diplomacy.js';
 
@@ -146,6 +147,17 @@ export class Game {
     clearSurface();
     this.walk = new Walker();
     this.walkOrder = null;
+    // Who has the con. Null means the captain does, which is where a
+    // commission starts — in the chair, on the bridge, at the top of alpha
+    // watch. Anything else is a station id, because a station is unique in a
+    // roster and an officer object cannot survive a save.
+    this.conStation = null;
+    // Whether the watch officer took it because the captain walked away, or
+    // was given it. Given, they keep it until they are told otherwise; taken,
+    // they hand it straight back when the captain returns to the bridge.
+    this.conGiven = false;
+    this.conHours = 0;
+    this.conLines = [];
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
@@ -381,6 +393,10 @@ export class Game {
     this.walkOrder.memory ??= {};
     const r = stepToward(this.walk, toId, dt, this.walkOrder.memory);
     this.walkOrder.elapsed = (this.walkOrder.elapsed ?? 0) + dt;
+    // The con changes hands the moment you step into the turbolift, not when
+    // you arrive wherever you were going. Cheap to ask every frame: it is two
+    // comparisons unless the answer has actually changed.
+    this.updateCon();
 
     if (r.arrived) {
       this.walkOrder = null;
@@ -416,6 +432,140 @@ export class Game {
     return { ok: true, room };
   }
 
+  // --------------------------------------------------------------- the con
+
+  /** True while the captain is standing on their own bridge. */
+  get onBridge() { return this.walk.roomId === 'bridge'; }
+
+  /** The officer who has the con, or null when the captain has it. */
+  get conOfficer() {
+    return this.conStation ? (this.crew.at(this.conStation) ?? null) : null;
+  }
+
+  /**
+   * The hour of the ship's day, 0..24.
+   *
+   * One stardate unit is one day everywhere else in this game, so the fraction
+   * of a stardate is the fraction of a day, and the watch bill can be read
+   * straight off the chronometer without a second clock to keep in step.
+   */
+  get shipHour() {
+    const frac = this.clock.stardate - Math.floor(this.clock.stardate);
+    return ((frac % 1) + 1) % 1 * 24;
+  }
+
+  /** Which of the three watches is standing right now. */
+  get watch() { return watchAt(this.shipHour); }
+
+  /** The whole watch bill: who stands alpha, beta and gamma. */
+  get watchBill() { return assignWatches(this.crew); }
+
+  /** The line of succession for the con, most senior first. */
+  get watchOrder() { return watchOrder(this.crew); }
+
+  /**
+   * Hand the con over.
+   *
+   * @param {string|null} nameOrStation who to give it to; the next ranking
+   *        officer available when not said.
+   * @param {object} opts `given` marks a deliberate handover, which the officer
+   *        keeps until told otherwise rather than surrendering the moment the
+   *        captain walks back in.
+   */
+  handOverCon(nameOrStation = null, { given = true, spoken = true } = {}) {
+    if (this.conStation && !nameOrStation) {
+      // An officer already standing the watch because you walked off the
+      // bridge is confirmed in it rather than told no — saying "you have the
+      // con" to the person who already has it is how it is made official, and
+      // it means they keep it when you walk back in.
+      if (!this.conGiven && given) {
+        this.conGiven = true;
+        const holder = this.conOfficer;
+        if (spoken && holder) {
+          this.pushLog(`${holder.rank} ${holder.name}, you have the con.`, 'captain');
+          this.officerSays(holder.station, 'Aye, Captain. I have the con.', 'report');
+        }
+        return { ok: true, officer: holder };
+      }
+      return { ok: false, reason: `${this.conOfficer?.name ?? 'The watch officer'} already has the con, Captain.` };
+    }
+    let officer = null;
+    if (nameOrStation) {
+      const want = String(nameOrStation).toLowerCase();
+      officer = this.crew.officers.find((o) => o.alive && !o.injured
+        && (o.station === want || o.name.toLowerCase().includes(want)));
+      if (!officer) {
+        return { ok: false, reason: `There is no one available by that name, Captain.` };
+      }
+    } else {
+      officer = nextInLine(this.crew);
+    }
+    if (!officer) return { ok: false, reason: 'There is no one fit to relieve you, Captain.' };
+    if (officer.station === this.conStation) {
+      return { ok: false, reason: `${officer.name} already has the con, Captain.` };
+    }
+
+    this.conStation = officer.station;
+    this.conGiven = given;
+    this.conHours = 0;
+    this.conLines = [];
+    if (spoken) {
+      this.pushLog(`${officer.rank} ${officer.name}, you have the con.`, 'captain');
+      this.officerSays(officer.station, 'Aye, Captain. I have the con.', 'report');
+    }
+    emit('con', { officer, held: true });
+    return { ok: true, officer };
+  }
+
+  /**
+   * Take it back, and hear what happened.
+   *
+   * The report is the point. A watch that hands back "nothing to report" is a
+   * watch that was stood, and one that hands back three lines about a hull
+   * breach is the game telling you the ship kept going without you — which is
+   * the whole reason the con exists rather than the bridge simply pausing.
+   */
+  takeCon({ spoken = true } = {}) {
+    const officer = this.conOfficer;
+    if (!this.conStation) return { ok: false, reason: 'You have the con, Captain.', lines: [] };
+
+    const lines = officer ? handbackReport(officer, this.conHours, this.conLines) : this.conLines.slice();
+    this.conStation = null;
+    this.conGiven = false;
+    this.conHours = 0;
+    this.conLines = [];
+    if (spoken) {
+      for (const line of lines) this.pushLog(line, 'bridge');
+      this.pushLog('I have the con.', 'captain');
+    }
+    emit('con', { officer, held: false });
+    return { ok: true, officer, lines };
+  }
+
+  /**
+   * Keep the con with whoever is actually on the bridge.
+   *
+   * Called every time the captain's position changes. Walk off the bridge and
+   * the next ranking officer relieves you without being asked, because that is
+   * what happens; walk back on and they give it back — unless you handed it to
+   * them deliberately, in which case they keep it until you say otherwise.
+   */
+  updateCon() {
+    if (this.over) return null;
+    if (this.onBridge) {
+      if (this.conStation && !this.conGiven) return this.takeCon();
+      return null;
+    }
+    if (!this.conStation) {
+      const r = this.handOverCon(null, { given: false, spoken: false });
+      if (r.ok) {
+        this.officerSays(r.officer.station, 'I have the con, Captain.', 'report');
+      }
+      return r;
+    }
+    return null;
+  }
+
   /** Stand up from the chair, or take it. */
   takeChair(on = true) {
     if (on && this.walk.roomId !== 'bridge') {
@@ -428,6 +578,7 @@ export class Game {
     this.walkOrder = null;
     const r = this.walk.sit(on);
     if (r.ok) this.pushLog(on ? 'Took the chair.' : 'Stood up from the chair.', 'captain');
+    if (r.ok && on) this.updateCon();
     return r;
   }
 
@@ -552,6 +703,7 @@ export class Game {
     makeSurface(body, label);
     this.walkOrder = null;
     this.walk.enter('surface');
+    this.updateCon();
     this.pushLog(`Beamed down to ${label}. ${surfaceReport(body.kind)}.`, 'transporter');
     emit('beam', { down: true, label, body });
     return { ok: true, label, body };
@@ -1251,6 +1403,12 @@ export class Game {
       podJettisoned: this.podJettisoned === true,
       warpFactor: this.warpFactor,
       walk: this.walk.save(),
+      // The watch, and what it has to report. A station id rather than the
+      // officer, because the roster is rebuilt from its own record on load and
+      // an officer object saved here would be a second, stale copy of them.
+      con: this.conStation
+        ? { station: this.conStation, given: this.conGiven === true, hours: this.conHours, lines: this.conLines }
+        : null,
       // Two ids, not a position. The vista is regenerated from the system id on
       // load and is identical every time, so the world is still exactly where
       // it was — saving coordinates would only give them a chance to disagree.
@@ -1339,10 +1497,32 @@ export class Game {
     if (ship.hullPct > before.hull + 0.02) {
       lines.push(`Hull integrity is up from ${Math.round(before.hull * 100)} to ${Math.round(ship.hullPct * 100)} percent.`);
     }
-    for (const line of lines) this.pushLog(line, 'engineering');
+    // Somebody had this ship while you were gone.
+    //
+    // If the captain walked away without handing the con over — closed the app
+    // in the chair, which is how it usually happens — the watch officer took it,
+    // because that is what a watch is for. Everything that happened is theirs
+    // to report, and they report it the moment the captain is back on the
+    // bridge to hear it. Off the bridge, they hold on to it and say so.
+    if (!this.conStation) this.handOverCon(null, { given: false, spoken: false });
+    const relief = this.conOfficer;
 
-    emit('campaign:resumed', { hours: pending, lines });
-    return { hours: pending, lines };
+    let report = lines;
+    if (relief) {
+      this.conHours += pending;
+      this.conLines.push(...lines);
+      if (this.onBridge) {
+        report = this.takeCon().lines;
+      } else {
+        report = [`${relief.rank} ${relief.name} has the con and is standing by to report.`];
+        this.pushLog(report[0], 'bridge');
+      }
+    } else {
+      for (const line of lines) this.pushLog(line, 'engineering');
+    }
+
+    emit('campaign:resumed', { hours: pending, lines: report });
+    return { hours: pending, lines: report };
   }
 
   // ------------------------------------------------- the Kobayashi Maru
@@ -1495,6 +1675,12 @@ export class Game {
     // which is where every commission starts anyway.
     g.walk = Walker.load(data.walk ?? {});
     g.walkOrder = null;
+    // Records written before there was a watch put the captain back in the
+    // chair with the con, which is what they had.
+    g.conStation = data.con?.station ?? null;
+    g.conGiven = data.con?.given === true;
+    g.conHours = Number(data.con?.hours) || 0;
+    g.conLines = Array.isArray(data.con?.lines) ? data.con.lines.slice() : [];
     // An orbit only survives if it belongs to where the ship actually is. A
     // record saved mid-transit, or one carrying a body that no longer exists,
     // restores to station-keeping rather than to an orbit of nothing.

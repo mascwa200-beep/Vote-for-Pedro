@@ -803,6 +803,62 @@ export const INTENTS = [
     }),
   },
   {
+    // Handing the con over is the single most-repeated piece of business on
+    // the bridge, and the three orders here are separated from each other by
+    // one pronoun. "You have the con", "I have the con" and "who has the con"
+    // share every other word in the sentence, so the pronoun does all the work
+    // and each intent vetoes the other two on it.
+    id: 'hand_over_con',
+    help: 'You have the con / Mr. Spock, take the con',
+    phrases: [
+      'you have the con', 'you have the conn', 'take the con', 'take the conn',
+      'the con is yours', 'you have the bridge', 'take the bridge',
+      'you have the watch', 'take the watch', 'stand the watch',
+      'hand over the con', 'the bridge is yours', 'relieve me',
+      'mind the store', 'she has the con', 'he has the con',
+      // Addressing an officer by rank strips the pronoun with it: "Number One,
+      // you have the con" normalises down to "have the con", and without these
+      // the most natural way to say the order is the one that does not work.
+      'have the con', 'have the conn', 'have the bridge', 'have the watch',
+    ],
+    keywords: { con: 3, conn: 3, watch: 2, bridge: 1.4, relieve: 2.2 },
+    // "me" is deliberately absent: "relieve me" is this order, and it is the
+    // way a tired captain actually says it.
+    veto: ['i', 'my', 'mine', 'who', 'which', 'give'],
+    // The whole line, so the officer named in it can be found against the
+    // actual roster — the lexicon does not know who is aboard.
+    // The line as it was actually typed, not the normalised one — normalising
+    // strips the address, and the address is the name of the officer being
+    // handed the ship.
+    build: (c) => ({ action: 'hand_over_con', said: c.full ?? c.text }),
+  },
+  {
+    id: 'take_con',
+    help: 'I have the con',
+    phrases: [
+      'i have the con', 'i have the conn', 'i have the bridge',
+      'i will take the con', 'i am taking the con', 'i have the watch',
+      'give me the con', 'the con is mine', 'i am taking the bridge',
+      'i will take the watch', 'i am back', 'i am relieving you',
+    ],
+    keywords: { con: 3, conn: 3, relieve: 2.2, watch: 1.6 },
+    veto: ['you', 'your', 'yours', 'she', 'he', 'they', 'who', 'which'],
+    build: () => ({ action: 'take_con' }),
+  },
+  {
+    id: 'watch_bill',
+    help: 'Who has the con? / read me the watch bill',
+    phrases: [
+      'who has the con', 'who has the conn', 'who has the bridge',
+      'who is standing watch', 'who has the watch', 'what is the watch',
+      'read me the watch bill', 'the watch bill', 'watch bill',
+      'what watch is it', 'which watch is standing', 'duty roster',
+      'read the duty roster', 'who is on duty', 'watch rotation',
+    ],
+    keywords: { watch: 2.6, bill: 2.4, roster: 2.4, duty: 2, who: 1.6 },
+    build: () => ({ action: 'watch_bill' }),
+  },
+  {
     // The one order that is about the game rather than the ship. It exists
     // because the parser accepts hundreds of phrasings and a player who has
     // only seen the buttons has no way to discover that.

@@ -14411,6 +14411,62 @@ const INTENTS = [
     }),
   },
   {
+    // Handing the con over is the single most-repeated piece of business on
+    // the bridge, and the three orders here are separated from each other by
+    // one pronoun. "You have the con", "I have the con" and "who has the con"
+    // share every other word in the sentence, so the pronoun does all the work
+    // and each intent vetoes the other two on it.
+    id: 'hand_over_con',
+    help: 'You have the con / Mr. Spock, take the con',
+    phrases: [
+      'you have the con', 'you have the conn', 'take the con', 'take the conn',
+      'the con is yours', 'you have the bridge', 'take the bridge',
+      'you have the watch', 'take the watch', 'stand the watch',
+      'hand over the con', 'the bridge is yours', 'relieve me',
+      'mind the store', 'she has the con', 'he has the con',
+      // Addressing an officer by rank strips the pronoun with it: "Number One,
+      // you have the con" normalises down to "have the con", and without these
+      // the most natural way to say the order is the one that does not work.
+      'have the con', 'have the conn', 'have the bridge', 'have the watch',
+    ],
+    keywords: { con: 3, conn: 3, watch: 2, bridge: 1.4, relieve: 2.2 },
+    // "me" is deliberately absent: "relieve me" is this order, and it is the
+    // way a tired captain actually says it.
+    veto: ['i', 'my', 'mine', 'who', 'which', 'give'],
+    // The whole line, so the officer named in it can be found against the
+    // actual roster — the lexicon does not know who is aboard.
+    // The line as it was actually typed, not the normalised one — normalising
+    // strips the address, and the address is the name of the officer being
+    // handed the ship.
+    build: (c) => ({ action: 'hand_over_con', said: c.full ?? c.text }),
+  },
+  {
+    id: 'take_con',
+    help: 'I have the con',
+    phrases: [
+      'i have the con', 'i have the conn', 'i have the bridge',
+      'i will take the con', 'i am taking the con', 'i have the watch',
+      'give me the con', 'the con is mine', 'i am taking the bridge',
+      'i will take the watch', 'i am back', 'i am relieving you',
+    ],
+    keywords: { con: 3, conn: 3, relieve: 2.2, watch: 1.6 },
+    veto: ['you', 'your', 'yours', 'she', 'he', 'they', 'who', 'which'],
+    build: () => ({ action: 'take_con' }),
+  },
+  {
+    id: 'watch_bill',
+    help: 'Who has the con? / read me the watch bill',
+    phrases: [
+      'who has the con', 'who has the conn', 'who has the bridge',
+      'who is standing watch', 'who has the watch', 'what is the watch',
+      'read me the watch bill', 'the watch bill', 'watch bill',
+      'what watch is it', 'which watch is standing', 'duty roster',
+      'read the duty roster', 'who is on duty', 'watch rotation',
+    ],
+    keywords: { watch: 2.6, bill: 2.4, roster: 2.4, duty: 2, who: 1.6 },
+    build: () => ({ action: 'watch_bill' }),
+  },
+  {
     // The one order that is about the game rather than the ship. It exists
     // because the parser accepts hundreds of phrasings and a player who has
     // only seen the buttons has no way to discover that.
@@ -15829,6 +15885,7 @@ const STATION_OF = (() => {
   Object.assign(map, {
     intercom: 'chair', alert: 'chair', jettison_pod: 'chair',
     viewscreen: 'chair', magnify: 'chair', log_entry: 'chair',
+    hand_over_con: 'chair', take_con: 'chair', watch_bill: 'chair',
     fabricate: 'engineering', work_shop: 'engineering', salvage: 'engineering',
   });
   return map;
@@ -19210,6 +19267,173 @@ __exports.connectivity = connectivity;
 
 });
 
+__define("src/sim/watch.js", function (__exports, __require) {
+// The bridge watch, and who has the con.
+//
+// A starship is crewed around the clock and the captain is one person. The
+// game has run for its whole life as though the bridge were empty whenever the
+// player was not looking at it — you closed the app mid-sector and the ship
+// simply stopped, then a summary panel told you what had happened as though
+// nobody had been there.
+//
+// Somebody was there. Handing the con over is the single most-repeated piece of
+// business on that show, and it is the thing that makes the ship feel crewed
+// rather than driven: you leave the bridge, the next ranking officer takes it,
+// they hold it while you are gone, and they tell you what happened when you get
+// back.
+//
+// Pure functions over a crew, with no game object and no renderer, so all of it
+// is testable outside a browser.
+
+/**
+ * Seniority, most senior first.
+ *
+ * Rank first, then the post: at equal rank a first officer outranks a helmsman
+ * for the purposes of the watch, which is a real thing and not a tiebreak
+ * invented for convenience — the first officer is the captain's relief.
+ */
+const RANK_ORDER = [
+  'Admiral', 'Vice Admiral', 'Rear Admiral', 'Commodore', 'Fleet Captain',
+  'Captain', 'Commander', 'Lieutenant Commander', 'Lieutenant',
+  'Lieutenant JG', 'Ensign',
+];
+
+/**
+ * Ranks that are not Starfleet's, placed against the ladder above.
+ *
+ * The rosters carry a Bajoran militia Major who was a station's first officer,
+ * a chief petty officer, a civilian constable and a hologram. Only the first of
+ * those slots into the chain of command anywhere near the top, and leaving it
+ * out is not a cosmetic bug — an unranked officer sorts to the bottom, so the
+ * DS9 roster's second-in-command would have been the last person called on.
+ *
+ * The enlisted and the civilians are deliberately absent. They keep the ship
+ * running and they do not stand a bridge watch, and the sort puts them last
+ * without needing to be told.
+ */
+const RANK_EQUIVALENT = {
+  Major: 'Commander',
+  Colonel: 'Captain',
+  Subcommander: 'Commander',
+};
+
+/** Which posts stand a watch, in the order they are called on. */
+const RELIEF_ORDER = [
+  'first_officer', 'tactical', 'helm', 'science', 'engineering',
+  'comms', 'security', 'ops', 'navigation', 'medical',
+];
+
+/** Lower is more senior. Unknown ranks sort to the bottom rather than crashing. */
+function seniority(officer) {
+  const rank = officer?.rank ?? '';
+  const r = RANK_ORDER.indexOf(RANK_EQUIVALENT[rank] ?? rank);
+  const post = RELIEF_ORDER.indexOf(officer?.station ?? '');
+  return [(r === -1 ? RANK_ORDER.length : r), (post === -1 ? RELIEF_ORDER.length : post)];
+}
+
+/**
+ * The crew who could take the con, most senior first.
+ *
+ * Only officers who are actually available. Somebody in sickbay does not have
+ * the con, and neither does somebody who is dead — which sounds obvious and is
+ * exactly the sort of thing a ranking sort gets wrong when the roster is a flat
+ * list and injuries are a boolean somewhere else.
+ */
+function watchOrder(crew) {
+  // One body, one watch. A roster can list the same officer at two posts — the
+  // TOS crew has its science officer standing in as first officer, which is
+  // true to the show and would otherwise put one Vulcan on two watches at once.
+  const seen = new Set();
+  const officers = (crew?.officers ?? []).filter((o) => {
+    if (!o?.alive || o.injured) return false;
+    if (seen.has(o.name)) return false;
+    seen.add(o.name);
+    return true;
+  });
+  return officers.slice().sort((a, b) => {
+    const [ra, pa] = seniority(a);
+    const [rb, pb] = seniority(b);
+    return ra - rb || pa - pb;
+  });
+}
+
+/**
+ * Who takes the con when the captain leaves it.
+ *
+ * @param {object} crew
+ * @param {object|null} except an officer who cannot take it — normally the one
+ *        who just handed it back, so the con does not bounce.
+ */
+function nextInLine(crew, except = null) {
+  const order = watchOrder(crew);
+  return order.find((o) => o !== except) ?? null;
+}
+
+/**
+ * The three watches a day is divided into.
+ *
+ * Alpha, beta and gamma, eight hours each, which is how a ship at sea and a
+ * ship in this franchise both do it. Alpha is the day watch and starts at 0800
+ * — the captain's watch, which is why the bridge you walk onto at the start of
+ * a commission is the one with the senior staff on it.
+ */
+const WATCHES = [
+  { id: 'alpha', name: 'Alpha watch', from: 8, to: 16 },
+  { id: 'beta', name: 'Beta watch', from: 16, to: 24 },
+  { id: 'gamma', name: 'Gamma watch', from: 0, to: 8 },
+];
+
+/** Which watch is standing at this hour of the ship's day. */
+function watchAt(hour) {
+  const h = ((Math.floor(hour) % 24) + 24) % 24;
+  return WATCHES.find((w) => h >= w.from && h < w.to) ?? WATCHES[2];
+}
+
+/**
+ * Assign the crew to watches.
+ *
+ * Round-robin down the seniority list rather than by department, so no single
+ * watch gets all the senior officers and none of them is left with nobody who
+ * can make a decision. The senior staff land on alpha because they are first in
+ * the list, which is both correct and what the show does.
+ */
+function assignWatches(crew) {
+  const order = watchOrder(crew);
+  const roster = { alpha: [], beta: [], gamma: [] };
+  order.forEach((o, i) => {
+    roster[WATCHES[i % WATCHES.length].id].push(o);
+  });
+  return roster;
+}
+
+/**
+ * What the officer with the con says when they hand it back.
+ *
+ * A report rather than a summary panel. The difference matters: a panel is the
+ * game telling you what happened, and this is a person telling you what they
+ * did about it while you were not there.
+ */
+function handbackReport(officer, hours, lines = []) {
+  if (!officer) return lines;
+  const span = hours < 1 ? 'the last hour'
+    : hours < 24 ? `the last ${Math.round(hours)} hours`
+      : `the last ${(hours / 24).toFixed(1)} days`;
+  const opener = lines.length
+    ? `${officer.rank} ${officer.name}: I had the con for ${span}.`
+    : `${officer.rank} ${officer.name}: I had the con for ${span}. Nothing to report.`;
+  return [opener, ...lines, `${officer.rank} ${officer.name}: You have the con, Captain.`];
+}
+
+__exports.seniority = seniority;
+__exports.watchOrder = watchOrder;
+__exports.nextInLine = nextInLine;
+__exports.WATCHES = WATCHES;
+__exports.watchAt = watchAt;
+__exports.assignWatches = assignWatches;
+__exports.handbackReport = handbackReport;
+
+});
+
 __define("src/sim/diplomacy.js", function (__exports, __require) {
 // Hails, negotiation, and what talking actually gets you.
 //
@@ -21880,6 +22104,7 @@ const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
 const { Engagement } = __require("src/sim/combat.js");
 const { AwayTeam } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom } = __require("src/sim/walk.js");
+const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { resolveHail, STANDING_EFFECTS } = __require("src/sim/diplomacy.js");
 
@@ -22010,6 +22235,17 @@ class Game {
     clearSurface();
     this.walk = new Walker();
     this.walkOrder = null;
+    // Who has the con. Null means the captain does, which is where a
+    // commission starts — in the chair, on the bridge, at the top of alpha
+    // watch. Anything else is a station id, because a station is unique in a
+    // roster and an officer object cannot survive a save.
+    this.conStation = null;
+    // Whether the watch officer took it because the captain walked away, or
+    // was given it. Given, they keep it until they are told otherwise; taken,
+    // they hand it straight back when the captain returns to the bridge.
+    this.conGiven = false;
+    this.conHours = 0;
+    this.conLines = [];
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
@@ -22245,6 +22481,10 @@ class Game {
     this.walkOrder.memory ??= {};
     const r = stepToward(this.walk, toId, dt, this.walkOrder.memory);
     this.walkOrder.elapsed = (this.walkOrder.elapsed ?? 0) + dt;
+    // The con changes hands the moment you step into the turbolift, not when
+    // you arrive wherever you were going. Cheap to ask every frame: it is two
+    // comparisons unless the answer has actually changed.
+    this.updateCon();
 
     if (r.arrived) {
       this.walkOrder = null;
@@ -22280,6 +22520,140 @@ class Game {
     return { ok: true, room };
   }
 
+  // --------------------------------------------------------------- the con
+
+  /** True while the captain is standing on their own bridge. */
+  get onBridge() { return this.walk.roomId === 'bridge'; }
+
+  /** The officer who has the con, or null when the captain has it. */
+  get conOfficer() {
+    return this.conStation ? (this.crew.at(this.conStation) ?? null) : null;
+  }
+
+  /**
+   * The hour of the ship's day, 0..24.
+   *
+   * One stardate unit is one day everywhere else in this game, so the fraction
+   * of a stardate is the fraction of a day, and the watch bill can be read
+   * straight off the chronometer without a second clock to keep in step.
+   */
+  get shipHour() {
+    const frac = this.clock.stardate - Math.floor(this.clock.stardate);
+    return ((frac % 1) + 1) % 1 * 24;
+  }
+
+  /** Which of the three watches is standing right now. */
+  get watch() { return watchAt(this.shipHour); }
+
+  /** The whole watch bill: who stands alpha, beta and gamma. */
+  get watchBill() { return assignWatches(this.crew); }
+
+  /** The line of succession for the con, most senior first. */
+  get watchOrder() { return watchOrder(this.crew); }
+
+  /**
+   * Hand the con over.
+   *
+   * @param {string|null} nameOrStation who to give it to; the next ranking
+   *        officer available when not said.
+   * @param {object} opts `given` marks a deliberate handover, which the officer
+   *        keeps until told otherwise rather than surrendering the moment the
+   *        captain walks back in.
+   */
+  handOverCon(nameOrStation = null, { given = true, spoken = true } = {}) {
+    if (this.conStation && !nameOrStation) {
+      // An officer already standing the watch because you walked off the
+      // bridge is confirmed in it rather than told no — saying "you have the
+      // con" to the person who already has it is how it is made official, and
+      // it means they keep it when you walk back in.
+      if (!this.conGiven && given) {
+        this.conGiven = true;
+        const holder = this.conOfficer;
+        if (spoken && holder) {
+          this.pushLog(`${holder.rank} ${holder.name}, you have the con.`, 'captain');
+          this.officerSays(holder.station, 'Aye, Captain. I have the con.', 'report');
+        }
+        return { ok: true, officer: holder };
+      }
+      return { ok: false, reason: `${this.conOfficer?.name ?? 'The watch officer'} already has the con, Captain.` };
+    }
+    let officer = null;
+    if (nameOrStation) {
+      const want = String(nameOrStation).toLowerCase();
+      officer = this.crew.officers.find((o) => o.alive && !o.injured
+        && (o.station === want || o.name.toLowerCase().includes(want)));
+      if (!officer) {
+        return { ok: false, reason: `There is no one available by that name, Captain.` };
+      }
+    } else {
+      officer = nextInLine(this.crew);
+    }
+    if (!officer) return { ok: false, reason: 'There is no one fit to relieve you, Captain.' };
+    if (officer.station === this.conStation) {
+      return { ok: false, reason: `${officer.name} already has the con, Captain.` };
+    }
+
+    this.conStation = officer.station;
+    this.conGiven = given;
+    this.conHours = 0;
+    this.conLines = [];
+    if (spoken) {
+      this.pushLog(`${officer.rank} ${officer.name}, you have the con.`, 'captain');
+      this.officerSays(officer.station, 'Aye, Captain. I have the con.', 'report');
+    }
+    emit('con', { officer, held: true });
+    return { ok: true, officer };
+  }
+
+  /**
+   * Take it back, and hear what happened.
+   *
+   * The report is the point. A watch that hands back "nothing to report" is a
+   * watch that was stood, and one that hands back three lines about a hull
+   * breach is the game telling you the ship kept going without you — which is
+   * the whole reason the con exists rather than the bridge simply pausing.
+   */
+  takeCon({ spoken = true } = {}) {
+    const officer = this.conOfficer;
+    if (!this.conStation) return { ok: false, reason: 'You have the con, Captain.', lines: [] };
+
+    const lines = officer ? handbackReport(officer, this.conHours, this.conLines) : this.conLines.slice();
+    this.conStation = null;
+    this.conGiven = false;
+    this.conHours = 0;
+    this.conLines = [];
+    if (spoken) {
+      for (const line of lines) this.pushLog(line, 'bridge');
+      this.pushLog('I have the con.', 'captain');
+    }
+    emit('con', { officer, held: false });
+    return { ok: true, officer, lines };
+  }
+
+  /**
+   * Keep the con with whoever is actually on the bridge.
+   *
+   * Called every time the captain's position changes. Walk off the bridge and
+   * the next ranking officer relieves you without being asked, because that is
+   * what happens; walk back on and they give it back — unless you handed it to
+   * them deliberately, in which case they keep it until you say otherwise.
+   */
+  updateCon() {
+    if (this.over) return null;
+    if (this.onBridge) {
+      if (this.conStation && !this.conGiven) return this.takeCon();
+      return null;
+    }
+    if (!this.conStation) {
+      const r = this.handOverCon(null, { given: false, spoken: false });
+      if (r.ok) {
+        this.officerSays(r.officer.station, 'I have the con, Captain.', 'report');
+      }
+      return r;
+    }
+    return null;
+  }
+
   /** Stand up from the chair, or take it. */
   takeChair(on = true) {
     if (on && this.walk.roomId !== 'bridge') {
@@ -22292,6 +22666,7 @@ class Game {
     this.walkOrder = null;
     const r = this.walk.sit(on);
     if (r.ok) this.pushLog(on ? 'Took the chair.' : 'Stood up from the chair.', 'captain');
+    if (r.ok && on) this.updateCon();
     return r;
   }
 
@@ -22416,6 +22791,7 @@ class Game {
     makeSurface(body, label);
     this.walkOrder = null;
     this.walk.enter('surface');
+    this.updateCon();
     this.pushLog(`Beamed down to ${label}. ${surfaceReport(body.kind)}.`, 'transporter');
     emit('beam', { down: true, label, body });
     return { ok: true, label, body };
@@ -23115,6 +23491,12 @@ class Game {
       podJettisoned: this.podJettisoned === true,
       warpFactor: this.warpFactor,
       walk: this.walk.save(),
+      // The watch, and what it has to report. A station id rather than the
+      // officer, because the roster is rebuilt from its own record on load and
+      // an officer object saved here would be a second, stale copy of them.
+      con: this.conStation
+        ? { station: this.conStation, given: this.conGiven === true, hours: this.conHours, lines: this.conLines }
+        : null,
       // Two ids, not a position. The vista is regenerated from the system id on
       // load and is identical every time, so the world is still exactly where
       // it was — saving coordinates would only give them a chance to disagree.
@@ -23203,10 +23585,32 @@ class Game {
     if (ship.hullPct > before.hull + 0.02) {
       lines.push(`Hull integrity is up from ${Math.round(before.hull * 100)} to ${Math.round(ship.hullPct * 100)} percent.`);
     }
-    for (const line of lines) this.pushLog(line, 'engineering');
+    // Somebody had this ship while you were gone.
+    //
+    // If the captain walked away without handing the con over — closed the app
+    // in the chair, which is how it usually happens — the watch officer took it,
+    // because that is what a watch is for. Everything that happened is theirs
+    // to report, and they report it the moment the captain is back on the
+    // bridge to hear it. Off the bridge, they hold on to it and say so.
+    if (!this.conStation) this.handOverCon(null, { given: false, spoken: false });
+    const relief = this.conOfficer;
 
-    emit('campaign:resumed', { hours: pending, lines });
-    return { hours: pending, lines };
+    let report = lines;
+    if (relief) {
+      this.conHours += pending;
+      this.conLines.push(...lines);
+      if (this.onBridge) {
+        report = this.takeCon().lines;
+      } else {
+        report = [`${relief.rank} ${relief.name} has the con and is standing by to report.`];
+        this.pushLog(report[0], 'bridge');
+      }
+    } else {
+      for (const line of lines) this.pushLog(line, 'engineering');
+    }
+
+    emit('campaign:resumed', { hours: pending, lines: report });
+    return { hours: pending, lines: report };
   }
 
   // ------------------------------------------------- the Kobayashi Maru
@@ -23359,6 +23763,12 @@ class Game {
     // which is where every commission starts anyway.
     g.walk = Walker.load(data.walk ?? {});
     g.walkOrder = null;
+    // Records written before there was a watch put the captain back in the
+    // chair with the con, which is what they had.
+    g.conStation = data.con?.station ?? null;
+    g.conGiven = data.con?.given === true;
+    g.conHours = Number(data.con?.hours) || 0;
+    g.conLines = Array.isArray(data.con?.lines) ? data.con.lines.slice() : [];
     // An orbit only survives if it belongs to where the ship actually is. A
     // record saved mid-transit, or one carrying a body that no longer exists,
     // restores to station-keeping rather than to an orbit of nothing.
@@ -23433,6 +23843,39 @@ function tap(fn, cue = 'ui_tap', feel = 'tap') {
   };
 }
 
+/**
+ * The con, as a button and as the phrase that does the same thing.
+ *
+ * Two states and never both: either you have it and can give it away, or a
+ * watch officer has it and is holding it until you take it back. The label
+ * names whoever has it, because "take the con back" from nobody in particular
+ * is the kind of line that makes a crew feel like furniture.
+ */
+function conButtons(g, app) {
+  const holder = g.conOfficer;
+  const out = [];
+  if (holder) {
+    out.push(button(`${holder.name} has the con`, tap(() => {
+      const r = g.takeCon();
+      if (!r.ok) g.pushLog(r.reason, 'computer');
+      app.render();
+    }), { color: 'orange', sub: 'Take it back and hear the report', say: 'i have the con' }));
+  } else {
+    const relief = g.watchOrder[0];
+    out.push(button('Hand over the con', tap(() => {
+      const r = g.handOverCon();
+      if (!r.ok) g.pushLog(r.reason, 'computer');
+      app.render();
+    }), {
+      color: 'ghost',
+      sub: relief ? `${relief.rank} ${relief.name} stands the watch` : 'Nobody is fit to relieve you',
+      disabled: !relief,
+      say: 'you have the con',
+    }));
+  }
+  return out;
+}
+
 // ================================================================ BRIDGE
 
 /**
@@ -23492,6 +23935,7 @@ function bridgeScreen(app) {
     hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
     hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }),
       { color: 'blue', say: 'stand up' }));
+    hand.push(...conButtons(g, app));
   } else if (w.room.surface) {
     hand.push(el('p', { class: 'muted', text: `On the surface of ${w.room.name}. ${surfaceReport(w.room.kind)}.` }));
     hand.push(button('Energise — beam up', tap(() => {
@@ -23504,6 +23948,14 @@ function bridgeScreen(app) {
     if (w.roomId === 'bridge') {
       hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }),
         { color: 'orange', say: 'take the chair' }));
+      hand.push(...conButtons(g, app));
+    } else if (g.conOfficer) {
+      // Off the bridge, the con is not yours to take from down here — but you
+      // should be able to see who is standing it without walking back up.
+      hand.push(el('p', {
+        class: 'muted',
+        text: `${g.conOfficer.rank} ${g.conOfficer.name} has the con. ${g.watch.name} is standing.`,
+      }));
     }
   }
 
@@ -25684,6 +26136,7 @@ const { hashSeed } = __require("src/core/rng.js");
 const { saveGame, loadSave, hasSave, loadSettings, saveSettings: persistSettings, exportSave, downloadSave, importSave } = __require("src/core/save.js");
 
 const { ABILITIES } = __require("src/sim/officers.js");
+const { WATCHES } = __require("src/sim/watch.js");
 const { Ship, FACINGS } = __require("src/sim/ship.js");
 const { parseOrder } = __require("src/ui/orders.js");
 const { SKILLS } = __require("src/sim/skills.js");
@@ -27085,6 +27538,35 @@ class App {
         const r = g.takeChair(order.sit !== false);
         if (r.ok) { audio.play('ui_confirm'); haptic('tap'); }
         else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'hand_over_con': {
+        // Who was named, if anyone. The roster is the only place that knows,
+        // so the match happens here rather than in the parser.
+        const said = String(order.said ?? '').toLowerCase();
+        const named = g.crew.officers.find((o) => o.alive && !o.injured
+          && said.includes(o.name.split(' ').pop().toLowerCase()));
+        const r = g.handOverCon(named ? named.station : null);
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'take_con': {
+        const r = g.takeCon();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'watch_bill': {
+        const holder = g.conOfficer;
+        g.pushLog(holder
+          ? `${holder.rank} ${holder.name} has the con. ${g.watch.name} is standing.`
+          : `You have the con, Captain. ${g.watch.name} is standing.`, 'computer');
+        for (const w of WATCHES) {
+          const names = g.watchBill[w.id].map((o) => o.name).join(', ');
+          g.pushLog(`${w.name}: ${names || 'unmanned'}.`, 'computer');
+        }
+        audio.play('computer_ack');
         break;
       }
       case 'help':

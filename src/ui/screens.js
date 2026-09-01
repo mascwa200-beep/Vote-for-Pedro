@@ -40,6 +40,39 @@ function tap(fn, cue = 'ui_tap', feel = 'tap') {
   };
 }
 
+/**
+ * The con, as a button and as the phrase that does the same thing.
+ *
+ * Two states and never both: either you have it and can give it away, or a
+ * watch officer has it and is holding it until you take it back. The label
+ * names whoever has it, because "take the con back" from nobody in particular
+ * is the kind of line that makes a crew feel like furniture.
+ */
+function conButtons(g, app) {
+  const holder = g.conOfficer;
+  const out = [];
+  if (holder) {
+    out.push(button(`${holder.name} has the con`, tap(() => {
+      const r = g.takeCon();
+      if (!r.ok) g.pushLog(r.reason, 'computer');
+      app.render();
+    }), { color: 'orange', sub: 'Take it back and hear the report', say: 'i have the con' }));
+  } else {
+    const relief = g.watchOrder[0];
+    out.push(button('Hand over the con', tap(() => {
+      const r = g.handOverCon();
+      if (!r.ok) g.pushLog(r.reason, 'computer');
+      app.render();
+    }), {
+      color: 'ghost',
+      sub: relief ? `${relief.rank} ${relief.name} stands the watch` : 'Nobody is fit to relieve you',
+      disabled: !relief,
+      say: 'you have the con',
+    }));
+  }
+  return out;
+}
+
 // ================================================================ BRIDGE
 
 /**
@@ -99,6 +132,7 @@ export function bridgeScreen(app) {
     hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
     hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }),
       { color: 'blue', say: 'stand up' }));
+    hand.push(...conButtons(g, app));
   } else if (w.room.surface) {
     hand.push(el('p', { class: 'muted', text: `On the surface of ${w.room.name}. ${surfaceReport(w.room.kind)}.` }));
     hand.push(button('Energise — beam up', tap(() => {
@@ -111,6 +145,14 @@ export function bridgeScreen(app) {
     if (w.roomId === 'bridge') {
       hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }),
         { color: 'orange', say: 'take the chair' }));
+      hand.push(...conButtons(g, app));
+    } else if (g.conOfficer) {
+      // Off the bridge, the con is not yours to take from down here — but you
+      // should be able to see who is standing it without walking back up.
+      hand.push(el('p', {
+        class: 'muted',
+        text: `${g.conOfficer.rank} ${g.conOfficer.name} has the con. ${g.watch.name} is standing.`,
+      }));
     }
   }
 

@@ -25,6 +25,7 @@ import {
 } from './core/save.js';
 
 import { ABILITIES } from './sim/officers.js';
+import { WATCHES } from './sim/watch.js';
 import { Ship, FACINGS } from './sim/ship.js';
 import { parseOrder } from './ui/orders.js';
 import { SKILLS } from './sim/skills.js';
@@ -1426,6 +1427,35 @@ class App {
         const r = g.takeChair(order.sit !== false);
         if (r.ok) { audio.play('ui_confirm'); haptic('tap'); }
         else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'hand_over_con': {
+        // Who was named, if anyone. The roster is the only place that knows,
+        // so the match happens here rather than in the parser.
+        const said = String(order.said ?? '').toLowerCase();
+        const named = g.crew.officers.find((o) => o.alive && !o.injured
+          && said.includes(o.name.split(' ').pop().toLowerCase()));
+        const r = g.handOverCon(named ? named.station : null);
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'take_con': {
+        const r = g.takeCon();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'watch_bill': {
+        const holder = g.conOfficer;
+        g.pushLog(holder
+          ? `${holder.rank} ${holder.name} has the con. ${g.watch.name} is standing.`
+          : `You have the con, Captain. ${g.watch.name} is standing.`, 'computer');
+        for (const w of WATCHES) {
+          const names = g.watchBill[w.id].map((o) => o.name).join(', ');
+          g.pushLog(`${w.name}: ${names || 'unmanned'}.`, 'computer');
+        }
+        audio.play('computer_ack');
         break;
       }
       case 'help':
