@@ -889,6 +889,29 @@ export const INTENTS = [
     },
   },
   {
+    // The sector chart has a third axis now, and an axis you cannot look along
+    // is decoration. See docs/RESEARCH.md §12.
+    id: 'chart_tilt',
+    help: 'Tilt the chart / level the chart / rotate the chart',
+    phrases: [
+      'tilt the chart', 'tilt the map', 'tilt the star chart',
+      'level the chart', 'level the map', 'flatten the chart',
+      'rotate the chart', 'rotate the map', 'spin the chart', 'turn the chart',
+      'show me the chart in three dimensions', 'give me a side view',
+      'look at the chart from the side', 'top down view', 'plan view',
+      'lay the chart over', 'stand the chart up',
+    ],
+    keywords: { chart: 2.6, tilt: 3, rotate: 2.4, spin: 2, level: 1.6, flatten: 2.4 },
+    // A course is not a camera move, and "level off" is the helm.
+    veto: ['course', 'ship', 'us', 'off'],
+    build: (c) => {
+      const t = c.text;
+      if (/\b(?:rotate|spin|turn)\b/.test(t)) return { action: 'chart_tilt', spin: 0.6 };
+      if (/\b(?:level|flatten|top down|plan view)\b/.test(t)) return { action: 'chart_tilt', tilt: 0 };
+      return { action: 'chart_tilt', tilt: 0.75 };
+    },
+  },
+  {
     id: 'watch_bill',
     help: 'Who has the con? / read me the watch bill',
     phrases: [

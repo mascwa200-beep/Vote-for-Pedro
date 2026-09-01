@@ -10661,6 +10661,51 @@ __define("src/world/systems.data.js", function (__exports, __require) {
 // which is enough geometry for warp travel time to feel like distance.
 // `links` are the charted lanes; travel between unlinked systems is possible
 // but costs a navigational penalty (see world/galaxy.js).
+
+/**
+ * How far each sector sits above or below the plane of the chart, in light
+ * years. See docs/RESEARCH.md §12.
+ *
+ * The local stellar neighbourhood is not a disc. Inside twenty light years the
+ * galactic disc is a thousand light years thick, so the nearest stars sit above
+ * and below Sol as readily as beside it — Alpha Centauri is sixty-one degrees
+ * below the celestial equator and 61 Cygni is thirty-nine above it. A sector
+ * map drawn on a tabletop is not a simplification of that, it is a different
+ * arrangement.
+ *
+ * Depth is assigned per sector rather than per star. The x and y in this file
+ * are an authored layout — the travel times between neighbours are what the
+ * campaign is balanced on, and Rigel is twenty-two units away here against 860
+ * light years in the sky — so inventing astrometry for the third axis and not
+ * the other two would be a pretence. What the sectors buy instead is
+ * STRUCTURE: the political blocs sit at different heights, so the map reads as
+ * a volume with something in it rather than a scatter.
+ *
+ * Where a system has a real counterpart, the SIGN follows the real
+ * declination. Alpha Centauri is below the plane and 61 Cygni is above it,
+ * because that part is free to be true.
+ */
+const SECTOR_DEPTH = {
+  sol: 0,             // the origin, by definition
+  vulcan: -1.4,       // 40 Eridani A and 61 Cygni pull opposite ways; Vulcan is below
+  andor: -3.2,        // Epsilon Indi, 57 degrees south
+  rigel: -2.1,
+  donatu: 2.6,
+  archanis: 3.4,
+  qonos: 4.8,         // the Empire sits high off the plane, and stays there
+  neutral: -1.1,
+  romulus: -4.4,      // and the Star Empire low, on the other side of the zone
+  bajor: 1.7,
+  cardassia: 2.9,
+  badlands: 0.8,      // the one place where the plane itself is unreliable
+  tholia: -5.6,       // the Assembly is the furthest thing from anybody
+  risa: -0.9,
+  betazed: 1.2,
+  gamma: 6.2,         // through the wormhole, and nothing about it is nearby
+  ferenginar: 3.1,
+  frontier: -2.7,
+  deepspace: 5.1,
+};
 const SECTORS = {
   sol: { id: 'sol', name: 'Sector 001', owner: 'federation', color: '#9cf' },
   vulcan: { id: 'vulcan', name: 'Vulcan Sector', owner: 'federation', color: '#9cf' },
@@ -10969,6 +11014,20 @@ function getSystem(id) {
 }
 
 /** Straight-line distance in light-years. */
+/**
+ * Chart distance between two systems, in light years.
+ *
+ * PLANAR, DELIBERATELY. `systemDepth` gives every system a third axis so the
+ * sector map can be looked at from somewhere other than directly above, and
+ * that axis is an authored layout rather than astrometry — see
+ * docs/RESEARCH.md §12. Folding it into this function would change the length
+ * of every lane in the game, and therefore every warp transit, every fuel cost
+ * and the whole balance of the campaign, in exchange for accuracy that does not
+ * exist. The depth is for the eye. The distance is for the helm.
+ *
+ * There is a test that holds this apart, because it is exactly the sort of
+ * thing somebody tidies up later without noticing what it costs.
+ */
 function distanceLy(a, b) {
   const sa = typeof a === 'string' ? SYSTEM_BY_ID[a] : a;
   const sb = typeof b === 'string' ? SYSTEM_BY_ID[b] : b;
@@ -10976,11 +11035,67 @@ function distanceLy(a, b) {
   return Math.hypot(sa.x - sb.x, sa.y - sb.y);
 }
 
+/**
+ * Declination of the real star a system stands in for, in degrees.
+ *
+ * Seven of these places have a published counterpart in the sky. Nothing else
+ * about the layout is astrometric, but the SIGN of the depth can be, and where
+ * it can be it is: Alpha Centauri sits below the plane and 61 Cygni above it,
+ * because that is where they actually are.
+ */
+const REAL_DECLINATION = {
+  sol: 0,                 // the origin
+  alpha_centauri: -60.83, // Alpha Centauri
+  wolf359: 7.01,          // Wolf 359
+  vulcan: -7.65,          // 40 Eridani A
+  tellar: 38.75,          // 61 Cygni
+  andoria: -56.79,        // Epsilon Indi
+  vega: 38.78,            // Vega
+  frontier_1: -62.50,     // Beta Reticuli, standing in for Zeta Reticuli
+};
+
+/**
+ * How far above or below the plane of the chart a system sits, in light years.
+ *
+ * The sector sets the magnitude; a system's own id sets a small offset inside
+ * it, so two worlds in one sector are not coplanar. The offset is a hash rather
+ * than a random number because this has to give the same answer in every
+ * session, on every device, forever — the map is drawn from it and a save made
+ * on one build has to load into the same galaxy on the next.
+ */
+function systemDepth(system) {
+  const sys = typeof system === 'string' ? SYSTEM_BY_ID[system] : system;
+  if (!sys) return 0;
+
+  const base = SECTOR_DEPTH[sys.sector] ?? 0;
+
+  // FNV-1a over the id, the same hash the saves are checksummed with, mapped
+  // to roughly ±1.2 light years of scatter within the sector.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < sys.id.length; i++) {
+    h ^= sys.id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  const jitter = ((h % 2401) / 2400 - 0.5) * 2.4;
+
+  const dec = REAL_DECLINATION[sys.id];
+  if (dec === undefined) return base + jitter;
+
+  // A real star: the magnitude still comes from the sector, so the map keeps
+  // its structure, but it goes on the side of the plane the star is really on.
+  const size = Math.abs(base) + Math.abs(jitter);
+  if (dec === 0) return 0;
+  return Math.sign(dec) * size;
+}
+
+__exports.SECTOR_DEPTH = SECTOR_DEPTH;
 __exports.SECTORS = SECTORS;
 __exports.SYSTEMS = SYSTEMS;
 __exports.SYSTEM_BY_ID = SYSTEM_BY_ID;
 __exports.getSystem = getSystem;
 __exports.distanceLy = distanceLy;
+__exports.REAL_DECLINATION = REAL_DECLINATION;
+__exports.systemDepth = systemDepth;
 
 });
 
@@ -12009,10 +12124,25 @@ __exports.EPISODES_BY_SYSTEM = EPISODES_BY_SYSTEM;
 });
 
 __define("src/ui/galaxymap.js", function (__exports, __require) {
-// The sector map: real coordinates, real lanes, real distances.
+// The sector map: real coordinates, real lanes, real distances — and a third
+// axis you can tilt into.
+//
+// The chart was drawn flat, and flat is the wrong shape for a sector. Inside
+// twenty light years the galactic disc is a thousand light years thick, so the
+// nearest stars sit above and below Sol as readily as beside it: Alpha Centauri
+// is sixty-one degrees below the celestial equator and 61 Cygni is thirty-nine
+// above it. See docs/RESEARCH.md §12.
+//
+// The projection is axonometric rather than perspective. That is not a
+// shortcut: a star chart is a chart, and parallel projection is what makes
+// distances on it comparable by eye. It also keeps `1 / scale` an honest pixel,
+// so line widths and label sizes go on working exactly as they did.
+//
+// At zero tilt the mapping is the identity and this draws precisely the map it
+// always drew. The third axis costs nothing until you ask for it.
 
 const { fitCanvas, attachPanZoom } = __require("src/ui/touch.js");
-const { SECTORS } = __require("src/world/systems.data.js");
+const { SECTORS, systemDepth } = __require("src/world/systems.data.js");
 const { EPISODES_BY_SYSTEM } = __require("src/missions/episodes/index.js");
 
 const TYPE_STYLE = {
@@ -12025,11 +12155,30 @@ const TYPE_STYLE = {
   anomaly: { r: 6, color: '#ff9cf0' },
   deadspace: { r: 5, color: '#888899' },
 };
+
+/** How far the chart can be laid over. Past this it is an edge-on line. */
+const MAX_TILT = 1.15;
+
+/**
+ * How much the third axis is exaggerated on the chart.
+ *
+ * The systems span some eighty light years across and about twelve top to
+ * bottom, which is the right proportion and the wrong drawing: laid over, a
+ * depth of two light years moves a star by less than the radius of its own dot
+ * and the tilt shows nothing. Every three-dimensional star chart ever drawn
+ * exaggerates the short axis for the same reason, and this one says so out
+ * loud rather than pretending the galaxy is taller than it is.
+ */
+const DEPTH_EXAGGERATION = 3.2;
 class GalaxyMap {
   constructor(canvas) {
     this.canvas = canvas;
     // Opens wide enough to see the Federation core and both borders at once.
     this.view = { x: -10, y: -6, scale: 3.6 };
+    // Tilt and spin of the chart itself, in radians. Zero is the plan view the
+    // map has always opened on.
+    this.tilt = 0;
+    this.spin = 0;
     this.onSelect = null;
     this.selectedId = null;
     this.game = null;
@@ -12039,6 +12188,83 @@ class GalaxyMap {
     });
   }
 
+  /**
+   * World (x, y, depth) to chart (u, v), plus how far away it is.
+   *
+   * Spin turns the chart about the vertical; tilt lays it over toward the
+   * viewer. `depth` is the distance along the view direction and exists so the
+   * far side of the galaxy can be drawn before the near side — without that,
+   * tilting the chart draws the Klingon border on top of Sol.
+   *
+   * Writes into `out` so the render loop allocates nothing per system.
+   */
+  project(x, y, z, out = { u: 0, v: 0, depth: 0 }) {
+    const cs = Math.cos(this.spin);
+    const sn = Math.sin(this.spin);
+    const rx = x * cs - y * sn;
+    const ry = x * sn + y * cs;
+    const ct = Math.cos(this.tilt);
+    const st = Math.sin(this.tilt);
+    const zz = z * DEPTH_EXAGGERATION;
+    out.u = rx;
+    out.v = ry * ct - zz * st;
+    out.depth = ry * st + zz * ct;
+    return out;
+  }
+
+  /** Where a system lands on the chart. */
+  at(system, out) {
+    return this.project(system.x, system.y, systemDepth(system), out);
+  }
+
+  /**
+   * Tilt the chart, in radians. Clamped, because past about sixty-five degrees
+   * it is a line with stars on it and nothing can be picked out of it.
+   */
+  setTilt(radians) {
+    const v = Number(radians);
+    if (!Number.isFinite(v)) return this.tilt;
+    // Whatever was in the middle of the screen stays there. Laying the chart
+    // over moves every star, so without this the map slid out from under the
+    // reader every time it was tilted.
+    const held = this.centred();
+    this.tilt = Math.max(0, Math.min(MAX_TILT, v));
+    this.recentre(held);
+    return this.tilt;
+  }
+
+  /** The system nearest the middle of the screen right now. */
+  centred() {
+    if (!this.game) return null;
+    let best = null;
+    let bestD = Infinity;
+    const p = { u: 0, v: 0, depth: 0 };
+    for (const s of this.game.galaxy.systems) {
+      this.at(s, p);
+      const d = Math.hypot(p.u + this.view.x, p.v + this.view.y);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return best;
+  }
+
+  /** Put a system back in the middle after the projection has changed. */
+  recentre(system) {
+    if (!system) return;
+    const p = this.at(system);
+    this.view.x = -p.u;
+    this.view.y = -p.v;
+  }
+
+  /** Spin the chart about the vertical. Wraps; there is no wrong way round. */
+  setSpin(radians) {
+    const v = Number(radians);
+    if (!Number.isFinite(v)) return this.spin;
+    const held = this.centred();
+    this.spin = ((v % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    this.recentre(held);
+    return this.spin;
+  }
+
   handleTap(px, py) {
     if (!this.game) return;
     const rect = this.canvas.getBoundingClientRect();
@@ -12046,8 +12272,13 @@ class GalaxyMap {
     const wy = (py - rect.height / 2) / this.view.scale - this.view.y;
     let best = null;
     let bestD = 26 / this.view.scale;
+    // Picked in CHART space, not world space. With the chart laid over, a
+    // system's world x/y is not where the finger is: it is somewhere above or
+    // below it by however far off the plane the system sits.
+    const p = { u: 0, v: 0, depth: 0 };
     for (const s of this.game.galaxy.systems) {
-      const d = Math.hypot(s.x - wx, s.y - wy);
+      this.at(s, p);
+      const d = Math.hypot(p.u - wx, p.v - wy);
       if (d < bestD) { bestD = d; best = s; }
     }
     if (best) {
@@ -12060,8 +12291,9 @@ class GalaxyMap {
   focus(systemId) {
     const s = this.game?.galaxy.get(systemId);
     if (!s) return;
-    this.view.x = -s.x;
-    this.view.y = -s.y;
+    const p = this.at(s);
+    this.view.x = -p.u;
+    this.view.y = -p.v;
   }
 
   render(game) {
@@ -12076,19 +12308,54 @@ class GalaxyMap {
 
     const g = game.galaxy;
     const px = 1 / this.view.scale;
+    const tilted = this.tilt > 0.02;
+
+    // Every system's place on the chart, once. The render below reads this
+    // rather than projecting the same star five times.
+    const chart = new Map();
+    for (const s of g.systems) chart.set(s.id, this.at(s));
+    const P = (id) => chart.get(id);
 
     // Charted lanes.
     ctx.strokeStyle = 'rgba(110,130,190,0.28)';
     ctx.lineWidth = px;
     ctx.beginPath();
     for (const s of g.systems) {
+      const a = P(s.id);
       for (const nb of g.adjacency[s.id] ?? []) {
         if (nb < s.id) continue; // draw each edge once
-        const o = g.get(nb);
-        ctx.moveTo(s.x, s.y); ctx.lineTo(o.x, o.y);
+        const b = P(nb);
+        if (!b) continue;
+        ctx.moveTo(a.u, a.v); ctx.lineTo(b.u, b.v);
       }
     }
     ctx.stroke();
+
+    // Drop lines to the plane.
+    //
+    // The one thing that makes a tilted star chart readable. Without them a
+    // star above the plane and a nearer star on it are the same dot in the same
+    // place, and the depth the tilt exists to show is invisible.
+    if (tilted) {
+      ctx.strokeStyle = 'rgba(150,190,255,0.45)';
+      ctx.lineWidth = px * 1.2;
+      ctx.beginPath();
+      const foot = { u: 0, v: 0, depth: 0 };
+      for (const s of g.systems) {
+        const a = P(s.id);
+        this.project(s.x, s.y, 0, foot);
+        ctx.moveTo(a.u, a.v); ctx.lineTo(foot.u, foot.v);
+      }
+      ctx.stroke();
+
+      // And the plane itself, as a horizon line through the origin, so there
+      // is something for the drop lines to land on.
+      const o = this.project(0, 0, 0);
+      ctx.strokeStyle = 'rgba(120,150,210,0.16)';
+      ctx.beginPath();
+      ctx.moveTo(o.u - 60, o.v); ctx.lineTo(o.u + 60, o.v);
+      ctx.stroke();
+    }
 
     // Plotted course, if we are under way.
     if (game.transit) {
@@ -12098,51 +12365,76 @@ class GalaxyMap {
       ctx.setLineDash([5 * px, 4 * px]);
       ctx.beginPath();
       path.forEach((id, i) => {
-        const s = g.get(id);
-        if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+        const p = P(id);
+        if (!p) return;
+        if (i === 0) ctx.moveTo(p.u, p.v); else ctx.lineTo(p.u, p.v);
       });
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // The ship itself, somewhere along the line.
+      // The ship itself, somewhere along the line. Its interpolated position
+      // is in world coordinates and has to go through the same projection, or
+      // it flies off the lane the moment the chart is laid over.
       const pos = game.transit.positionIn(g);
+      const at = this.project(pos.x, pos.y, pos.z ?? 0);
       ctx.fillStyle = '#ffcc66';
       ctx.beginPath();
-      ctx.arc(pos.x, pos.y, 3.2 * px * 1.4, 0, Math.PI * 2);
+      ctx.arc(at.u, at.v, 3.2 * px * 1.4, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = 'rgba(255,204,102,0.5)';
       ctx.lineWidth = px;
       ctx.beginPath();
-      ctx.arc(pos.x, pos.y, 7 * px * 1.4, 0, Math.PI * 2);
+      ctx.arc(at.u, at.v, 7 * px * 1.4, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    // Systems.
-    for (const s of g.systems) {
+    // Systems, far side first. A painter's sort is the whole depth buffer a 2D
+    // chart gets, and without it the near stars are drawn under the far ones.
+    const order = g.systems.slice().sort((a, b) => P(b.id).depth - P(a.id).depth);
+
+    // Aerial perspective, which is the oldest depth cue there is: the far side
+    // of the chart is dimmer and slightly smaller than the near side. Sorting
+    // alone puts the stars in the right order and still leaves every one of
+    // them the same weight, so the eye has nothing to read distance from.
+    let near = 0;
+    let far = 0;
+    if (tilted) {
+      const ds = order.map((x) => P(x.id).depth);
+      near = Math.min(...ds);
+      far = Math.max(...ds);
+    }
+    const span = Math.max(1e-6, far - near);
+
+    for (const s of order) {
+      const { u, v, depth } = P(s.id);
+      // 1 at the near edge, 0 at the far one.
+      const nearness = tilted ? 1 - (depth - near) / span : 1;
+      const dim = tilted ? 0.45 + 0.55 * nearness : 1;
+      const grow = tilted ? 0.82 + 0.28 * nearness : 1;
       const style = TYPE_STYLE[s.type] ?? { r: 5, color: '#aaa' };
       const visited = g.visited.has(s.id);
       const here = s.id === game.locationId;
-      const r = style.r * px * 1.5;
+      const r = style.r * px * 1.5 * grow;
 
       // Sector tint behind border and contested systems.
       if (s.contested || s.border) {
         ctx.fillStyle = 'rgba(204,68,68,0.1)';
         ctx.beginPath();
-        ctx.arc(s.x, s.y, r * 3.4, 0, Math.PI * 2);
+        ctx.arc(u, v, r * 3.4, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      ctx.globalAlpha = visited ? 1 : 0.5;
+      ctx.globalAlpha = (visited ? 1 : 0.5) * dim;
       ctx.fillStyle = style.color;
       ctx.beginPath();
-      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      ctx.arc(u, v, r, 0, Math.PI * 2);
       ctx.fill();
 
       if (style.ring) {
         ctx.strokeStyle = style.color;
         ctx.lineWidth = px;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, r * 1.9, 0, Math.PI * 2);
+        ctx.arc(u, v, r * 1.9, 0, Math.PI * 2);
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
@@ -12153,10 +12445,10 @@ class GalaxyMap {
       if (hasMission) {
         ctx.fillStyle = '#ff9c00';
         ctx.beginPath();
-        const my = s.y - r * 3;
-        ctx.moveTo(s.x, my - 3.4 * px * 1.5);
-        ctx.lineTo(s.x + 3 * px * 1.5, my + 2.4 * px * 1.5);
-        ctx.lineTo(s.x - 3 * px * 1.5, my + 2.4 * px * 1.5);
+        const my = v - r * 3;
+        ctx.moveTo(u, my - 3.4 * px * 1.5);
+        ctx.lineTo(u + 3 * px * 1.5, my + 2.4 * px * 1.5);
+        ctx.lineTo(u - 3 * px * 1.5, my + 2.4 * px * 1.5);
         ctx.closePath();
         ctx.fill();
       }
@@ -12168,7 +12460,7 @@ class GalaxyMap {
         for (let i = 0; i < 4; i++) {
           const a = (i * 90 + 45) * Math.PI / 180;
           ctx.beginPath();
-          ctx.arc(s.x, s.y, r * 3, a - 0.3, a + 0.3);
+          ctx.arc(u, v, r * 3, a - 0.3, a + 0.3);
           ctx.stroke();
         }
       }
@@ -12178,25 +12470,34 @@ class GalaxyMap {
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1.5 * px;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, r * 2.4, 0, Math.PI * 2);
+        ctx.arc(u, v, r * 2.4, 0, Math.PI * 2);
         ctx.stroke();
       }
 
       // Labels appear once you are zoomed in enough to read them.
       // Font size is expressed in world units so that, once the canvas
       // transform is applied, it lands at a fixed size on screen.
-      if (this.view.scale > 2.4) {
+      // Labels appear once you are zoomed in enough to read them.
+      //
+      // A laid-over chart has less vertical room and the same number of names
+      // in it, so tilting turned the map into a wall of overlapping text. When
+      // it is tilted only the names that are load-bearing are drawn — where you
+      // are, what you have selected, and anywhere with something to do — and
+      // the rest of the chart is read by its shape, which is the thing the tilt
+      // was for.
+      const worthLabelling = !tilted || here || s.id === this.selectedId || hasMission;
+      if (this.view.scale > 2.4 && worthLabelling) {
         const fs = 11 / this.view.scale;
         ctx.font = `${fs}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.fillStyle = visited ? 'rgba(255,220,180,0.9)' : 'rgba(180,180,200,0.55)';
-        ctx.fillText(visited || s.type !== 'anomaly' ? s.name : 'Unsurveyed', s.x, s.y + r * 2 + fs);
+        ctx.fillText(visited || s.type !== 'anomaly' ? s.name : 'Unsurveyed', u, v + r * 2 + fs);
       }
     }
 
     // Sector names are a zoomed-out overview only; at close range they would
     // sit on top of the system labels that matter.
-    if (this.view.scale < 2.4) {
+    if (this.view.scale < 2.4 && !tilted) {
       const seen = new Set();
       ctx.font = `${13 / this.view.scale}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
@@ -12206,10 +12507,15 @@ class GalaxyMap {
         const sector = SECTORS[s.sector];
         if (!sector) continue;
         const members = g.systems.filter((o) => o.sector === s.sector);
-        const cx = members.reduce((n, o) => n + o.x, 0) / members.length;
-        const cy = members.reduce((n, o) => n + o.y, 0) / members.length;
+        // The centre of the sector on the CHART, so the name follows the
+        // systems it belongs to when the chart is laid over.
+        let cu = 0;
+        let cv = 0;
+        for (const o of members) { const p = P(o.id); cu += p.u; cv += p.v; }
+        cu /= members.length;
+        cv /= members.length;
         ctx.fillStyle = `${sector.color}55`;
-        ctx.fillText(sector.name.toUpperCase(), cx, cy - 8 / this.view.scale);
+        ctx.fillText(sector.name.toUpperCase(), cu, cv - 8 / this.view.scale);
       }
     }
 
@@ -12217,6 +12523,8 @@ class GalaxyMap {
   }
 }
 
+__exports.MAX_TILT = MAX_TILT;
+__exports.DEPTH_EXAGGERATION = DEPTH_EXAGGERATION;
 __exports.GalaxyMap = GalaxyMap;
 
 });
@@ -14709,6 +15017,29 @@ const INTENTS = [
     },
   },
   {
+    // The sector chart has a third axis now, and an axis you cannot look along
+    // is decoration. See docs/RESEARCH.md §12.
+    id: 'chart_tilt',
+    help: 'Tilt the chart / level the chart / rotate the chart',
+    phrases: [
+      'tilt the chart', 'tilt the map', 'tilt the star chart',
+      'level the chart', 'level the map', 'flatten the chart',
+      'rotate the chart', 'rotate the map', 'spin the chart', 'turn the chart',
+      'show me the chart in three dimensions', 'give me a side view',
+      'look at the chart from the side', 'top down view', 'plan view',
+      'lay the chart over', 'stand the chart up',
+    ],
+    keywords: { chart: 2.6, tilt: 3, rotate: 2.4, spin: 2, level: 1.6, flatten: 2.4 },
+    // A course is not a camera move, and "level off" is the helm.
+    veto: ['course', 'ship', 'us', 'off'],
+    build: (c) => {
+      const t = c.text;
+      if (/\b(?:rotate|spin|turn)\b/.test(t)) return { action: 'chart_tilt', spin: 0.6 };
+      if (/\b(?:level|flatten|top down|plan view)\b/.test(t)) return { action: 'chart_tilt', tilt: 0 };
+      return { action: 'chart_tilt', tilt: 0.75 };
+    },
+  },
+  {
     id: 'watch_bill',
     help: 'Who has the con? / read me the watch bill',
     phrases: [
@@ -16155,6 +16486,7 @@ const STATION_OF = (() => {
     intercom: 'chair', alert: 'chair', jettison_pod: 'chair',
     viewscreen: 'chair', magnify: 'chair', log_entry: 'chair',
     hand_over_con: 'chair', take_con: 'chair', watch_bill: 'chair',
+    chart_tilt: 'helm',
     diagnostic: 'engineering',
     fabricate: 'engineering', work_shop: 'engineering', salvage: 'engineering',
   });
@@ -25885,6 +26217,24 @@ function galaxyScreen(app) {
   root.append(wrap);
   app.galaxyCanvas = canvas;
 
+  // The chart has a third axis. An axis you cannot look along is decoration,
+  // so here are the two controls that move it — and the phrases that do the
+  // same thing, as everywhere else.
+  root.append(el('div', { class: 'chip-row' }, [
+    button('Tilt', tap(() => {
+      app.map?.setTilt((app.map.tilt ?? 0) > 0.02 ? 0 : 0.75);
+      app.needsRender = true;
+    }), {
+      color: 'blue',
+      say: (app.map?.tilt ?? 0) > 0.02 ? 'level the chart' : 'tilt the chart',
+      sub: (app.map?.tilt ?? 0) > 0.02 ? 'Back to plan view' : 'Look along the third axis',
+    }),
+    button('Rotate', tap(() => {
+      app.map?.setSpin((app.map.spin ?? 0) + 0.6);
+      app.needsRender = true;
+    }), { color: 'blue', say: 'rotate the chart', sub: 'Turn it about the vertical' }),
+  ]));
+
   const detail = el('div', { class: 'scroll', style: { flex: '0 0 auto', maxHeight: '52%' } });
   root.append(detail);
   app.galaxyDetail = detail;
@@ -27941,10 +28291,31 @@ class App {
       this.tactical.setVista?.(g.location?.id, g.location?.type);
     }
     if (screen === 'galaxy' && this.galaxyCanvas) {
+      // The screen rebuilds its canvas, so the map object has to be rebuilt
+      // with it — but how the captain was LOOKING at the chart is not part of
+      // the screen. It used to be: every render made a fresh map at the
+      // default zoom, re-centred on the selection, so any pan, any zoom and
+      // (once the chart gained a third axis) any tilt was thrown away by the
+      // next thing that happened to mark the UI dirty.
+      // Snapshot the outgoing map's view before it is replaced. `view` is the
+      // live object the pan/zoom gestures write into, so this is wherever the
+      // captain had actually got to.
+      const was = this.map
+        ? { view: { ...this.map.view }, tilt: this.map.tilt, spin: this.map.spin }
+        : this.mapView;
       this.map = new GalaxyMap(this.galaxyCanvas);
       this.map.selectedId = this.selectedSystemId ?? g.locationId;
       this.map.game = g;
-      this.map.focus(this.selectedSystemId ?? g.locationId);
+      if (was) {
+        Object.assign(this.map.view, was.view);
+        this.map.setTilt(was.tilt ?? 0);
+        this.map.setSpin(was.spin ?? 0);
+      } else {
+        this.map.focus(this.selectedSystemId ?? g.locationId);
+      }
+      // Kept on the app as well, so leaving the chart and coming back to it
+      // returns to the same view rather than snapping home.
+      this.mapView = was ?? { view: { ...this.map.view }, tilt: 0, spin: 0 };
       this.map.onSelect = (sys) => {
         this.selectedSystemId = sys.id;
         audio.play('ui_tap');
@@ -28873,6 +29244,23 @@ class App {
         const r = g.diagnostic(order.level);
         audio.play(r.clean ? 'computer_ack' : 'ui_deny');
         if (!r.clean) haptic('alert');
+        break;
+      }
+      case 'chart_tilt': {
+        // The chart is on the navigation console, so the order takes you there
+        // as well as moving it — saying "tilt the chart" while looking at
+        // something else and having nothing visibly happen is not an answer.
+        if (this.screen !== 'galaxy') this.go('galaxy');
+        const map = this.map;
+        if (!map) { audio.play('ui_deny'); break; }
+        if (order.spin !== undefined) map.setSpin(map.spin + order.spin);
+        else map.setTilt(order.tilt);
+        audio.play('ui_select');
+        haptic('tap');
+        ack('helm', order.tilt === 0 ? 'Chart levelled, Captain.'
+          : order.spin !== undefined ? 'Rotating the chart.'
+            : 'Laying the chart over.');
+        this.needsRender = true;
         break;
       }
       case 'watch_bill': {

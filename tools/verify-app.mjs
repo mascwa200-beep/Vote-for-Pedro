@@ -682,6 +682,86 @@ try {
     broken.orbit === false && broken.drawing === true, JSON.stringify(broken));
   await dismissModals(page);
 
+  // ---- The chart has a third axis ----
+  //
+  // Driven through the order bar, and the screenshots are the point: a tilted
+  // star chart is either legible or it is not, and no assertion can tell you
+  // which.
+  // There is no Map button: the chart is a console on the bridge. The order
+  // takes you to it, which is the behaviour being checked as much as the tilt.
+  await page.fill('.orderbar input', 'level the chart');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(600);
+  const chartOpened = await page.evaluate(() => ({
+    screen: globalThis.__app.screen, map: !!globalThis.__app.map,
+  }));
+  check('an order about the chart opens the chart',
+    chartOpened.screen === 'galaxy' && chartOpened.map === true, JSON.stringify(chartOpened));
+  await page.screenshot({ path: join(SHOTS, '15a-chart-plan.png') });
+
+  await page.fill('.orderbar input', 'tilt the chart');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(600);
+  const tiltedChart = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const m = app.map;
+    if (!m) return { error: 'no map' };
+    const g = app.game;
+    // Two systems in the same place on the plan view, at different depths,
+    // must land in different places once the chart is laid over.
+    const sol = g.galaxy.get('sol');
+    const a = m.at(sol);
+    const flat = m.project(sol.x, sol.y, 0);
+    return {
+      tilt: m.tilt,
+      screen: app.screen,
+      moved: Math.abs(a.v - flat.v),
+      depths: new Set(g.galaxy.systems.map((s) => m.at(s).depth.toFixed(3))).size,
+      systems: g.galaxy.systems.length,
+    };
+  });
+  check('a typed order lays the sector chart over',
+    tiltedChart.tilt > 0.5 && tiltedChart.screen === 'galaxy', JSON.stringify(tiltedChart));
+  check('and the chart has real depth in it, not one plane',
+    tiltedChart.depths > tiltedChart.systems * 0.9, JSON.stringify(tiltedChart));
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(SHOTS, '15b-chart-tilted.png') });
+
+  await page.fill('.orderbar input', 'rotate the chart');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(600);
+  const spun = await page.evaluate(() => ({ spin: globalThis.__app.map?.spin ?? -1 }));
+  check('and it can be turned about the vertical', spun.spin > 0.1, JSON.stringify(spun));
+  await page.screenshot({ path: join(SHOTS, '15c-chart-rotated.png') });
+
+  // Picking has to follow the projection, or the finger selects the wrong star.
+  const picked = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const m = app.map;
+    const g = app.game;
+    const target = g.galaxy.get('vulcan');
+    const p = m.at(target);
+    // Where that chart position lands in canvas pixels.
+    const rect = m.canvas.getBoundingClientRect();
+    const px = (p.u + m.view.x) * m.view.scale + rect.width / 2;
+    const py = (p.v + m.view.y) * m.view.scale + rect.height / 2;
+    m.handleTap(px, py);
+    return { selected: m.selectedId };
+  });
+  check('picking a star follows the chart, not the plan view',
+    picked.selected === 'vulcan', JSON.stringify(picked));
+
+  await page.fill('.orderbar input', 'level the chart');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(500);
+  const chartLevel = await page.evaluate(() => ({ tilt: globalThis.__app.map?.tilt ?? -1 }));
+  check('and "level the chart" puts it back', chartLevel.tilt === 0, JSON.stringify(chartLevel));
+
+  // Back to the bridge. Everything after this assumes the captain is looking
+  // out of a window rather than at a star chart.
+  await nav(page, 'Bridge');
+  await dismissModals(page);
+
   // ---- The ship checks itself ----
   //
   // A level one diagnostic is the invariant sweep given as an order. The point

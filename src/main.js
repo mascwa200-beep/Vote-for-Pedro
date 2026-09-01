@@ -556,10 +556,31 @@ class App {
       this.tactical.setVista?.(g.location?.id, g.location?.type);
     }
     if (screen === 'galaxy' && this.galaxyCanvas) {
+      // The screen rebuilds its canvas, so the map object has to be rebuilt
+      // with it — but how the captain was LOOKING at the chart is not part of
+      // the screen. It used to be: every render made a fresh map at the
+      // default zoom, re-centred on the selection, so any pan, any zoom and
+      // (once the chart gained a third axis) any tilt was thrown away by the
+      // next thing that happened to mark the UI dirty.
+      // Snapshot the outgoing map's view before it is replaced. `view` is the
+      // live object the pan/zoom gestures write into, so this is wherever the
+      // captain had actually got to.
+      const was = this.map
+        ? { view: { ...this.map.view }, tilt: this.map.tilt, spin: this.map.spin }
+        : this.mapView;
       this.map = new GalaxyMap(this.galaxyCanvas);
       this.map.selectedId = this.selectedSystemId ?? g.locationId;
       this.map.game = g;
-      this.map.focus(this.selectedSystemId ?? g.locationId);
+      if (was) {
+        Object.assign(this.map.view, was.view);
+        this.map.setTilt(was.tilt ?? 0);
+        this.map.setSpin(was.spin ?? 0);
+      } else {
+        this.map.focus(this.selectedSystemId ?? g.locationId);
+      }
+      // Kept on the app as well, so leaving the chart and coming back to it
+      // returns to the same view rather than snapping home.
+      this.mapView = was ?? { view: { ...this.map.view }, tilt: 0, spin: 0 };
       this.map.onSelect = (sys) => {
         this.selectedSystemId = sys.id;
         audio.play('ui_tap');
@@ -1488,6 +1509,23 @@ class App {
         const r = g.diagnostic(order.level);
         audio.play(r.clean ? 'computer_ack' : 'ui_deny');
         if (!r.clean) haptic('alert');
+        break;
+      }
+      case 'chart_tilt': {
+        // The chart is on the navigation console, so the order takes you there
+        // as well as moving it — saying "tilt the chart" while looking at
+        // something else and having nothing visibly happen is not an answer.
+        if (this.screen !== 'galaxy') this.go('galaxy');
+        const map = this.map;
+        if (!map) { audio.play('ui_deny'); break; }
+        if (order.spin !== undefined) map.setSpin(map.spin + order.spin);
+        else map.setTilt(order.tilt);
+        audio.play('ui_select');
+        haptic('tap');
+        ack('helm', order.tilt === 0 ? 'Chart levelled, Captain.'
+          : order.spin !== undefined ? 'Rotating the chart.'
+            : 'Laying the chart over.');
+        this.needsRender = true;
         break;
       }
       case 'watch_bill': {
