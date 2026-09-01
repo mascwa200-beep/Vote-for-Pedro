@@ -20030,6 +20030,7 @@ class Engagement {
     // campaign's dead and not this battle's. Without a mark at the start,
     // every fight reported every death that had ever happened.
     this.crewAtStart = player?.crew ?? 0;
+    this.shotsFired = 0;
     // Ships whose destruction has already been announced. A death is a
     // one-time event and the sweep that finds it runs every tick.
     this.mourned = new Set();
@@ -20234,6 +20235,12 @@ class Engagement {
     if (distance > (WEAPON_RANGE[weapon.type] ?? 900)) return false;
 
     weapon.cooldown = weapon.cycle;
+    // Whether a shot was ever fired in this engagement, which the after-action
+    // report needs and could not otherwise know. "Nobody fired" is a real thing
+    // to be able to say about a battle that ended in a negotiation, and there
+    // was no way to tell it apart from one that ended after two minutes of
+    // shooting.
+    this.shotsFired++;
 
     if (weapon.type === 'torpedo') {
       attacker.torpedoes = Math.max(0, attacker.torpedoes - 1);
@@ -27072,6 +27079,7 @@ class Game {
       hostiles: eng.hostiles.length,
       hullLeft: this.ship.hullPct,
       crewLost: lost,
+      shotsFired: eng.shotsFired ?? 0,
       seconds: Math.round(eng.time),
       systemId: this.locationId,
       stardate: this.clock.stardate,
@@ -31591,9 +31599,16 @@ class App {
       routed: ['They have broken off and gone to warp.'],
       escaped: ['We are clear and at warp.'],
       destroyed: ['The ship is lost.'],
-      // Talking your way out is the rarest ending in the game and used to
-      // report itself as "The engagement has ended."
-      parley: ['They are standing off. Nobody fired.', 'Rescue operations may proceed.'],
+      // Talking your way out used to be the rarest ending in the game — it was
+      // reachable only through the Kobayashi Maru, because every hail that
+      // ended a real battle was recorded as a rout instead. Now that it is the
+      // ordinary ending for a fight settled by talking, this line cannot go on
+      // claiming nobody fired: most parleys are reached after shooting, and
+      // "rescue operations may proceed" was written for the one scenario that
+      // is about a rescue.
+      parley: g.lastCombat?.shotsFired
+        ? ['They are standing off. The shooting has stopped.']
+        : ['They are standing off. Nobody fired a shot.'],
     }[outcome] ?? ['The engagement has ended.'];
     if (outcome !== 'destroyed') {
       // From the after-action record, which counts the dead of THIS fight.

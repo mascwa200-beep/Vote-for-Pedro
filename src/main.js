@@ -920,9 +920,16 @@ class App {
       routed: ['They have broken off and gone to warp.'],
       escaped: ['We are clear and at warp.'],
       destroyed: ['The ship is lost.'],
-      // Talking your way out is the rarest ending in the game and used to
-      // report itself as "The engagement has ended."
-      parley: ['They are standing off. Nobody fired.', 'Rescue operations may proceed.'],
+      // Talking your way out used to be the rarest ending in the game — it was
+      // reachable only through the Kobayashi Maru, because every hail that
+      // ended a real battle was recorded as a rout instead. Now that it is the
+      // ordinary ending for a fight settled by talking, this line cannot go on
+      // claiming nobody fired: most parleys are reached after shooting, and
+      // "rescue operations may proceed" was written for the one scenario that
+      // is about a rescue.
+      parley: g.lastCombat?.shotsFired
+        ? ['They are standing off. The shooting has stopped.']
+        : ['They are standing off. Nobody fired a shot.'],
     }[outcome] ?? ['The engagement has ended.'];
     if (outcome !== 'destroyed') {
       // From the after-action record, which counts the dead of THIS fight.

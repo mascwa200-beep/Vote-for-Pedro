@@ -102,6 +102,7 @@ export class Engagement {
     // campaign's dead and not this battle's. Without a mark at the start,
     // every fight reported every death that had ever happened.
     this.crewAtStart = player?.crew ?? 0;
+    this.shotsFired = 0;
     // Ships whose destruction has already been announced. A death is a
     // one-time event and the sweep that finds it runs every tick.
     this.mourned = new Set();
@@ -306,6 +307,12 @@ export class Engagement {
     if (distance > (WEAPON_RANGE[weapon.type] ?? 900)) return false;
 
     weapon.cooldown = weapon.cycle;
+    // Whether a shot was ever fired in this engagement, which the after-action
+    // report needs and could not otherwise know. "Nobody fired" is a real thing
+    // to be able to say about a battle that ended in a negotiation, and there
+    // was no way to tell it apart from one that ended after two minutes of
+    // shooting.
+    this.shotsFired++;
 
     if (weapon.type === 'torpedo') {
       attacker.torpedoes = Math.max(0, attacker.torpedoes - 1);

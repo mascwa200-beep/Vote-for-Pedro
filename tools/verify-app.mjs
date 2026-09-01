@@ -2636,6 +2636,28 @@ try {
   });
   check('and it still reports the dead when there are any',
     /\b4 crew did not survive/.test(panel2), panel2.slice(0, 160));
+
+  // A parley used to be reachable only through the Kobayashi Maru, so its line
+  // said "Nobody fired" and offered to begin rescue operations. It is now the
+  // ordinary ending for any fight settled by talking — most of which are
+  // reached after shooting — and the line has to be true of both.
+  const parley = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const said = {};
+    for (const [key, shotsFired] of [['quiet', 0], ['loud', 37]]) {
+      g.lastCombat = { ...g.lastCombat, outcome: 'parley', crewLost: 0, shotsFired };
+      app.showCombatResult('parley');
+      said[key] = [...document.querySelectorAll('.modal')].map((m) => m.textContent).join(' ');
+      for (const b of document.querySelectorAll('.modal .btn')) b.click();
+    }
+    return said;
+  });
+  check('a parley after a fight does not claim nobody fired',
+    /shooting has stopped/i.test(parley.loud) && !/nobody fired/i.test(parley.loud),
+    parley.loud.slice(0, 160));
+  check('and a parley with no shots fired still says so',
+    /nobody fired/i.test(parley.quiet), parley.quiet.slice(0, 160));
   await dismissModals(page);
 
   // Leave it as it was found; everything after this assumes a quiet ship.
