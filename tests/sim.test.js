@@ -1308,6 +1308,51 @@ test('a captain saved on a planet is still on it when the game comes back', () =
   assert.ok(!Game.load(JSON.parse(JSON.stringify(raw))).ashore);
 });
 
+test('the ship does not leave without the captain', () => {
+  const g = new Game({ seed: 4242 });
+  g.enterOrbit();
+  g.walk.enter('transporter');
+  assert.ok(g.beamDown().ok);
+
+  // Both orders that would take the ship out from under a landing party.
+  const broke = g.breakOrbit();
+  assert.ok(!broke.ok, 'the ship broke orbit with the captain on the ground');
+  assert.match(broke.error, /surface/i);
+
+  const here = g.locationId;
+  const elsewhere = g.galaxy.systems.find((s) => s.id !== here).id;
+  const course = g.setCourse(elsewhere);
+  assert.ok(!course.ok, 'the ship warped away with the captain on the ground');
+  assert.match(course.error, /surface/i);
+
+  // Nothing moved: still ashore, still in orbit, no transit running.
+  assert.ok(g.ashore);
+  assert.ok(g.orbit, 'the refused order cleared the orbit anyway');
+  assert.equal(g.transit, null);
+  assert.equal(g.locationId, here);
+
+  // And once the captain is aboard, both orders work.
+  assert.ok(g.beamUp().ok);
+  assert.ok(g.setCourse(elsewhere).ok, 'the guard outlived the landing party');
+});
+
+test('a walker in a room that is not there reaches for nothing', () => {
+  const g = new Game({ seed: 4243 });
+  g.enterOrbit();
+  g.walk.enter('transporter');
+  g.beamDown();
+
+  // Clear the generated world out from under the walker without moving it —
+  // the state the fuzzer reached by other means, and the frame after it used
+  // to throw rather than come back empty.
+  g.walk.roomId = 'nowhere-at-all';
+  assert.equal(g.walk.room, undefined);
+  assert.equal(g.walk.nearestStation(), null);
+  assert.equal(g.walk.nearestExit(), null);
+  assert.doesNotThrow(() => g.walk.step({ move: [1, 0] }, 1 / 30));
+  assert.doesNotThrow(() => g.update(1 / 30));
+});
+
 test('"beam down" and "energize" are opposite orders', () => {
   const g = new Game({ seed: 12 });
   assert.equal(parseOrder('beam down', g).action, 'beam_down');

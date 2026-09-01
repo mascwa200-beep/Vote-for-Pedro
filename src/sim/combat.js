@@ -41,6 +41,9 @@ export const WITHDRAW_SECONDS = 8;
  */
 export const ARENA_RADIUS = 2600;
 
+/** Every way a fight can finish. `end` accepts nothing else. */
+export const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 export const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
 
@@ -641,7 +644,12 @@ export class Engagement {
   end(outcome) {
     if (this.over) return;
     this.over = true;
-    this.outcome = outcome;
+    // A fight that is over has an outcome, always. `eng.outcome` in the
+    // invariant file says so, everything downstream reads it, and nothing in
+    // the game supplies a blank one — but this is a public method and a
+    // missing argument used to produce a finished engagement with no result.
+    // "Routed" is the neutral reading: it stopped, and nobody says why.
+    this.outcome = OUTCOMES.includes(outcome) ? outcome : 'routed';
     emit('combat:end', { outcome, engagement: this });
     if (this.stepping) this.settleWhenSafe = true;
     else this.onEnd?.(this);

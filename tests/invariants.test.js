@@ -1453,11 +1453,12 @@ describe('the game survives being called wrongly', () => {
     {}, [], true, false, -0.5, '7', { id: 'nope' },
   ];
 
-  test('no public call throws or breaks a rule, whatever it is handed', () => {
-    const rand = stream(0x9e3779b9);
+  /** One pass, from one seed. Three of them run below. */
+  function fuzz(seed, difficulty) {
+    const rand = stream(seed);
     const pick = (list) => list[Math.floor(rand() * list.length)];
 
-    const g = new Game({ seed: 31n, crewMode: 'original', difficulty: 'commander' });
+    const g = new Game({ seed: BigInt(seed), crewMode: 'original', difficulty });
     const systems = g.galaxy.systems.map((s) => s.id);
     const bodies = (g.galaxy.systems.find((s) => s.id === g.locationId)?.bodies ?? [])
       .map((b) => b.id);
@@ -1512,6 +1513,26 @@ describe('the game survives being called wrongly', () => {
       () => g.buildAwayTeam(),
       () => g.surveyFeature(pick([...JUNK, 'feature0', 'feature1'])),
       () => g.update(1 / 30),
+
+      // The campaign layer, which the combat soak never touches.
+      () => g.startMission(pick([...JUNK, ...(g.availableMissions?.() ?? []).map((m) => m.id)])),
+      () => g.chooseMission(pick([...JUNK, '0', 'a'])),
+      () => g.earnReputation(pick(['combat_victory', 'colony_saved', ...JUNK])),
+      () => g.progress.addXP(pick([100, 1e6, ...JUNK]), { ledger: g.ledger }),
+      () => g.ledger.adjustStanding(pick(['klingon', 'federation', ...JUNK]), pick([5, -400, ...JUNK]), 'fuzz'),
+      () => g.pushLog(pick(['line', ...JUNK]), pick(['helm', ...JUNK])),
+      () => g.setPreset?.(pick(['balanced', 'attack', 'evade', ...JUNK])),
+      () => g.character?.useSignature?.(g),
+      () => g.crew.at(pick(['helm', 'science', ...JUNK])),
+      () => g.crew.officers[0]?.injure(pick([0.5, 5, ...JUNK])),
+
+      // And what the app would come back as if it were closed right here.
+      () => {
+        const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+        for (const v of checkAll(back, OPTS)) {
+          throw new Error(`a save loaded broken: ${v.code} — ${v.text}`);
+        }
+      },
     ];
 
     const threw = [];
@@ -1534,9 +1555,23 @@ describe('the game survives being called wrongly', () => {
       for (const v of checkAll(g, OPTS)) broke.add(`${v.code} — ${v.text}`);
     }
 
-    assert.deepEqual(threw, [], 'a public call threw');
-    assert.deepEqual([...broke], [], 'a public call left the simulation broken');
-  });
+    return { threw, broke: [...broke] };
+  }
+
+  // Three seeds and three difficulty rungs: casualty scaling, permadeath and
+  // the enemy-count multiplier all move with the rung, and each of them is a
+  // different set of numbers flowing through the same calls.
+  for (const [seed, difficulty] of [
+    [0x9e3779b9, 'commander'],
+    [0x85ebca6b, 'story'],
+    [0xc2b2ae35, 'fleet_admiral'],
+  ]) {
+    test(`no public call throws or breaks a rule — seed ${seed.toString(16)}, ${difficulty}`, () => {
+      const { threw, broke } = fuzz(seed, difficulty);
+      assert.deepEqual(threw, [], 'a public call threw');
+      assert.deepEqual(broke, [], 'a public call left the simulation broken');
+    });
+  }
 });
 
 test('ejecting the core does not put a hull back together', () => {

@@ -214,6 +214,11 @@ export class Walker {
   /** The station within reach, if any. Nearest wins. */
   nearestStation() {
     const room = this.room;
+    // Nowhere is not a room. The walker can be pointed at a room id that no
+    // longer resolves — the surface, after the ship has left it — and reaching
+    // for a console in a place that isn't there should come back empty, not
+    // throw halfway through a frame.
+    if (!room) return null;
     let best = null;
     let bestD = REACH;
     for (const s of room.stations ?? []) {

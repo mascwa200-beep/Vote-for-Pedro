@@ -745,6 +745,16 @@ export class Game {
   /** Out of orbit and back to station-keeping. */
   breakOrbit() {
     if (!this.orbit) return { ok: false, error: 'We are not in orbit, Captain.' };
+    // Not with the captain on the ground.
+    //
+    // Breaking orbit while ashore left the landing party on a world the ship
+    // had left, `ashore` still true, and the transporter with nothing under
+    // it — and the next order to set a course took the ship out of the system
+    // entirely. You could maroon yourself, and the only thing that ever
+    // noticed was the API fuzzer walking into a room that was no longer there.
+    if (this.ashore) {
+      return { ok: false, error: 'You are on the surface, Captain. We are not leaving without you.' };
+    }
     const label = this.orbitLabel;
     this.orbit = null;
     if (label) this.officerSays('helm', `Breaking orbit of ${label}.`);
@@ -816,6 +826,12 @@ export class Game {
 
   setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
+    // The same refusal `breakOrbit` gives, for the same reason: a course order
+    // clears the orbit on its way out, so without this the ship would leave the
+    // system with the captain still standing on the planet.
+    if (this.ashore) {
+      return { ok: false, error: 'You are on the surface, Captain. We are not leaving without you.' };
+    }
     const plan = plotTransit(
       this.galaxy, this.locationId, destinationId, warpFactor,
       this.ship, this.progress.warpEfficiency,
@@ -1246,8 +1262,13 @@ export class Game {
    * `Engagement.update`, which is why `combat:end` no longer resolves it.
    */
   resolveCombat() {
+    // Whether the game happens to be in combat MODE is not the question. A
+    // finished engagement has to be settled wherever the game has got to,
+    // because everything that follows a battle hangs off it — and requiring
+    // the mode meant anything that moved the mode out from under a running
+    // fight left one over-but-unsettled forever.
     const eng = this.engagement;
-    if (!eng?.over || this.mode !== MODES.COMBAT) return false;
+    if (!eng?.over) return false;
     this.finishCombat(eng.outcome);
     return true;
   }
@@ -1364,7 +1385,10 @@ export class Game {
       this.scriptedScenario = false;
       this.applyAllMods();   // hand the difficulty bonuses back
     }
-    this.mode = MODES.BRIDGE;
+    // Back to the bridge — unless the captain is somewhere else entirely. A
+    // fight that finishes while a mission is on screen should not throw the
+    // player off it.
+    if (this.mode === MODES.COMBAT) this.mode = MODES.BRIDGE;
     this.setAlert(outcome === 'destroyed' ? 'red' : 'normal');
     emit('combat:resolved', { outcome, killed });
 
@@ -1390,7 +1414,16 @@ export class Game {
   startMission(id) {
     const m = this.missions.start(id, this);
     if (m) {
-      this.mode = MODES.MISSION;
+      // Not while people are shooting.
+      //
+      // `chooseMission` has always been careful about this — setting the mode
+      // during a battle orphans the engagement, because Game.update stops
+      // stepping it. Starting one was not: the fight kept its object, stopped
+      // being ticked, and when something finally ended it the settle was
+      // skipped because the mode was no longer COMBAT. That left an engagement
+      // over-but-unsettled and a relief ship inbound to a battle that was not
+      // running. Found by the API fuzzer.
+      if (!this.engagement || this.engagement.over) this.mode = MODES.MISSION;
       this.pushLog(`Mission: ${m.title}`, 'captain');
     }
     return m;

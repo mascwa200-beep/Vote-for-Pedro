@@ -19435,6 +19435,9 @@ const WITHDRAW_SECONDS = 8;
  */
 const ARENA_RADIUS = 2600;
 
+/** Every way a fight can finish. `end` accepts nothing else. */
+const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
 
@@ -20034,7 +20037,12 @@ class Engagement {
   end(outcome) {
     if (this.over) return;
     this.over = true;
-    this.outcome = outcome;
+    // A fight that is over has an outcome, always. `eng.outcome` in the
+    // invariant file says so, everything downstream reads it, and nothing in
+    // the game supplies a blank one — but this is a public method and a
+    // missing argument used to produce a finished engagement with no result.
+    // "Routed" is the neutral reading: it stopped, and nobody says why.
+    this.outcome = OUTCOMES.includes(outcome) ? outcome : 'routed';
     emit('combat:end', { outcome, engagement: this });
     if (this.stepping) this.settleWhenSafe = true;
     else this.onEnd?.(this);
@@ -20209,6 +20217,7 @@ __exports.WEAPON_RANGE = WEAPON_RANGE;
 __exports.MAX_WEAPON_RANGE = MAX_WEAPON_RANGE;
 __exports.WITHDRAW_SECONDS = WITHDRAW_SECONDS;
 __exports.ARENA_RADIUS = ARENA_RADIUS;
+__exports.OUTCOMES = OUTCOMES;
 __exports.DISENGAGE_RANGE = DISENGAGE_RANGE;
 __exports.rangeFactor = rangeFactor;
 __exports.Engagement = Engagement;
@@ -20910,6 +20919,11 @@ class Walker {
   /** The station within reach, if any. Nearest wins. */
   nearestStation() {
     const room = this.room;
+    // Nowhere is not a room. The walker can be pointed at a room id that no
+    // longer resolves — the surface, after the ship has left it — and reaching
+    // for a console in a place that isn't there should come back empty, not
+    // throw halfway through a frame.
+    if (!room) return null;
     let best = null;
     let bestD = REACH;
     for (const s of room.stations ?? []) {
@@ -25229,6 +25243,16 @@ class Game {
   /** Out of orbit and back to station-keeping. */
   breakOrbit() {
     if (!this.orbit) return { ok: false, error: 'We are not in orbit, Captain.' };
+    // Not with the captain on the ground.
+    //
+    // Breaking orbit while ashore left the landing party on a world the ship
+    // had left, `ashore` still true, and the transporter with nothing under
+    // it — and the next order to set a course took the ship out of the system
+    // entirely. You could maroon yourself, and the only thing that ever
+    // noticed was the API fuzzer walking into a room that was no longer there.
+    if (this.ashore) {
+      return { ok: false, error: 'You are on the surface, Captain. We are not leaving without you.' };
+    }
     const label = this.orbitLabel;
     this.orbit = null;
     if (label) this.officerSays('helm', `Breaking orbit of ${label}.`);
@@ -25300,6 +25324,12 @@ class Game {
 
   setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
+    // The same refusal `breakOrbit` gives, for the same reason: a course order
+    // clears the orbit on its way out, so without this the ship would leave the
+    // system with the captain still standing on the planet.
+    if (this.ashore) {
+      return { ok: false, error: 'You are on the surface, Captain. We are not leaving without you.' };
+    }
     const plan = plotTransit(
       this.galaxy, this.locationId, destinationId, warpFactor,
       this.ship, this.progress.warpEfficiency,
@@ -25730,8 +25760,13 @@ class Game {
    * `Engagement.update`, which is why `combat:end` no longer resolves it.
    */
   resolveCombat() {
+    // Whether the game happens to be in combat MODE is not the question. A
+    // finished engagement has to be settled wherever the game has got to,
+    // because everything that follows a battle hangs off it — and requiring
+    // the mode meant anything that moved the mode out from under a running
+    // fight left one over-but-unsettled forever.
     const eng = this.engagement;
-    if (!eng?.over || this.mode !== MODES.COMBAT) return false;
+    if (!eng?.over) return false;
     this.finishCombat(eng.outcome);
     return true;
   }
@@ -25848,7 +25883,10 @@ class Game {
       this.scriptedScenario = false;
       this.applyAllMods();   // hand the difficulty bonuses back
     }
-    this.mode = MODES.BRIDGE;
+    // Back to the bridge — unless the captain is somewhere else entirely. A
+    // fight that finishes while a mission is on screen should not throw the
+    // player off it.
+    if (this.mode === MODES.COMBAT) this.mode = MODES.BRIDGE;
     this.setAlert(outcome === 'destroyed' ? 'red' : 'normal');
     emit('combat:resolved', { outcome, killed });
 
@@ -25874,7 +25912,16 @@ class Game {
   startMission(id) {
     const m = this.missions.start(id, this);
     if (m) {
-      this.mode = MODES.MISSION;
+      // Not while people are shooting.
+      //
+      // `chooseMission` has always been careful about this — setting the mode
+      // during a battle orphans the engagement, because Game.update stops
+      // stepping it. Starting one was not: the fight kept its object, stopped
+      // being ticked, and when something finally ended it the settle was
+      // skipped because the mode was no longer COMBAT. That left an engagement
+      // over-but-unsettled and a relief ship inbound to a battle that was not
+      // running. Found by the API fuzzer.
+      if (!this.engagement || this.engagement.over) this.mode = MODES.MISSION;
       this.pushLog(`Mission: ${m.title}`, 'captain');
     }
     return m;
