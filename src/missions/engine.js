@@ -198,7 +198,17 @@ export class Mission {
     const ending = this.def.endings?.[outcome];
     if (ending) {
       const g = this.ctx.game;
-      if (ending.effects) Object.assign(applied, this.applyEffects(ending.effects));
+      if (ending.effects) {
+        // Merged, not overwritten. `applied` already carries what the choice
+        // itself did — the standing that moved, the experience earned — and
+        // Object.assign replaced its `messages` array wholesale with the
+        // ending's, so on a terminal choice the player was told what the ending
+        // did and never what their own decision had cost or paid.
+        const endEffects = this.applyEffects(ending.effects);
+        const merged = [...(applied.messages ?? []), ...(endEffects.messages ?? [])];
+        Object.assign(applied, endEffects);
+        applied.messages = merged;
+      }
       g.ledger.record('mission_complete', {
         text: `${this.def.title}: ${ending.label ?? outcome}`,
         mission: this.id, outcome, stardate: g.clock.stardate,

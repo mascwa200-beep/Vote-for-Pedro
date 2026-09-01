@@ -286,17 +286,40 @@ describe('save round trip', () => {
     assert.equal(g.podJettisoned, true, 'reloading restored a spent ion pod');
   });
 
-  test('the Kobayashi Maru is still running after a reload', () => {
+  test('a forced channel does not survive a reload', () => {
+    // This test used to assert the opposite, and the opposite was a hole.
+    //
+    // An engagement cannot be saved, so restoring the flags that belong to one
+    // left the order line hijacked with nobody on the other end: the next thing
+    // the player typed after resuming was swallowed as an appeal to a Klingon
+    // commander who was not there, and if it scored, it wrote
+    // `kobayashi_maru_solved` into the permanent record and paid the
+    // reputation. The no-win scenario could be beaten by force-quitting it.
     const g = roundTrip((game) => {
       game.inKobayashi = true;
       game.gambitOpen = true;
       game.parleyForced = true;
       game.firstStrike = true;
     });
-    assert.equal(g.inKobayashi, true, 'the scenario flag was lost');
-    assert.equal(g.gambitOpen, true, 'the forced channel was lost');
-    assert.equal(g.parleyForced, true, 'the parley flag was lost');
+    assert.equal(g.engagement, null, 'a fight was somehow restored');
+    assert.equal(g.gambitOpen, false, 'the channel came back open to nobody');
+    assert.equal(g.parleyForced, false, 'the parley flag outlived its fight');
+    assert.equal(g.inKobayashi, false, 'the scenario outlived the engagement that was it');
     assert.equal(g.firstStrike, true, 'who shot first was lost');
+  });
+
+  test('and an appeal into that silence is refused, not scored', () => {
+    const g = roundTrip((game) => {
+      game.reputation.tracks.klingon.tier = 5;
+      for (let i = 0; i < 4; i++) game.ledger.record('ship_destroyed_hostile');
+      for (let i = 0; i < 3; i++) game.ledger.record('ship_spared');
+      game.inKobayashi = true;
+      game.gambitOpen = true;
+    });
+    const r = g.makeAppeal('You know my record. I have spared three of your crews. Let them go.');
+    assert.equal(r.success, false, 'the no-win scenario was won on an empty bridge');
+    assert.ok(!g.ledger.counters.kobayashi_maru_solved,
+      'a permanent record was written for a fight that never happened');
   });
 
   test('flags absent from an older save load as false, not undefined', () => {

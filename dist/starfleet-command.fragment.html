@@ -7428,7 +7428,16 @@ class TacticalView3D {
     const { aspect } = this.renderer.resize(rect.width || 320, rect.height || 320, dpr);
 
     if (!this.renderer.beginFrame()) return;
-    if (!engagement) return;
+    if (!engagement) {
+      // The labels, the hull bars and the target reticle live on a separate 2D
+      // canvas that keeps whatever was last drawn on it. `beginFrame` clears
+      // the GL side and this returned before ever reaching `drawOverlay`, so
+      // the final frame of a battle — the dead fleet's names and health, and a
+      // reticle locked to a ship that no longer exists — stayed painted over
+      // an empty plot until something else happened to redraw it.
+      this.clearOverlay(rect);
+      return;
+    }
 
     this.playerShip = engagement.player;
     this.hullReach = hullScale(engagement.player?.classId) * 1.1;
@@ -7523,12 +7532,24 @@ class TacticalView3D {
       // Open the screen pointed at something worth seeing rather than at an
       // arbitrary patch of empty sky.
       const f = this.vistaSource.focus;
-      if (f) {
+      // Only when the screen is free to look.
+      //
+      // A bearing is anywhere in the full circle, and this wrote it straight
+      // into the pan — past the `panLimit` clamp the rest of this class
+      // enforces, and without asking whether a fight was on. Opening the main
+      // viewer during a battle therefore snapped the screen up to 171 degrees
+      // off the bow toward whichever planet happened to be nearest, and the
+      // slaved spring took about five seconds to bring it back, with the enemy
+      // showing only as an arrow on the bezel for all of it. That is precisely
+      // what the pan limit exists to prevent.
+      if (f && this.freeLook) {
         // The pan rotates the bow by +yaw about world up, and at rest the bow
         // is +x — so the yaw that lands on a body IS its bearing. It was
         // negated here at first, which opened the viewer aimed at the exact
         // opposite patch of empty sky from the planet it had chosen.
-        this.look.targetYaw = bearingOf(f);
+        const want = bearingOf(f);
+        const limit = this.panLimit ?? Math.PI;
+        this.look.targetYaw = Math.max(-limit, Math.min(limit, want));
         this.look.yaw = this.look.targetYaw;
       }
     }
@@ -7732,6 +7753,14 @@ class TacticalView3D {
   }
 
   // -------------------------------------------------------------- overlay
+
+  /** Wipe the 2D chrome. Used when there is nothing left to label. */
+  clearOverlay(rect) {
+    this.overlay.style.width = `${rect.width}px`;
+    this.overlay.style.height = `${rect.height}px`;
+    const { ctx, width, height } = fitCanvas(this.overlay);
+    ctx.clearRect(0, 0, width, height);
+  }
 
   /** LCARS chrome: names, hull bars, the target reticle. Plain 2D, on top. */
   drawOverlay(engagement, rect) {
@@ -18625,6 +18654,18 @@ class Engagement {
       s.x *= k; s.y *= k; s.z = (s.z ?? 0) * k;
       if (s.destroyed) continue;
 
+      // The captain still has the helm.
+      //
+      // The clamp holds everyone inside the volume, but rewriting the desired
+      // heading is steering — and doing it to the player took the helm out of
+      // their hands without a word: the ship turned back from the boundary on
+      // its own and the order they had just given was gone. The AI is told
+      // where to go; the player is told what happened.
+      if (s === this.player) {
+        this.pushLog('We are at the edge of the engagement volume, Captain.', 'helm');
+        continue;
+      }
+
       // Point back toward the middle of the engagement.
       s.desiredHeading = Math.atan2(-s.y, -s.x) * 180 / Math.PI;
       const flat = Math.hypot(s.x, s.y) || 1;
@@ -21575,7 +21616,17 @@ class Mission {
     const ending = this.def.endings?.[outcome];
     if (ending) {
       const g = this.ctx.game;
-      if (ending.effects) Object.assign(applied, this.applyEffects(ending.effects));
+      if (ending.effects) {
+        // Merged, not overwritten. `applied` already carries what the choice
+        // itself did — the standing that moved, the experience earned — and
+        // Object.assign replaced its `messages` array wholesale with the
+        // ending's, so on a terminal choice the player was told what the ending
+        // did and never what their own decision had cost or paid.
+        const endEffects = this.applyEffects(ending.effects);
+        const merged = [...(applied.messages ?? []), ...(endEffects.messages ?? [])];
+        Object.assign(applied, endEffects);
+        applied.messages = merged;
+      }
       g.ledger.record('mission_complete', {
         text: `${this.def.title}: ${ending.label ?? outcome}`,
         mission: this.id, outcome, stardate: g.clock.stardate,
@@ -22964,7 +23015,7 @@ const { CaptainProgress, combatXP } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
 const { Engagement, ARENA_RADIUS } = __require("src/sim/combat.js");
 const { AwayTeam } = __require("src/sim/away.js");
-const { Walker, stepToward, findRoom } = __require("src/sim/walk.js");
+const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
@@ -24762,6 +24813,17 @@ class Game {
 
   /** Say your piece. What you typed is the input; the ledger is the judge. */
   makeAppeal(text) {
+    // There has to be somebody listening.
+    //
+    // Closing the channel on load fixes the reload route into this, but the
+    // door itself belongs here: an appeal is a thing you say to a commander who
+    // is shooting at you, and without a live fight it wrote a permanent
+    // `kobayashi_maru_solved` to the ledger and paid the reputation for a
+    // sentence typed on a quiet bridge.
+    if (!this.engagement || this.engagement.over || !this.engagement.liveHostiles?.length) {
+      closeChannel(this);
+      return { success: false, text, reply: 'There is no one on the channel, Captain.' };
+    }
     const outcome = resolveGambit(this, text);
     this.pushLog(`Captain, to the Klingon commander: "${outcome.text}"`, 'captain');
     this.pushLog(outcome.reply, 'comms');
@@ -24933,11 +24995,32 @@ class Game {
     if (data.walk?.roomId === 'surface' && g.orbitBody) {
       makeSurface(g.orbitBody, g.orbitLabel);
       g.walk.roomId = 'surface';
+      // And put them back where they were standing.
+      //
+      // `Walker.load` resolves the saved coordinates against the room it can
+      // see, and at that point the surface does not exist yet — so it resolved
+      // against the bridge fallback and a captain saved half a kilometre out
+      // among the outcrops woke up on the beam-in point. The room exists now,
+      // so the raw position can be resolved against the right geometry.
+      const [sx, sz] = resolveIn(ROOMS.surface, Number(data.walk.x) || 0, Number(data.walk.z) || 0);
+      g.walk.x = sx;
+      g.walk.z = sz;
     }
     g.firstStrike = data.firstStrike === true;
-    g.inKobayashi = data.inKobayashi === true;
-    g.gambitOpen = data.gambitOpen === true;
-    g.parleyForced = data.parleyForced === true;
+    // Set below, alongside the channel it belongs to.
+    // A forced channel does NOT survive a reload.
+    //
+    // The engagement is not restored — a fight cannot be saved — so restoring
+    // the flags that belong to it left the order line hijacked with nobody on
+    // the other end. `finishCombat` closes the channel for exactly this reason
+    // and its comment says so; the load path reached the same state by another
+    // door and never ran it. The result was that the no-win scenario could be
+    // beaten by force-quitting it and then typing one sentence on an empty
+    // bridge: a scoring appeal wrote `kobayashi_maru_solved` to the permanent
+    // ledger and paid the reputation, with no Klingons and no freighter.
+    g.gambitOpen = false;
+    g.parleyForced = false;
+    g.inKobayashi = false;
 
     g.applyAllMods();
     return g;
@@ -28552,11 +28635,15 @@ class App {
         break;
       }
       case 'heading':
-        eng?.setHeading(order.value);
+        // Something to steer. `eng?.` quietly did nothing with no fight on and
+        // the acknowledgement went out anyway, so the helm confirmed a course
+        // change that had not happened.
+        if (!eng || eng.over) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        eng.setHeading(order.value);
         // "Bearing 210 mark 15" always parsed its mark, carried it in the order
         // object, and had it dropped here. The mark is the elevation, and it is
         // the only reason the third axis is in the sentence.
-        if (order.mark) eng?.setPitch(order.mark);
+        if (order.mark) eng.setPitch(order.mark);
         ack('helm', order.mark
           ? `Coming to bearing ${order.value} mark ${order.mark}.`
           : `Coming to bearing ${order.value}.`);
@@ -28604,7 +28691,8 @@ class App {
         break;
       }
       case 'come_about':
-        eng?.comeAboutTo(eng.target);
+        if (!eng || eng.over) { ack('helm', 'There is nothing to come about on, Captain.'); break; }
+        eng.comeAboutTo(eng.target);
         ack('helm', 'Coming about.');
         break;
       case 'evasive':
@@ -29200,10 +29288,22 @@ class App {
       this.lastFrameAt = timestamp;
       if (this.fpv) this.fpv.render(g, dt);
       else if (this.tactical) {
-        if (g.engagement) this.tactical.render(g.engagement, g.clock.alpha, dt);
-        // No engagement and the viewer is open: draw what is actually outside,
-        // rather than the black rectangle a combat camera gives you at peace.
-        else if (this.screen === 'viewscreen') this.tactical.renderVista?.(g, dt);
+        if (g.engagement) {
+          this.tactical.render(g.engagement, g.clock.alpha, dt);
+        } else if (this.screen === 'viewscreen') {
+          // No engagement and the viewer is open: draw what is actually
+          // outside, rather than the black rectangle a combat camera gives you
+          // at peace.
+          this.tactical.renderVista?.(g, dt);
+        } else {
+          // The plot, with nothing on it. Gated on a live engagement, the last
+          // frame of the battle simply stayed on the canvas — the dead fleet's
+          // hulls, their labels, the hull bars and the target reticle, painted
+          // over a plot that no longer had anything in it. `render` clears both
+          // the GL frame and the 2D chrome before it decides there is nothing
+          // to draw.
+          this.tactical.render(null, g.clock.alpha, dt);
+        }
       }
       if (this.map) this.map.render(g);
       this.updateOverlay();

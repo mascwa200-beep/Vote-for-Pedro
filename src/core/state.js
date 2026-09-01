@@ -11,7 +11,7 @@ import { CaptainProgress, combatXP } from '../sim/skills.js';
 import { Loadout, startingLoadout } from '../sim/loadout.js';
 import { Engagement, ARENA_RADIUS } from '../sim/combat.js';
 import { AwayTeam } from '../sim/away.js';
-import { Walker, stepToward, findRoom } from '../sim/walk.js';
+import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
@@ -1813,6 +1813,17 @@ export class Game {
 
   /** Say your piece. What you typed is the input; the ledger is the judge. */
   makeAppeal(text) {
+    // There has to be somebody listening.
+    //
+    // Closing the channel on load fixes the reload route into this, but the
+    // door itself belongs here: an appeal is a thing you say to a commander who
+    // is shooting at you, and without a live fight it wrote a permanent
+    // `kobayashi_maru_solved` to the ledger and paid the reputation for a
+    // sentence typed on a quiet bridge.
+    if (!this.engagement || this.engagement.over || !this.engagement.liveHostiles?.length) {
+      closeChannel(this);
+      return { success: false, text, reply: 'There is no one on the channel, Captain.' };
+    }
     const outcome = resolveGambit(this, text);
     this.pushLog(`Captain, to the Klingon commander: "${outcome.text}"`, 'captain');
     this.pushLog(outcome.reply, 'comms');
@@ -1984,11 +1995,32 @@ export class Game {
     if (data.walk?.roomId === 'surface' && g.orbitBody) {
       makeSurface(g.orbitBody, g.orbitLabel);
       g.walk.roomId = 'surface';
+      // And put them back where they were standing.
+      //
+      // `Walker.load` resolves the saved coordinates against the room it can
+      // see, and at that point the surface does not exist yet — so it resolved
+      // against the bridge fallback and a captain saved half a kilometre out
+      // among the outcrops woke up on the beam-in point. The room exists now,
+      // so the raw position can be resolved against the right geometry.
+      const [sx, sz] = resolveIn(ROOMS.surface, Number(data.walk.x) || 0, Number(data.walk.z) || 0);
+      g.walk.x = sx;
+      g.walk.z = sz;
     }
     g.firstStrike = data.firstStrike === true;
-    g.inKobayashi = data.inKobayashi === true;
-    g.gambitOpen = data.gambitOpen === true;
-    g.parleyForced = data.parleyForced === true;
+    // Set below, alongside the channel it belongs to.
+    // A forced channel does NOT survive a reload.
+    //
+    // The engagement is not restored — a fight cannot be saved — so restoring
+    // the flags that belong to it left the order line hijacked with nobody on
+    // the other end. `finishCombat` closes the channel for exactly this reason
+    // and its comment says so; the load path reached the same state by another
+    // door and never ran it. The result was that the no-win scenario could be
+    // beaten by force-quitting it and then typing one sentence on an empty
+    // bridge: a scoring appeal wrote `kobayashi_maru_solved` to the permanent
+    // ledger and paid the reputation, with no Klingons and no freighter.
+    g.gambitOpen = false;
+    g.parleyForced = false;
+    g.inKobayashi = false;
 
     g.applyAllMods();
     return g;

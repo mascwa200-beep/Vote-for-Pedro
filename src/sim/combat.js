@@ -619,6 +619,18 @@ export class Engagement {
       s.x *= k; s.y *= k; s.z = (s.z ?? 0) * k;
       if (s.destroyed) continue;
 
+      // The captain still has the helm.
+      //
+      // The clamp holds everyone inside the volume, but rewriting the desired
+      // heading is steering — and doing it to the player took the helm out of
+      // their hands without a word: the ship turned back from the boundary on
+      // its own and the order they had just given was gone. The AI is told
+      // where to go; the player is told what happened.
+      if (s === this.player) {
+        this.pushLog('We are at the edge of the engagement volume, Captain.', 'helm');
+        continue;
+      }
+
       // Point back toward the middle of the engagement.
       s.desiredHeading = Math.atan2(-s.y, -s.x) * 180 / Math.PI;
       const flat = Math.hypot(s.x, s.y) || 1;

@@ -787,3 +787,87 @@ test('a doomed attack ship can actually reach what it is ramming', () => {
   assert.ok(foe.destroyed || closed < 400,
     `it never closed: ${Math.round(closed)} units away, destroyed=${foe.destroyed}`);
 });
+
+describe('what the adversarial audit confirmed', () => {
+  test('a forced channel cannot outlive the fight it belongs to', () => {
+    // The no-win scenario could be beaten by force-quitting it. An engagement
+    // is never saved, but the flags that belong to one were — so the first
+    // thing typed after resuming was swallowed as an appeal to a commander who
+    // was not there, and a scoring sentence wrote `kobayashi_maru_solved` into
+    // the permanent record and paid the reputation.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    g.reputation.tracks.klingon.tier = 5;
+    for (let i = 0; i < 4; i++) g.ledger.record('ship_destroyed_hostile');
+    for (let i = 0; i < 3; i++) g.ledger.record('ship_spared');
+    g.runKobayashiMaru();
+    for (let i = 0; i < 300; i++) g.update(STEP);
+    assert.equal(g.forceChannel().ok, true, 'the channel would not open in the scenario');
+
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(back.gambitOpen, false);
+    assert.equal(back.inKobayashi, false);
+
+    const r = back.makeAppeal(
+      'I am Captain Reyes. You know my record. I have spared three of your crews. Let them go.');
+    assert.equal(r.success, false, 'the scenario was won on an empty bridge');
+    assert.ok(!back.ledger.counters.kobayashi_maru_solved);
+  });
+
+  test('an appeal with nobody listening is refused wherever it comes from', () => {
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    g.gambitOpen = true;
+    g.parleyForced = true;
+    const r = g.makeAppeal('You know my record. Let them go.');
+    assert.equal(r.success, false);
+    assert.equal(g.gambitOpen, false, 'the channel stayed open with nobody on it');
+  });
+
+  test('the arena turns the AI around, not the captain', () => {
+    // Clamping a position holds everyone inside the volume. Rewriting the
+    // desired heading is steering, and doing it to the player took the helm out
+    // of their hands mid-order without a word.
+    const g = fight();
+    const eng = g.engagement;
+    g.ship.x = ARENA_RADIUS + 400;
+    g.ship.y = 0;
+    eng.setHeading(0);
+    const ordered = g.ship.desiredHeading;
+    eng.holdTheArena();
+
+    assert.ok(Math.hypot(g.ship.x, g.ship.y, g.ship.z ?? 0) <= ARENA_RADIUS + 1,
+      'the player was not held inside the arena');
+    assert.equal(g.ship.desiredHeading, ordered, 'the arena flew the ship for the captain');
+    assert.ok(eng.log.some((l) => /edge of the engagement volume/.test(l.text)),
+      'nobody mentioned hitting the edge');
+
+    // The AI still gets turned around, because nobody is giving it orders.
+    const foe = eng.hostiles[0];
+    foe.x = ARENA_RADIUS + 400; foe.y = 0; foe.desiredHeading = 0;
+    eng.holdTheArena();
+    assert.notEqual(foe.desiredHeading, 0, 'a hostile ground against the wall forever');
+  });
+
+  test('a captain saved on a planet wakes up where they were standing', () => {
+    // Walker.load resolves the saved position against the room it can see, and
+    // the surface does not exist until Game.load rebuilds it — so a captain
+    // saved out among the outcrops woke up on the beam-in point.
+    const g = new Game({ seed: 3n, crewMode: 'original' });
+    const body = g.galaxy.systems.find((sys) => sys.id === g.locationId)?.bodies
+      ?.find?.((b) => b.kind !== 'gas' && b.kind !== 'star');
+    if (!body) return;
+    g.enterOrbit(body.id);
+    g.walkOrder = null;
+    g.walk.enter('transporter');
+    if (!g.beamDown().ok) return;
+
+    // Walk away from the pads.
+    g.walk.x += 40;
+    g.walk.z -= 25;
+    const [wx, wz] = [g.walk.x, g.walk.z];
+
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(back.walk.roomId, 'surface', 'the captain was brought aboard by reloading');
+    assert.ok(Math.hypot(back.walk.x - wx, back.walk.z - wz) < 1,
+      `moved from ${wx.toFixed(1)},${wz.toFixed(1)} to ${back.walk.x.toFixed(1)},${back.walk.z.toFixed(1)}`);
+  });
+});

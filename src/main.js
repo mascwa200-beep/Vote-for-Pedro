@@ -1271,11 +1271,15 @@ class App {
         break;
       }
       case 'heading':
-        eng?.setHeading(order.value);
+        // Something to steer. `eng?.` quietly did nothing with no fight on and
+        // the acknowledgement went out anyway, so the helm confirmed a course
+        // change that had not happened.
+        if (!eng || eng.over) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        eng.setHeading(order.value);
         // "Bearing 210 mark 15" always parsed its mark, carried it in the order
         // object, and had it dropped here. The mark is the elevation, and it is
         // the only reason the third axis is in the sentence.
-        if (order.mark) eng?.setPitch(order.mark);
+        if (order.mark) eng.setPitch(order.mark);
         ack('helm', order.mark
           ? `Coming to bearing ${order.value} mark ${order.mark}.`
           : `Coming to bearing ${order.value}.`);
@@ -1323,7 +1327,8 @@ class App {
         break;
       }
       case 'come_about':
-        eng?.comeAboutTo(eng.target);
+        if (!eng || eng.over) { ack('helm', 'There is nothing to come about on, Captain.'); break; }
+        eng.comeAboutTo(eng.target);
         ack('helm', 'Coming about.');
         break;
       case 'evasive':
@@ -1919,10 +1924,22 @@ class App {
       this.lastFrameAt = timestamp;
       if (this.fpv) this.fpv.render(g, dt);
       else if (this.tactical) {
-        if (g.engagement) this.tactical.render(g.engagement, g.clock.alpha, dt);
-        // No engagement and the viewer is open: draw what is actually outside,
-        // rather than the black rectangle a combat camera gives you at peace.
-        else if (this.screen === 'viewscreen') this.tactical.renderVista?.(g, dt);
+        if (g.engagement) {
+          this.tactical.render(g.engagement, g.clock.alpha, dt);
+        } else if (this.screen === 'viewscreen') {
+          // No engagement and the viewer is open: draw what is actually
+          // outside, rather than the black rectangle a combat camera gives you
+          // at peace.
+          this.tactical.renderVista?.(g, dt);
+        } else {
+          // The plot, with nothing on it. Gated on a live engagement, the last
+          // frame of the battle simply stayed on the canvas — the dead fleet's
+          // hulls, their labels, the hull bars and the target reticle, painted
+          // over a plot that no longer had anything in it. `render` clears both
+          // the GL frame and the 2D chrome before it decides there is nothing
+          // to draw.
+          this.tactical.render(null, g.clock.alpha, dt);
+        }
       }
       if (this.map) this.map.render(g);
       this.updateOverlay();
