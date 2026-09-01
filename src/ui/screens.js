@@ -529,8 +529,13 @@ export function viewscreenScreen(app) {
       g.ship.shieldsUp ? pill('shields up', 'green') : pill('shields down', 'red'),
     ].filter(Boolean)));
     if (t && !t.destroyed) {
-      status.push(readout(`${t.name} hull`, t.hullPct));
-      status.push(readout(`${t.name} shields`, t.shieldPct));
+      // The name once, then the two bars. `readout` puts its label in a fixed
+      // narrow column, so "IKS Ch'Tang hull" wrapped onto three lines and then
+      // said it again for the shields — six lines of label for two numbers, on
+      // a phone, with a Klingon shooting at you.
+      status.push(el('p', {}, [el('b', { text: t.name }), ' — ', t.cls.name]));
+      status.push(readout('Hull', t.hullPct));
+      status.push(readout('Shields', t.shieldPct));
     }
   }
   side.append(panel('On Screen', status, eng && !eng.over ? 'danger' : 'accent'));
