@@ -1630,6 +1630,12 @@ class App {
         }
         break;
       }
+      case 'abandon_mission': {
+        const r = g.abandonMission();
+        if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('comms', r.error); }
+        break;
+      }
       case 'duty_roster': {
         // A question, so it is answered rather than acted on.
         const roster = g.dutyRoster ?? [];

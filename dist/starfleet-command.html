@@ -17295,6 +17295,22 @@ const INTENTS = [
     build: () => ({ action: 'work_shop' }),
   },
   {
+    id: 'abandon_mission',
+    help: 'Break off the episode you are in the middle of',
+    phrases: [
+      'abandon the mission', 'break off the mission', 'give up the mission',
+      'we are done with this mission', 'close out the mission',
+      'abort the mission', 'leave the mission', 'drop the mission',
+    ],
+    keywords: { abandon: 3, abort: 2.6, mission: 2.4, break: 1.2 },
+    // No `confirm` flag here: that is the PARSER's wrapper shape for a reading
+    // it is unsure of ({ confirm, order, alternatives }), not a field a built
+    // order carries — setting it would hand the dispatcher `order.order`,
+    // which is undefined. Saying "abandon the mission" is deliberate enough,
+    // and the ledger keeps the fact either way.
+    build: () => ({ action: 'abandon_mission' }),
+  },
+  {
     // The duty roster: who is aboard, and sending them somewhere.
     //
     // Two intents rather than one, because "who is out" and "send a party out"
@@ -24868,12 +24884,45 @@ class MissionBook {
     });
   }
 
+  /**
+   * Begin an episode.
+   *
+   * Refuses while another is half-finished. This was a bare assignment, so
+   * starting a second episode silently replaced the first: it was never marked
+   * complete, never written to the ledger, and was offered again later from its
+   * opening stage — with every flag, standing change and point of experience it
+   * had already paid still paid. Measured on `shakedown`: a hundred experience,
+   * banked, and the episode back on the board to be run again.
+   *
+   * Walking away is still allowed. It is `abandon` now, and it says so in the
+   * record, which is the difference between a decision and an accident.
+   */
   start(episodeId, game) {
     const def = this.byId[episodeId];
     if (!def) return null;
+    if (this.active && !this.active.complete) return null;
     this.active = new Mission(def, { game });
     emit('mission:start', { mission: this.active });
     return this.active;
+  }
+
+  /**
+   * Give up on the episode in progress, on purpose and on the record.
+   *
+   * Not the same as finishing it: the episode does NOT go into `completed`, so
+   * it can be picked up again from the beginning — but the ledger carries the
+   * fact that it was walked away from, and the captain chose it.
+   */
+  abandon(game) {
+    const m = this.active;
+    if (!m || m.complete) return null;
+    this.active = null;
+    game?.ledger?.record?.('mission_abandoned', {
+      text: `${m.def.title}: broken off at ${m.stageId}`,
+      mission: m.id, stardate: game.clock?.stardate,
+    });
+    emit('mission:abandon', { mission: m });
+    return m;
   }
 
   finishActive() {
@@ -27918,11 +27967,32 @@ class Game {
 
   // ------------------------------------------------------------------ missions
 
+  /** Give up the episode in progress. Recorded, because it was a decision. */
+  abandonMission() {
+    const running = this.missions.active;
+    if (!running || running.complete) {
+      return { ok: false, error: 'We are not in the middle of anything, Captain.' };
+    }
+    this.missions.abandon(this);
+    if (this.mode === MODES.MISSION) this.mode = MODES.BRIDGE;
+    this.pushLog(`${running.title}: broken off.`, 'captain');
+    this.officerSays('comms', `Logged, Captain. ${running.title} is closed out unfinished.`, 'report');
+    return { ok: true, mission: running };
+  }
+
   availableMissions() {
     return this.missions.availableAt(this.locationId, this);
   }
 
   startMission(id) {
+    // One episode at a time. Starting a second used to replace the first
+    // silently — see MissionBook.start.
+    const running = this.missions.active;
+    if (running && !running.complete) {
+      const why = `We are still in the middle of ${running.title}, Captain.`;
+      this.officerSays('comms', why, 'object');
+      return { ok: false, error: why, active: running };
+    }
     const m = this.missions.start(id, this);
     if (m) {
       // Not while people are shooting.
@@ -30748,6 +30818,21 @@ function missionPanel(app) {
       say: c.locked ? '' : spoken[i],
     }))));
 
+  // And the way out. Starting another episode used to be the way out — it
+  // replaced this one silently, kept everything it had already paid, and put
+  // it back on the board to be run again. Walking away is now a thing you do
+  // on purpose, and the ledger says you did.
+  wrap.append(panel('', [
+    button('Break off the mission', tap(() => {
+      app.game.abandonMission();
+      app.render();
+    }, 'ui_deny'), {
+      color: 'ghost',
+      sub: 'nothing this episode has not already paid is paid',
+      say: 'abandon the mission',
+    }),
+  ]));
+
   return wrap;
 }
 
@@ -33205,6 +33290,12 @@ class App {
             `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
             'report');
         }
+        break;
+      }
+      case 'abandon_mission': {
+        const r = g.abandonMission();
+        if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('comms', r.error); }
         break;
       }
       case 'duty_roster': {

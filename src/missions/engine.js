@@ -324,12 +324,45 @@ export class MissionBook {
     });
   }
 
+  /**
+   * Begin an episode.
+   *
+   * Refuses while another is half-finished. This was a bare assignment, so
+   * starting a second episode silently replaced the first: it was never marked
+   * complete, never written to the ledger, and was offered again later from its
+   * opening stage — with every flag, standing change and point of experience it
+   * had already paid still paid. Measured on `shakedown`: a hundred experience,
+   * banked, and the episode back on the board to be run again.
+   *
+   * Walking away is still allowed. It is `abandon` now, and it says so in the
+   * record, which is the difference between a decision and an accident.
+   */
   start(episodeId, game) {
     const def = this.byId[episodeId];
     if (!def) return null;
+    if (this.active && !this.active.complete) return null;
     this.active = new Mission(def, { game });
     emit('mission:start', { mission: this.active });
     return this.active;
+  }
+
+  /**
+   * Give up on the episode in progress, on purpose and on the record.
+   *
+   * Not the same as finishing it: the episode does NOT go into `completed`, so
+   * it can be picked up again from the beginning — but the ledger carries the
+   * fact that it was walked away from, and the captain chose it.
+   */
+  abandon(game) {
+    const m = this.active;
+    if (!m || m.complete) return null;
+    this.active = null;
+    game?.ledger?.record?.('mission_abandoned', {
+      text: `${m.def.title}: broken off at ${m.stageId}`,
+      mission: m.id, stardate: game.clock?.stardate,
+    });
+    emit('mission:abandon', { mission: m });
+    return m;
   }
 
   finishActive() {
