@@ -30,6 +30,7 @@ import {
 import { Game } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
 import { ARENA_RADIUS } from '../src/sim/combat.js';
+import { parseOrder } from '../src/ui/orders.js';
 
 const STEP = 1 / 30;
 const OPTS = { arenaRadius: ARENA_RADIUS };
@@ -1230,5 +1231,103 @@ describe('somebody answers the distress call', () => {
       `the ledger recorded ${logged.length} kills for ${g.lastCombat.hostiles} hostiles`);
     assert.ok(!logged.some((k) => k.faction === 'federation'),
       'a Starfleet ship went into the record as one of your kills');
+  });
+});
+
+// ============================================ the landing parties nobody could send
+
+describe('a landing party goes somewhere', () => {
+  // AWAY_TEMPLATES has held five multi-step missions since the away system was
+  // written — hazard levels, per-step checks, difficulty classes on every one —
+  // and no code has ever read the table. The order existed too: "assemble an
+  // away team" put one together and reported it standing by, which is a
+  // landing party that never went anywhere.
+
+  /** A hostile beaten to the point where a boarding party can cross. */
+  function crippled(g) {
+    const foe = g.engagement.hostiles[0];
+    for (const f of Object.keys(foe.shields)) foe.shields[f] = 0;
+    foe.hull = foe.maxHull * 0.2;
+    foe.x = 200; foe.y = 0; foe.z = 0;
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    return foe;
+  }
+
+  test('there is nowhere to send one from an empty bridge', () => {
+    const g = new Game({ seed: 2n, crewMode: 'original' });
+    assert.deepEqual(g.availableAwayMissions(), []);
+    assert.equal(g.awayMission('boarding_action').ok, false);
+  });
+
+  test('a beaten ship can be boarded, and a healthy one cannot', () => {
+    const g = fight('d7');
+    assert.deepEqual(g.availableAwayMissions(), [],
+      'a boarding party was offered against full shields');
+    crippled(g);
+    assert.deepEqual(g.availableAwayMissions().map((t) => t.id), ['boarding_action']);
+  });
+
+  test('every step is run and every result is reported', () => {
+    const g = fight('d7');
+    crippled(g);
+    const r = g.awayMission('boarding_action');
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.of, 3, 'a three-step template ran a different number of steps');
+    assert.equal(r.steps.length <= 3, true);
+    assert.ok(['success', 'partial', 'failure'].includes(r.outcome));
+    assert.equal(r.passed, r.steps.filter((s) => s.success).length);
+    assert.deepEqual(checkAll(g, OPTS), [], 'the checker objects after a boarding action');
+  });
+
+  test('a bridge taken is a ship out of the fight, and not a kill', () => {
+    // The whole point of crippling instead of killing. It must not show up in
+    // the destroyed-ships record, because it was not destroyed.
+    let taken = 0;
+    for (let seed = 1n; seed <= 40n && !taken; seed++) {
+      const g = fight('d7', { seed, difficulty: 'story' });
+      const foe = crippled(g);
+      const r = g.awayMission('boarding_action');
+      if (r.outcome !== 'success') continue;
+      taken++;
+      assert.equal(foe.withdrawn, true, 'the boarded ship kept fighting');
+      assert.equal(foe.destroyed, false, 'boarding a ship blew it up');
+      assert.ok(!g.ledger.destroyedShips.some((k) => k.name === foe.name),
+        'a captured ship went into the record as a kill');
+      assert.ok(!g.engagement || g.engagement.target !== foe,
+        'the guns are still locked on a ship that has gone');
+      assert.deepEqual(checkAll(g, OPTS), []);
+    }
+    assert.ok(taken > 0, 'no boarding action in forty attempts ever succeeded');
+  });
+
+  test('the fight ends when the last hostile is boarded', () => {
+    for (let seed = 1n; seed <= 40n; seed++) {
+      const g = fight('d7', { seed, difficulty: 'story' });
+      crippled(g);
+      if (g.awayMission('boarding_action').outcome !== 'success') continue;
+      for (let i = 0; i < 30 * 20 && !g.lastCombat; i++) g.update(STEP);
+      assert.ok(g.lastCombat, 'the board emptied and the fight never ended');
+      assert.equal(g.mode, 'bridge');
+      assert.deepEqual(checkAll(g, OPTS), []);
+      return;
+    }
+  });
+
+  test('a party with nobody left standing stops', () => {
+    // The loop breaks when the team is gone. Without it the remaining steps
+    // run against an empty team, which is a check with no officer behind it.
+    const g = fight('d7', { difficulty: 'admiral' });
+    crippled(g);
+    const r = g.awayMission('boarding_action');
+    assert.ok(r.steps.length >= 1);
+    assert.ok(r.steps.length <= 3);
+  });
+
+  test('the away order sends them somewhere instead of standing by', () => {
+    const g = fight('d7');
+    crippled(g);
+    const order = parseOrder('board them', g);
+    assert.equal(order.action, 'away_team');
+    assert.equal(order.prefer, 'board', 'the parser lost which mission was meant');
   });
 });

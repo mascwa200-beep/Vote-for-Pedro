@@ -41,10 +41,18 @@ function check(label, condition, detail = '') {
 async function dismissModals(page) {
   for (let i = 0; i < 6; i++) {
     const btn = page.locator('.modal .btn').first();
-    if (!(await btn.count())) return;
+    if (!(await btn.count())) break;
     await btn.click({ timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(150);
   }
+  // A backdrop that outlived its button swallows every click underneath it,
+  // and the failure that produces is a thirty-second timeout on some unrelated
+  // step a hundred lines later. If one is still there after six goes, take it
+  // off the page: this is a harness, and a stuck dialog is not the thing under
+  // test at that point.
+  await page.evaluate(() => {
+    for (const back of document.querySelectorAll('.modal-back')) back.remove();
+  });
 }
 
 /**
@@ -1149,6 +1157,79 @@ try {
   });
   await page.waitForTimeout(500);
   await page.screenshot({ path: join(SHOTS, '18-relief.png') });
+
+  // ---- Boarding a beaten ship ----
+  //
+  // AWAY_TEMPLATES has held five multi-step landing parties since the away
+  // system was written and no code ever read the table. Driven here through
+  // the real order line, because the half that matters is whether taking the
+  // last bridge on the board leaves the game in one piece.
+  const boarding = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.ship.crew = g.ship.maxCrew;
+    g.startCombat([new Ship('d7', { name: 'Klingon cruiser' })]);
+    const before = g.availableAwayMissions().map((t) => t.id);
+
+    // Beat it: shields flat, hull low, alongside.
+    const foe = g.engagement.hostiles[0];
+    for (const f of Object.keys(foe.shields)) foe.shields[f] = 0;
+    foe.hull = foe.maxHull * 0.2;
+    foe.x = 200; foe.y = 0; foe.z = 0;
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    app.render();
+    return {
+      before,
+      after: g.availableAwayMissions().map((t) => t.id),
+      button: [...document.querySelectorAll('button')]
+        .some((b) => /Board the hostile/i.test(b.textContent ?? '')),
+    };
+  });
+  check('a boarding party is offered only against a ship that is beaten',
+    boarding.before.length === 0 && boarding.after.includes('boarding_action'),
+    JSON.stringify(boarding));
+  check('and the bridge shows the button when it is',
+    boarding.button === true, JSON.stringify(boarding));
+
+  // Ending the previous fight raises the after-action panel, and a modal
+  // swallows the click on the order bar.
+  await dismissModals(page);
+  await page.fill('.orderbar input', 'board them');
+  await page.click('.orderbar button.send');
+  // Photographed BEFORE the clock runs on. The report is what the captain is
+  // owed for the order they just gave, and a few hundred ticks later the
+  // battle may have ended on its own and put its own summary over the top.
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: join(SHOTS, '19-boarding.png') });
+  await page.waitForTimeout(300);
+  const boarded = await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    const { checkAll } = await import('./src/sim/invariants.js');
+    const { ARENA_RADIUS } = await import('./src/sim/combat.js');
+    return {
+      ran: !!g.lastAway,
+      of: g.lastAway?.of ?? 0,
+      outcome: g.lastAway?.outcome ?? null,
+      violations: checkAll(g, { arenaRadius: ARENA_RADIUS }).map((v) => v.code),
+      modal: document.querySelectorAll('.modal').length,
+    };
+  });
+  check('a typed order sends the boarding party',
+    boarded.ran === true && boarded.of === 3, JSON.stringify(boarded));
+  check('and taking a bridge breaks no rule',
+    boarded.violations.length === 0, boarded.violations.join(', '));
+  check('the away report comes back as something you have to acknowledge',
+    boarded.modal >= 1, String(boarded.modal));
+  // One modal at a time. `modal()` appends to the document, so a report and a
+  // battle ending in the same breath used to leave two stacked backdrops with
+  // only the newer one closable.
+  check('two things happening at once do not stack two dialogs',
+    boarded.modal === 1, `${boarded.modal} modals open`);
+  await dismissModals(page);
 
   // Leave the bridge as it was found. Everything after this checks the
   // first-person view and the chair, and neither is on the tactical plot.

@@ -545,13 +545,7 @@ export class Engagement {
         if (this.warpOutTimer <= 0) return this.end('escaped');
       }
     }
-    if (!this.liveHostiles.length) {
-      // An empty board is a win only if you emptied it. Anyone who withdrew
-      // under their own power was routed, not destroyed, and the ledger cares
-      // about the difference.
-      return this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
-    }
-    if (this.liveHostiles.every((s) => s.fleeing)) return this.end('routed');
+    if (this.settle()) return;
 
     // A fight in which nobody can touch anybody is over, whatever the AI
     // thinks it is doing. Held for a few seconds so a fast pass through the
@@ -561,6 +555,35 @@ export class Engagement {
     );
     this.separationTimer = unreachable ? this.separationTimer + dt : 0;
     if (this.separationTimer > 6) return this.end('routed');
+  }
+
+  /**
+   * The end conditions that need no clock, checked wherever the board changes.
+   *
+   * The tick is not the only thing that empties a board. A boarding party
+   * taking a bridge withdraws the last hostile from OUTSIDE the tick, and the
+   * fight then sat with nobody left to shoot, the player alive and `over`
+   * still false — which is `eng.unresolved`, the soft-lock shape, and the most
+   * important rule in the invariant file. It lasted one frame, and one frame
+   * is what the renderer draws.
+   *
+   * The warp-out countdown and the separation timer stay in `step`, because
+   * both of them are clocks and this is deliberately not.
+   *
+   * @returns {boolean} whether the fight is over
+   */
+  settle() {
+    if (this.over) return true;
+    if (this.player.destroyed) { this.end('destroyed'); return true; }
+    if (!this.liveHostiles.length) {
+      // An empty board is a win only if you emptied it. Anyone who withdrew
+      // under their own power was routed, not destroyed, and the ledger cares
+      // about the difference.
+      this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
+      return true;
+    }
+    if (this.liveHostiles.every((s) => s.fleeing)) { this.end('routed'); return true; }
+    return false;
   }
 
   updateProjectiles(dt) {

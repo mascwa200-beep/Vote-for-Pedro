@@ -10,7 +10,7 @@ import { Crew, Officer } from '../sim/officers.js';
 import { CaptainProgress, combatXP } from '../sim/skills.js';
 import { Loadout, startingLoadout } from '../sim/loadout.js';
 import { Engagement, ARENA_RADIUS } from '../sim/combat.js';
-import { AwayTeam } from '../sim/away.js';
+import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } from '../sim/away.js';
 import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { checkAll, Watchdog } from '../sim/invariants.js';
@@ -1435,6 +1435,198 @@ export class Game {
       difficulty: this.difficulty,
     });
     return this.awayTeam;
+  }
+
+  /**
+   * The away missions this situation actually supports.
+   *
+   * `AWAY_TEMPLATES` has held five multi-step landing parties since the away
+   * system was written — board a derelict, evacuate a colony, open a
+   * negotiation, run a covert survey, take a hostile bridge — with hazard
+   * levels, per-step checks and difficulty classes on every one of them. No
+   * code has ever read the table. The whole of the casualty model, the
+   * officer-selection model and the consequence scaling was reachable through
+   * exactly one mission-stage button.
+   *
+   * What decides availability is where you are and what is in front of you,
+   * which is the same rule the rest of this game runs on.
+   */
+  availableAwayMissions() {
+    const out = [];
+    const eng = this.engagement;
+
+    // Taking a bridge. The ship has to be beaten first — a boarding party does
+    // not go through raised shields — and this is what makes crippling a
+    // hostile a real alternative to killing it.
+    const boardable = eng && !eng.over
+      ? eng.liveHostiles.find((s) => !s.cloaked
+        && s.shieldPct <= 0.05
+        && (s.hullPct <= 0.35 || s.subsystems.engines <= 0.15)
+        && this.ship.distanceTo(s) < 900)
+      : null;
+    if (boardable) out.push({ ...AWAY_TEMPLATES.boarding_action, target: boardable });
+
+    // A hulk with its logs still in it. Stripping a wreck is the machine shop's
+    // job; boarding one is the science officer's, and they are different orders
+    // with different risks.
+    if (!eng && this.wreckHere && !this.wreckHere.boarded) {
+      out.push({ ...AWAY_TEMPLATES.derelict_search });
+    }
+
+    if (!eng) {
+      const body = this.orbitBody;
+      const sys = this.location;
+      if (body && sys) {
+        if (this.encounter?.kind === 'distress' || sys.type === 'colony') {
+          out.push({ ...AWAY_TEMPLATES.colony_rescue });
+        }
+        if (sys.type === 'homeworld' || sys.type === 'core' || sys.faction !== 'none') {
+          out.push({ ...AWAY_TEMPLATES.diplomatic_landing });
+        }
+        // A world that has not invented warp is one you do not announce
+        // yourself to. The Prime Directive is the reason this template exists.
+        if (sys.preWarp || sys.type === 'frontier' || sys.type === 'unexplored') {
+          out.push({ ...AWAY_TEMPLATES.covert_landing });
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * Send the landing party, and live with what comes back.
+   *
+   * Every step is a real check against the officer best suited to it, with the
+   * hazard level deciding how badly a failure hurts — the machinery in
+   * src/sim/away.js, which already models injuries, deaths, security losses,
+   * difficulty scaling and permadeath, and which nothing has been able to reach
+   * with more than one step at a time.
+   *
+   * A step that fails does not end the mission. The team presses on with the
+   * next one and the outcome is how many of them worked, because "three of the
+   * four went right and we lost a man doing it" is the kind of result this
+   * game is about and a pass/fail is not.
+   */
+  awayMission(templateId) {
+    if (this.ashore) {
+      return { ok: false, reason: 'You are already on the surface, Captain.' };
+    }
+    const available = this.availableAwayMissions();
+    const template = available.find((t) => t.id === templateId);
+    if (!template) {
+      return { ok: false, reason: 'There is nowhere to send a team, Captain.' };
+    }
+    if (this.ship.subsystems.transporter !== undefined
+      && this.ship.subsystems.transporter < 0.3) {
+      return { ok: false, reason: 'The transporters are down, Captain.' };
+    }
+
+    // Who goes. A boarding action is security's job; everything else takes the
+    // department the first step needs.
+    const stations = template.id === 'boarding_action'
+      ? ['tactical', 'medical', 'engineering']
+      : ['science', 'medical', 'tactical'];
+    const team = this.buildAwayTeam(stations, false);
+    if (!team.members.length) {
+      return { ok: false, reason: 'There is nobody fit to send, Captain.' };
+    }
+
+    this.pushLog(`${template.title}. Landing party is away.`, 'transporter');
+    const steps = [];
+    for (const step of template.steps) {
+      const r = team.check(this.rng, step.check, {
+        dc: step.dc, hazard: template.hazard, label: step.text,
+      });
+      this.pushLog(`${step.text} — ${r.formatted}`, 'science');
+      if (r.killed) this.pushLog(`We lost ${r.killed.name}.`, 'medical');
+      else if (r.injured) this.pushLog(`${r.injured.name} is hurt.`, 'medical');
+      steps.push({ text: step.text, success: r.success, officer: r.officer?.name ?? null });
+      // A team that has nobody left standing does not carry on.
+      if (!team.members.length) break;
+    }
+
+    const won = steps.filter((s) => s.success).length;
+    const outcome = won === steps.length ? 'success'
+      : won === 0 ? 'failure' : 'partial';
+    const lost = team.casualties.filter((c) => c.killed).length;
+
+    this.applyAwayOutcome(template, outcome, won, steps.length);
+
+    const report = {
+      ok: true, id: template.id, title: template.title, outcome,
+      steps, passed: won, of: steps.length,
+      casualties: team.casualties.slice(), lost,
+    };
+    this.lastAway = report;
+    this.ledger.record('away_mission', {
+      text: `${template.title}: ${won} of ${steps.length} objectives`
+        + (lost ? `, ${lost} lost` : ''),
+      system: this.locationId,
+    });
+    this.pushLog(
+      `Landing party is back aboard. ${won} of ${steps.length} objectives.`
+      + (lost ? ` We lost ${lost}.` : ''),
+      'transporter',
+    );
+    emit('away:mission', report);
+    return report;
+  }
+
+  /** What a landing party's result changes about the world it happened in. */
+  applyAwayOutcome(template, outcome, won, total) {
+    const share = total ? won / total : 0;
+    this.progress.addXP(Math.round(120 * share * (HAZARD_LEVEL[template.hazard]?.death ?? 0.05) * 20),
+      { ledger: this.ledger });
+
+    if (template.id === 'boarding_action' && template.target) {
+      const foe = template.target;
+      if (outcome === 'success') {
+        // A bridge taken is a ship that stops fighting. It is not a kill, and
+        // the record is careful about the difference.
+        foe.fleeing = true;
+        foe.withdrawn = true;
+        // A withdrawn ship is off the board, and a lock on one is the exact
+        // state `eng.target.withdrawn` exists to report. Clear it here rather
+        // than waiting for the next tick to re-acquire, because the renderer
+        // draws between ticks and would put a reticle on a ship that has gone.
+        if (this.engagement?.target === foe) {
+          this.engagement.target = this.engagement.liveHostiles[0] ?? null;
+        }
+        this.engagement?.pushLog(
+          `${foe.name} is ours, Captain. Her crew have stood down.`, 'tactical');
+        // Taking the last bridge on the board ends the battle THERE. Left to
+        // the next tick, the fight spends a frame with nobody left to shoot
+        // and `over` still false, which is the soft-lock shape exactly.
+        this.engagement?.settle();
+        this.ledger.record('ship_captured', {
+          text: `${foe.name} boarded and taken`, faction: foe.faction, system: this.locationId,
+        });
+        this.earnReputation('accepted_surrender');
+      } else if (outcome === 'failure') {
+        this.engagement?.pushLog(
+          'They have repelled the boarding party, Captain.', 'tactical');
+      }
+      return;
+    }
+
+    if (template.id === 'derelict_search' && this.wreck) {
+      this.wreck.boarded = true;
+      if (share >= 0.5) this.earnReputation('anomaly_catalogued');
+    }
+    if (template.id === 'colony_rescue' && outcome !== 'failure') {
+      this.earnReputation(outcome === 'success' ? 'colony_saved' : 'distress_answered');
+    }
+    if (template.id === 'diplomatic_landing' && outcome === 'success') {
+      this.earnReputation('first_contact');
+    }
+    if (template.id === 'covert_landing' && outcome === 'failure') {
+      // Being seen is the failure that matters here, and it is not free.
+      this.ledger.adjustStanding('federation', -6, 'Observed by a pre-warp culture');
+      this.pushLog(
+        'We were seen, Captain. That will be in the report to the Prime Directive board.',
+        'science');
+    }
   }
 
   /**

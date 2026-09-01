@@ -15875,17 +15875,27 @@ const INTENTS = [
   },
   {
     id: 'away_team',
-    help: 'Assemble an away team',
+    help: 'Send an away team / board them',
     phrases: [
       'away team', 'landing party', 'beam down', 'send a team down',
       'assemble an away team', 'put together a team', 'go down there',
       'send someone down', 'i am going down', 'i will lead the team',
       'transport down', 'take a team', 'shore party', 'boarding party',
+      // Boarding is the same order with a different destination, and it was
+      // the one AWAY_TEMPLATES entry with no way to reach it at all.
+      'send an away team', 'send a landing party', 'send a team over',
+      'send a team across', 'board them', 'board her', 'board that ship',
+      'board the derelict', 'board the wreck', 'take her bridge',
+      'send a boarding party', 'send security across', 'beam a team over',
+      'beam a team across', 'put a team on that ship',
     ],
-    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5 },
+    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5, board: 2.4, boarding: 3 },
     build: (c) => ({
       action: 'away_team',
       captainLeads: /\b(?:i will lead|i am going|with me|i will go|myself|personally)\b/.test(c.text),
+      // Which mission the captain meant, when the situation offers more than
+      // one. Saying "board them" in a firefight is not ambiguous.
+      prefer: /\bboard/.test(c.text) ? 'board' : null,
     }),
   },
   {
@@ -19865,13 +19875,7 @@ class Engagement {
         if (this.warpOutTimer <= 0) return this.end('escaped');
       }
     }
-    if (!this.liveHostiles.length) {
-      // An empty board is a win only if you emptied it. Anyone who withdrew
-      // under their own power was routed, not destroyed, and the ledger cares
-      // about the difference.
-      return this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
-    }
-    if (this.liveHostiles.every((s) => s.fleeing)) return this.end('routed');
+    if (this.settle()) return;
 
     // A fight in which nobody can touch anybody is over, whatever the AI
     // thinks it is doing. Held for a few seconds so a fast pass through the
@@ -19881,6 +19885,35 @@ class Engagement {
     );
     this.separationTimer = unreachable ? this.separationTimer + dt : 0;
     if (this.separationTimer > 6) return this.end('routed');
+  }
+
+  /**
+   * The end conditions that need no clock, checked wherever the board changes.
+   *
+   * The tick is not the only thing that empties a board. A boarding party
+   * taking a bridge withdraws the last hostile from OUTSIDE the tick, and the
+   * fight then sat with nobody left to shoot, the player alive and `over`
+   * still false — which is `eng.unresolved`, the soft-lock shape, and the most
+   * important rule in the invariant file. It lasted one frame, and one frame
+   * is what the renderer draws.
+   *
+   * The warp-out countdown and the separation timer stay in `step`, because
+   * both of them are clocks and this is deliberately not.
+   *
+   * @returns {boolean} whether the fight is over
+   */
+  settle() {
+    if (this.over) return true;
+    if (this.player.destroyed) { this.end('destroyed'); return true; }
+    if (!this.liveHostiles.length) {
+      // An empty board is a win only if you emptied it. Anyone who withdrew
+      // under their own power was routed, not destroyed, and the ledger cares
+      // about the difference.
+      this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
+      return true;
+    }
+    if (this.liveHostiles.every((s) => s.fleeing)) { this.end('routed'); return true; }
+    return false;
   }
 
   updateProjectiles(dt) {
@@ -24363,7 +24396,7 @@ const { Crew, Officer } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
 const { Engagement, ARENA_RADIUS } = __require("src/sim/combat.js");
-const { AwayTeam } = __require("src/sim/away.js");
+const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
@@ -25784,6 +25817,198 @@ class Game {
       difficulty: this.difficulty,
     });
     return this.awayTeam;
+  }
+
+  /**
+   * The away missions this situation actually supports.
+   *
+   * `AWAY_TEMPLATES` has held five multi-step landing parties since the away
+   * system was written — board a derelict, evacuate a colony, open a
+   * negotiation, run a covert survey, take a hostile bridge — with hazard
+   * levels, per-step checks and difficulty classes on every one of them. No
+   * code has ever read the table. The whole of the casualty model, the
+   * officer-selection model and the consequence scaling was reachable through
+   * exactly one mission-stage button.
+   *
+   * What decides availability is where you are and what is in front of you,
+   * which is the same rule the rest of this game runs on.
+   */
+  availableAwayMissions() {
+    const out = [];
+    const eng = this.engagement;
+
+    // Taking a bridge. The ship has to be beaten first — a boarding party does
+    // not go through raised shields — and this is what makes crippling a
+    // hostile a real alternative to killing it.
+    const boardable = eng && !eng.over
+      ? eng.liveHostiles.find((s) => !s.cloaked
+        && s.shieldPct <= 0.05
+        && (s.hullPct <= 0.35 || s.subsystems.engines <= 0.15)
+        && this.ship.distanceTo(s) < 900)
+      : null;
+    if (boardable) out.push({ ...AWAY_TEMPLATES.boarding_action, target: boardable });
+
+    // A hulk with its logs still in it. Stripping a wreck is the machine shop's
+    // job; boarding one is the science officer's, and they are different orders
+    // with different risks.
+    if (!eng && this.wreckHere && !this.wreckHere.boarded) {
+      out.push({ ...AWAY_TEMPLATES.derelict_search });
+    }
+
+    if (!eng) {
+      const body = this.orbitBody;
+      const sys = this.location;
+      if (body && sys) {
+        if (this.encounter?.kind === 'distress' || sys.type === 'colony') {
+          out.push({ ...AWAY_TEMPLATES.colony_rescue });
+        }
+        if (sys.type === 'homeworld' || sys.type === 'core' || sys.faction !== 'none') {
+          out.push({ ...AWAY_TEMPLATES.diplomatic_landing });
+        }
+        // A world that has not invented warp is one you do not announce
+        // yourself to. The Prime Directive is the reason this template exists.
+        if (sys.preWarp || sys.type === 'frontier' || sys.type === 'unexplored') {
+          out.push({ ...AWAY_TEMPLATES.covert_landing });
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * Send the landing party, and live with what comes back.
+   *
+   * Every step is a real check against the officer best suited to it, with the
+   * hazard level deciding how badly a failure hurts — the machinery in
+   * src/sim/away.js, which already models injuries, deaths, security losses,
+   * difficulty scaling and permadeath, and which nothing has been able to reach
+   * with more than one step at a time.
+   *
+   * A step that fails does not end the mission. The team presses on with the
+   * next one and the outcome is how many of them worked, because "three of the
+   * four went right and we lost a man doing it" is the kind of result this
+   * game is about and a pass/fail is not.
+   */
+  awayMission(templateId) {
+    if (this.ashore) {
+      return { ok: false, reason: 'You are already on the surface, Captain.' };
+    }
+    const available = this.availableAwayMissions();
+    const template = available.find((t) => t.id === templateId);
+    if (!template) {
+      return { ok: false, reason: 'There is nowhere to send a team, Captain.' };
+    }
+    if (this.ship.subsystems.transporter !== undefined
+      && this.ship.subsystems.transporter < 0.3) {
+      return { ok: false, reason: 'The transporters are down, Captain.' };
+    }
+
+    // Who goes. A boarding action is security's job; everything else takes the
+    // department the first step needs.
+    const stations = template.id === 'boarding_action'
+      ? ['tactical', 'medical', 'engineering']
+      : ['science', 'medical', 'tactical'];
+    const team = this.buildAwayTeam(stations, false);
+    if (!team.members.length) {
+      return { ok: false, reason: 'There is nobody fit to send, Captain.' };
+    }
+
+    this.pushLog(`${template.title}. Landing party is away.`, 'transporter');
+    const steps = [];
+    for (const step of template.steps) {
+      const r = team.check(this.rng, step.check, {
+        dc: step.dc, hazard: template.hazard, label: step.text,
+      });
+      this.pushLog(`${step.text} — ${r.formatted}`, 'science');
+      if (r.killed) this.pushLog(`We lost ${r.killed.name}.`, 'medical');
+      else if (r.injured) this.pushLog(`${r.injured.name} is hurt.`, 'medical');
+      steps.push({ text: step.text, success: r.success, officer: r.officer?.name ?? null });
+      // A team that has nobody left standing does not carry on.
+      if (!team.members.length) break;
+    }
+
+    const won = steps.filter((s) => s.success).length;
+    const outcome = won === steps.length ? 'success'
+      : won === 0 ? 'failure' : 'partial';
+    const lost = team.casualties.filter((c) => c.killed).length;
+
+    this.applyAwayOutcome(template, outcome, won, steps.length);
+
+    const report = {
+      ok: true, id: template.id, title: template.title, outcome,
+      steps, passed: won, of: steps.length,
+      casualties: team.casualties.slice(), lost,
+    };
+    this.lastAway = report;
+    this.ledger.record('away_mission', {
+      text: `${template.title}: ${won} of ${steps.length} objectives`
+        + (lost ? `, ${lost} lost` : ''),
+      system: this.locationId,
+    });
+    this.pushLog(
+      `Landing party is back aboard. ${won} of ${steps.length} objectives.`
+      + (lost ? ` We lost ${lost}.` : ''),
+      'transporter',
+    );
+    emit('away:mission', report);
+    return report;
+  }
+
+  /** What a landing party's result changes about the world it happened in. */
+  applyAwayOutcome(template, outcome, won, total) {
+    const share = total ? won / total : 0;
+    this.progress.addXP(Math.round(120 * share * (HAZARD_LEVEL[template.hazard]?.death ?? 0.05) * 20),
+      { ledger: this.ledger });
+
+    if (template.id === 'boarding_action' && template.target) {
+      const foe = template.target;
+      if (outcome === 'success') {
+        // A bridge taken is a ship that stops fighting. It is not a kill, and
+        // the record is careful about the difference.
+        foe.fleeing = true;
+        foe.withdrawn = true;
+        // A withdrawn ship is off the board, and a lock on one is the exact
+        // state `eng.target.withdrawn` exists to report. Clear it here rather
+        // than waiting for the next tick to re-acquire, because the renderer
+        // draws between ticks and would put a reticle on a ship that has gone.
+        if (this.engagement?.target === foe) {
+          this.engagement.target = this.engagement.liveHostiles[0] ?? null;
+        }
+        this.engagement?.pushLog(
+          `${foe.name} is ours, Captain. Her crew have stood down.`, 'tactical');
+        // Taking the last bridge on the board ends the battle THERE. Left to
+        // the next tick, the fight spends a frame with nobody left to shoot
+        // and `over` still false, which is the soft-lock shape exactly.
+        this.engagement?.settle();
+        this.ledger.record('ship_captured', {
+          text: `${foe.name} boarded and taken`, faction: foe.faction, system: this.locationId,
+        });
+        this.earnReputation('accepted_surrender');
+      } else if (outcome === 'failure') {
+        this.engagement?.pushLog(
+          'They have repelled the boarding party, Captain.', 'tactical');
+      }
+      return;
+    }
+
+    if (template.id === 'derelict_search' && this.wreck) {
+      this.wreck.boarded = true;
+      if (share >= 0.5) this.earnReputation('anomaly_catalogued');
+    }
+    if (template.id === 'colony_rescue' && outcome !== 'failure') {
+      this.earnReputation(outcome === 'success' ? 'colony_saved' : 'distress_answered');
+    }
+    if (template.id === 'diplomatic_landing' && outcome === 'success') {
+      this.earnReputation('first_contact');
+    }
+    if (template.id === 'covert_landing' && outcome === 'failure') {
+      // Being seen is the failure that matters here, and it is not free.
+      this.ledger.adjustStanding('federation', -6, 'Observed by a pre-warp culture');
+      this.pushLog(
+        'We were seen, Captain. That will be in the report to the Prime Directive board.',
+        'science');
+    }
   }
 
   /**
@@ -27283,6 +27508,23 @@ function tacticalScreen(app) {
     comms.push(el('p', { class: 'hint', text: 'The call has been made.' }));
   }
   if (comms.length) side.append(panel('Communications', comms));
+
+  // --- Boarding ---
+  //
+  // Only offered when it is actually possible: shields down, the ship beaten
+  // or crippled, and close enough to beam across. That is what makes crippling
+  // a hostile a real alternative to killing it.
+  const boardable = g.availableAwayMissions().find((t) => t.id === 'boarding_action');
+  if (boardable) {
+    side.append(panel('Boarding Party', [
+      button(boardable.title, tap(() => app.runAwayMission('boarding_action')), {
+        say: 'board them',
+        color: 'amber',
+        sub: `${boardable.target.name} — shields down. Security can cross.`,
+      }),
+      el('p', { class: 'hint', text: 'A bridge taken is a ship out of the fight and not a kill. It is also the most dangerous thing you can ask of a landing party.' }),
+    ], 'warn'));
+  }
 
   // The chair is where you are sitting, so it is on this screen too — with a
   // different set of controls, because blue alert is not a combat condition
@@ -29700,7 +29942,7 @@ class App {
     this.consoleTitle = title;
     const body = (nodes.length ? nodes : [el('p', { text: 'Working, Captain.' })])
       .map((n) => (n instanceof globalThis.Node ? n : el('p', { text: String(n) })));
-    this.modalHandle = modal(title, body, [
+    this.modalHandle = this.raiseModal(title, body, [
       button('Step away', () => this.closeModal(), { color: 'ghost' }),
     ]);
   }
@@ -29720,7 +29962,7 @@ class App {
     const body = [].concat(lines).map((l) => (
       typeof l === 'object' && l?.natural !== undefined ? rollCard(l) : el('p', { text: String(l) })
     ));
-    this.modalHandle = modal(title, body,
+    this.modalHandle = this.raiseModal(title, body,
       actions ?? [button('Acknowledged', () => { audio.play('computer_ack'); this.closeModal(); }, { color: 'blue' })]);
     audio.play('computer_query');
     return this.modalHandle;
@@ -29733,6 +29975,23 @@ class App {
    *        which closes modals on the way through, and that closed the very
    *        console the switch was on.
    */
+  /**
+   * Put a modal up, and take down whatever was already there.
+   *
+   * `modal()` appends to the document, so two calls leave two stacked
+   * backdrops — and `closeModal` only ever knew about the last handle, so
+   * dismissing the top one left the other one on screen with nothing able to
+   * remove it. Two things can raise a modal in the same breath: a boarding
+   * party's report and the end of the battle that party just decided.
+   *
+   * One at a time, newest wins. The one raised last is the one that answers
+   * the order the captain actually gave.
+   */
+  raiseModal(title, body, actions = []) {
+    this.modalHandle?.close();
+    return modal(title, body, actions);
+  }
+
   closeModal(keepConsole = false) {
     if (!keepConsole && !this._refreshingConsole) this.consoleOpen = null;
     this.modalHandle?.close();
@@ -29756,7 +30015,7 @@ class App {
       this.executeOrder(forced.confirm ? forced.order : forced, raw);
     }, { color: 'ghost' }));
 
-    this.modalHandle = modal('Confirm order', [
+    this.modalHandle = this.raiseModal('Confirm order', [
       el('p', { class: 'muted', text: `You said: “${raw}”` }),
       el('p', { text: `I read that as: ${result.reading}` }),
       alts.length ? el('p', { class: 'muted', text: 'Or did you mean:' }) : null,
@@ -29777,14 +30036,14 @@ class App {
 
   showOfficer(officer) {
     this.closeModal();
-    this.modalHandle = modal(officer.name,
+    this.modalHandle = this.raiseModal(officer.name,
       screens.officerDetail(this, officer),
       [button('Close', () => this.closeModal(), { color: 'ghost' })]);
   }
 
   openHail(factionId) {
     this.closeModal();
-    this.modalHandle = modal('Open Channel',
+    this.modalHandle = this.raiseModal('Open Channel',
       screens.hailOptions(this, factionId, (optionId) => {
         const result = this.game.hail(optionId);
         this.closeModal();
@@ -29818,7 +30077,7 @@ class App {
     const start = () => { this.closeModal(); this.showNewGame(); };
     if (skipConfirm) return start();
     this.closeModal();
-    this.modalHandle = modal('Abandon Command', [
+    this.modalHandle = this.raiseModal('Abandon Command', [
       el('p', { text: 'This ends the current commission. The record cannot be recovered unless you exported it.' }),
     ], [
       button('Abandon command', () => start(), { color: 'red' }),
@@ -30132,11 +30391,50 @@ class App {
 
     audio.play(outcome.success ? 'computer_ack' : 'ui_deny');
     haptic(outcome.success ? 'confirm' : 'deny');
-    this.modalHandle = modal(
+    this.modalHandle = this.raiseModal(
       outcome.success ? 'They Are Standing Down' : 'The Channel Closes',
       body,
       [button('Acknowledged', () => this.closeModal(), { color: outcome.success ? 'green' : 'red' })],
     );
+    this.needsRender = true;
+  }
+
+  /** More than one place to send them: let the captain say which. */
+  chooseAwayMission(options) {
+    audio.play('ui_select');
+    this.modalHandle = this.raiseModal('Where To, Captain?', [
+      el('p', { class: 'muted', text: 'A landing party can be sent to more than one place from here.' }),
+      ...options.map((t) => button(t.title, () => {
+        this.closeModal();
+        this.runAwayMission(t.id);
+      }, { say: t.id === 'boarding_action' ? 'board them' : 'send an away team', color: 'ice' })),
+    ], [button('Belay that', () => this.closeModal(), { color: 'ghost' })]);
+    this.needsRender = true;
+  }
+
+  /** Run one, and show what came back. */
+  runAwayMission(id) {
+    const r = this.game.awayMission(id);
+    if (!r.ok) {
+      audio.play('ui_deny');
+      this.game.pushLog(r.reason, 'transporter');
+      this.render();
+      return;
+    }
+    audio.play(r.outcome === 'failure' ? 'ui_deny' : 'computer_ack');
+    haptic(r.outcome === 'failure' ? 'deny' : 'confirm');
+    this.modalHandle = this.raiseModal(r.title, [
+      ...r.steps.map((st) => el('p', {
+        class: st.success ? '' : 'muted',
+        text: `${st.success ? '\u2713' : '\u2717'} ${st.text}${st.officer ? ` — ${st.officer}` : ''}`,
+      })),
+      el('p', {}, [el('b', {
+        text: `${r.passed} of ${r.of} objectives.`
+          + (r.lost ? ` We lost ${r.lost}.` : ''),
+      })]),
+    ], [button('Acknowledged', () => this.closeModal(), {
+      color: r.outcome === 'failure' ? 'red' : 'green',
+    })]);
     this.needsRender = true;
   }
 
@@ -30619,8 +30917,24 @@ class App {
         break;
       }
       case 'away_team': {
-        g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
-        ack('comms', 'Away team assembled and standing by in the transporter room.');
+        // This used to assemble a team and say it was standing by, and that was
+        // the whole order — a landing party that never went anywhere. The five
+        // templates in AWAY_TEMPLATES have been sitting unread since the away
+        // system was written; what runs is decided by where the ship is and
+        // what is in front of it.
+        const options = g.availableAwayMissions();
+        if (!options.length) {
+          g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
+          ack('transporter',
+            'Away team assembled and standing by. There is nowhere to send them, Captain.');
+          break;
+        }
+        const wanted = order.prefer === 'board'
+          ? options.find((t) => t.id === 'boarding_action' || t.id === 'derelict_search')
+          : null;
+        const pick = wanted ?? (options.length === 1 ? options[0] : null);
+        if (!pick) { this.chooseAwayMission(options); break; }
+        this.runAwayMission(pick.id);
         break;
       }
       case 'mission_choice': {
@@ -30707,7 +31021,7 @@ class App {
   pickAbilityIncrease(remaining, picked) {
     const g = this.game;
     this.closeModal();
-    this.modalHandle = modal(`Field Commission — ${remaining} to assign`, [
+    this.modalHandle = this.raiseModal(`Field Commission — ${remaining} to assign`, [
       el('p', { class: 'hint', text: 'Raise an ability score by one. Scores are capped at 20.' }),
       ...ABILITY_LIST.map((a) => {
         const score = g.character.score(a.id);
@@ -30883,7 +31197,7 @@ class App {
   resumeOrStart() {
     if (hasSave('auto')) {
       const data = loadSave('auto');
-      this.modalHandle = modal('Resume Command', [
+      this.modalHandle = this.raiseModal('Resume Command', [
         el('p', { text: data.label ?? 'A command record was found.' }),
       ], [
         button('Resume', () => {

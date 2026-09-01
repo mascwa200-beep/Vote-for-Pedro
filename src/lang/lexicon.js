@@ -1088,17 +1088,27 @@ export const INTENTS = [
   },
   {
     id: 'away_team',
-    help: 'Assemble an away team',
+    help: 'Send an away team / board them',
     phrases: [
       'away team', 'landing party', 'beam down', 'send a team down',
       'assemble an away team', 'put together a team', 'go down there',
       'send someone down', 'i am going down', 'i will lead the team',
       'transport down', 'take a team', 'shore party', 'boarding party',
+      // Boarding is the same order with a different destination, and it was
+      // the one AWAY_TEMPLATES entry with no way to reach it at all.
+      'send an away team', 'send a landing party', 'send a team over',
+      'send a team across', 'board them', 'board her', 'board that ship',
+      'board the derelict', 'board the wreck', 'take her bridge',
+      'send a boarding party', 'send security across', 'beam a team over',
+      'beam a team across', 'put a team on that ship',
     ],
-    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5 },
+    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5, board: 2.4, boarding: 3 },
     build: (c) => ({
       action: 'away_team',
       captainLeads: /\b(?:i will lead|i am going|with me|i will go|myself|personally)\b/.test(c.text),
+      // Which mission the captain meant, when the situation offers more than
+      // one. Saying "board them" in a firefight is not ambiguous.
+      prefer: /\bboard/.test(c.text) ? 'board' : null,
     }),
   },
   {

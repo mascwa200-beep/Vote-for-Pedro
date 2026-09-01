@@ -753,6 +753,23 @@ export function tacticalScreen(app) {
   }
   if (comms.length) side.append(panel('Communications', comms));
 
+  // --- Boarding ---
+  //
+  // Only offered when it is actually possible: shields down, the ship beaten
+  // or crippled, and close enough to beam across. That is what makes crippling
+  // a hostile a real alternative to killing it.
+  const boardable = g.availableAwayMissions().find((t) => t.id === 'boarding_action');
+  if (boardable) {
+    side.append(panel('Boarding Party', [
+      button(boardable.title, tap(() => app.runAwayMission('boarding_action')), {
+        say: 'board them',
+        color: 'amber',
+        sub: `${boardable.target.name} — shields down. Security can cross.`,
+      }),
+      el('p', { class: 'hint', text: 'A bridge taken is a ship out of the fight and not a kill. It is also the most dangerous thing you can ask of a landing party.' }),
+    ], 'warn'));
+  }
+
   // The chair is where you are sitting, so it is on this screen too — with a
   // different set of controls, because blue alert is not a combat condition
   // and the ion pod only earns its keep when someone is shooting at you.

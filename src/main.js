@@ -772,7 +772,7 @@ class App {
     this.consoleTitle = title;
     const body = (nodes.length ? nodes : [el('p', { text: 'Working, Captain.' })])
       .map((n) => (n instanceof globalThis.Node ? n : el('p', { text: String(n) })));
-    this.modalHandle = modal(title, body, [
+    this.modalHandle = this.raiseModal(title, body, [
       button('Step away', () => this.closeModal(), { color: 'ghost' }),
     ]);
   }
@@ -792,7 +792,7 @@ class App {
     const body = [].concat(lines).map((l) => (
       typeof l === 'object' && l?.natural !== undefined ? rollCard(l) : el('p', { text: String(l) })
     ));
-    this.modalHandle = modal(title, body,
+    this.modalHandle = this.raiseModal(title, body,
       actions ?? [button('Acknowledged', () => { audio.play('computer_ack'); this.closeModal(); }, { color: 'blue' })]);
     audio.play('computer_query');
     return this.modalHandle;
@@ -805,6 +805,23 @@ class App {
    *        which closes modals on the way through, and that closed the very
    *        console the switch was on.
    */
+  /**
+   * Put a modal up, and take down whatever was already there.
+   *
+   * `modal()` appends to the document, so two calls leave two stacked
+   * backdrops — and `closeModal` only ever knew about the last handle, so
+   * dismissing the top one left the other one on screen with nothing able to
+   * remove it. Two things can raise a modal in the same breath: a boarding
+   * party's report and the end of the battle that party just decided.
+   *
+   * One at a time, newest wins. The one raised last is the one that answers
+   * the order the captain actually gave.
+   */
+  raiseModal(title, body, actions = []) {
+    this.modalHandle?.close();
+    return modal(title, body, actions);
+  }
+
   closeModal(keepConsole = false) {
     if (!keepConsole && !this._refreshingConsole) this.consoleOpen = null;
     this.modalHandle?.close();
@@ -828,7 +845,7 @@ class App {
       this.executeOrder(forced.confirm ? forced.order : forced, raw);
     }, { color: 'ghost' }));
 
-    this.modalHandle = modal('Confirm order', [
+    this.modalHandle = this.raiseModal('Confirm order', [
       el('p', { class: 'muted', text: `You said: “${raw}”` }),
       el('p', { text: `I read that as: ${result.reading}` }),
       alts.length ? el('p', { class: 'muted', text: 'Or did you mean:' }) : null,
@@ -849,14 +866,14 @@ class App {
 
   showOfficer(officer) {
     this.closeModal();
-    this.modalHandle = modal(officer.name,
+    this.modalHandle = this.raiseModal(officer.name,
       screens.officerDetail(this, officer),
       [button('Close', () => this.closeModal(), { color: 'ghost' })]);
   }
 
   openHail(factionId) {
     this.closeModal();
-    this.modalHandle = modal('Open Channel',
+    this.modalHandle = this.raiseModal('Open Channel',
       screens.hailOptions(this, factionId, (optionId) => {
         const result = this.game.hail(optionId);
         this.closeModal();
@@ -890,7 +907,7 @@ class App {
     const start = () => { this.closeModal(); this.showNewGame(); };
     if (skipConfirm) return start();
     this.closeModal();
-    this.modalHandle = modal('Abandon Command', [
+    this.modalHandle = this.raiseModal('Abandon Command', [
       el('p', { text: 'This ends the current commission. The record cannot be recovered unless you exported it.' }),
     ], [
       button('Abandon command', () => start(), { color: 'red' }),
@@ -1204,11 +1221,50 @@ class App {
 
     audio.play(outcome.success ? 'computer_ack' : 'ui_deny');
     haptic(outcome.success ? 'confirm' : 'deny');
-    this.modalHandle = modal(
+    this.modalHandle = this.raiseModal(
       outcome.success ? 'They Are Standing Down' : 'The Channel Closes',
       body,
       [button('Acknowledged', () => this.closeModal(), { color: outcome.success ? 'green' : 'red' })],
     );
+    this.needsRender = true;
+  }
+
+  /** More than one place to send them: let the captain say which. */
+  chooseAwayMission(options) {
+    audio.play('ui_select');
+    this.modalHandle = this.raiseModal('Where To, Captain?', [
+      el('p', { class: 'muted', text: 'A landing party can be sent to more than one place from here.' }),
+      ...options.map((t) => button(t.title, () => {
+        this.closeModal();
+        this.runAwayMission(t.id);
+      }, { say: t.id === 'boarding_action' ? 'board them' : 'send an away team', color: 'ice' })),
+    ], [button('Belay that', () => this.closeModal(), { color: 'ghost' })]);
+    this.needsRender = true;
+  }
+
+  /** Run one, and show what came back. */
+  runAwayMission(id) {
+    const r = this.game.awayMission(id);
+    if (!r.ok) {
+      audio.play('ui_deny');
+      this.game.pushLog(r.reason, 'transporter');
+      this.render();
+      return;
+    }
+    audio.play(r.outcome === 'failure' ? 'ui_deny' : 'computer_ack');
+    haptic(r.outcome === 'failure' ? 'deny' : 'confirm');
+    this.modalHandle = this.raiseModal(r.title, [
+      ...r.steps.map((st) => el('p', {
+        class: st.success ? '' : 'muted',
+        text: `${st.success ? '\u2713' : '\u2717'} ${st.text}${st.officer ? ` — ${st.officer}` : ''}`,
+      })),
+      el('p', {}, [el('b', {
+        text: `${r.passed} of ${r.of} objectives.`
+          + (r.lost ? ` We lost ${r.lost}.` : ''),
+      })]),
+    ], [button('Acknowledged', () => this.closeModal(), {
+      color: r.outcome === 'failure' ? 'red' : 'green',
+    })]);
     this.needsRender = true;
   }
 
@@ -1691,8 +1747,24 @@ class App {
         break;
       }
       case 'away_team': {
-        g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
-        ack('comms', 'Away team assembled and standing by in the transporter room.');
+        // This used to assemble a team and say it was standing by, and that was
+        // the whole order — a landing party that never went anywhere. The five
+        // templates in AWAY_TEMPLATES have been sitting unread since the away
+        // system was written; what runs is decided by where the ship is and
+        // what is in front of it.
+        const options = g.availableAwayMissions();
+        if (!options.length) {
+          g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
+          ack('transporter',
+            'Away team assembled and standing by. There is nowhere to send them, Captain.');
+          break;
+        }
+        const wanted = order.prefer === 'board'
+          ? options.find((t) => t.id === 'boarding_action' || t.id === 'derelict_search')
+          : null;
+        const pick = wanted ?? (options.length === 1 ? options[0] : null);
+        if (!pick) { this.chooseAwayMission(options); break; }
+        this.runAwayMission(pick.id);
         break;
       }
       case 'mission_choice': {
@@ -1779,7 +1851,7 @@ class App {
   pickAbilityIncrease(remaining, picked) {
     const g = this.game;
     this.closeModal();
-    this.modalHandle = modal(`Field Commission — ${remaining} to assign`, [
+    this.modalHandle = this.raiseModal(`Field Commission — ${remaining} to assign`, [
       el('p', { class: 'hint', text: 'Raise an ability score by one. Scores are capped at 20.' }),
       ...ABILITY_LIST.map((a) => {
         const score = g.character.score(a.id);
@@ -1955,7 +2027,7 @@ class App {
   resumeOrStart() {
     if (hasSave('auto')) {
       const data = loadSave('auto');
-      this.modalHandle = modal('Resume Command', [
+      this.modalHandle = this.raiseModal('Resume Command', [
         el('p', { text: data.label ?? 'A command record was found.' }),
       ], [
         button('Resume', () => {
