@@ -56,6 +56,30 @@ async function dismissModals(page) {
 }
 
 /**
+ * Stop the simulation clock without stopping the renderer.
+ *
+ * A portrait is a still, and taking one takes real time: the screenshot, the
+ * modal sweep and the settling wait all happen between `page.evaluate` calls,
+ * and the app's animation loop keeps stepping the game the whole while. The
+ * runabout — the flimsiest hull in Starfleet — died inside that window on a
+ * slow runner, the fight ended, the game went back to the bridge, and the
+ * canvas the screenshot wanted was no longer on the page. Locally it survived;
+ * in CI it did not, which is the definition of a flaky check.
+ *
+ * `Clock.paused` already does exactly this and nothing had ever set it: the
+ * frame still arrives, `lastFrame` still moves so there is no dt spike when it
+ * comes back, and the step count is zero. Every render path, every DOM update
+ * and the whole GL pipeline carry on untouched; only time stops.
+ */
+async function freezeClock(page) {
+  await page.evaluate(() => { globalThis.__app.game.clock.paused = true; });
+}
+
+async function thawClock(page) {
+  await page.evaluate(() => { globalThis.__app.game.clock.paused = false; });
+}
+
+/**
  * Go to a screen that no longer has a tab.
  *
  * The viewer, the tactical plot and the galaxy map used to be nav destinations
@@ -695,6 +719,14 @@ try {
   // The screenshot is the check. "Does a Galaxy dwarf a Constitution" is a
   // question only a picture answers, and for the whole life of this project
   // the answer was no: a 641 m Galaxy drew at 1.10x a 289 m Constitution.
+  //
+  // Everything from here to `leftAsFound` is photography, so the clock stops
+  // for all of it. Each of these blocks already says "rendered, never
+  // simulated" — and each of them meant it only for the code inside its own
+  // `page.evaluate`. Between the blocks are screenshots, modal sweeps and
+  // settling waits, and the app's animation loop kept stepping the game right
+  // through them.
+  await freezeClock(page);
   const sizes = await page.evaluate(async () => {
     const app = globalThis.__app;
     const g = app.game;
@@ -833,6 +865,15 @@ try {
       const r = document.getElementById('tactical')?.getBoundingClientRect();
       return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
     });
+    // The sitter has to still be there when the shutter opens. Without the
+    // clock stopped, the runabout — 23 metres of hull against a Constitution —
+    // was shot to pieces inside this wait on a slow runner, the fight ended,
+    // the game went back to the bridge and the canvas went with it.
+    const alive = await page.evaluate(() => {
+      const g = globalThis.__app.game;
+      return !!g.engagement && !g.engagement.over && g.clock.paused === true;
+    });
+    if (!alive) { portraits.push(`${id}:fight-ended-mid-portrait`); continue; }
     if (!box) { portraits.push(`${id}:no-canvas`); continue; }
     const png = await page.screenshot({ path: join(SHOTS, `17-hull-${id}.png`), clip: box });
     // A hull that failed to build draws nothing, and nothing compresses small.
@@ -937,6 +978,7 @@ try {
   check('and the scale checks left the ship as they found it',
     leftAsFound.over === false && leftAsFound.hull === 1 && leftAsFound.engagement === false,
     JSON.stringify(leftAsFound));
+  await thawClock(page);
   await dismissModals(page);
 
   // ---- The chart has a third axis ----
