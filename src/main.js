@@ -1713,10 +1713,9 @@ class App {
       this.pickAbilityIncrease(2, []);
       return;
     }
-    if (g.character.takeFeat(featId)) {
-      g.pendingFeats--;
-      g.applyAllMods();
-      g.pushLog(`Qualified: ${feat.name}.`, 'captain');
+    // Spending the bank and recomputing what the feat changes is
+    // `Game.takeFeat`; this is the announcement.
+    if (g.takeFeat(featId).ok) {
       audio.play('ui_confirm');
       this.showMessage(feat.name, [feat.text]);
       this.render();
@@ -1735,10 +1734,7 @@ class App {
           if (remaining > 1) {
             this.pickAbilityIncrease(remaining - 1, next);
           } else {
-            g.character.takeFeat('ability_score', next);
-            g.pendingFeats--;
-            g.applyAllMods();
-            g.pushLog('Field commission: ability scores raised.', 'captain');
+            g.takeFeat('ability_score', next);
             this.closeModal();
             audio.play('ui_confirm');
             this.render();

@@ -36,7 +36,7 @@ import {
 } from '../missions/kobayashi.js';
 import { EPISODES } from '../missions/episodes/index.js';
 
-import { Character } from '../rules/character.js';
+import { Character, FEAT_BY_ID } from '../rules/character.js';
 import { Reputation, REP_TRACKS } from '../rules/reputation.js';
 import { DifficultySettings, DEFAULT_DIFFICULTY } from '../rules/difficulty.js';
 import { CampaignClock, absenceReport, COMMISSION_DAYS } from '../campaign/clock.js';
@@ -335,6 +335,45 @@ export class Game {
     }
     emit('captain:promoted', promo);
     return promo;
+  }
+
+  /**
+   * Take one of the feats a promotion banked.
+   *
+   * `character.takeFeat` records the feat. Spending the bank, recomputing the
+   * ship modifiers the feat changes and saying so were done in the sheet
+   * screen, so a feat taken any other way was free and had no effect on the
+   * ship — the two things that make it worth taking.
+   *
+   * `payload` is the ability list for the repeatable Field Commission; the
+   * screen asks which scores one at a time, and passes them here together.
+   */
+  takeFeat(featId, payload = null) {
+    if (!(this.pendingFeats > 0)) return { ok: false, reason: 'Nothing to choose, Captain.' };
+    if (!this.character?.takeFeat(featId, payload)) {
+      return { ok: false, reason: 'Not available, Captain.' };
+    }
+    this.pendingFeats--;
+    this.applyAllMods();
+    const name = FEAT_BY_ID[featId]?.name ?? featId;
+    this.pushLog(featId === 'ability_score'
+      ? 'Field commission: ability scores raised.'
+      : `Qualified: ${name}.`, 'captain');
+    return { ok: true, featId, name, remaining: this.pendingFeats };
+  }
+
+  /**
+   * Spend a skill point.
+   *
+   * One rank, and the ship modifiers that depend on it recomputed. Spending
+   * without recomputing left the point spent and the ship unchanged until
+   * something else happened to call `applyAllMods`, which is a rank that does
+   * nothing for an unpredictable length of time.
+   */
+  spendSkill(skillId) {
+    if (!this.progress.spend(skillId)) return { ok: false, reason: 'No points, Captain.' };
+    this.applyAllMods();
+    return { ok: true, skillId, ranks: this.progress.ranksIn(skillId), left: this.progress.unspent };
   }
 
   /**

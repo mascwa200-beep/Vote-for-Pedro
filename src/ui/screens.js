@@ -1080,8 +1080,7 @@ export function captainScreen(app) {
           el('button', {
             disabled: !p.canSpend(skill.id),
             onclick: p.canSpend(skill.id) ? tap(() => {
-              p.spend(skill.id);
-              g.applyAllMods();
+              g.spendSkill(skill.id);
               app.render();
             }, 'ui_confirm') : null,
             text: '+',

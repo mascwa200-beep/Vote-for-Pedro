@@ -927,3 +927,44 @@ test('a board of inquiry blocks the promotion and everything under it', () => {
   assert.equal(g.character.level, level, 'the level arrived anyway');
   assert.equal(g.pendingFeats ?? 0, 0, 'the feat arrived anyway');
 });
+
+test('a feat can be taken without a screen, and only when one is banked', () => {
+  const g = new Game({ seed: 1216n, crewMode: 'original' });
+  assert.equal(g.takeFeat('unshakeable').ok, false, 'a feat was taken out of thin air');
+
+  g.awardXP(1e6);
+  assert.equal(g.pendingFeats, 1);
+  const feat = FEATS.find((f) => f.id !== 'ability_score' && (f.minRank ?? 0) <= g.progress.rankIndex);
+  const r = g.takeFeat(feat.id);
+  assert.ok(r.ok, r.reason);
+  assert.ok(g.character.feats.includes(feat.id), 'the feat was never recorded');
+  assert.equal(g.pendingFeats, 0, 'the bank was not spent');
+  assert.equal(g.takeFeat(feat.id).ok, false, 'the same feat was taken twice');
+  assert.ok(g.log.some((l) => l.text.includes(feat.name)), 'nobody said anything about it');
+});
+
+test('the repeatable field commission raises the scores it was given', () => {
+  const g = new Game({ seed: 1217n, crewMode: 'original' });
+  g.awardXP(1e6);
+  const before = g.character.score('command');
+  const r = g.takeFeat('ability_score', ['command', 'command']);
+  assert.ok(r.ok, r.reason);
+  assert.ok(g.character.score('command') > before, 'the scores did not move');
+  assert.equal(g.pendingFeats, 0);
+});
+
+test('spending a skill point takes the point and changes the ship', () => {
+  const g = new Game({ seed: 1218n, crewMode: 'original' });
+  const points = g.progress.unspent;
+  assert.ok(points > 0, 'a new captain has no points to spend');
+
+  const r = g.spendSkill('sensors');
+  assert.ok(r.ok, r.reason);
+  assert.equal(g.progress.unspent, points - 1);
+  assert.equal(g.progress.ranksIn('sensors'), r.ranks);
+
+  // And a point that does not exist is refused rather than taken on credit.
+  g.progress.unspent = 0;
+  assert.equal(g.spendSkill('sensors').ok, false);
+  assert.equal(g.spendSkill('no_such_skill').ok, false);
+});

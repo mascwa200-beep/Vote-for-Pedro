@@ -24930,7 +24930,7 @@ const { MissionBook } = __require("src/missions/engine.js");
 const { SCENARIO: KOBAYASHI, gambitStatus, forceChannel, resolveGambit, recordOf, closeChannel } = __require("src/missions/kobayashi.js");
 const { EPISODES } = __require("src/missions/episodes/index.js");
 
-const { Character } = __require("src/rules/character.js");
+const { Character, FEAT_BY_ID } = __require("src/rules/character.js");
 const { Reputation, REP_TRACKS } = __require("src/rules/reputation.js");
 const { DifficultySettings, DEFAULT_DIFFICULTY } = __require("src/rules/difficulty.js");
 const { CampaignClock, absenceReport, COMMISSION_DAYS } = __require("src/campaign/clock.js");
@@ -25227,6 +25227,45 @@ class Game {
     }
     emit('captain:promoted', promo);
     return promo;
+  }
+
+  /**
+   * Take one of the feats a promotion banked.
+   *
+   * `character.takeFeat` records the feat. Spending the bank, recomputing the
+   * ship modifiers the feat changes and saying so were done in the sheet
+   * screen, so a feat taken any other way was free and had no effect on the
+   * ship — the two things that make it worth taking.
+   *
+   * `payload` is the ability list for the repeatable Field Commission; the
+   * screen asks which scores one at a time, and passes them here together.
+   */
+  takeFeat(featId, payload = null) {
+    if (!(this.pendingFeats > 0)) return { ok: false, reason: 'Nothing to choose, Captain.' };
+    if (!this.character?.takeFeat(featId, payload)) {
+      return { ok: false, reason: 'Not available, Captain.' };
+    }
+    this.pendingFeats--;
+    this.applyAllMods();
+    const name = FEAT_BY_ID[featId]?.name ?? featId;
+    this.pushLog(featId === 'ability_score'
+      ? 'Field commission: ability scores raised.'
+      : `Qualified: ${name}.`, 'captain');
+    return { ok: true, featId, name, remaining: this.pendingFeats };
+  }
+
+  /**
+   * Spend a skill point.
+   *
+   * One rank, and the ship modifiers that depend on it recomputed. Spending
+   * without recomputing left the point spent and the ship unchanged until
+   * something else happened to call `applyAllMods`, which is a rank that does
+   * nothing for an unpredictable length of time.
+   */
+  spendSkill(skillId) {
+    if (!this.progress.spend(skillId)) return { ok: false, reason: 'No points, Captain.' };
+    this.applyAllMods();
+    return { ok: true, skillId, ranks: this.progress.ranksIn(skillId), left: this.progress.unspent };
   }
 
   /**
@@ -28572,8 +28611,7 @@ function captainScreen(app) {
           el('button', {
             disabled: !p.canSpend(skill.id),
             onclick: p.canSpend(skill.id) ? tap(() => {
-              p.spend(skill.id);
-              g.applyAllMods();
+              g.spendSkill(skill.id);
               app.render();
             }, 'ui_confirm') : null,
             text: '+',
@@ -31622,10 +31660,9 @@ class App {
       this.pickAbilityIncrease(2, []);
       return;
     }
-    if (g.character.takeFeat(featId)) {
-      g.pendingFeats--;
-      g.applyAllMods();
-      g.pushLog(`Qualified: ${feat.name}.`, 'captain');
+    // Spending the bank and recomputing what the feat changes is
+    // `Game.takeFeat`; this is the announcement.
+    if (g.takeFeat(featId).ok) {
       audio.play('ui_confirm');
       this.showMessage(feat.name, [feat.text]);
       this.render();
@@ -31644,10 +31681,7 @@ class App {
           if (remaining > 1) {
             this.pickAbilityIncrease(remaining - 1, next);
           } else {
-            g.character.takeFeat('ability_score', next);
-            g.pendingFeats--;
-            g.applyAllMods();
-            g.pushLog('Field commission: ability scores raised.', 'captain');
+            g.takeFeat('ability_score', next);
             this.closeModal();
             audio.play('ui_confirm');
             this.render();
