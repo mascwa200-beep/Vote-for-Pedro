@@ -71,6 +71,10 @@ export class Engagement {
     this.time = 0;
     this.over = false;
     this.outcome = null;
+    // Set by whoever owns this fight, and called the instant it ends. See end().
+    this.onEnd = opts.onEnd ?? null;
+    this.stepping = false;
+    this.settleWhenSafe = false;
     this.projectiles = [];
     this.effects = [];
     this.log = [];
@@ -442,8 +446,36 @@ export class Engagement {
 
   // ---------------- step ----------------
 
+  /**
+   * One tick, and then — if this tick ended the fight — the settling of it.
+   *
+   * `step` is the simulation; `update` is the simulation plus the one thing
+   * that must happen after it and cannot happen during it. Everything that
+   * follows a battle (the experience, the salvage, the standing, the casualty
+   * record, losing the ship) throws this engagement away, and doing that from
+   * inside `step` would pull the object out from under the rest of the tick.
+   *
+   * Splitting it in two is what lets `end()` be honest: a fight is settled the
+   * moment it ends, wherever it ends — a hail answered with a surrender, a
+   * scenario stopped by the captain talking, or a hostile blowing up in the
+   * middle of `step` — and never one frame later.
+   */
   update(dt) {
     if (this.over) return;
+    this.stepping = true;
+    try {
+      this.step(dt);
+    } finally {
+      this.stepping = false;
+    }
+    // The stack is clear now, so it is safe to hand the fight back.
+    if (this.settleWhenSafe) {
+      this.settleWhenSafe = false;
+      this.onEnd?.(this);
+    }
+  }
+
+  step(dt) {
     this.time += dt;
 
     for (const s of this.allShips) s.update(dt, this.rng);
@@ -565,11 +597,31 @@ export class Engagement {
     this.effects = this.effects.filter((e) => e.life > 0);
   }
 
+  /**
+   * The fight is over, and the game is told so immediately.
+   *
+   * `over` used to be a flag somebody else had to notice. The tick loop
+   * noticed it, so a fight that ended inside `step` was settled on the same
+   * tick — but a fight ended from an ORDER (a hail answered with a surrender,
+   * the Kobayashi gambit talked to a finish, a test or a harness saying so
+   * outright) sat finished-but-unsettled until the next tick came round.
+   *
+   * One frame is not nothing: the renderer draws between ticks, so the plot
+   * showed a battle that was over and the order bar offered to fire on nobody.
+   * The running game's own watchdog is what reported it, as `game.mode.stuck`.
+   *
+   * `onEnd` is set by the game that owns the engagement. If the fight ended
+   * inside `step`, the call is deferred to the end of `update` — settling it
+   * mid-step would throw the engagement away with the rest of the tick still
+   * to run on it.
+   */
   end(outcome) {
     if (this.over) return;
     this.over = true;
     this.outcome = outcome;
     emit('combat:end', { outcome, engagement: this });
+    if (this.stepping) this.settleWhenSafe = true;
+    else this.onEnd?.(this);
   }
 
   /**

@@ -21,6 +21,7 @@
 
 import { vec3 } from './math.js';
 import { MeshBuilder, saucer, tube, box, sphere, mirrored } from './mesh.js';
+import { FEDERATION_FORMS } from './forms.federation.js';
 
 /** Hull plating by faction. Flat shading means these are the whole look. */
 export const PALETTE = {
@@ -49,6 +50,11 @@ export const paletteFor = (faction) => PALETTE[faction] ?? PALETTE.independent;
  * blueprint's own parameters.
  */
 const FORMS = {
+  // The Federation silhouettes that this file's own `starfleet` cannot make —
+  // no secondary hull, two hulls, four nacelles, no saucer. See
+  // src/gfx/forms.federation.js and docs/RESEARCH.md §14.
+  ...FEDERATION_FORMS,
+
   /**
    * Saucer, secondary hull, and two nacelles on pylons. The Federation
    * silhouette, and the reason the saucer primitive gets the most segments.
@@ -62,6 +68,11 @@ const FORMS = {
       thickness: b.saucerThickness ?? 0.1,
       domeRatio: b.domeRatio ?? 0.34,
       domeHeight: b.domeHeight ?? 0.05,
+      // A Constitution's saucer is a circle. A Galaxy's is an ovoid, a
+      // Sovereign's a raked ellipse, an Excelsior's an elongated disc — and
+      // this primitive could only make circles, so all three were drawn as the
+      // one shape they are not.
+      stretch: b.saucerStretch ?? 1,
       segments: b.segments ?? 22,
       color: p.hull,
       rimColor: p.trim,
@@ -465,18 +476,18 @@ export const DIMENSIONS = {
 export const BLUEPRINTS = {
   // ---- Starfleet ----
   constitution: { form: 'tos_starfleet', length: 289, saucerRadius: 0.46, nacelleLength: 0.9 },
-  constitution_refit: { form: 'starfleet', length: 305, saucerRadius: 0.45, nacelleRadius: 0.085, pylonSweep: 0.1 },
-  miranda: { form: 'starfleet', length: 278, saucerRadius: 0.52, neck: false, hullLength: 0.5, nacelleX: -0.34, nacelleY: -0.02, nacelleLength: 0.62 },
-  oberth: { form: 'starfleet', length: 120, saucerRadius: 0.38, hullY: -0.36, hullLength: 0.66, nacelleY: -0.3, nacelleLength: 0.6 },
-  excelsior: { form: 'starfleet', length: 467, saucerRadius: 0.47, hullLength: 1.0, nacelleLength: 1.0, nacelleZ: 0.4 },
-  constellation: { form: 'starfleet', length: 260, saucerRadius: 0.42, nacelleLength: 0.72, nacelleZ: 0.44, pylonSweep: 0.04 },
-  ambassador: { form: 'starfleet', length: 526, saucerRadius: 0.5, nacelleLength: 0.86 },
-  galaxy: { form: 'starfleet', length: 641, saucerRadius: 0.62, saucerThickness: 0.13, hullLength: 0.9, nacelleZ: 0.44, nacelleLength: 0.88 },
-  nebula: { form: 'starfleet', length: 442, saucerRadius: 0.58, hullLength: 0.6, nacelleX: -0.3, nacelleZ: 0.42, nacelleLength: 0.7 },
-  intrepid: { form: 'starfleet', length: 345, saucerRadius: 0.44, saucerThickness: 0.09, hullLength: 0.6, nacelleLength: 0.66, pylonSweep: 0.2 },
-  defiant: { form: 'starfleet', length: 171, saucerRadius: 0.4, saucerThickness: 0.14, domeRatio: 0.6, neck: false, hullLength: 0.4, hullY: -0.08, nacelleX: -0.2, nacelleY: 0, nacelleZ: 0.3, nacelleLength: 0.5, pylonSweep: 0.02 },
-  sovereign: { form: 'starfleet', length: 685, saucerRadius: 0.54, saucerThickness: 0.1, hullLength: 1.0, nacelleLength: 0.94, pylonSweep: 0.24 },
-  runabout: { form: 'starfleet', length: 23, saucerRadius: 0.3, saucerThickness: 0.16, domeRatio: 0.55, neck: false, hullLength: 0.34, hullY: -0.04, nacelleX: -0.12, nacelleY: 0.02, nacelleZ: 0.24, nacelleLength: 0.36, segments: 12 },
+  constitution_refit: { form: 'starfleet', length: 305, saucerRadius: 0.45, saucerThickness: 0.09, domeRatio: 0.5, domeHeight: 0.025, nacelleRadius: 0.085, nacelleY: 0.18, pylonSweep: 0.1 },
+  miranda: { form: 'rollbar', length: 278, saucerRadius: 0.52, neck: false, hullLength: 0.5, nacelleX: -0.34, nacelleY: -0.02, nacelleLength: 0.62 },
+  oberth: { form: 'twinhull', length: 120, saucerRadius: 0.38, hullY: -0.36, hullLength: 0.66, nacelleY: -0.3, nacelleLength: 0.6 },
+  excelsior: { form: 'starfleet', length: 467, saucerRadius: 0.42, saucerStretch: 1.3, hullLength: 1.0, nacelleLength: 1.0, nacelleZ: 0.34, nacelleY: 0.24, pylonSweep: 0.04 },
+  constellation: { form: 'quadnacelle', length: 260, saucerRadius: 0.42, nacelleLength: 0.72, nacelleZ: 0.44, pylonSweep: 0.04 },
+  ambassador: { form: 'starfleet', length: 526, saucerRadius: 0.52, saucerStretch: 1.1, saucerThickness: 0.11, nacelleZ: 0.32, nacelleY: 0.08, nacelleLength: 0.86, pylonSweep: 0.1 },
+  galaxy: { form: 'starfleet', length: 641, saucerRadius: 0.6, saucerStretch: 1.24, saucerThickness: 0.13, hullLength: 0.9, nacelleZ: 0.44, nacelleY: 0.2, nacelleLength: 0.88, pylonSweep: 0.22 },
+  nebula: { form: 'podded', length: 442, saucerRadius: 0.58, hullLength: 0.6, nacelleX: -0.3, nacelleZ: 0.42, nacelleLength: 0.7 },
+  intrepid: { form: 'starfleet', length: 345, saucerRadius: 0.34, saucerStretch: 1.34, saucerThickness: 0.08, hullLength: 0.6, hullR0: 0.08, hullR1: 0.11, nacelleY: 0.26, nacelleZ: 0.3, nacelleLength: 0.66, pylonSweep: 0.2 },
+  defiant: { form: 'compact', length: 171, saucerRadius: 0.4, saucerThickness: 0.14, domeRatio: 0.6, neck: false, hullLength: 0.4, hullY: -0.08, nacelleX: -0.2, nacelleY: 0, nacelleZ: 0.3, nacelleLength: 0.5, pylonSweep: 0.02 },
+  sovereign: { form: 'starfleet', length: 685, saucerRadius: 0.46, saucerStretch: 1.5, saucerThickness: 0.09, domeRatio: 0.26, hullLength: 1.0, nacelleY: 0.06, nacelleLength: 0.94, pylonSweep: 0.34 },
+  runabout: { form: 'compact', length: 23, saucerRadius: 0.3, saucerThickness: 0.16, domeRatio: 0.55, neck: false, hullLength: 0.34, hullY: -0.04, nacelleX: -0.12, nacelleY: 0.02, nacelleZ: 0.24, nacelleLength: 0.36, segments: 12 },
 
   // ---- Klingon ----
   bird_of_prey: { form: 'raptor', length: 158, wingSpan: 0.76, wingSweep: 0.46, wingDroop: -0.2 },

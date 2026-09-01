@@ -1645,3 +1645,134 @@ describe('the hulls are built in unit space, not in metres', () => {
     }
   });
 });
+
+// =============================================== one shape per class of ship
+
+describe('no two Federation classes are the same shape', () => {
+  const FEDERATION = Object.entries(BLUEPRINTS)
+    .filter(([id]) => DIMENSIONS[id] && SHIP_LIST.find((c) => c.id === id)?.faction === 'federation')
+    .map(([id]) => id);
+
+  /**
+   * A shape fingerprint that survives being scaled.
+   *
+   * Normalised to unit length, so this compares SILHOUETTE and not size — the
+   * whole failure being guarded against is twelve classes built by one function
+   * that differ only in how big they are.
+   */
+  function fingerprint(id) {
+    const m = hullMesh(id, 'federation');
+    const f = m.stride / 4;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < m.vertexCount; i++) {
+      const x = m.data[i * f];
+      lo = Math.min(lo, x);
+      hi = Math.max(hi, x);
+    }
+    const span = hi - lo || 1;
+    // Twelve slices along the hull, each the normalised cross-sectional extent
+    // at that station. A Miranda with no engineering hull and an Oberth with
+    // two read completely differently here, and that is the point.
+    const slices = new Array(12).fill(0);
+    for (let i = 0; i < m.vertexCount; i++) {
+      const x = m.data[i * f];
+      const y = m.data[i * f + 1];
+      const z = m.data[i * f + 2];
+      const k = Math.min(11, Math.floor(((x - lo) / span) * 12));
+      slices[k] = Math.max(slices[k], Math.hypot(y, z) / span);
+    }
+    return slices;
+  }
+
+  test('every Federation hull has a distinct profile', () => {
+    const prints = new Map(FEDERATION.map((id) => [id, fingerprint(id)]));
+    const same = [];
+    for (const a of FEDERATION) {
+      for (const b of FEDERATION) {
+        if (a >= b) continue;
+        const pa = prints.get(a);
+        const pb = prints.get(b);
+        const diff = pa.reduce((n, v, i) => n + Math.abs(v - pb[i]), 0);
+        if (diff < 0.12) same.push(`${a} and ${b} (${diff.toFixed(3)})`);
+      }
+    }
+    assert.deepEqual(same, [],
+      'these classes are built as the same shape at different sizes');
+  });
+
+  test('the classes that cannot be a parametrised saucer are not one', () => {
+    // Four of these are impossible for the shared `starfleet` form at any
+    // parameter setting: a Miranda has no secondary hull, an Oberth has two, a
+    // Constellation has four nacelles, and a Defiant has no saucer.
+    const OWN_FORM = {
+      miranda: 'rollbar',
+      oberth: 'twinhull',
+      constellation: 'quadnacelle',
+      nebula: 'podded',
+      defiant: 'compact',
+      runabout: 'compact',
+    };
+    for (const [id, form] of Object.entries(OWN_FORM)) {
+      assert.equal(BLUEPRINTS[id].form, form, `${id} is still built as a generic saucer`);
+    }
+  });
+
+  test('a Constellation really does have four nacelles', () => {
+    // The count is the silhouette. Counting the emissive bussard caps counts
+    // the nacelles, because nothing else on a Federation hull is drawn in the
+    // glow colour.
+    function glowClusters(id) {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      const glow = paletteFor('federation').glow;
+      const seen = [];
+      for (let i = 0; i < m.vertexCount; i++) {
+        const r = m.data[i * f + 6];
+        const g = m.data[i * f + 7];
+        const b = m.data[i * f + 8];
+        if (Math.abs(r - glow[0]) > 1e-3 || Math.abs(g - glow[1]) > 1e-3
+          || Math.abs(b - glow[2]) > 1e-3) continue;
+        const pt = [m.data[i * f], m.data[i * f + 1], m.data[i * f + 2]];
+        if (!seen.some((q) => Math.hypot(q[0] - pt[0], q[1] - pt[1], q[2] - pt[2]) < 0.25)) {
+          seen.push(pt);
+        }
+      }
+      return seen.length;
+    }
+    assert.equal(glowClusters('constellation'), 4,
+      'a Constellation is the ship with four glowing caps in a square');
+    assert.equal(glowClusters('constitution'), 2);
+  });
+
+  test('the stretched saucers are actually stretched', () => {
+    // A Galaxy's saucer is an ovoid and a Sovereign's a raked ellipse. The
+    // primitive could only make circles, so both were drawn as the one shape
+    // they are not.
+    function saucerAspect(id) {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      let x0 = Infinity; let x1 = -Infinity; let z1 = 0;
+      for (let i = 0; i < m.vertexCount; i++) {
+        const y = m.data[i * f + 1];
+        if (Math.abs(y) > 0.08) continue;          // the saucer plane only
+        x0 = Math.min(x0, m.data[i * f]);
+        x1 = Math.max(x1, m.data[i * f]);
+        z1 = Math.max(z1, Math.abs(m.data[i * f + 2]));
+      }
+      return (x1 - x0) / (z1 * 2);
+    }
+    assert.ok(saucerAspect('galaxy') > 1.1,
+      `a Galaxy's saucer is ${saucerAspect('galaxy').toFixed(2)} — still a circle`);
+    assert.ok(saucerAspect('sovereign') > saucerAspect('galaxy'),
+      'a Sovereign should be longer and narrower than a Galaxy');
+  });
+
+  test('and every one of them still builds inside the budget', () => {
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const m = hullMesh(id, 'federation');
+      assert.ok(m.vertexCount > 0, `${id} built nothing`);
+      assert.ok(m.triangles < 900, `${id} is ${m.triangles} triangles`);
+    }
+  });
+});

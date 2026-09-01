@@ -259,8 +259,13 @@ describe('what you say is judged against what you did', () => {
     const outcome = g.makeAppeal(kirk);
 
     assert.equal(outcome.success, true, JSON.stringify(outcome.hits));
-    assert.equal(g.engagement.over, true, 'the Klingons kept shooting');
-    assert.equal(g.engagement.outcome, 'parley');
+    // Talking them down ends the fight THERE, on the sentence that did it —
+    // not on the next tick. The scenario used to leave a finished engagement
+    // hanging in combat mode until something stepped the clock, and a frame
+    // rendered in between drew a battle nobody was in.
+    assert.equal(g.engagement, null, 'the Klingons kept shooting');
+    assert.equal(g.mode, 'bridge', 'the bridge stayed at battle stations');
+    assert.equal(g.lastCombat?.outcome, 'parley');
     assert.equal(g.ledger.counters.kobayashi_maru_solved, 1);
     assert.equal(g.gambitOpen, false, 'the channel stayed open afterwards');
   });

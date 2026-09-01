@@ -871,3 +871,114 @@ describe('what the adversarial audit confirmed', () => {
       `moved from ${wx.toFixed(1)},${wz.toFixed(1)} to ${back.walk.x.toFixed(1)},${back.walk.z.toFixed(1)}`);
   });
 });
+
+describe('a fight that ends on a sentence ends immediately', () => {
+  // Found by the watchdog running inside the real app, which is the whole
+  // reason it is in there: `game.mode.stuck — the fight is over but the game
+  // is still in combat mode`.
+  //
+  // Fights that end during the tick were settled by the tick. Fights that end
+  // because of something the CAPTAIN SAID — a hail answered with a surrender,
+  // the Kobayashi gambit — ran from an order handler outside the tick and left
+  // the game in combat mode with a finished engagement until the next frame.
+  //
+  // The renderer draws between ticks. For that frame the tactical view showed
+  // a battle that was over, the order bar offered to fire on nobody, and
+  // anything reading `game.mode` got the wrong answer.
+
+  /** Every way the game can settle a fight, and what must be true after. */
+  function settled(g, how) {
+    assert.equal(g.mode, 'bridge', `${how}: still in ${g.mode} mode`);
+    assert.equal(g.engagement, null, `${how}: the engagement was left hanging`);
+    assert.equal(g.alert, 'normal', `${how}: still at battle stations`);
+    assert.ok(g.lastCombat, `${how}: no after-action record`);
+    assert.deepEqual(checkAll(g, OPTS), [], `${how}: the checker still objects`);
+  }
+
+  test('the tick settles a fight the tick ended', () => {
+    const g = fight('bird_of_prey');
+    for (let i = 0; i < 30 * 240 && !g.lastCombat; i++) { pilot(g); g.update(STEP); }
+    settled(g, 'fought to a finish');
+  });
+
+  test('a hail that ends the fight settles it on the spot', () => {
+    // Walk a fight to where a hail can end it, then keep talking until one
+    // does. Whatever the diplomacy roll says, the two states that must never
+    // coexist are a finished engagement and combat mode.
+    let ended = 0;
+    for (let seed = 1n; seed <= 12n; seed++) {
+      const g = fight('d7', { seed, difficulty: 'story' });
+      for (let i = 0; i < 30 * 20; i++) { pilot(g); g.update(STEP); }
+      if (!g.engagement || g.engagement.over) continue;
+
+      for (let attempt = 0; attempt < 12 && !g.lastCombat; attempt++) {
+        g.hail(attempt % 2 ? 'negotiate' : 'demand_surrender');
+        if (g.engagement && !g.engagement.over) { pilot(g); g.update(STEP); }
+      }
+      if (!g.lastCombat) continue;   // nobody talked their way out of this one
+      ended++;
+      settled(g, `hail on seed ${seed}`);
+    }
+    assert.ok(ended > 0, 'no hail in twelve fights ever ended one');
+  });
+
+  test('the Kobayashi gambit settles it on the spot', () => {
+    const g = new Game({ seed: 11n, crewMode: 'original' });
+    if (typeof g.runKobayashiMaru !== 'function') return;
+    g.runKobayashiMaru();
+    g.gambitOpen = true;
+    const r = g.makeAppeal(
+      'I am not asking as an officer. There are eighty-one people on that ship '
+      + 'and they are freezing. Let me take them off and I will go, and you have '
+      + 'my word I will log every word of this.');
+    if (!r?.success) return;   // the appeal is judged, not scripted
+    settled(g, 'talked them down');
+  });
+
+  test('ending an engagement by hand settles it without a tick', () => {
+    // The general guarantee, and the one that stops this being fixed once per
+    // call site: whoever ends a fight, however they reach it, the game is out
+    // of combat before the next line of their code runs. No tick required.
+    for (const outcome of ['victory', 'routed', 'escaped', 'parley']) {
+      const g = fight('d7');
+      g.engagement.end(outcome);
+      settled(g, `end('${outcome}') by hand`);
+      assert.equal(g.lastCombat.outcome, outcome);
+    }
+  });
+
+  test('settling does not happen underneath a running tick', () => {
+    // The other half of the same guarantee. A fight that ends INSIDE the
+    // engagement's own step must not be thrown away while the rest of that
+    // step is still running on it — so the hand-back waits for the stack to
+    // clear, and by the time `update` returns it has happened.
+    const g = fight('bird_of_prey');
+    let sawTornDown = 0;
+    const originalStep = g.engagement.step.bind(g.engagement);
+    g.engagement.step = (dt) => {
+      originalStep(dt);
+      // Still mid-step: the engagement must still be the game's.
+      if (g.engagement === null || g.mode !== 'combat') sawTornDown++;
+    };
+    for (let i = 0; i < 30 * 240 && !g.lastCombat; i++) { pilot(g); g.update(STEP); }
+    assert.equal(sawTornDown, 0, 'the engagement was cleared mid-step');
+    settled(g, 'ended inside the step');
+  });
+
+  test('no order leaves the game watching a fight that is over', () => {
+    // The general form, checked the way the app checks it: a watchdog on every
+    // tick, driving a fight to its end through each ending in turn.
+    for (const seed of [3n, 9n, 21n]) {
+      const g = fight('d7', { seed, difficulty: 'story' });
+      const dog = new Watchdog({ every: 1 });
+      for (let i = 0; i < 30 * 300; i++) {
+        pilot(g);
+        g.update(STEP);
+        dog.tick(g, OPTS);
+        if (g.lastCombat) break;
+      }
+      assert.deepEqual(dog.summary.map((v) => v.code), [],
+        `seed ${seed}: ${dog.summary.map((v) => v.text).join(' | ')}`);
+    }
+  });
+});

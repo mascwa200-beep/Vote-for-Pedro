@@ -638,6 +638,77 @@ Sources: [Memory Alpha — Constitution class](https://memory-alpha.fandom.com/w
 
 ---
 
+## 14. Twelve ships, one silhouette
+
+Every Federation hull in this game is the same shape.
+
+`BLUEPRINTS` gives twelve classes `form: 'starfleet'` — the refit, Miranda,
+Oberth, Excelsior, Constellation, Ambassador, Galaxy, Nebula, Intrepid,
+Defiant, Sovereign and the runabout. That form builds one topology: a round
+saucer, a tapering secondary hull, and two cylindrical nacelles on swept box
+pylons. The parameters differ; the shape does not. An Intrepid and a Sovereign
+are the same object at different sizes, and now that the sizes are true, being
+the same object is the only thing left that is wrong.
+
+### What actually tells them apart
+
+Not proportions. **Topology.** These are the structural facts that make each
+class recognisable from a distance, which is the only distance that matters on
+a tactical plot:
+
+| Class | The thing that identifies it |
+|---|---|
+| Constitution (refit) | Flat-topped saucer, thin nacelles on flat swept pylons |
+| Miranda | **No secondary hull at all** — nacelles hang directly beneath the saucer, and a rollbar carries the weapon pod above it |
+| Oberth | Saucer above, a **separate lower hull** slung under it on two struts, nacelles on the lower hull |
+| Excelsior | Elongated saucer, long dorsal neck, **tall vertical pylons** |
+| Constellation | **Four nacelles**, in two stacked pairs |
+| Ambassador | Wide saucer, low profile, nacelles close in — the transitional shape |
+| Galaxy | **Ovoid saucer**, thick neck, nacelles swept up and back |
+| Nebula | Galaxy saucer with a **dorsal pod** where the swept nacelle arrangement would be |
+| Intrepid | Narrow secondary hull, nacelles raised on **hinged pylons** |
+| Defiant | **No saucer** — one wedge body with the nacelles buried in it |
+| Sovereign | Raked elliptical saucer, nacelles low and swept back |
+| Danube runabout | A box with two nacelles and no saucer at all |
+
+Four of those cannot be expressed by the current form at any parameter setting:
+a Miranda has no secondary hull, an Oberth has two hulls, a Constellation has
+four nacelles, and a Defiant and a runabout have no saucer. Those are not knobs;
+they are different builders.
+
+### What the primitives can already do, and the one gap
+
+`saucer`, `tube`, `box` (with `sweep`, which shears one end backwards and is how
+a slab becomes a swept pylon), `sphere` and `mirrored` cover almost all of it.
+Four nacelles is `mirrored` called twice at different heights. A rollbar is two
+boxes and a tube. A second hull is a second `tube`.
+
+The gap is that **`saucer` is circular**. It steps around a full turn at a fixed
+radius, so it cannot make the ovoid the Galaxy has, the ellipse the Sovereign
+has, or the elongated disc on an Excelsior. That is one parameter — a stretch
+along the long axis — and it unlocks three of the twelve.
+
+### What the build takes from this
+
+A builder per silhouette rather than per class, because several classes share a
+silhouette family and the differences between those really are proportions. The
+families are: the classic two-nacelle cruiser, the no-secondary-hull Miranda,
+the twin-hull Oberth, the four-nacelle Constellation, the pod-carrying Nebula,
+the saucerless wedge, and the box-with-nacelles runabout.
+
+Beam and height from §13 drive them. A Galaxy is 641 m long and 464 m wide, a
+ratio of 0.72; an Intrepid is 345 by 132, a ratio of 0.38. Those two numbers
+alone make one hull broad and the other narrow without a single value being
+guessed, which is the entire reason §13 recorded beam in the first place.
+
+Sources: [Memory Alpha — Miranda class](https://memory-alpha.fandom.com/wiki/Miranda_class),
+[Memory Alpha — Oberth class](https://memory-alpha.fandom.com/wiki/Oberth_class),
+[Memory Alpha — Constellation class](https://memory-alpha.fandom.com/wiki/Constellation_class),
+[Memory Alpha — Nebula class](https://memory-alpha.fandom.com/wiki/Nebula_class),
+[Cygnus-X1 — Star Trek Blueprints](https://www.cygnus-x1.net/links/lcars/star-trek-blueprints.php)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

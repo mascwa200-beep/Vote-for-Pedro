@@ -723,6 +723,162 @@ try {
   await page.waitForTimeout(900);
   await page.screenshot({ path: join(SHOTS, '16-hull-scale.png') });
 
+  // Six Federation classes on one plot. The screenshot is the check: "are an
+  // Intrepid and a Sovereign the same ship at two sizes" is a question only a
+  // picture answers, and for the life of this project the answer was yes.
+  const shapes = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    const { BLUEPRINTS } = await import('./src/gfx/blueprint.js');
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    for (let i = 0; i < 5; i++) g.update(1 / 30);
+
+    const CLASSES = ['miranda', 'oberth', 'constellation', 'nebula', 'defiant', 'sovereign'];
+    const fleet = CLASSES.map((id, i) => {
+      const s = new Ship(id, { faction: 'federation', name: id });
+      s.x = 380 + (i % 3) * 340;
+      s.y = -240 + Math.floor(i / 3) * 480;
+      s.z = 0;
+      return s;
+    });
+    g.startCombat(fleet, { name: 'Silhouette check', relentless: true });
+    for (const s of fleet) { s.throttle = 0; s.heading = 0; s.desiredHeading = 0; }
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    app.go('tactical');
+    // Rendered, never simulated — six ships shooting at you ends the game.
+    for (let i = 0; i < 40; i++) app.tactical?.render(g.engagement, 0, 1 / 60);
+    return { forms: CLASSES.map((id) => BLUEPRINTS[id].form), drawing: !!app.tactical };
+  });
+  check('the Federation classes no longer share one hull form',
+    new Set(shapes.forms).size >= 5, JSON.stringify(shapes));
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const app = globalThis.__app;
+    for (let i = 0; i < 10; i++) app.tactical?.render(app.game.engagement, 0, 1 / 60);
+  });
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: join(SHOTS, '16c-silhouettes.png') });
+
+  // And one class at a time, close enough to actually see.
+  //
+  // Six ships on one plot proves they are not the same object; it does not
+  // show you what any of them look like, because the framing camera pulls back
+  // to fit the spread and every hull ends up thirty pixels across. These are
+  // the pictures the shapes were checked against by eye — one per class, alone,
+  // at a range where a Miranda's rollbar and a Constellation's four nacelles
+  // are things you can see rather than things a fingerprint asserts.
+  const FED_CLASSES = [
+    'constitution', 'constitution_refit', 'miranda', 'oberth', 'constellation',
+    'excelsior', 'ambassador', 'galaxy', 'nebula', 'intrepid', 'defiant',
+    'sovereign', 'runabout',
+  ];
+  const portraits = [];
+  for (const id of FED_CLASSES) {
+    const ok = await page.evaluate(async (classId) => {
+      const app = globalThis.__app;
+      const g = app.game;
+      const { Ship } = await import('./src/sim/ship.js');
+      const { hullScale } = await import('./src/gfx/blueprint.js');
+      if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+      g.update(1 / 30);
+
+      const s = new Ship(classId, { faction: 'federation', name: classId });
+      // Stand off by the hull's own size, so a runabout is framed as tightly
+      // as a Sovereign instead of vanishing at a fixed distance.
+      // The framing camera frames everything on the plot, the player included,
+      // so how big the subject draws is set by how close the two ships are to
+      // each other — in hull lengths, not in kilometres.
+      g.startCombat([s], { name: 'Portrait', relentless: true });
+      // After startCombat, which does its own placement — putting a ship
+      // somewhere before the fight begins does nothing at all.
+      //
+      // Both hulls set the standoff: half a Constitution plus half the subject
+      // is the distance at which they are just clear of each other, whether the
+      // subject is a runabout or a Sovereign.
+      const both = hullScale('constitution') + hullScale(classId);
+      s.x = both * 1.15; s.y = 0; s.z = both * 0.16;
+      s.heading = 2.5; s.desiredHeading = 2.5;
+      s.pitch = 0.12; s.roll = 0.2; s.throttle = 0;
+      g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+      g.ship.heading = 0; g.ship.desiredHeading = 0;
+      app.go('tactical');
+      // These are portraits, so the camera is placed by hand rather than by the
+      // framing rule — `userZoom` is exactly the flag that says "a human is
+      // driving this camera, leave it alone".
+      app.tactical.userZoom = true;
+      app.tactical.cam.wantDistance = both * 1.6;
+      app.tactical.cam.distance = both * 1.6;
+      for (let i = 0; i < 60; i++) app.tactical?.render(g.engagement, 0, 1 / 60);
+      return !!app.tactical;
+    }, id);
+    // Ending the previous portrait's fight raises the after-action panel, and
+    // its backdrop dims the whole plot — which is not what these pictures are
+    // for.
+    await dismissModals(page);
+    await page.evaluate(() => {
+      const app = globalThis.__app;
+      for (let i = 0; i < 10; i++) app.tactical?.render(app.game.engagement, 0, 1 / 60);
+    });
+    await page.waitForTimeout(150);
+    const box = await page.evaluate(() => {
+      const r = document.getElementById('tactical')?.getBoundingClientRect();
+      return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+    });
+    if (!box) { portraits.push(`${id}:no-canvas`); continue; }
+    const png = await page.screenshot({ path: join(SHOTS, `17-hull-${id}.png`), clip: box });
+    // A hull that failed to build draws nothing, and nothing compresses small.
+    if (!ok || png.length < 6000) portraits.push(`${id}:${png.length}B`);
+  }
+  check('every Federation class draws a hull when it is the only ship on the plot',
+    portraits.length === 0, portraits.join(' | '));
+
+  // The camera has to cope with 130:1 as well as the geometry does.
+  const framing = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    const out = {};
+
+    for (const [key, id] of [['small', 'runabout'], ['huge', 'borg_cube']]) {
+      if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+      g.update(1 / 30);
+      const s = new Ship(id, { name: id });
+      g.startCombat([s], { name: 'Framing', relentless: true });
+      // Same separation for both, set AFTER startCombat has done its own
+      // placement, so the only thing that differs between the two readings is
+      // how big the ship is.
+      s.x = 300; s.y = 0; s.z = 0; s.throttle = 0;
+      g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+      app.go('tactical');
+      // Pinch to zoom on the first one, so the second proves the framing camera
+      // comes back for a new fight instead of staying where a finger left it.
+      if (key === 'small') app.tactical.userZoom = true;
+      for (let i = 0; i < 200; i++) app.tactical?.render(g.engagement, 0, 1 / 60);
+      out[key] = Math.round(app.tactical.cam.wantDistance);
+      out[`${key}Zoom`] = app.tactical.userZoom;
+    }
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.ship.crew = g.ship.maxCrew;
+    return out;
+  });
+  check('the plot pulls back for a Borg cube and closes in for a runabout',
+    framing.huge > framing.small * 3, JSON.stringify(framing));
+  check('a new engagement takes the camera back from a stale pinch',
+    framing.hugeZoom === false, JSON.stringify(framing));
+
+  // Leave the plot as it was found: a live one-sided fight left running here
+  // shoots at the player for the rest of the harness.
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.ship.crew = g.ship.maxCrew;
+  });
+
   // Put the biggest thing in the game on the plot and check the camera copes.
   const framed = await page.evaluate(async () => {
     const app = globalThis.__app;
@@ -873,6 +1029,11 @@ try {
       hasHull: said.some((t) => /Hull integrity/.test(t)),
       watchdog: !!g.watchdog,
       seen: g.watchdog?.total ?? -1,
+      // Not just the count: a bare number tells you something is wrong and
+      // nothing about what, and this check has already cost one debugging
+      // session that a single string would have ended.
+      caughtWhat: (g.watchdog?.summary ?? []).map(
+        (v) => `${v.code}x${v.count}: ${v.text}`),
     };
   });
   check('a typed order runs a level one diagnostic',
@@ -880,7 +1041,8 @@ try {
   check('the diagnostic reports no anomaly in a healthy ship',
     diag.anomalies.length === 0, diag.anomalies.join(' | '));
   check('the simulation is watching itself in the running app',
-    diag.watchdog === true && diag.seen === 0, JSON.stringify({ w: diag.watchdog, seen: diag.seen }));
+    diag.watchdog === true && diag.seen === 0,
+    JSON.stringify({ w: diag.watchdog, seen: diag.seen, what: diag.caughtWhat }));
 
   // And it must actually notice. Poison one number and confirm the running
   // game reports it rather than carrying on with a broken ship.
