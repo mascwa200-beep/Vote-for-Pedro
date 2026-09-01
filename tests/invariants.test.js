@@ -30,7 +30,7 @@ import {
 import { Game } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
 import {
-  ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES,
+  ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES, OUTCOMES,
 } from '../src/sim/combat.js';
 import { parseOrder } from '../src/ui/orders.js';
 
@@ -210,6 +210,144 @@ test('no rule is ever broken, in any fight, at any difficulty', () => {
   assert.ok(ticks > 100000, `only ${ticks} ticks simulated; the soak is not soaking`);
   assert.deepEqual(dog.summary.map((v) => `${v.severity} ${v.code}: ${v.text}`), [],
     `${dog.total} invariant violations across ${ticks} ticks`);
+});
+
+// A tour of duty, rather than a fight.
+//
+// The soak above runs sixty-eight engagements and every one of them is the
+// FIRST engagement of a brand new commission. That is not how the game is
+// played, and it is not where the bugs are: "combat's done and the stuff that
+// comes after it is also messed up" is about the second fight, and the third,
+// on a ship that is already damaged, already short of crew, already carrying a
+// wreck it never salvaged and a distress call it never cancelled.
+//
+// So this runs one captain through eight consecutive engagements with the
+// ordinary business of a starship in between — repairs, orbits, salvage,
+// handing over the con, a log entry — and checks every rule on every tick of
+// all of it. The fights themselves are flown much harder than `pilot` flies
+// them: subsystem targeting, evasive, decoys, alert levels, a distress call,
+// the career signature, and occasionally an order to break off entirely.
+test('a tour of duty: fight after fight, on one commission', () => {
+  // Rosters by era, and a player ship to match, because the balance the game
+  // is built to has always been tier-appropriate: two ships of your own tier
+  // is a fight you break off, and two ships a tier above ends the commission
+  // in one engagement. A tour that puts a 2260s Constitution against a pair of
+  // Vor'chas is not testing the aftermath, it is testing how fast a ship dies.
+  const TOS = ['bird_of_prey', 'd7', 'orion_raider', 'scoutship', 'freighter'];
+  const TNG = ['ktinga', 'galor', 'marauder', 'keldon', 'bird_of_prey'];
+  const LATE = ['vorcha', 'galor', 'keldon', 'jem_hadar_attack', 'marauder'];
+
+  const dog = new Watchdog();
+  let ticks = 0;
+  let fought = 0;
+  let lost = 0;
+  const outcomes = new Set();
+
+  for (const [seed, difficulty, crewMode, shipClass, HOSTILES] of [
+    [91001, 'story', 'canon', 'constitution', TOS],
+    [91002, 'lieutenant', 'original', 'constitution_refit', TOS],
+    [91003, 'commander', 'original', 'excelsior', TNG],
+    [91004, 'captain', 'canon', 'galaxy', TNG],
+    [91005, 'fleet_admiral', 'original', 'sovereign', LATE],
+  ]) {
+    const g = new Game({ seed: BigInt(seed), crewMode, difficulty, shipClass });
+    const rand = (() => {
+      let s = seed >>> 0;
+      return () => { s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0; return s / 0x100000000; };
+    })();
+    const pick = (list) => list[Math.floor(rand() * list.length)];
+
+    for (let f = 0; f < 8 && !g.over; f++) {
+      const id = HOSTILES[(seed + f) % HOSTILES.length];
+      const count = 1 + ((seed + f) % 2);
+      g.startCombat(Array.from({ length: count }, (_, k) =>
+        new Ship(id, { name: `${id} ${k + 1}` })));
+      assert.ok(g.engagement, `${difficulty}: fight ${f + 1} never started`);
+      fought++;
+      for (let t = 0; t < 20000 && g.engagement && !g.engagement.over; t++) {
+        const eng = g.engagement;
+        if (!eng.target || eng.target.destroyed) eng.cycleTarget();
+        const mark = eng.target ?? eng.liveHostiles[0];
+        if (mark) eng.comeAboutTo(mark);
+        eng.setThrottle(0.35 + rand() * 0.65);
+        // A captain who is losing breaks off, which is what the ladder is
+        // designed around and what makes a tour last more than one fight.
+        // It also walks the "escaped" path and everything downstream of it
+        // without having to stage a withdrawal artificially.
+        if (g.ship.hullPct < 0.35 && eng.warpOutTimer <= 0) {
+          eng.beginWarpOut();
+          eng.evasive(true);
+        }
+
+        const roll = rand();
+        if (roll < 0.004) eng.targetSubsystem(pick(['weapons', 'shields', 'engines', 'warp_core', null]));
+        else if (roll < 0.008) eng.evasive(rand() < 0.5);
+        else if (roll < 0.010) eng.deployDecoy(2 + rand() * 4);
+        else if (roll < 0.012) g.setAlert(pick(['red', 'yellow', 'normal']));
+        else if (roll < 0.013) g.callForHelp();
+        else if (roll < 0.014) g.character?.useSignature?.(g);
+        eng.fireAll(rand() < 0.15 ? 'torpedo' : 'all');
+
+        g.update(STEP);
+        dog.tick(g, OPTS);
+        ticks++;
+      }
+
+      // The fight is over. Everything that hangs off that has to have
+      // happened, on the spot, with nothing left half-finished.
+      assert.equal(g.engagement, null,
+        `${difficulty} fight ${f + 1}: the engagement was never cleared away`);
+      assert.ok(g.lastCombat, `${difficulty} fight ${f + 1}: no after-action record`);
+      assert.ok(OUTCOMES.includes(g.lastCombat.outcome),
+        `${difficulty} fight ${f + 1}: outcome was ${JSON.stringify(g.lastCombat.outcome)}`);
+      assert.equal(g.helpInbound, null, 'a relief ship outlived the fight it was sent to');
+      outcomes.add(g.lastCombat.outcome);
+      if (g.over) { lost++; break; }
+      assert.equal(g.mode, 'bridge', `${difficulty} fight ${f + 1}: left the game in ${g.mode}`);
+
+      // Damage control between engagements, which is what a captain who
+      // intends to fight another one does. Without it a tour is four fights
+      // long on the harder rungs and the test measures nothing after that.
+      for (let i = 0; i < 4; i++) g.effectRepairs();
+      if (g.canDock()) g.dock();
+
+      // And the ordinary business of a starship. Each of these is a real
+      // order, and each is checked as thoroughly as a tick of combat is.
+      const between = [
+        () => g.effectRepairs(),
+        () => g.dock(),
+        () => g.diagnostic(5),
+        () => g.stripWreck(),
+        () => g.salvage(),
+        () => g.enterOrbit(),
+        () => g.breakOrbit(),
+        () => g.logEntry(`After action, engagement ${f + 1}.`),
+        () => g.intercom(pick(['engineering', 'sickbay', 'security'])),
+        () => g.handOverCon(),
+        () => g.takeCon(),
+        () => g.workTheShop(1),
+        () => g.availableMissions(),
+        () => g.setAlert('normal'),
+      ];
+      for (let i = 0; i < 8; i++) {
+        pick(between)();
+        for (let t = 0; t < 80; t++) { g.update(STEP); dog.tick(g, OPTS); ticks++; }
+      }
+      // A save round trip between fights, because the player closes the app.
+      const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+      assert.deepEqual(checkAll(back, OPTS), [],
+        `${difficulty}: the save between fights ${f + 1} and ${f + 2} loaded broken`);
+    }
+  }
+
+  assert.ok(fought >= 30, `only ${fought} engagements in the tour`);
+  assert.ok(ticks > 60000, `only ${ticks} ticks; the tour is not touring`);
+  assert.ok(outcomes.has('escaped'), 'no fight was ever broken off');
+  assert.ok(outcomes.has('victory') || outcomes.has('routed'),
+    `nothing was ever won: ${[...outcomes]}`);
+  assert.ok(lost < 5, 'every commission ended with the ship lost');
+  assert.deepEqual(dog.summary.map((v) => `${v.severity} ${v.code}: ${v.text}`), [],
+    `${dog.total} invariant violations across ${ticks} ticks of a tour`);
 });
 
 test('a fight survives being saved and loaded on any tick', () => {
