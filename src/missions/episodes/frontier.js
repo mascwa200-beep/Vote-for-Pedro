@@ -320,7 +320,7 @@ export const FRONTIER_EPISODES = [
         speaker: 'Tactical',
         choices: [
           { id: 'fight', label: 'Break the lattice', outcome: 'fought_out',
-            effects: { combat: { faction: 'tholian', ships: ['tholian_web_spinner', 'tholian_web_spinner'] },
+            effects: { combat: { faction: 'tholian', ships: ['tholian_web_spinner', 'tholian_web_spinner'], canWarpOut: false },
               xp: 1000, damage: 0.15, record: { lives_saved: 82 }, standing: { tholian: -18 } } },
         ],
       },
