@@ -2480,6 +2480,122 @@ try {
   check('landscape layout renders', (await page.locator('.panel').count()) > 0);
   await page.screenshot({ path: join(SHOTS, '10-landscape.png') });
 
+  // ------------------------------------------------ the order monkey
+  //
+  // Every phrasing the parser knows, given in a shuffled order, through the
+  // REAL dispatcher, with the invariant checker running after every one.
+  //
+  // The unit soak proves a fight cannot go wrong. It cannot prove that an
+  // order given at the wrong moment cannot go wrong, because the thing that
+  // turns a parsed order into a change of state lives in main.js and only
+  // exists when a screen is attached. This is the only place that code can be
+  // exercised at scale, and "no matter what you do, in what order, at any
+  // point" is precisely what it is for.
+  //
+  // Deterministic: one seeded shuffle, so a failure names an order and a
+  // sequence rather than a mood.
+  const monkey = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { parseOrder } = await import('./src/ui/orders.js');
+    const { INTENTS } = await import('./src/lang/lexicon.js');
+    const { checkAll } = await import('./src/sim/invariants.js');
+    const { ARENA_RADIUS } = await import('./src/sim/combat.js');
+    const { Ship } = await import('./src/sim/ship.js');
+
+    // Leave whatever the last block was doing.
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.ship.crew = g.ship.maxCrew;
+    app.go('bridge');
+
+    const phrases = [];
+    for (const intent of INTENTS) for (const p of intent.phrases) phrases.push(p);
+
+    // xorshift32, so the sequence is the same on every machine and every run.
+    let seed = 0x5f3759df;
+    const rand = () => {
+      seed ^= seed << 13; seed >>>= 0;
+      seed ^= seed >> 17;
+      seed ^= seed << 5; seed >>>= 0;
+      return seed / 0x100000000;
+    };
+    for (let i = phrases.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [phrases[i], phrases[j]] = [phrases[j], phrases[i]];
+    }
+
+    const OPTS = { arenaRadius: ARENA_RADIUS };
+    const violations = [];
+    const threw = [];
+    let given = 0;
+
+    for (let i = 0; i < phrases.length; i++) {
+      const text = phrases[i];
+
+      // Keep the world moving underneath the orders. A fight every so often,
+      // because half of these only mean anything with somebody shooting at
+      // you, and the interesting failures are at the seams.
+      if (i % 45 === 0 && (!g.engagement || g.engagement.over)) {
+        g.startCombat([new Ship('d7', { name: `Hostile ${i}` })]);
+      }
+      if (i % 90 === 45 && g.engagement && !g.engagement.over) {
+        g.engagement.end('routed');
+      }
+
+      try {
+        const order = parseOrder(text, g);
+        // A confirmation dialog is the parser asking rather than acting; the
+        // monkey answers by acting, which is the more dangerous branch.
+        app.executeOrder(order.confirm ? order.order : order, text);
+        given++;
+      } catch (err) {
+        threw.push(`${text}: ${err?.message ?? err}`);
+      }
+
+      // The ship keeps flying whatever was just said to it.
+      for (let t = 0; t < 3; t++) g.update(1 / 30);
+
+      for (const v of checkAll(g, OPTS)) {
+        violations.push(`after "${text}": ${v.code} — ${v.text}`);
+      }
+      if (violations.length > 6) break;
+
+      // Never leave the game over: the rest of the sweep would be testing a
+      // dead bridge, and losing the ship IS one of the things these orders do.
+      if (g.over) {
+        g.over = false;
+        g.overReason = null;
+        g.ship.restore?.();
+        g.ship.crew = g.ship.maxCrew;
+      }
+      // And never leave the captain on a planet for a hundred orders.
+      if (g.ashore && i % 7 === 0) g.beamUp?.();
+    }
+
+    // Put it back the way it was found.
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.ship.crew = g.ship.maxCrew;
+    for (const back of document.querySelectorAll('.modal-back')) back.remove();
+    app.go('bridge');
+    app.render();
+
+    return { given, total: phrases.length, violations, threw };
+  });
+  check('every phrasing the parser knows can be given to the running game',
+    monkey.given >= monkey.total * 0.98,
+    `${monkey.given} of ${monkey.total} orders reached the dispatcher`);
+  check('no order throws, whenever it is given',
+    monkey.threw.length === 0, monkey.threw.slice(0, 4).join(' | '));
+  check('no order leaves the simulation in a state that breaks a rule',
+    monkey.violations.length === 0, monkey.violations.slice(0, 4).join(' | '));
+
+  await dismissModals(page);
+  await page.waitForTimeout(250);
+
   // ------------------------------------------------ no errors anywhere
   const ignorable = (t) => /favicon|Failed to load resource.*404/i.test(t);
   const realConsole = consoleErrors.filter((t) => !ignorable(t));

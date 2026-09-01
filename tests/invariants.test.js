@@ -1331,3 +1331,34 @@ describe('a landing party goes somewhere', () => {
     assert.equal(order.prefer, 'board', 'the parser lost which mission was meant');
   });
 });
+
+test('reinforcing a shield is not an anomaly', () => {
+  // Found by the order monkey in tools/verify-app.mjs on its first run, which
+  // is the point of having one: `pilot()` in this file has never reinforced a
+  // shield, so no fight the soak has ever run could reach the state.
+  //
+  // `reinforceShield` moves charge from five facings onto one and deliberately
+  // pushes it past `maxShield` — that IS the order. The checker read the
+  // normal ceiling, so giving an ordinary tactical order put an anomaly in the
+  // ship's log, and would have done so in front of a player with the debug
+  // flag on.
+  const g = fight('d7');
+  g.ship.reinforceShield('port');
+  assert.ok(g.ship.shields.port > g.ship.maxShield,
+    'the order did not overcharge anything, so this proves nothing');
+  assert.deepEqual(checkAll(g, OPTS), []);
+
+  // And the ceiling is still a ceiling.
+  g.ship.shields.port = g.ship.maxShield * 3;
+  assert.ok(checkAll(g, OPTS).some((v) => v.code === 'ship.shield.overmax'));
+});
+
+test('the overcharge bleeds back off on its own', () => {
+  const g = fight('d7');
+  g.ship.reinforceShield('port');
+  const peak = g.ship.shields.port;
+  for (let i = 0; i < 30 * 40; i++) g.update(STEP);
+  assert.ok(g.ship.shields.port < peak,
+    'a reinforced facing held its overcharge forever');
+  assert.deepEqual(checkAll(g, OPTS), []);
+});

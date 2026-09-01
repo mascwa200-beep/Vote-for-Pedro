@@ -26,7 +26,7 @@
 // Violations are data, not exceptions. The caller decides whether to throw
 // (tests), log (the debug overlay), or count (the fuzzer).
 
-import { FACINGS } from './ship.js';
+import { FACINGS, SHIELD_OVERCHARGE } from './ship.js';
 
 /**
  * How far outside the arena a ship may be before it counts as escaped.
@@ -125,8 +125,15 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
     r.must(ok(v), 'ship.shield.finite', 'fatal', `${who}: shields.${f} is ${v}`, who);
     r.must(num(v) >= 0, 'ship.shield.negative', 'error',
       `${who}: shields.${f} is ${v}`, who);
-    r.must(num(v) <= num(s.maxShield) + 1e-6, 'ship.shield.overmax', 'error',
-      `${who}: shields.${f} is ${v}, above max ${s.maxShield}`, who);
+    // The ceiling is the OVERCHARGE ceiling, not the normal one.
+    // `reinforceShield` deliberately pushes one facing past `maxShield` — that
+    // is the entire point of the order — and the excess bleeds off over about
+    // twenty seconds. This rule read the normal maximum, so an ordinary
+    // tactical order put an anomaly in the ship's log every time it was given.
+    // Found by the order monkey in tools/verify-app.mjs on its first run.
+    const ceiling = num(s.maxShield) * SHIELD_OVERCHARGE;
+    r.must(num(v) <= ceiling + 1e-6, 'ship.shield.overmax', 'error',
+      `${who}: shields.${f} is ${v}, above the ${ceiling} ceiling`, who);
   }
 
   for (const [k, v] of Object.entries(s.subsystems ?? {})) {

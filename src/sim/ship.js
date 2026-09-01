@@ -17,6 +17,21 @@ import { emit } from '../core/events.js';
 // the AI, the display, saves, and balance. They are worth paying for once.
 export const FACINGS = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'];
 
+/**
+ * How far past its normal ceiling one facing may be charged.
+ *
+ * `reinforceShield` moves charge from five facings onto one, and the point of
+ * the order is that the receiving facing ends up STRONGER than it can normally
+ * be — otherwise the manoeuvre buys nothing but a redistribution. The excess
+ * bleeds off over about twenty seconds.
+ *
+ * Exported because the invariant checker has to know it. It did not, and
+ * forbade any facing above `maxShield` outright, so reinforcing shields — an
+ * ordinary tactical order — reported an anomaly in the ship's log to any
+ * captain running with the checker on.
+ */
+export const SHIELD_OVERCHARGE = 1.2;
+
 export const FACING_LABEL = {
   fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
   dorsal: 'Dorsal', ventral: 'Ventral',
@@ -633,7 +648,7 @@ export class Ship {
   /**
    * Emergency shield reinforcement to one facing, taken from the others.
    *
-   * The receiving facing is capped at 1.2x max, so it can only ever absorb a
+   * The receiving facing is capped at SHIELD_OVERCHARGE, so it can only ever absorb a
    * limited amount. Charge is conserved: we work out the headroom first and
    * draw exactly that much, proportionally, rather than stripping a fixed
    * fraction off five facings and letting the overflow evaporate.
@@ -643,7 +658,7 @@ export class Ship {
     const others = FACINGS.filter((f) => f !== facing);
     const draw = clamp(fraction, 0, 1);
     const available = others.reduce((n, f) => n + this.shields[f] * draw, 0);
-    const headroom = Math.max(0, this.maxShield * 1.2 - this.shields[facing]);
+    const headroom = Math.max(0, this.maxShield * SHIELD_OVERCHARGE - this.shields[facing]);
     const wanted = Math.min(available, headroom);
     if (wanted <= 0) return true;
 
@@ -656,7 +671,7 @@ export class Ship {
       this.shields[f] -= take;
       pooled += take;
     }
-    this.shields[facing] = Math.min(this.maxShield * 1.2, this.shields[facing] + pooled);
+    this.shields[facing] = Math.min(this.maxShield * SHIELD_OVERCHARGE, this.shields[facing] + pooled);
     return true;
   }
 
