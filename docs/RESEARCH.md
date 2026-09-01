@@ -709,6 +709,66 @@ Sources: [Memory Alpha — Miranda class](https://memory-alpha.fandom.com/wiki/M
 
 ---
 
+## 15. The other two axes: what the beam and height figures were actually worth
+
+§13 recorded length, beam and height for all thirty-one classes, and Phase B
+used exactly one of the three. Length set the on-screen size; beam and height
+sat in the table and nothing read them. This is what the models were doing
+instead, measured by building each hull and taking its bounding box:
+
+| class | drawn beam ÷ length | published | drawn height ÷ length | published |
+|---|---|---|---|---|
+| Constitution | 0.647 | 0.457 | 0.488 | 0.253 |
+| Excelsior | 0.600 | 0.398 | 0.454 | 0.167 |
+| Oberth | 0.776 | 0.550 | 0.694 | 0.292 |
+| Miranda | 0.990 | 0.507 | 0.369 | 0.223 |
+| Sovereign | 0.529 | 0.366 | 0.261 | 0.128 |
+| Bird-of-Prey | 0.899 | 1.152 | 0.244 | 0.620 |
+
+Every Federation hull was between 1.2× and 2.0× too wide and between 1.1× and
+2.7× too tall. An Excelsior stood at 2.7 times its own height. The alien forms
+were much closer — the wedges and haulers came in at 0.9–1.3 — because those
+builders were written against a length-and-width table and the Starfleet ones
+were shaped by eye.
+
+The single largest error was the saucer. A `starfleet` hull drew a primary hull
+0.72 of the ship's length across; a Constitution's is 0.44, and on every
+two-nacelle Starfleet cruiser **the published beam IS the saucer diameter**,
+because the nacelles sit inboard of the rim on all of them. That one identity
+fixes the saucer on eight classes without a value being chosen.
+
+Three classes break it, and they break it the same way: on a Miranda, a
+Constellation and a Danube runabout the widest point is the NACELLES, not the
+primary hull. Those forms take the saucer as a fraction of the beam instead.
+
+A Bird-of-Prey is the mirror-image error. Its published height is 0.62 of its
+length — the tallest figure in the whole table — because the figure is taken
+with the wings DOWN, and the model drooped them barely at all.
+
+### What the build takes from this
+
+Two ratios, `beam ÷ length` and `height ÷ length`, handed to every builder
+against a hull that spans one unit fore and aft. Saucer radius, hull radius,
+nacelle height, nacelle radius, pylon height and rollbar span all derive from
+them, so a blueprint entry carries only what is genuinely per-ship: how raked
+the saucer is, how far the pylons sweep, how long the nacelles run.
+
+Two tests hold it. The first measures the built mesh and requires drawn
+beam-over-length and height-over-length to equal the published figures within
+2%. The second is the one that matters: the normalising step at the end of
+`hullMesh` would satisfy the first test whatever shape the builder produced, so
+`proportionError` measures how much squashing that step has to do, and it must
+stay under 1.25 — which forces the FORMS to be right and leaves the normaliser
+only the last few percent. A nacelle built round and then squashed 2:1 is an
+ellipse, and no test that only checks the final bounding box would ever say so.
+
+Sources: the same figures recorded in §13, re-read as three numbers rather than
+one. [Memory Alpha — Constitution class](https://memory-alpha.fandom.com/wiki/Constitution_class),
+[Memory Alpha — Bird-of-Prey](https://memory-alpha.fandom.com/wiki/Klingon_Bird-of-Prey),
+[DITL — ship specifications](https://www.ditl.org/)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

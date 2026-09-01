@@ -5484,18 +5484,25 @@ function tube(mb, {
 
 /**
  * A box, given its centre and half-extents. Pylons, wings and hull plating.
- * `sweep` shears the far end backwards along -x, which is what turns a
- * rectangular slab into a swept wing without a second primitive.
+ *
+ * Two shears, because a Starfleet pylon leans in two planes and a box that can
+ * only lean in one is why every warp pylon in this game read as a rectangular
+ * slab from the side. `sweep` displaces the outboard (+z) end aft, which is
+ * the rake you see from ABOVE — a swept wing. `rake` displaces the top (+y)
+ * end aft, which is the lean you see from the SIDE, and is the whole reason a
+ * Constitution's nacelles look like they are being carried rather than
+ * balanced. Both are in world units at the far face and taper to nothing at
+ * the near one.
  */
 function box(mb, {
-  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0,
+  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0,
   color = [0.6, 0.64, 0.7],
 } = {}) {
   const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
   const [cx, cy, cz] = center;
-  // Eight corners; +z corners are displaced by the sweep.
+  // Eight corners; the +z corners carry the sweep and the +y corners the rake.
   const p = (sx, sy, sz) => vec3(
-    cx + sx * hx - (sz > 0 ? sweep : 0),
+    cx + sx * hx - (sz > 0 ? sweep : 0) - (sy > 0 ? rake : 0),
     cy + sy * hy,
     cz + sz * hz,
   );
@@ -5596,6 +5603,12 @@ __define("src/gfx/forms.federation.js", function (__exports, __require) {
 // See docs/RESEARCH.md §14 for what identifies each class and why topology
 // rather than proportion is what does it.
 //
+// Every size below is a share of the class's PUBLISHED beam and height, handed
+// in as `ratioBeam` and `ratioHeight` against a hull built to span one unit
+// fore and aft. Nothing here is a hand-tuned constant, because hand-tuned
+// constants are what made every Federation hull in this game half again too
+// wide and twice too tall.
+//
 // Coordinate convention, matching mesh.js and the simulation: +x is the bow,
 // +y is dorsal, +z is starboard. `mirrored` builds the starboard half and
 // reflects it, so everything below is written for one side only.
@@ -5625,45 +5638,60 @@ const FEDERATION_FORMS = {
    * The class's identity is what is missing. The nacelles hang directly beneath
    * a broad saucer with nothing between them, and a rollbar carries the weapon
    * pod above it.
+   *
+   * The published beam includes the nacelles, which sit at the saucer's rim
+   * rather than inboard of it, so the saucer here is a fraction of the beam
+   * instead of the whole of it — the one place a Starfleet hull's widest point
+   * is not its primary hull.
    */
   rollbar(mb, p, b) {
-    const sr = b.saucerRadius ?? 0.52;
-    const sx = b.saucerX ?? 0.1;
+    const wide = b.ratioBeam ?? 0.5;
+    const high = b.ratioHeight ?? 0.22;
+    const sr = b.saucerRadius ?? wide * 0.46;
+    const sx = b.saucerX ?? 0.5 - sr * 1.06;
     saucer(mb, {
       origin: vec3(sx, 0, 0),
       radius: sr,
-      thickness: b.saucerThickness ?? 0.11,
+      thickness: b.saucerThickness ?? high * 0.34,
       domeRatio: b.domeRatio ?? 0.3,
-      domeHeight: b.domeHeight ?? 0.04,
-      stretch: b.saucerStretch ?? 1,
+      domeHeight: b.domeHeight ?? high * 0.16,
+      // A Miranda's primary hull is wider across than it is deep fore-and-aft,
+      // which is the opposite of every other saucer in the fleet.
+      stretch: b.saucerStretch ?? 0.86,
       segments: b.segments ?? 22,
       color: p.hull,
       rimColor: p.trim,
     });
 
     if (b.rollbar !== false) {
-      const ry = b.rollbarY ?? 0.24;
-      box(mb, { center: vec3(sx, ry, 0), size: vec3(0.16, 0.05, sr * 1.5), color: p.trim });
+      const ry = b.rollbarY ?? high * 0.42;
+      box(mb, { center: vec3(sx, ry, 0), size: vec3(sr * 0.34, high * 0.12, wide * 0.82), color: p.trim });
       mirrored(mb, (m) => {
-        box(m, { center: vec3(sx, ry / 2, sr * 0.72), size: vec3(0.1, ry, 0.06), color: p.trim });
+        box(m, {
+          center: vec3(sx, ry / 2, wide * 0.4),
+          size: vec3(sr * 0.22, ry, high * 0.13),
+          color: p.trim,
+        });
       });
       tube(mb, {
-        origin: vec3(sx - 0.16, ry, 0), length: 0.32,
-        r0: 0.05, r1: 0.05, segments: 8, color: p.hull,
+        origin: vec3(sx - sr * 0.34, ry, 0), length: sr * 0.68,
+        r0: high * 0.11, r1: high * 0.11, segments: 8, color: p.hull,
       });
     }
 
-    const ny = b.nacelleY ?? -0.16;
-    const nz = b.nacelleZ ?? 0.34;
-    const nx = b.nacelleX ?? -0.32;
-    const nl = b.nacelleLength ?? 0.66;
+    const ny = b.nacelleY ?? -high * 0.28;
+    const nz = b.nacelleZ ?? wide * 0.44;
+    // Short and fat, and they reach the stern: a Miranda's engines ARE its aft
+    // half. Long thin rods read as a saucer with two spikes behind it.
+    const nl = b.nacelleLength ?? 0.5 + sx * 0.5;
+    const nx = b.nacelleX ?? -0.5;
     mirrored(mb, (m) => {
       box(m, {
-        center: vec3(nx + nl * 0.4, ny / 2, nz * 0.7),
-        size: vec3(0.1, Math.abs(ny), nz * 0.7),
+        center: vec3(sx - sr * 0.3, ny / 2, nz * 0.72),
+        size: vec3(sr * 0.7, Math.abs(ny) + high * 0.16, nz * 0.75),
         color: p.trim,
       });
-      nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? 0.07 });
+      nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? high * 0.26 });
     });
   },
 
@@ -5672,41 +5700,49 @@ const FEDERATION_FORMS = {
    *
    * A saucer above and a wholly separate lower hull below it on two struts,
    * with the nacelles on the LOWER hull. Nothing else in Starfleet is built
-   * this way.
+   * this way, and the gap between the two hulls is the whole silhouette —
+   * which is also why an Oberth is proportionally the tallest ship in the
+   * fleet for its length.
    */
   twinhull(mb, p, b) {
-    const sr = b.saucerRadius ?? 0.38;
-    const sx = b.saucerX ?? 0.16;
-    const sy = b.saucerY ?? 0.2;
+    const wide = b.ratioBeam ?? 0.55;
+    const high = b.ratioHeight ?? 0.29;
+    const sr = b.saucerRadius ?? wide / 2;
+    const sx = b.saucerX ?? 0.5 - sr;
+    const sy = b.saucerY ?? high * 0.28;
     saucer(mb, {
       origin: vec3(sx, sy, 0),
       radius: sr,
-      thickness: b.saucerThickness ?? 0.1,
-      domeRatio: 0.3, domeHeight: 0.05,
+      thickness: b.saucerThickness ?? high * 0.26,
+      domeRatio: 0.3, domeHeight: high * 0.14,
+      stretch: b.saucerStretch ?? 0.94,
       segments: b.segments ?? 20,
       color: p.hull, rimColor: p.trim,
     });
 
-    const ly = b.lowerY ?? -0.26;
+    const ly = b.lowerY ?? -high * 0.28;
     tube(mb, {
-      origin: vec3(-0.44, ly, 0),
-      length: b.hullLength ?? 0.78,
-      r0: b.hullR0 ?? 0.1, r1: b.hullR1 ?? 0.12,
+      origin: vec3(-0.5, ly, 0),
+      length: b.hullLength ?? 0.86,
+      r0: high * 0.3, r1: high * 0.36,
       segments: 12, color: p.hull,
     });
     mirrored(mb, (m) => {
       box(m, {
-        center: vec3(sx, (sy + ly) / 2, sr * 0.4),
-        size: vec3(0.14, sy - ly, 0.07),
+        center: vec3(sx, (sy + ly) / 2, sr * 0.42),
+        size: vec3(sr * 0.36, sy - ly, high * 0.2),
         color: p.trim,
       });
     });
 
-    const nz = b.nacelleZ ?? 0.3;
-    const nl = b.nacelleLength ?? 0.6;
+    const nz = b.nacelleZ ?? wide * 0.42;
+    const nl = b.nacelleLength ?? 0.56;
     mirrored(mb, (m) => {
-      box(m, { center: vec3(-0.14, ly, nz * 0.6), size: vec3(0.34, 0.06, nz * 0.8), color: p.trim });
-      nacelle(m, p, { x: -0.36, y: ly, z: nz, length: nl, radius: b.nacelleRadius ?? 0.065 });
+      box(m, {
+        center: vec3(-0.16, ly, nz * 0.6),
+        size: vec3(0.34, high * 0.16, nz * 0.8), color: p.trim,
+      });
+      nacelle(m, p, { x: -0.42, y: ly, z: nz, length: nl, radius: b.nacelleRadius ?? high * 0.2 });
     });
   },
 
@@ -5715,40 +5751,51 @@ const FEDERATION_FORMS = {
    *
    * The count is the whole silhouette: at any distance where you cannot read a
    * registry, a Constellation is the ship with four glowing caps in a square.
+   * The published beam is set by the nacelles at their widest, so the saucer
+   * is smaller than the beam rather than equal to it.
    */
   quadnacelle(mb, p, b) {
-    const sr = b.saucerRadius ?? 0.42;
-    const sx = b.saucerX ?? 0.3;
-    const hy = b.hullY ?? -0.17;
+    const wide = b.ratioBeam ?? 0.61;
+    const high = b.ratioHeight ?? 0.23;
+    const sr = b.saucerRadius ?? wide * 0.38;
+    const sx = b.saucerX ?? 0.5 - sr;
+    const hy = b.hullY ?? -high * 0.2;
     saucer(mb, {
-      origin: vec3(sx, 0.02, 0),
+      origin: vec3(sx, 0, 0),
       radius: sr,
-      thickness: b.saucerThickness ?? 0.1,
-      domeRatio: 0.32, domeHeight: 0.05,
+      thickness: b.saucerThickness ?? high * 0.24,
+      domeRatio: 0.32, domeHeight: high * 0.18,
       segments: b.segments ?? 20,
       color: p.hull, rimColor: p.trim,
     });
-    box(mb, { center: vec3(sx - sr * 0.55, -0.1, 0), size: vec3(sr * 0.5, 0.22, 0.09), color: p.trim });
+    box(mb, {
+      center: vec3(sx - sr * 0.55, hy / 2, 0),
+      size: vec3(sr * 0.5, Math.abs(hy) + high * 0.22, high * 0.34),
+      color: p.trim,
+    });
     tube(mb, {
-      origin: vec3(-0.46, hy, 0),
-      length: b.hullLength ?? 0.74, r0: 0.1, r1: 0.13,
+      origin: vec3(-0.5, hy, 0),
+      length: b.hullLength ?? 0.5 + sx * 0.8,
+      r0: high * 0.22, r1: high * 0.28,
       segments: 12, color: p.hull,
     });
 
     // `mirrored` gives port and starboard; the loop gives the stack.
-    const nl = b.nacelleLength ?? 0.72;
-    const nx = b.nacelleX ?? -0.42;
-    const nz = b.nacelleZ ?? 0.38;
-    const high = b.nacelleY ?? 0.2;
-    for (const ny of [high, high - (b.nacelleStack ?? 0.34)]) {
+    const nl = b.nacelleLength ?? 0.66;
+    const nx = b.nacelleX ?? -0.46;
+    const nz = b.nacelleZ ?? wide * 0.46;
+    const high2 = b.nacelleY ?? high * 0.32;
+    const stack = b.nacelleStack ?? high * 0.62;
+    for (const ny of [high2, high2 - stack]) {
       mirrored(mb, (m) => {
         box(m, {
           center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
-          size: vec3(0.09, 0.3, nz * 0.85),
-          sweep: b.pylonSweep ?? 0.08,
+          size: vec3(high * 0.2, Math.abs(ny - hy) + high * 0.14, nz * 0.85),
+          sweep: b.pylonSweep ?? 0.04,
+          rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.5,
           color: p.trim,
         });
-        nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? 0.06 });
+        nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? high * 0.11 });
       });
     }
   },
@@ -5761,43 +5808,46 @@ const FEDERATION_FORMS = {
    * side the two are unmistakable.
    */
   podded(mb, p, b) {
-    const sr = b.saucerRadius ?? 0.58;
-    const sx = b.saucerX ?? 0.2;
-    const hy = b.hullY ?? -0.16;
+    const wide = b.ratioBeam ?? 0.72;
+    const high = b.ratioHeight ?? 0.29;
+    const sr = b.saucerRadius ?? wide / 2;
+    const sx = b.saucerX ?? 0.5 - sr;
+    const hy = b.hullY ?? -high * 0.2;
     saucer(mb, {
-      origin: vec3(sx, 0.02, 0),
+      origin: vec3(sx, 0, 0),
       radius: sr,
-      thickness: b.saucerThickness ?? 0.12,
-      domeRatio: 0.3, domeHeight: 0.05,
-      stretch: b.saucerStretch ?? 1.1,
+      thickness: b.saucerThickness ?? high * 0.2,
+      domeRatio: 0.3, domeHeight: high * 0.12,
+      stretch: b.saucerStretch ?? 1.2,
       segments: b.segments ?? 22,
       color: p.hull, rimColor: p.trim,
     });
     tube(mb, {
-      origin: vec3(-0.4, hy, 0),
-      length: b.hullLength ?? 0.6, r0: 0.11, r1: 0.14,
+      origin: vec3(-0.5, hy, 0),
+      length: b.hullLength ?? 0.5 + sx * 0.8,
+      r0: high * 0.2, r1: high * 0.26,
       segments: 12, color: p.hull,
     });
 
-    const spine = sx - sr * 0.5;
-    box(mb, { center: vec3(spine, 0.2, 0), size: vec3(0.12, 0.3, 0.1), color: p.trim });
+    const spine = sx - sr * 0.45;
+    box(mb, { center: vec3(spine, high * 0.2, 0), size: vec3(sr * 0.3, high * 0.4, wide * 0.16), color: p.trim });
     box(mb, {
-      center: vec3(spine, b.podY ?? 0.38, 0),
-      size: vec3(b.podLength ?? 0.5, 0.12, b.podWidth ?? 0.42),
+      center: vec3(spine, b.podY ?? high * 0.4, 0),
+      size: vec3(b.podLength ?? sr * 0.95, high * 0.2, b.podWidth ?? wide * 0.5),
       sweep: 0.06, color: p.hull,
     });
 
-    const ny = b.nacelleY ?? -0.02;
-    const nz = b.nacelleZ ?? 0.42;
-    const nx = b.nacelleX ?? -0.36;
-    const nl = b.nacelleLength ?? 0.7;
+    const ny = b.nacelleY ?? -high * 0.04;
+    const nz = b.nacelleZ ?? wide * 0.44;
+    const nx = b.nacelleX ?? -0.5;
+    const nl = b.nacelleLength ?? 0.62;
     mirrored(mb, (m) => {
       box(m, {
         center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.6),
-        size: vec3(0.1, 0.24, nz * 0.8),
+        size: vec3(high * 0.2, Math.abs(ny - hy) + high * 0.18, nz * 0.8),
         sweep: 0.1, color: p.trim,
       });
-      nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? 0.075 });
+      nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? high * 0.15 });
     });
   },
 
@@ -5806,36 +5856,52 @@ const FEDERATION_FORMS = {
    *
    * One body with the nacelles buried in it rather than hung off pylons. The
    * Defiant is a warship built as a single wedge; a runabout is a box with two
-   * engines on it.
+   * engines on it. Both are proportionally squat, which is why they are the
+   * two classes whose hand-tuned proportions were nearly right to begin with.
    */
   compact(mb, p, b) {
-    const bl = b.bodyLength ?? 1.0;
-    const bh = b.bodyHeight ?? 0.2;
-    const bw = b.bodyWidth ?? 0.44;
-    box(mb, {
-      center: vec3(0.05, 0, 0),
-      size: vec3(bl, bh, bw),
-      sweep: b.bodySweep ?? 0.16,
-      color: p.hull,
+    const wide = b.ratioBeam ?? 0.7;
+    const high = b.ratioHeight ?? 0.19;
+    const bl = b.bodyLength ?? 0.94;
+    const bh = b.bodyHeight ?? high * 0.86;
+    const bw = b.bodyWidth ?? wide;
+
+    // Built as two mirrored halves rather than one box.
+    //
+    // `sweep` displaces only the +z face, so a full-width box with a sweep on
+    // it is a RHOMBUS — the port side raked aft and the starboard side square,
+    // which is what a Defiant looked like from above until somebody drew it in
+    // plan. A half-width box mirrored is the symmetric wedge the ship is.
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(0, 0, bw / 4),
+        size: vec3(bl, bh, bw / 2),
+        sweep: b.bodySweep ?? bl * 0.3,
+        color: p.hull,
+      });
     });
     box(mb, {
-      center: vec3(0.05 + bl * 0.18, bh * 0.6, 0),
-      size: vec3(bl * 0.3, 0.1, bw * 0.42),
+      center: vec3(bl * 0.1, bh * 0.72, 0),
+      size: vec3(bl * 0.3, high * 0.26, bw * 0.38),
       color: p.trim,
     });
     sphere(mb, {
-      origin: vec3(0.05 + bl * 0.5, -0.02, 0),
-      radius: 0.07, segments: 8, rings: 5,
+      origin: vec3(bl * 0.46, -high * 0.06, 0),
+      radius: high * 0.24, segments: 8, rings: 5,
       color: p.dish ?? p.glow,
     });
 
+    // Part of the body rather than hung off it, which is the whole point of
+    // the class — but riding its upper surface, not buried inside it. Sunk
+    // level with the hull they were invisible, and a Defiant with no visible
+    // engines is a grey wedge.
     mirrored(mb, (m) => {
       nacelle(m, p, {
-        x: b.nacelleX ?? -0.34,
-        y: b.nacelleY ?? 0.02,
-        z: b.nacelleZ ?? 0.26,
-        length: b.nacelleLength ?? 0.52,
-        radius: b.nacelleRadius ?? 0.07,
+        x: b.nacelleX ?? -0.46,
+        y: b.nacelleY ?? bh * 0.5,
+        z: b.nacelleZ ?? bw * 0.3,
+        length: b.nacelleLength ?? bl * 0.72,
+        radius: b.nacelleRadius ?? bh * 0.44,
       });
     });
   },
@@ -5907,53 +5973,79 @@ const FORMS = {
    * silhouette, and the reason the saucer primitive gets the most segments.
    */
   starfleet(mb, p, b) {
-    const sr = b.saucerRadius ?? 0.44;
-    const sx = b.saucerX ?? 0.34;
+    // Proportions come from the published beam and height, not from taste.
+    //
+    // Every number below used to be a hand-tuned constant, and measured
+    // against the figures in DIMENSIONS they were not close: this form drew a
+    // saucer 0.72 of the hull's length across when a Constitution's is 0.44,
+    // and stood the ship twice as tall as it is. `wide` and `high` are the
+    // published beam and height as fractions of length, and the hull is built
+    // to span one unit fore-and-aft, so they are directly usable as sizes.
+    const wide = b.ratioBeam ?? 0.45;
+    const high = b.ratioHeight ?? 0.25;
+    // For a two-nacelle Starfleet cruiser the beam IS the saucer: the nacelles
+    // sit inboard of the rim on every one of them.
+    const sr = b.saucerRadius ?? wide / 2;
+    const stretch = b.saucerStretch ?? 1;
+    const sx = b.saucerX ?? 0.5 - sr * stretch;
     saucer(mb, {
-      origin: vec3(sx, b.saucerY ?? 0.02, 0),
+      origin: vec3(sx, b.saucerY ?? 0, 0),
       radius: sr,
-      thickness: b.saucerThickness ?? 0.1,
+      thickness: b.saucerThickness ?? high * 0.2,
       domeRatio: b.domeRatio ?? 0.34,
-      domeHeight: b.domeHeight ?? 0.05,
+      // `domeFlat` is how tall the dome is as a share of the ship's height, so
+      // the refit's famously flat-topped saucer stays flat at any size.
+      domeHeight: b.domeHeight ?? high * (b.domeFlat ?? 0.16),
       // A Constitution's saucer is a circle. A Galaxy's is an ovoid, a
       // Sovereign's a raked ellipse, an Excelsior's an elongated disc — and
       // this primitive could only make circles, so all three were drawn as the
       // one shape they are not.
-      stretch: b.saucerStretch ?? 1,
+      stretch,
       segments: b.segments ?? 22,
       color: p.hull,
       rimColor: p.trim,
     });
 
+    const hy = b.hullY ?? -high * 0.24;
     if (b.neck !== false) {
       box(mb, {
-        center: vec3(sx - sr * 0.55, -0.1, 0),
-        size: vec3(sr * 0.5, 0.22, 0.09),
+        center: vec3(sx - sr * 0.5, hy / 2, 0),
+        size: vec3(sr * 0.5, Math.abs(hy) + high * 0.2, high * 0.36),
         color: p.trim,
       });
     }
 
     // The secondary hull, tapering aft.
     tube(mb, {
-      origin: vec3(-0.5, b.hullY ?? -0.17, 0),
-      length: b.hullLength ?? 0.82,
-      r0: b.hullR0 ?? 0.1,
-      r1: b.hullR1 ?? 0.14,
+      origin: vec3(-0.5, hy, 0),
+      length: b.hullLength ?? 0.5 + sx * 0.85,
+      r0: b.hullR0 ?? high * 0.17,
+      r1: b.hullR1 ?? high * 0.23,
       segments: 12,
       color: p.hull,
     });
 
     // Nacelles, one built and one mirrored.
-    const nz = b.nacelleZ ?? 0.36;
-    const ny = b.nacelleY ?? 0.14;
-    const nx = b.nacelleX ?? -0.46;
-    const nl = b.nacelleLength ?? 0.86;
-    const nr = b.nacelleRadius ?? 0.075;
+    // Deviations are multipliers of the published figures, not absolutes: an
+    // Excelsior's pylons are tall FOR AN EXCELSIOR, and an absolute value
+    // written here would mean something different on every hull.
+    const nz = b.nacelleZ ?? sr * (b.nacelleWide ?? 0.78);
+    const ny = b.nacelleY ?? high * (b.nacelleHigh ?? 0.38);
+    const nx = b.nacelleX ?? -0.48;
+    // Long enough to reach the saucer's trailing edge and no further: the
+    // bussards used to run forward to the saucer's midpoint, which is a
+    // shape no Starfleet cruiser has.
+    const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
+    const nr = b.nacelleRadius ?? high * 0.12;
     mirrored(mb, (m) => {
+      // The pylon reaches from the hull to the nacelle, measured rather than
+      // guessed at a fixed 0.34 — which was right for a Constitution and left
+      // every ship with higher nacelles connected to nothing.
       box(m, {
-        center: vec3(nx + nl * 0.28, (ny + (b.hullY ?? -0.17)) / 2, nz * 0.55),
-        size: vec3(0.1, 0.34, nz * 0.9),
-        sweep: b.pylonSweep ?? 0.14,
+        center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
+        size: vec3(high * 0.24, Math.abs(ny - hy) + high * 0.16, nz * 0.9),
+        sweep: b.pylonSweep ?? 0.06,
+        rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.7,
         color: p.trim,
       });
       tube(m, {
@@ -5995,16 +6087,23 @@ const FORMS = {
    * was a warm off-white.
    */
   tos_starfleet(mb, p, b) {
-    const sr = b.saucerRadius ?? 0.46;
-    const sx = b.saucerX ?? 0.34;
-    const hullY = b.hullY ?? -0.17;
+    // Same rule as `starfleet`: the published beam and height as fractions of
+    // length, and a hull built to span one unit fore-and-aft. A Constitution
+    // is 289 m by 127 by 72.6, which is a saucer 0.44 of the ship's length
+    // across on a hull a quarter of its length tall — a much flatter, smaller-
+    // saucered object than the hand-tuned numbers here ever drew.
+    const wide = b.ratioBeam ?? 0.44;
+    const high = b.ratioHeight ?? 0.25;
+    const sr = b.saucerRadius ?? wide / 2;
+    const sx = b.saucerX ?? 0.5 - sr;
+    const hullY = b.hullY ?? -high * 0.24;
 
     saucer(mb, {
-      origin: vec3(sx, b.saucerY ?? 0.02, 0),
+      origin: vec3(sx, b.saucerY ?? 0, 0),
       radius: sr,
-      thickness: b.saucerThickness ?? 0.09,
+      thickness: b.saucerThickness ?? high * 0.19,
       domeRatio: b.domeRatio ?? 0.3,
-      domeHeight: b.domeHeight ?? 0.055,
+      domeHeight: b.domeHeight ?? high * 0.2,
       segments: b.segments ?? 24,
       color: p.hull,
       rimColor: p.trim,
@@ -6012,38 +6111,39 @@ const FORMS = {
 
     // The dorsal neck, raked rather than vertical.
     box(mb, {
-      center: vec3(sx - sr * 0.6, hullY / 2 - 0.02, 0),
-      size: vec3(sr * 0.42, 0.26, 0.075),
+      center: vec3(sx - sr * 0.6, hullY / 2, 0),
+      size: vec3(sr * 0.42, Math.abs(hullY) + high * 0.24, high * 0.3),
       sweep: 0.08,
       color: p.hull,
     });
 
     // Secondary hull. Blunter at the bow than the generic taper, because the
     // dish has to sit in something.
-    const hl = b.hullLength ?? 0.8;
+    const hr = high * 0.2;
+    const hl = b.hullLength ?? 0.46 + sx * 0.72;
     tube(mb, {
-      origin: vec3(-0.46, hullY, 0),
+      origin: vec3(-0.48, hullY, 0),
       length: hl,
-      r0: 0.105,
-      r1: 0.145,
+      r0: hr * 0.85,
+      r1: hr,
       segments: 14,
       color: p.hull,
       capAft: true,
     });
 
     // The deflector dish, recessed in a collar at the bow.
-    const dishX = -0.46 + hl;
+    const dishX = -0.48 + hl;
     tube(mb, {
-      origin: vec3(dishX - 0.03, hullY, 0),
-      length: 0.05,
-      r0: 0.145,
-      r1: 0.125,
+      origin: vec3(dishX - hr * 0.2, hullY, 0),
+      length: hr * 0.34,
+      r0: hr,
+      r1: hr * 0.86,
       segments: 14,
       color: p.trim,
     });
     sphere(mb, {
-      origin: vec3(dishX + 0.035, hullY, 0),
-      radius: 0.108,
+      origin: vec3(dishX + hr * 0.24, hullY, 0),
+      radius: hr * 0.74,
       segments: 12,
       rings: 6,
       color: p.dish ?? p.glow,
@@ -6051,23 +6151,30 @@ const FORMS = {
 
     // The hangar: a flat transom closing the stern.
     box(mb, {
-      center: vec3(-0.47, hullY, 0),
-      size: vec3(0.05, 0.17, 0.15),
+      center: vec3(-0.49, hullY, 0),
+      size: vec3(hr * 0.34, hr * 1.2, hr * 1.05),
       color: p.trim,
     });
 
     // Nacelles on slender raked pylons.
-    const nz = b.nacelleZ ?? 0.35;
-    const ny = b.nacelleY ?? 0.155;
-    const nx = b.nacelleX ?? -0.44;
-    const nl = b.nacelleLength ?? 0.9;
-    const nr = b.nacelleRadius ?? 0.072;
+    //
+    // Height matters more than any other number here. The nacelles used to sit
+    // at 0.155 — a saucer's thickness above the saucer — and the ship read as
+    // a plate with two logs beside it. On the real thing they are carried well
+    // clear of the primary hull, and it is the empty space under them that
+    // makes the silhouette.
+    const nz = b.nacelleZ ?? sr * (b.nacelleWide ?? 0.76);
+    const ny = b.nacelleY ?? high * (b.nacelleHigh ?? 0.38);
+    const nx = b.nacelleX ?? -0.46;
+    const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
+    const nr = b.nacelleRadius ?? high * 0.115;
     mirrored(mb, (m) => {
-      // Thin, and swept harder than the generic slab.
+      // Thin, swept harder than the generic slab, and leaning aft as it rises.
       box(m, {
-        center: vec3(nx + nl * 0.3, (ny + hullY) / 2, nz * 0.55),
-        size: vec3(0.055, 0.35, nz * 0.92),
-        sweep: b.pylonSweep ?? 0.26,
+        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, nz * 0.55),
+        size: vec3(high * 0.2, Math.abs(ny - hullY) + high * 0.12, nz * 0.92),
+        sweep: b.pylonSweep ?? 0.05,
+        rake: b.pylonRake ?? Math.max(0, ny - hullY) * 0.8,
         color: p.trim,
       });
       tube(m, {
@@ -6081,15 +6188,15 @@ const FORMS = {
       });
       // The bussard collar, then the dome set into it.
       tube(m, {
-        origin: vec3(nx + nl - 0.02, ny, nz),
-        length: 0.045,
+        origin: vec3(nx + nl - nr * 0.3, ny, nz),
+        length: nr * 0.6,
         r0: nr * 0.95,
         r1: nr * 1.1,
         segments: 12,
         color: p.trim,
       });
       sphere(m, {
-        origin: vec3(nx + nl + 0.035, ny, nz),
+        origin: vec3(nx + nl + nr * 0.45, ny, nz),
         radius: nr * 1.08,
         segments: 10,
         rings: 6,
@@ -6098,7 +6205,7 @@ const FORMS = {
       // The blue intercooler grille along the outboard face.
       box(m, {
         center: vec3(nx + nl * 0.45, ny - nr * 0.55, nz),
-        size: vec3(nl * 0.42, 0.012, nr * 0.5),
+        size: vec3(nl * 0.42, nr * 0.17, nr * 0.5),
         color: p.trim,
       });
     });
@@ -6219,15 +6326,21 @@ const FORMS = {
 
   /** Literally a cube. There is nothing else to say about it. */
   cube(mb, p, b) {
+    // A Borg cube is a cube because it IS one — its published figures are equal
+    // on all three axes, so the ratios below give it back exactly that. Anything
+    // else built by this form (the bioship) is not a cube, and drawing it as one
+    // made it three times as tall as its own dimensions say.
     const s = b.size ?? 1.1;
-    box(mb, { center: vec3(), size: vec3(s, s, s), color: p.hull });
+    const sy = s * ((b.ratioHeight ?? 1) / 1);
+    const sz = s * ((b.ratioBeam ?? 1) / 1);
+    box(mb, { center: vec3(), size: vec3(s, sy, sz), color: p.hull });
     // Surface clutter, so it does not read as a flat-shaded box at a distance.
     for (let i = 0; i < 14; i++) {
       const t = i / 14;
       const a = t * Math.PI * 2 * 3.7;
       box(mb, {
-        center: vec3(Math.cos(a) * s * 0.36, Math.sin(a * 1.7) * s * 0.36, Math.sin(a) * s * 0.5),
-        size: vec3(s * 0.2, s * 0.18, s * 0.12),
+        center: vec3(Math.cos(a) * s * 0.36, Math.sin(a * 1.7) * sy * 0.36, Math.sin(a) * sz * 0.5),
+        size: vec3(s * 0.2, sy * 0.18, sz * 0.12),
         color: i % 4 === 0 ? p.glow : p.trim,
       });
     }
@@ -6322,30 +6435,40 @@ const DIMENSIONS = {
  */
 const BLUEPRINTS = {
   // ---- Starfleet ----
-  constitution: { form: 'tos_starfleet', length: 289, saucerRadius: 0.46, nacelleLength: 0.9 },
-  constitution_refit: { form: 'starfleet', length: 305, saucerRadius: 0.45, saucerThickness: 0.09, domeRatio: 0.5, domeHeight: 0.025, nacelleRadius: 0.085, nacelleY: 0.18, pylonSweep: 0.1 },
-  miranda: { form: 'rollbar', length: 278, saucerRadius: 0.52, neck: false, hullLength: 0.5, nacelleX: -0.34, nacelleY: -0.02, nacelleLength: 0.62 },
-  oberth: { form: 'twinhull', length: 120, saucerRadius: 0.38, hullY: -0.36, hullLength: 0.66, nacelleY: -0.3, nacelleLength: 0.6 },
-  excelsior: { form: 'starfleet', length: 467, saucerRadius: 0.42, saucerStretch: 1.3, hullLength: 1.0, nacelleLength: 1.0, nacelleZ: 0.34, nacelleY: 0.24, pylonSweep: 0.04 },
-  constellation: { form: 'quadnacelle', length: 260, saucerRadius: 0.42, nacelleLength: 0.72, nacelleZ: 0.44, pylonSweep: 0.04 },
-  ambassador: { form: 'starfleet', length: 526, saucerRadius: 0.52, saucerStretch: 1.1, saucerThickness: 0.11, nacelleZ: 0.32, nacelleY: 0.08, nacelleLength: 0.86, pylonSweep: 0.1 },
-  galaxy: { form: 'starfleet', length: 641, saucerRadius: 0.6, saucerStretch: 1.24, saucerThickness: 0.13, hullLength: 0.9, nacelleZ: 0.44, nacelleY: 0.2, nacelleLength: 0.88, pylonSweep: 0.22 },
-  nebula: { form: 'podded', length: 442, saucerRadius: 0.58, hullLength: 0.6, nacelleX: -0.3, nacelleZ: 0.42, nacelleLength: 0.7 },
-  intrepid: { form: 'starfleet', length: 345, saucerRadius: 0.34, saucerStretch: 1.34, saucerThickness: 0.08, hullLength: 0.6, hullR0: 0.08, hullR1: 0.11, nacelleY: 0.26, nacelleZ: 0.3, nacelleLength: 0.66, pylonSweep: 0.2 },
-  defiant: { form: 'compact', length: 171, saucerRadius: 0.4, saucerThickness: 0.14, domeRatio: 0.6, neck: false, hullLength: 0.4, hullY: -0.08, nacelleX: -0.2, nacelleY: 0, nacelleZ: 0.3, nacelleLength: 0.5, pylonSweep: 0.02 },
-  sovereign: { form: 'starfleet', length: 685, saucerRadius: 0.46, saucerStretch: 1.5, saucerThickness: 0.09, domeRatio: 0.26, hullLength: 1.0, nacelleY: 0.06, nacelleLength: 0.94, pylonSweep: 0.34 },
-  runabout: { form: 'compact', length: 23, saucerRadius: 0.3, saucerThickness: 0.16, domeRatio: 0.55, neck: false, hullLength: 0.34, hullY: -0.04, nacelleX: -0.12, nacelleY: 0.02, nacelleZ: 0.24, nacelleLength: 0.36, segments: 12 },
+  // Federation entries carry SHAPE and nothing else.
+  //
+  // Every saucer radius, hull radius, nacelle height and nacelle offset that
+  // used to sit here was a hand-tuned proportion, and the DIMENSIONS table
+  // above already holds the published figure for each of them. The forms read
+  // those figures now, so what is left below is only what makes one ship
+  // different from another at the same proportions: how raked the saucer is,
+  // how far the pylons sweep, how long the nacelles run. Everything that would
+  // duplicate a number in DIMENSIONS is gone, because two copies of a figure
+  // is one copy too many and the second one always goes stale.
+  constitution: { form: 'tos_starfleet', length: 289 },
+  constitution_refit: { form: 'starfleet', length: 305, domeRatio: 0.52, domeFlat: 0.22, nacelleHigh: 0.3, pylonSweep: 0.08 },
+  miranda: { form: 'rollbar', length: 278, neck: false },
+  oberth: { form: 'twinhull', length: 120, lowerY: -0.06 },
+  excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, nacelleHigh: 0.34, pylonSweep: 0.02 },
+  constellation: { form: 'quadnacelle', length: 260 },
+  ambassador: { form: 'starfleet', length: 526, nacelleHigh: 0.3, pylonSweep: 0.08 },
+  galaxy: { form: 'starfleet', length: 641, saucerStretch: 0.95, nacelleHigh: 0.4, nacelleWide: 0.86, pylonSweep: 0.14 },
+  nebula: { form: 'podded', length: 442, saucerStretch: 0.95 },
+  intrepid: { form: 'starfleet', length: 345, saucerStretch: 1.12, nacelleHigh: 0.4, pylonSweep: 0.12 },
+  defiant: { form: 'compact', length: 171 },
+  sovereign: { form: 'starfleet', length: 685, saucerStretch: 1.2, domeRatio: 0.26, nacelleHigh: 0.34, pylonSweep: 0.22 },
+  runabout: { form: 'compact', length: 23, segments: 12 },
 
   // ---- Klingon ----
-  bird_of_prey: { form: 'raptor', length: 158, wingSpan: 0.76, wingSweep: 0.46, wingDroop: -0.2 },
-  d7: { form: 'raptor', length: 228, wingSpan: 0.66, wingSweep: 0.3, wingDroop: -0.04, bodyLength: 0.7 },
-  ktinga: { form: 'raptor', length: 235, wingSpan: 0.68, wingSweep: 0.32, wingDroop: -0.05, bodyLength: 0.72 },
-  vorcha: { form: 'raptor', length: 481, wingSpan: 0.62, wingSweep: 0.5, wingDroop: -0.02, bodyLength: 0.9, bodyR0: 0.16 },
-  neghvar: { form: 'raptor', length: 682, wingSpan: 0.7, wingSweep: 0.54, wingDroop: 0.02, bodyLength: 1.0, bodyR0: 0.22 },
+  bird_of_prey: { form: 'raptor', length: 158, wingSpan: 0.98, wingSweep: 0.46, wingDroop: -0.8 },
+  d7: { form: 'raptor', length: 228, wingSpan: 0.52, wingSweep: 0.3, wingDroop: -0.1, bodyLength: 0.7 },
+  ktinga: { form: 'raptor', length: 235, wingSpan: 0.52, wingSweep: 0.32, wingDroop: -0.1, bodyLength: 0.72 },
+  vorcha: { form: 'raptor', length: 481, wingSpan: 0.62, wingSweep: 0.5, wingDroop: -0.16, bodyLength: 0.9, bodyR0: 0.16 },
+  neghvar: { form: 'raptor', length: 682, wingSpan: 0.62, wingSweep: 0.54, wingDroop: 0.02, bodyLength: 1.0, bodyR0: 0.19 },
 
   // ---- Romulan ----
   warbird: { form: 'warbird', length: 1041, wingSpan: 0.62 },
-  scoutship: { form: 'raptor', length: 68, wingSpan: 0.68, wingSweep: 0.2, wingDroop: -0.06, bodyLength: 0.42, bodyR0: 0.14 },
+  scoutship: { form: 'raptor', length: 68, wingSpan: 0.48, wingSweep: 0.2, wingDroop: -0.18, bodyLength: 0.42, bodyR0: 0.14 },
 
   // ---- Cardassian ----
   galor: { form: 'wedge', length: 372, length_: 1.25, width: 0.36, sweep: 0.34 },
@@ -6353,18 +6476,122 @@ const BLUEPRINTS = {
 
   // ---- Everyone else ----
   marauder: { form: 'warbird', length: 366, wingSpan: 0.5 },
-  orion_raider: { form: 'raptor', length: 110, wingSpan: 0.54, wingSweep: 0.24, bodyLength: 0.5 },
+  orion_raider: { form: 'raptor', length: 110, wingSpan: 0.44, wingSweep: 0.24, bodyLength: 0.5 },
   tholian_web_spinner: { form: 'wedge', length: 130, length_: 0.8, width: 0.44, height: 0.1, sweep: 0.1 },
-  jem_hadar_attack: { form: 'wedge', length: 178, length_: 0.9, width: 0.42, height: 0.12, sweep: 0.4 },
-  jem_hadar_battleship: { form: 'wedge', length: 800, length_: 1.4, width: 0.5, height: 0.2, sweep: 0.44 },
+  jem_hadar_attack: { form: 'wedge', length: 178, length_: 0.9, width: 0.46, height: 0.1, sweep: 0.4 },
+  jem_hadar_battleship: { form: 'wedge', length: 800, length_: 1.4, width: 0.44, height: 0.24, sweep: 0.44 },
   borg_cube: { form: 'cube', length: 3040, size: 1.15 },
   bioship: { form: 'cube', length: 600, size: 0.85 },
-  transport: { form: 'hauler', length: 120, length_: 1.0 },
-  freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.2 },
+  transport: { form: 'hauler', length: 120, length_: 1.0, r0: 0.13, r1: 0.11 },
+  freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.155, r1: 0.13 },
 };
 
 /** Meshes are built once per class and reused by every ship of that class. */
 const cache = new Map();
+
+/**
+ * The blueprint a form actually receives: its own parameters, plus the two
+ * ratios that ought to decide most of them.
+ *
+ * A form has no idea which class it is building, which is why every
+ * proportion in this file was a constant. Handing it beam-over-length and
+ * height-over-length lets it derive the saucer, the hull radius and the
+ * nacelle height from the published figures, and leaves the blueprint entries
+ * to say only what is genuinely per-ship — how raked a Sovereign's saucer is,
+ * how far a Galaxy's pylons sweep.
+ */
+function withRatios(classId, bp) {
+  const d = DIMENSIONS[classId];
+  if (!d?.length || !d.beam || !d.height) return bp;
+  return { ...bp, ratioBeam: d.beam / d.length, ratioHeight: d.height / d.length };
+}
+
+/**
+ * Squash a built hull onto its published beam and height.
+ *
+ * Phase B made every ship the right LENGTH and stopped there, and the other
+ * two axes were hand-tuned unit-space guesses that nothing could check. They
+ * were not close. Measured against the published figures, every Federation
+ * hull in the game was drawn between 1.2x and 2.0x too wide and between 1.1x
+ * and 2.7x too tall: an Excelsior stood 2.7 times its own height, an Oberth
+ * 2.4, a Miranda was twice the beam it has. Federation ships are FLAT, and
+ * none of these were.
+ *
+ * Length is the reference axis because `hullScale` already sets it, so this
+ * only ever moves y and z. It runs once per class, at build time, on a mesh
+ * that is then cached forever — it costs nothing per frame.
+ *
+ * Normals get the inverse scale and a re-normalise, which is what a
+ * non-uniform transform does to a surface normal; skipping that lights a
+ * squashed hull as though it were still the shape it was built as.
+ */
+function toPublishedProportions(mb, classId) {
+  const d = DIMENSIONS[classId];
+  if (!d?.length || !d.beam || !d.height) return mb;
+
+  const P = mb.positions;
+  const N = mb.normals;
+  if (!P.length) return mb;
+
+  let loX = Infinity; let hiX = -Infinity;
+  let loY = Infinity; let hiY = -Infinity;
+  let loZ = Infinity; let hiZ = -Infinity;
+  for (let i = 0; i < P.length; i += 3) {
+    if (P[i] < loX) loX = P[i]; if (P[i] > hiX) hiX = P[i];
+    if (P[i + 1] < loY) loY = P[i + 1]; if (P[i + 1] > hiY) hiY = P[i + 1];
+    if (P[i + 2] < loZ) loZ = P[i + 2]; if (P[i + 2] > hiZ) hiZ = P[i + 2];
+  }
+  const ex = hiX - loX; const ey = hiY - loY; const ez = hiZ - loZ;
+  if (!(ex > 1e-6) || !(ey > 1e-6) || !(ez > 1e-6)) return mb;
+
+  const sy = (ex * (d.height / d.length)) / ey;
+  const sz = (ex * (d.beam / d.length)) / ez;
+  // The squash is about the hull's own centre in y and its centreline in z, so
+  // a ship does not slide off the origin its weapons and shields are drawn at.
+  const midY = (loY + hiY) / 2;
+  for (let i = 0; i < P.length; i += 3) {
+    P[i + 1] = midY + (P[i + 1] - midY) * sy;
+    P[i + 2] *= sz;
+  }
+  for (let i = 0; i < N.length; i += 3) {
+    const nx = N[i]; const ny = N[i + 1] / sy; const nz = N[i + 2] / sz;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    N[i] = nx / len; N[i + 1] = ny / len; N[i + 2] = nz / len;
+  }
+  return mb;
+}
+
+/**
+ * How far a form has to be squashed to reach its published proportions.
+ *
+ * Exported because it is the number that keeps the forms honest. Normalising
+ * makes every hull dimensionally true whatever shape it was built as, which
+ * would let a form drift arbitrarily far from the ship it draws and still pass
+ * — and a nacelle built round and then squashed 2:1 is an ellipse. A test
+ * holds this near 1, so the forms have to be roughly right before the
+ * normaliser is allowed to finish the job.
+ */
+function proportionError(classId) {
+  const d = DIMENSIONS[classId];
+  const bp = BLUEPRINTS[classId];
+  if (!d || !bp) return { beam: 1, height: 1 };
+  const mb = new MeshBuilder();
+  (FORMS[bp.form] ?? FORMS.hauler)(mb, paletteFor('independent'), withRatios(classId, bp));
+  const P = mb.positions;
+  let loX = Infinity; let hiX = -Infinity;
+  let loY = Infinity; let hiY = -Infinity;
+  let loZ = Infinity; let hiZ = -Infinity;
+  for (let i = 0; i < P.length; i += 3) {
+    if (P[i] < loX) loX = P[i]; if (P[i] > hiX) hiX = P[i];
+    if (P[i + 1] < loY) loY = P[i + 1]; if (P[i + 1] > hiY) hiY = P[i + 1];
+    if (P[i + 2] < loZ) loZ = P[i + 2]; if (P[i + 2] > hiZ) hiZ = P[i + 2];
+  }
+  const ex = hiX - loX;
+  return {
+    beam: ((hiZ - loZ) / ex) / (d.beam / d.length),
+    height: ((hiY - loY) / ex) / (d.height / d.length),
+  };
+}
 
 /**
  * Build (or fetch) the mesh for a ship class.
@@ -6378,7 +6605,8 @@ function hullMesh(classId, faction = 'independent') {
   const bp = BLUEPRINTS[classId] ?? BLUEPRINTS.transport;
   const form = FORMS[bp.form] ?? FORMS.hauler;
   const mb = new MeshBuilder();
-  form(mb, paletteFor(faction), bp);
+  form(mb, paletteFor(faction), withRatios(classId, bp));
+  toPublishedProportions(mb, classId);
 
   const built = mb.build();
   built.triangles = mb.triangleCount;
@@ -6423,6 +6651,7 @@ __exports.PALETTE = PALETTE;
 __exports.paletteFor = paletteFor;
 __exports.DIMENSIONS = DIMENSIONS;
 __exports.BLUEPRINTS = BLUEPRINTS;
+__exports.proportionError = proportionError;
 __exports.hullMesh = hullMesh;
 __exports.UNITS_PER_METRE = UNITS_PER_METRE;
 __exports.hullScale = hullScale;

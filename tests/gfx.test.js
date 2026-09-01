@@ -21,6 +21,7 @@ import {
 import { MeshBuilder, saucer, tube, box, sphere, mirrored } from '../src/gfx/mesh.js';
 import {
   BLUEPRINTS, DIMENSIONS, hullMesh, hullScale, paletteFor, UNITS_PER_METRE,
+  proportionError,
 } from '../src/gfx/blueprint.js';
 import { SHIP_LIST } from '../src/world/ships.data.js';
 import {
@@ -477,11 +478,26 @@ describe('the TOS Constitution', () => {
   const P = paletteFor('federation');
   const mesh = hullMesh('constitution', 'federation');
 
+  // `stride` is in BYTES; the interleaved array is indexed in floats. Stepping
+  // by the byte stride here read every fourth vertex and then ran off the end
+  // of the buffer, so three quarters of this hull was never examined by any
+  // assertion below.
+  const FLOATS = mesh.stride / 4;
+
+  /** Every vertex position in the built hull. */
+  const verts = (() => {
+    const out = [];
+    for (let i = 0; i < mesh.vertexCount; i++) {
+      out.push([mesh.data[i * FLOATS], mesh.data[i * FLOATS + 1], mesh.data[i * FLOATS + 2]]);
+    }
+    return out;
+  })();
+
   /** Vertices whose colour matches `rgb`, within tolerance. */
   const coloured = (rgb, eps = 0.02) => {
     const out = [];
     for (let i = 0; i < mesh.vertexCount; i++) {
-      const o = i * mesh.stride;
+      const o = i * FLOATS;
       const cr = mesh.data[o + 6]; const cg = mesh.data[o + 7]; const cb = mesh.data[o + 8];
       if (Math.abs(cr - rgb[0]) < eps && Math.abs(cg - rgb[1]) < eps && Math.abs(cb - rgb[2]) < eps) {
         out.push([mesh.data[o], mesh.data[o + 1], mesh.data[o + 2]]);
@@ -498,10 +514,18 @@ describe('the TOS Constitution', () => {
     assert.ok(P.dish, 'the federation palette carries no dish colour');
     const dish = coloured(P.dish);
     assert.ok(dish.length > 20, `only ${dish.length} vertices are dish-coloured`);
-    // Forward of the saucer's centre, and below it — where the dish sits.
+    // Where the dish sits is a RELATIONSHIP, not a number: at the bow of the
+    // secondary hull, which is forward of the ship's middle and well aft of
+    // the saucer's leading edge. A fixed threshold here only ever measured
+    // whatever length the secondary hull happened to be built at.
     const cx = dish.reduce((n, v) => n + v[0], 0) / dish.length;
     const cy = dish.reduce((n, v) => n + v[1], 0) / dish.length;
-    assert.ok(cx > 0.25, `the dish sits at x=${cx.toFixed(2)}, not at the bow`);
+    const bow = verts.reduce((n, v) => Math.max(n, v[0]), -Infinity);
+    const stern = verts.reduce((n, v) => Math.min(n, v[0]), Infinity);
+    assert.ok(cx > (bow + stern) / 2,
+      `the dish sits at x=${cx.toFixed(2)}, aft of the ship's middle`);
+    assert.ok(cx < bow - (bow - stern) * 0.15,
+      `the dish sits at x=${cx.toFixed(2)}, out past the saucer's leading edge`);
     assert.ok(cy < 0, `the dish sits at y=${cy.toFixed(2)}, not on the secondary hull`);
   });
 
@@ -1646,6 +1670,99 @@ describe('the hulls are built in unit space, not in metres', () => {
   });
 });
 
+// ====================================== the other two axes, not just length
+
+describe('every hull is drawn to its published beam and height', () => {
+  /** Nose-to-tail, keel-to-masthead, and beam, of a built mesh. */
+  function extents(id) {
+    const m = hullMesh(id, 'independent');
+    const floats = m.stride / 4;
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < m.vertexCount; i++) {
+      for (let a = 0; a < 3; a++) {
+        const v = m.data[i * floats + a];
+        if (v < lo[a]) lo[a] = v;
+        if (v > hi[a]) hi[a] = v;
+      }
+    }
+    return { length: hi[0] - lo[0], height: hi[1] - lo[1], beam: hi[2] - lo[2] };
+  }
+
+  test('beam over length matches the published figure on every class', () => {
+    // Phase B made every ship the right LENGTH and left the other two axes as
+    // hand-tuned guesses, which is where they had drifted to: measured against
+    // DIMENSIONS, every Federation hull was between 1.2x and 2.0x too wide and
+    // between 1.1x and 2.7x too tall. An Excelsior stood 2.7 times its own
+    // height. Federation ships are FLAT, and not one of them was.
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const d = DIMENSIONS[id];
+      if (!d) continue;
+      const e = extents(id);
+      const drawn = e.beam / e.length;
+      const published = d.beam / d.length;
+      assert.ok(Math.abs(drawn / published - 1) < 0.02,
+        `${id}: drawn beam ${drawn.toFixed(3)} of its length, published ${published.toFixed(3)}`);
+    }
+  });
+
+  test('height over length matches the published figure on every class', () => {
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const d = DIMENSIONS[id];
+      if (!d) continue;
+      const e = extents(id);
+      const drawn = e.height / e.length;
+      const published = d.height / d.length;
+      assert.ok(Math.abs(drawn / published - 1) < 0.02,
+        `${id}: drawn height ${drawn.toFixed(3)} of its length, published ${published.toFixed(3)}`);
+    }
+  });
+
+  test('the forms are nearly right before anything is squashed', () => {
+    // The check above is satisfied by the normaliser whatever shape the form
+    // built, which would let a builder drift arbitrarily far from the ship it
+    // draws and still pass — and a nacelle built round and then squashed 2:1
+    // is an ellipse. `proportionError` is the distortion the normaliser has to
+    // apply, so holding it near 1 forces the FORMS to be right and leaves the
+    // normaliser only the last few percent.
+    const worst = [];
+    for (const id of Object.keys(BLUEPRINTS)) {
+      if (!DIMENSIONS[id]) continue;
+      const e = proportionError(id);
+      const off = Math.max(e.beam, 1 / e.beam, e.height, 1 / e.height);
+      if (off > 1.25) worst.push(`${id} ${off.toFixed(2)}x`);
+    }
+    assert.deepEqual(worst, [],
+      `these forms lean on the normaliser instead of being built right: ${worst.join(', ')}`);
+  });
+
+  test('a Federation hull is wider than it is tall', () => {
+    // The one shape rule the whole fleet obeys and no test held: these are
+    // discs. A Bird-of-Prey with its wings down is the exception, and it is
+    // Klingon.
+    for (const id of Object.keys(BLUEPRINTS)) {
+      if (SHIP_LIST.find((c) => c.id === id)?.faction !== 'federation') continue;
+      const e = extents(id);
+      assert.ok(e.beam > e.height,
+        `${id} is ${e.height.toFixed(2)} tall and only ${e.beam.toFixed(2)} across`);
+    }
+  });
+
+  test('squashing a hull leaves its normals unit length', () => {
+    // A non-uniform scale needs the inverse on the normals and a renormalise.
+    // Skipping it lights a squashed hull as though it were still the shape it
+    // was built as, which is a bug you can see and cannot name.
+    for (const id of ['constitution', 'galaxy', 'oberth', 'borg_cube', 'bird_of_prey']) {
+      const m = hullMesh(id, 'federation');
+      const floats = m.stride / 4;
+      for (let i = 0; i < m.vertexCount; i++) {
+        const n = Math.hypot(m.data[i * floats + 3], m.data[i * floats + 4], m.data[i * floats + 5]);
+        assert.ok(Math.abs(n - 1) < 1e-4, `${id} vertex ${i} has a normal of length ${n}`);
+      }
+    }
+  });
+});
+
 // =============================================== one shape per class of ship
 
 describe('no two Federation classes are the same shape', () => {
@@ -1734,7 +1851,10 @@ describe('no two Federation classes are the same shape', () => {
         if (Math.abs(r - glow[0]) > 1e-3 || Math.abs(g - glow[1]) > 1e-3
           || Math.abs(b - glow[2]) > 1e-3) continue;
         const pt = [m.data[i * f], m.data[i * f + 1], m.data[i * f + 2]];
-        if (!seen.some((q) => Math.hypot(q[0] - pt[0], q[1] - pt[1], q[2] - pt[2]) < 0.25)) {
+        // 0.09, not 0.25: the hulls are drawn at their published height now,
+        // and a Constellation's two nacelle pairs are a fifth of its length
+        // apart in y — closer together than the old radius could resolve.
+        if (!seen.some((q) => Math.hypot(q[0] - pt[0], q[1] - pt[1], q[2] - pt[2]) < 0.09)) {
           seen.push(pt);
         }
       }

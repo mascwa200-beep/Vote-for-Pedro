@@ -138,18 +138,25 @@ export function tube(mb, {
 
 /**
  * A box, given its centre and half-extents. Pylons, wings and hull plating.
- * `sweep` shears the far end backwards along -x, which is what turns a
- * rectangular slab into a swept wing without a second primitive.
+ *
+ * Two shears, because a Starfleet pylon leans in two planes and a box that can
+ * only lean in one is why every warp pylon in this game read as a rectangular
+ * slab from the side. `sweep` displaces the outboard (+z) end aft, which is
+ * the rake you see from ABOVE — a swept wing. `rake` displaces the top (+y)
+ * end aft, which is the lean you see from the SIDE, and is the whole reason a
+ * Constitution's nacelles look like they are being carried rather than
+ * balanced. Both are in world units at the far face and taper to nothing at
+ * the near one.
  */
 export function box(mb, {
-  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0,
+  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0,
   color = [0.6, 0.64, 0.7],
 } = {}) {
   const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
   const [cx, cy, cz] = center;
-  // Eight corners; +z corners are displaced by the sweep.
+  // Eight corners; the +z corners carry the sweep and the +y corners the rake.
   const p = (sx, sy, sz) => vec3(
-    cx + sx * hx - (sz > 0 ? sweep : 0),
+    cx + sx * hx - (sz > 0 ? sweep : 0) - (sy > 0 ? rake : 0),
     cy + sy * hy,
     cz + sz * hz,
   );
