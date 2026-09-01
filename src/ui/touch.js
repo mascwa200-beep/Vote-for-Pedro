@@ -74,14 +74,26 @@ export function attachPanZoom(canvas, view, opts = {}) {
     };
   };
 
-  canvas.addEventListener('pointerdown', (e) => {
+  // Every listener this attaches, so it can be taken off again. The canvas is
+  // a singleton that is MOVED between screens rather than rebuilt — a WebGL
+  // context is expensive and browsers cap how many can exist — so a view that
+  // attaches and is thrown away without detaching leaves its handlers on a
+  // node that outlives it. Five per fight, and every stale generation still
+  // fired its onTap into an engagement that no longer existed.
+  const attached = [];
+  const listen = (type, fn, opts) => {
+    canvas.addEventListener(type, fn, opts);
+    attached.push([type, fn, opts]);
+  };
+
+  listen('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 1) { moved = false; downAt = performance.now(); }
     lastDistance = 0;
   });
 
-  canvas.addEventListener('pointermove', (e) => {
+  listen('pointermove', (e) => {
     const prev = pointers.get(e.pointerId);
     if (!prev) return;
     const next = { x: e.clientX, y: e.clientY };
@@ -117,15 +129,22 @@ export function attachPanZoom(canvas, view, opts = {}) {
       onTap(e.clientX - rect.left, e.clientY - rect.top);
     }
   };
-  canvas.addEventListener('pointerup', release);
-  canvas.addEventListener('pointercancel', release);
+  listen('pointerup', release);
+  listen('pointercancel', release);
 
   // Desktop convenience; harmless on touch.
-  canvas.addEventListener('wheel', (e) => {
+  listen('wheel', (e) => {
     e.preventDefault();
     view.scale = Math.max(minScale, Math.min(maxScale, view.scale * (e.deltaY < 0 ? 1.1 : 0.9)));
   }, { passive: false });
 
+  // The view is what callers have always used; `detach` is hung off it so
+  // nothing that already destructures the return value has to change.
+  view.detach = () => {
+    for (const [type, fn, opts] of attached) canvas.removeEventListener(type, fn, opts);
+    attached.length = 0;
+    pointers.clear();
+  };
   return view;
 }
 

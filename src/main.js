@@ -1922,7 +1922,18 @@ class App {
   updateOverlay() {
     const g = this.game;
     const overlay = this.tacticalOverlay;
-    if (!overlay || !g?.engagement) return;
+    if (!overlay) return;
+    // No fight, no chips.
+    //
+    // This returned early when the engagement went away and left whatever was
+    // painted on the last frame of the battle sitting there — the hull bars,
+    // the target reticle and the dead fleet's labels, over the first-person
+    // bridge, for the rest of the session. The overlay is a view of a fight;
+    // with no fight it has to be empty.
+    if (!g?.engagement || g.engagement.over) {
+      if (overlay.childNodes.length) clear(overlay);
+      return;
+    }
     const eng = g.engagement;
     const p = g.ship;
     clear(overlay);

@@ -1545,6 +1545,61 @@ try {
   check('destroying a ship costs standing with its faction',
     killRecorded.standing < 0, String(killRecorded.standing));
 
+  // ---- what a finished fight leaves on the screen ----
+  //
+  // The combat chips are a view of a battle. With no battle they have to be
+  // empty: `updateOverlay` returned early when the engagement went away, so
+  // the hull bars, the target reticle and the dead fleet's labels stayed
+  // painted over the first-person bridge for the rest of the session.
+  await page.waitForTimeout(400);
+  const leftBehind = await page.evaluate(() => {
+    const app = globalThis.__app;
+    app.updateOverlay();
+    return {
+      fighting: !!app.game.engagement,
+      chips: app.tacticalOverlay?.childNodes.length ?? -1,
+      mode: app.game.mode,
+      wreck: !!app.game.wreckHere,
+    };
+  });
+  check('the fight is settled and the game came out of combat mode',
+    leftBehind.fighting === false && leftBehind.mode !== 'combat', JSON.stringify(leftBehind));
+  check('and no combat chips are left painted over the bridge',
+    leftBehind.chips === 0, JSON.stringify(leftBehind));
+  check('a destroyed ship leaves a hulk worth stripping',
+    leftBehind.wreck === true, JSON.stringify(leftBehind));
+
+  // ---- the order fires the weapon it names ----
+  const namedWeapon = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    const foe = new Ship('d7', { faction: 'klingon', name: 'Arc Test' });
+    g.startCombat([foe], { name: 'Weapon selection' });
+    const eng = g.engagement;
+    foe.x = 300; foe.y = 0; foe.z = 0;
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    g.ship.heading = 0; g.ship.desiredHeading = 0;
+    eng.setTarget(foe);
+
+    for (const w of g.ship.weapons) w.cooldown = 0;
+    const start = g.ship.torpedoes;
+    eng.fireAll('beam');
+    const afterBeams = g.ship.torpedoes;
+    for (const w of g.ship.weapons) w.cooldown = 0;
+    eng.fireAll('torpedo');
+    const afterTorps = g.ship.torpedoes;
+
+    eng.end('routed');
+    g.update(1 / 30);
+    return { start, afterBeams, afterTorps };
+  });
+  check('"fire phasers" does not launch torpedoes',
+    namedWeapon.afterBeams === namedWeapon.start, JSON.stringify(namedWeapon));
+  check('and "fire torpedoes" does',
+    namedWeapon.afterTorps < namedWeapon.afterBeams, JSON.stringify(namedWeapon));
+  await dismissModals(page);
+
   // ------------------------------------------------ the rest of the screens
   for (const [navLabel, shot] of [['Ship', '06-ship'], ['Crew', '07-crew'], ['Record', '08-record']]) {
     await nav(page, navLabel);

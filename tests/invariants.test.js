@@ -603,3 +603,130 @@ test('a watch officer who fought a battle has something to report', () => {
   assert.match(lines, /engaged/i);
   assert.match(lines, /Hull integrity/);
 });
+
+describe('the damage model holds together', () => {
+  test('shields come back when the emitter is repaired', () => {
+    // One hit on the shield generator used to cost you shields for the rest of
+    // the commission: losing the emitter drops them, and nothing raised them
+    // again once passive repair had walked the subsystem back to 1.0.
+    const s = new Ship('constitution', { isPlayer: true });
+    s.damageSubsystem('shields', 1);
+    assert.equal(s.shieldsUp, false);
+    for (let t = 0; t < 30 * 600; t++) s.update(STEP, null);
+    assert.ok(s.subsystems.shields > 0.9, 'the emitter never repaired');
+    assert.equal(s.shieldsUp, true, 'the shields stayed down forever');
+  });
+
+  test('shields lowered on purpose stay down', () => {
+    const s = new Ship('constitution', { isPlayer: true });
+    s.shieldsUp = false;
+    s.shieldsDown = true;
+    for (let t = 0; t < 30 * 60; t++) s.update(STEP, null);
+    assert.equal(s.shieldsUp, false, 'the ship raised its own shields against orders');
+  });
+
+  test('reinforcing a facing does not destroy the charge it moved', () => {
+    // The order moves 20% overcharge onto one facing; the regeneration clamp
+    // was a flat minimum against maxShield and deleted it on the next tick, so
+    // the order took charge off five facings and threw it away.
+    const s = new Ship('constitution', { isPlayer: true });
+    s.shields.fore = s.maxShield * 0.3;
+    const pool = () => Object.values(s.shields).reduce((a, b) => a + b, 0);
+    const before = pool();
+    s.reinforceShield('fore');
+    const ordered = s.shields.fore;
+    assert.ok(ordered > s.maxShield, 'the order produced no overcharge at all');
+
+    s.update(STEP, null);
+    assert.ok(s.shields.fore > s.maxShield, `the overcharge was deleted: ${s.shields.fore}`);
+    assert.ok(pool() >= before - 1e-6, `the pool lost ${(before - pool()).toFixed(1)} points of charge`);
+  });
+
+  test('an overcharged facing settles back rather than holding forever', () => {
+    const s = new Ship('constitution', { isPlayer: true });
+    s.shields.fore = s.maxShield * 1.2;
+    for (let t = 0; t < 30 * 600; t++) s.update(STEP, null);
+    assert.ok(Math.abs(s.shields.fore - s.maxShield) < 1,
+      `overcharge held at ${s.shields.fore} against a max of ${s.maxShield}`);
+  });
+
+  test('an ability that raises a maximum actually raises it', () => {
+    // recomputeDerived read `this.mods` rather than `this.mod()`, so buffs were
+    // computed, displayed, and ignored by the only numbers they existed for.
+    const s = new Ship('constitution', { isPlayer: true });
+    const base = s.maxShield;
+    s.addBuff({ id: 'shield_harmonics', until: 30, mods: { shieldMax: 1.2 } });
+    assert.ok(s.maxShield > base * 1.19, `maxShield stayed at ${s.maxShield}`);
+
+    for (let t = 0; t < 30 * 40; t++) s.update(STEP, null);
+    assert.ok(Math.abs(s.maxShield - base) < 1e-6,
+      `the buff expired and left the maximum at ${s.maxShield}`);
+  });
+});
+
+describe('the guns fire what was asked for', () => {
+  /** Put the target dead ahead, in range, with everything loaded. */
+  function lineUp(g) {
+    const eng = g.engagement;
+    const foe = eng.hostiles[0];
+    foe.x = 300; foe.y = 0; foe.z = 0;
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    g.ship.heading = 0; g.ship.desiredHeading = 0;
+    eng.setTarget(foe);
+    for (const w of g.ship.weapons) w.cooldown = 0;
+    return eng;
+  }
+
+  test('"fire phasers" does not launch photon torpedoes', () => {
+    const g = fight();
+    const eng = lineUp(g);
+    const before = g.ship.torpedoes;
+    eng.fireAll('beam');
+    assert.equal(g.ship.torpedoes, before, 'an order for phasers spent torpedoes');
+  });
+
+  test('"fire torpedoes" launches them', () => {
+    const g = fight();
+    const eng = lineUp(g);
+    const before = g.ship.torpedoes;
+    eng.fireAll('torpedo');
+    assert.ok(g.ship.torpedoes < before, 'an order for torpedoes launched nothing');
+  });
+
+  test('a torpedo that arrives does damage, however far the shooter has drifted', () => {
+    // The range used at impact was the LAUNCHER's current distance, not the
+    // torpedo's. Torpedoes fly for up to six seconds while both ships move, so
+    // a shooter past the 1,200-unit range watched its torpedo arrive and do
+    // nothing at all.
+    const g = fight('freighter');
+    const eng = lineUp(g);
+    const foe = eng.hostiles[0];
+    foe.shieldsUp = false;
+    eng.fireAll('torpedo');
+    assert.ok(eng.projectiles.length > 0, 'nothing was launched');
+
+    // The shooter runs well out of torpedo range while it is in flight.
+    g.ship.x = -4000;
+    const hullBefore = foe.hull;
+    for (let t = 0; t < 200 && eng.projectiles.length; t++) eng.updateProjectiles(STEP);
+    assert.ok(foe.hull < hullBefore,
+      'the torpedo arrived and did nothing because the shooter had moved');
+  });
+});
+
+describe('nothing repairs the ship mid-firefight', () => {
+  test('docking is refused under fire', () => {
+    const g = fight();
+    g.ship.hull = g.ship.maxHull * 0.2;
+    const r = g.dock();
+    assert.equal(r.ok, false, 'a spacedock door opened during a battle');
+    assert.ok(g.ship.hullPct < 0.25, 'the ship was repaired anyway');
+  });
+
+  test('the machine shop is sealed at red alert', () => {
+    const g = fight();
+    g.stores.duranium = 999;
+    assert.equal(g.fabricate('hull_patch').ok, false, 'the shop took a job under fire');
+    assert.equal(g.workTheShop(4).ok, false, 'hours were worked under fire');
+  });
+});
