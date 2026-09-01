@@ -934,7 +934,23 @@ function officer3d(solid, station) {
   });
 }
 
-/** The viewscreen: a dark rectangle in the forward wall with a lit surround. */
+/**
+ * The viewscreen: an aperture in the forward wall with a lit surround.
+ *
+ * It used to be an aperture with a near-black quad filling it, and that quad
+ * was the reason the main viewer had never shown anything. The first-person
+ * view draws the exterior FIRST, scissored to the screen's rectangle and
+ * pinned to the far end of the depth buffer, and then draws the room over the
+ * top — so the bulkhead covers the difference between the axis-aligned scissor
+ * box and the trapezoid the screen actually occupies. A filled panel inside
+ * that trapezoid, drawn in the room pass at its own depth, covers the picture
+ * as well.
+ *
+ * Everything behind it was being rendered and thrown away: the starfield, the
+ * warp streaks, the world in orbit with its terminator laid on by the system's
+ * own primary, and the hostiles during a fight. All of it, every frame, behind
+ * a black rectangle.
+ */
 function viewscreen3d(solid, glow, vs) {
   const [x, z] = vs.at;
   const w = vs.width / 2;
@@ -950,10 +966,21 @@ function viewscreen3d(solid, glow, vs) {
     z + u * nx + nz * d,
   );
 
-  glow.quad(at(-w - 0.14, -h - 0.14, inset), at(w + 0.14, -h - 0.14, inset),
-    at(w + 0.14, h + 0.14, inset), at(-w - 0.14, h + 0.14, inset), PALETTE.panelGold);
-  solid.quad(at(-w, -h, inset + 0.01), at(w, -h, inset + 0.01),
-    at(w, h, inset + 0.01), at(-w, h, inset + 0.01), [0.05, 0.06, 0.09]);
+  // The surround only. What is inside the frame is outside the ship.
+  //
+  // Drawn as four strips rather than one quad with a hole in it, because the
+  // bezel has to be solid where it is and absent where the picture is, and a
+  // quad cannot be both.
+  const bez = 0.14;
+  const strip = (u0, v0, u1, v1) => glow.quad(
+    at(u0, v0, inset), at(u1, v0, inset), at(u1, v1, inset), at(u0, v1, inset),
+    PALETTE.panelGold,
+  );
+  strip(-w - bez, h, w + bez, h + bez);        // over the top
+  strip(-w - bez, -h - bez, w + bez, -h);      // under the bottom
+  strip(-w - bez, -h, -w, h);                  // down the left
+  strip(w, -h, w + bez, h);                    // down the right
+  void solid;
 }
 
 // ------------------------------------------------------------- occlusion

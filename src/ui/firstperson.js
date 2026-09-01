@@ -282,7 +282,19 @@ export class FirstPersonView {
     if (screen) this.drawThroughScreen(game, screen, aspect, height);
 
     // Pass two: the room, over the top of it.
+    //
+    // The depth buffer is reset inside the aperture first, while the scissor
+    // is still set — so the room is in front of the exterior by construction
+    // rather than by arithmetic. It used to be by arithmetic: the exterior was
+    // squeezed into the far 0.1% of the depth range, which needs the buffer to
+    // have enough bits to tell 0.99999 from 1.0. On a 16-bit depth buffer it
+    // does not, every fragment of space landed on exactly the cleared value,
+    // and the depth test threw all of it away. The starfield, the warp
+    // streaks, the world in orbit with its terminator, the hostiles in a
+    // fight: rendered every frame, discarded every frame.
+    if (screen) this.renderer.clearDepth();
     this.renderer.clearScissor();
+    this.renderer.resetViewport();
     this.renderer.setDepthRange(0, 1);
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
@@ -400,15 +412,24 @@ export class FirstPersonView {
   drawThroughScreen(game, screen, aspect, height = 0) {
     const r = this.renderer;
     r.setScissor(screen.x, screen.y, screen.w, screen.h);
+    // The aperture gets its own viewport, so the camera below is built FOR the
+    // screen rather than for the canvas and then cropped. Cropping is what it
+    // used to do, and it is why the main viewer showed nothing: a 74° cone
+    // across the whole canvas, scissored to three per cent of it, is a
+    // fourteen-degree window — and a window that narrow onto a sphere of 260
+    // stars contains, on average, less than one of them.
+    r.setViewport(screen.x, screen.y, screen.w, screen.h);
+    const lens = screen.h > 0 ? screen.w / screen.h : aspect;
     // Back to vacuum inside the screen: one hard sun, deep shadow, which is
     // what a hull a thousand kilometres away actually looks like.
     r.setLighting({
       key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
       ambient: 0.20, keyPower: 0.9, gloss: 0,
     });
-    // The far slice of the depth buffer, so the room drawn afterwards covers
-    // everything except the aperture.
-    r.setDepthRange(0.9990, 1.0);
+    // The whole depth range, so the exterior sorts against itself properly —
+    // a planet behind a ship stays behind it. What keeps the ROOM in front of
+    // all of it is the depth clear after this pass, not a reserved slice.
+    r.setDepthRange(0, 1);
 
     // A hit costs the picture its sync.
     //
@@ -436,24 +457,23 @@ export class FirstPersonView {
     // screen at the moment they matter most.
     const world = eng ? null : this.orbitWorld(game);
 
-    // How wide the lens is. The projection is built for the whole canvas and
-    // then scissored down to the aperture, so what the player sees is a slice
-    // of it — which means the aperture's field of view is a fraction of the
-    // canvas's, and the fraction is exactly `screen.h / height`.
+    // How wide the lens is. Now that the aperture has its own viewport this is
+    // the field of view of the SCREEN, which is what a viewscreen's field of
+    // view means, rather than a fraction of the canvas's.
     //
-    // In orbit that has to be solved rather than assumed. The world's angular
-    // radius is fixed by the altitude at 21°, and the picture wants that disc
-    // to come out about half the height of the aperture, so the lens is chosen
-    // to put it there: tan(V/2) = tan(θ) · (height/2) / (wanted pixels). Which
-    // is the ship widening its field to look at a world, and not the ship
-    // parking somewhere the show never put it.
-    let fovy = fovFor(aspect, 74);
+    // In orbit it is solved rather than chosen. The world's angular radius is
+    // fixed by the altitude at 21°, and the picture wants that disc to come
+    // out about three quarters of the height of the aperture — so the lens is
+    // whatever puts it there. That is the ship widening its field to look at a
+    // world, and not the ship parking somewhere the show never put it.
+    let fovy = fovFor(lens, 74);
     let tilt = 0;
-    if (world && height > 0 && screen.h > 0) {
+    if (world) {
       const theta = angularRadius();
-      fovy = Math.min(2.9, 2 * Math.atan(Math.tan(theta) * (height / 2) / (0.78 * screen.h)));
+      fovy = Math.min(2.9, 2 * Math.atan(Math.tan(theta) / 0.78));
       tilt = theta * 0.34;
     }
+    void height;
 
     const eye = vec3();
     const at = vec3();
@@ -468,7 +488,7 @@ export class FirstPersonView {
       at[2] = eye[2] + nose[2] * 8000;
       this._up[0] = 0; this._up[1] = 1; this._up[2] = 0;
     }
-    perspective(fovy, aspect, 2, 40000, this._proj);
+    perspective(fovy, lens, 2, 40000, this._proj);
     lookAt(eye, at, this._up, this._view);
     multiply(this._proj, this._view, this._screenVP);
     r.setCamera(this._screenVP);

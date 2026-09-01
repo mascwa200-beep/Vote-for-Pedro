@@ -335,6 +335,46 @@ export class Renderer {
   }
 
   /**
+   * Draw into a rectangle of the canvas instead of all of it.
+   *
+   * Top-left origin, same as `setScissor`, because everything else in this
+   * codebase measures the canvas that way and GL is the odd one out.
+   *
+   * This is what makes a picture-in-picture possible: a camera built for the
+   * rectangle rather than for the canvas. Scissoring alone crops a full-canvas
+   * projection down, which is a very different picture — the main viewer was
+   * showing a fourteen-degree slice of a seventy-four-degree cone, and a slice
+   * that narrow contains less than one star.
+   */
+  setViewport(x, y, w, h) {
+    if (this.lost) return;
+    const H = this.canvas.height;
+    this.gl.viewport(
+      Math.round(x), Math.round(H - y - h),
+      Math.max(1, Math.round(w)), Math.max(1, Math.round(h)),
+    );
+  }
+
+  /** Back to the whole canvas. */
+  resetViewport() {
+    if (!this.lost) this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  /**
+   * Reset the depth buffer, honouring the scissor if one is set.
+   *
+   * `glClear` obeys the scissor test, which makes this the way to say "what
+   * comes next sits in front of everything already drawn HERE" without saying
+   * anything about the rest of the frame. The alternative — squeezing the
+   * background into a thin slice at the far end of the depth range — depends
+   * on the depth buffer having enough bits to tell that slice apart from the
+   * cleared value, and on a 16-bit buffer it does not.
+   */
+  clearDepth() {
+    if (!this.lost) this.gl.clear(this.gl.DEPTH_BUFFER_BIT);
+  }
+
+  /**
    * Push a draw to the back of the depth buffer, or restore the full range.
    *
    * The other half of the viewscreen: the exterior is drawn first into the

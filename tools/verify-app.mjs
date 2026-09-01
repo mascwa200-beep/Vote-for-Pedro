@@ -232,6 +232,45 @@ try {
     built.science >= 14 && built.proficientScience,
     `science ${built.science}, proficient ${built.proficientScience}`);
 
+  // ---- The main viewer is showing something ----
+  //
+  // The bridge's whole set points at it, and it had never shown anything. The
+  // exterior is drawn first, scissored to the screen's rectangle and pinned to
+  // the far end of the depth buffer; the room is drawn over the top so the
+  // bulkhead can cover the difference between the axis-aligned scissor box and
+  // the trapezoid. A filled panel inside that trapezoid — which is what the
+  // room mesh carried — covered the picture along with it.
+  //
+  // "The aperture exists" was already asserted and had been passing the whole
+  // time, which is the difference between checking a rectangle and checking a
+  // picture. This photographs the middle of the aperture: a region of solid
+  // black compresses to almost nothing, and a starfield does not.
+  const aperture = await page.evaluate(() => {
+    const fpv = globalThis.__app.fpv;
+    const r = fpv?.stats?.screenRect;
+    const canvas = fpv?.canvas;
+    if (!r || !canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    const dpr = canvas.width / box.width;
+    // `screenRect` is in device pixels from the TOP left, same as a
+    // screenshot; `setScissor` is what flips it for GL.
+    return {
+      x: box.x + (r.x + r.w * 0.2) / dpr,
+      y: box.y + (r.y + r.h * 0.2) / dpr,
+      width: Math.max(8, (r.w * 0.6) / dpr),
+      height: Math.max(8, (r.h * 0.6) / dpr),
+    };
+  });
+  check('the main viewer has an aperture the exterior is drawn into',
+    aperture !== null, JSON.stringify(aperture));
+  if (aperture) {
+    const png = await page.screenshot({ clip: aperture });
+    await page.screenshot({ path: join(SHOTS, '02b-viewscreen.png'), clip: aperture });
+    // A flat black rectangle of this size compresses to a few hundred bytes.
+    check('and there is something on it', png.length > 1200,
+      `${png.length}B from ${Math.round(aperture.width)}x${Math.round(aperture.height)}`);
+  }
+
   await page.screenshot({ path: join(SHOTS, '02-bridge.png') });
 
   // ------------------------------------------------ audio graph
@@ -573,6 +612,28 @@ try {
   check('the orbital scene stays inside the frame budget',
     inOrbit.tris > 0 && inOrbit.tris <= 8000 && inOrbit.draws <= 60,
     `${inOrbit.tris} triangles in ${inOrbit.draws} draws`);
+  // And the world is ON the viewer, not merely computed for it. In orbit the
+  // aperture holds a lit disc with a terminator across it; in open space it
+  // holds a handful of stars. The first compresses to many times the second,
+  // which is the difference this measures.
+  const orbitViewer = await page.evaluate(() => {
+    const fpv = globalThis.__app.fpv;
+    const r = fpv?.stats?.screenRect;
+    const canvas = fpv?.canvas;
+    if (!r || !canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    const dpr = canvas.width / box.width;
+    return {
+      x: box.x + (r.x + r.w * 0.2) / dpr, y: box.y + (r.y + r.h * 0.2) / dpr,
+      width: Math.max(8, (r.w * 0.6) / dpr), height: Math.max(8, (r.h * 0.6) / dpr),
+    };
+  });
+  if (orbitViewer) {
+    const png = await page.screenshot({ clip: orbitViewer });
+    await page.screenshot({ path: join(SHOTS, '03e-viewscreen-orbit.png'), clip: orbitViewer });
+    check('the world the ship is orbiting is on the main viewer',
+      png.length > 4000, `${png.length}B`);
+  }
   await page.screenshot({ path: join(SHOTS, '03c-orbit.png') });
 
   // ---- And down onto it ----
