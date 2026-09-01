@@ -137,6 +137,10 @@ export class Officer {
       station: 'tactical', name: 'Officer', species: 'Human', rank: 'Lieutenant',
       discipline: 80, daring: 70, candor: 70, expertise: 80,
       canon: false,
+      // What the captain calls them when there is no time for a surname.
+      // Read by src/sim/address.js; saved, because a name somebody answers to
+      // that stops working after a reload is worse than never having it.
+      aliases: [],
     }, data);
 
     this.alive = true;
@@ -270,7 +274,7 @@ export class Officer {
     return {
       station: this.station, name: this.name, species: this.species, rank: this.rank,
       discipline: this.discipline, daring: this.daring, candor: this.candor,
-      expertise: this.expertise, canon: this.canon,
+      expertise: this.expertise, canon: this.canon, aliases: this.aliases,
       alive: this.alive, injured: this.injured, injurySeverity: this.injurySeverity,
       xp: this.xp, level: this.level, abilities: this.abilities, relationship: this.relationship,
     };

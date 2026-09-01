@@ -1044,6 +1044,51 @@ try {
     diag.watchdog === true && diag.seen === 0,
     JSON.stringify({ w: diag.watchdog, seen: diag.seen, what: diag.caughtWhat }));
 
+  // ---- Orders given to a person ----
+  //
+  // Typed into the real order bar, against the real roster. "Mr. Sulu, warp
+  // six" has to reach the helm as an order AND as an address, and the officer
+  // who was named has to be the one who answers — which is the half of this
+  // that only shows up with a game and a screen attached.
+  const addressed = [];
+  for (const [line, want] of [
+    ['helm, warp factor six', { action: 'warp_factor', station: 'helm' }],
+    ['tactical, red alert', { action: 'alert', station: 'tactical' }],
+    ['raise shields, number one', { action: 'shields', station: 'first_officer' }],
+    ['science, scan the system', { action: 'scan', station: 'science' }],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const got = await page.evaluate(async (typed) => {
+      const app = globalThis.__app;
+      const { parseOrder } = await import('./src/ui/orders.js');
+      const o = parseOrder(typed, app.game);
+      return { action: o?.action ?? null, station: o?.addressee?.station ?? null,
+        name: o?.addressee?.name ?? null };
+    }, line);
+    if (got.action !== want.action || got.station !== want.station) {
+      addressed.push(`${line} -> ${JSON.stringify(got)}`);
+    }
+  }
+  check('an order can be given to an officer by name or by post',
+    addressed.length === 0, addressed.join(' | '));
+
+  // And the person named is the person who speaks.
+  await page.fill('.orderbar input', 'helm, warp factor four');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(400);
+  const answered = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    const helm = g.crew.at('helm');
+    const said = g.log.slice(-8);
+    return {
+      helm: helm?.name ?? null,
+      spoke: said.some((e) => helm && String(e.text).includes(helm.name.split(' ').pop())),
+      tail: said.map((e) => e.text).join(' | '),
+    };
+  });
+  check('the officer who was named is the one who answers',
+    answered.spoke === true, `${answered.helm}: ${answered.tail}`);
+
   // And it must actually notice. Poison one number and confirm the running
   // game reports it rather than carrying on with a broken ship.
   const caught = await page.evaluate(async () => {
@@ -1264,6 +1309,19 @@ try {
   check('the reference lists every order', manual.entries >= 38, String(manual.entries));
   check('the reference shows the phrasings, which are the point',
     manual.phrases >= 100, String(manual.phrases));
+
+  // Telling a captain they may address an officer and not telling them the
+  // names is half a manual — and the names are per-game, so the sheet has to
+  // read the crew standing the watch rather than a list written down anywhere.
+  const roster = await page.evaluate(() => {
+    const names = [...document.querySelectorAll('.panel')]
+      .find((p) => /Who You Can Talk To/i.test(p.textContent))?.textContent ?? '';
+    const crew = globalThis.__app.game.crew.officers;
+    return { names, missing: crew.filter((o) => !names.includes(o.name)).map((o) => o.name) };
+  });
+  check('the reference names the officers you can give orders to',
+    roster.names.length > 0 && roster.missing.length === 0,
+    roster.names ? `missing: ${roster.missing.join(', ')}` : 'no roster panel');
   await page.screenshot({ path: join(SHOTS, '08-reference.png') });
 
   // And by voice, which is the discovery path that does not require finding a

@@ -11,13 +11,20 @@ import { ABILITIES } from '../sim/officers.js';
 import { parseText, CONFIDENT } from '../lang/parse.js';
 import { intentHelp, phraseCount, INTENTS, STATION_AFFINITY } from '../lang/lexicon.js';
 import { findRoom } from '../world/interiors.data.js';
+import { addressedTo } from '../sim/address.js';
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
   nine: 9, ten: 10, half: 0.5, full: 1, maximum: 1, max: 1, all: 1, none: 0, zero: 0,
 };
 
-/** Strip the officer being addressed — "helm," "mister sulu," "tactical," etc. */
+// Strip the officer being addressed, when there is no roster to consult.
+//
+// This is the fallback. It knows honorifics and posts and cannot know a NAME,
+// because a captain may serve with the 1966 crew, the 1987 crew, or seven
+// people the game generated this morning. When a crew is passed to
+// `parseOrder`, src/sim/address.js does this properly and says who was spoken
+// to; this list is what is left for the callers that have no crew to hand.
 const ADDRESS = /^\s*(?:mister|mr\.?|miss|ms\.?|commander|lieutenant|ensign|doctor|chief|number one|helm|tactical|engineering|science|comms?|communications|bridge|computer)\s*,?\s*/i;
 
 function normalize(text) {
@@ -351,26 +358,41 @@ function matchAbility(t) {
  *   { error }                           understood, missing something
  *   { unknown: true, suggestions }      not understood
  */
-export function parseOrder(raw) {
+export function parseOrder(raw, crew = null) {
   if (!raw || !raw.trim()) return { unknown: true };
-  const full = normalize(raw);
-  const t = stripAddress(full);
 
-  const plain = matchPlainOrder(t, raw);
-  const natural = parseText(raw);
+  // Who was spoken to, if the caller knows who is aboard.
+  //
+  // "Mr. Sulu, warp six" and "warp six" are the same order; the difference is
+  // that the first one is said to somebody, and that somebody should be the
+  // one who answers. Resolving it here rather than inside each intent means
+  // every order in the game gets it, including the ones added tomorrow.
+  const address = crew ? addressedTo(raw, crew) : null;
+  const said = address?.order ?? raw;
+
+  const full = normalize(said);
+  const t = crew ? full : stripAddress(full);
+
+  const plain = matchPlainOrder(t, said);
+  const natural = parseText(said);
+
+  // Whatever the order turns out to be, it remembers who it was given to.
+  const to = (order) => (address?.station || address?.officer
+    ? { ...order, raw, addressee: { station: address.station, name: address.officer?.name ?? null, form: address.form } }
+    : { ...order, raw });
 
   const ability = matchAbility(t);
   if (ability) {
     const fallback = plain && !plain.unknown && !plain.error ? plain
       : (natural && !natural.unknown && !natural.confirm ? natural : null);
-    return { action: 'ability', ability, raw, fallback };
+    return to({ action: 'ability', ability, fallback });
   }
 
-  if (natural?.action && natural.confidence >= CONFIDENT) return natural;
-  if (plain && !plain.unknown && !plain.error) return plain;
-  if (natural && !natural.unknown) return natural;
+  if (natural?.action && natural.confidence >= CONFIDENT) return to(natural);
+  if (plain && !plain.unknown && !plain.error) return to(plain);
+  if (natural && !natural.unknown) return to(natural);
 
-  return plain?.error ? plain : natural;
+  return to(plain?.error ? plain : natural);
 }
 
 function matchPlainOrder(t, raw) {

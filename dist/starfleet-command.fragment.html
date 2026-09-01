@@ -13376,9 +13376,9 @@ const ERAS = {
       { station: 'first_officer', name: 'Spock', species: 'Vulcan/Human', rank: 'Commander',
         discipline: 96, daring: 55, candor: 88, expertise: 94, secondary: 'science' },
       { station: 'medical', name: 'Leonard McCoy', species: 'Human', rank: 'Lieutenant Commander',
-        discipline: 62, daring: 48, candor: 99, expertise: 92 },
+        discipline: 62, daring: 48, candor: 99, expertise: 92, aliases: ['bones'] },
       { station: 'engineering', name: 'Montgomery Scott', species: 'Human', rank: 'Lieutenant Commander',
-        discipline: 84, daring: 72, candor: 76, expertise: 97 },
+        discipline: 84, daring: 72, candor: 76, expertise: 97, aliases: ['scotty'] },
       { station: 'helm', name: 'Hikaru Sulu', species: 'Human', rank: 'Lieutenant',
         discipline: 90, daring: 82, candor: 55, expertise: 88 },
       { station: 'comms', name: 'Nyota Uhura', species: 'Human', rank: 'Lieutenant',
@@ -13709,6 +13709,10 @@ class Officer {
       station: 'tactical', name: 'Officer', species: 'Human', rank: 'Lieutenant',
       discipline: 80, daring: 70, candor: 70, expertise: 80,
       canon: false,
+      // What the captain calls them when there is no time for a surname.
+      // Read by src/sim/address.js; saved, because a name somebody answers to
+      // that stops working after a reload is worse than never having it.
+      aliases: [],
     }, data);
 
     this.alive = true;
@@ -13842,7 +13846,7 @@ class Officer {
     return {
       station: this.station, name: this.name, species: this.species, rank: this.rank,
       discipline: this.discipline, daring: this.daring, candor: this.candor,
-      expertise: this.expertise, canon: this.canon,
+      expertise: this.expertise, canon: this.canon, aliases: this.aliases,
       alive: this.alive, injured: this.injured, injurySeverity: this.injurySeverity,
       xp: this.xp, level: this.level, abilities: this.abilities, relationship: this.relationship,
     };
@@ -16704,6 +16708,228 @@ __exports.parseText = parseText;
 
 });
 
+__define("src/sim/address.js", function (__exports, __require) {
+// Who the captain is talking to.
+//
+// Almost every order on this bridge is said to somebody. "Mr. Sulu, warp six",
+// "Bones, get down here", "Spock, what do you make of it" — the name is not
+// decoration, it is half the line, and the game heard none of it. One regex in
+// main.js matched a surname for the single order that hands over the con, and
+// every other order in the game was addressed to nobody in particular.
+//
+// This resolves an address against the ACTUAL ROSTER, which is the only place
+// that knows who is aboard: the lexicon cannot, because a captain can serve
+// with the 1966 crew, the 1987 crew, or seven people it generated this morning.
+//
+// Four ways to name somebody, and the crew answers to all of them:
+//
+//   By surname, with or without an honorific — "Spock", "Mr. Spock",
+//     "Commander Spock", "Doctor McCoy", "Lieutenant Uhura".
+//   By the post — "helm", "science", "the chief engineer", "tactical".
+//   By the standing form of address — "Number One" is the first officer on
+//     any ship in Starfleet, whoever holds the job.
+//   By what their friends call them, where the roster records it.
+//
+// The address may lead ("Spock, scan it") or trail ("Take us out, Mr. Sulu"),
+// because both are how people talk, and what comes back is the officer AND the
+// order with the address removed — so the parser sees "scan it" either way.
+
+/**
+ * Forms of address that belong to a POST rather than a person.
+ *
+ * "Number One" is the first officer of any ship, and a captain who says it is
+ * addressing whoever currently holds the job — which changes when somebody is
+ * hurt, which is exactly why this maps to the station and not to a name.
+ */
+const BY_POST = {
+  'number one': 'first_officer',
+  'number 1': 'first_officer',
+  exec: 'first_officer',
+  'executive officer': 'first_officer',
+  xo: 'first_officer',
+  'first officer': 'first_officer',
+  helm: 'helm',
+  helmsman: 'helm',
+  navigator: 'helm',
+  conn: 'helm',
+  tactical: 'tactical',
+  'tactical officer': 'tactical',
+  security: 'tactical',
+  weapons: 'tactical',
+  science: 'science',
+  'science officer': 'science',
+  sciences: 'science',
+  engineering: 'engineering',
+  engineer: 'engineering',
+  'chief engineer': 'engineering',
+  doctor: 'medical',
+  doc: 'medical',
+  medical: 'medical',
+  'chief medical officer': 'medical',
+  communications: 'comms',
+  comms: 'comms',
+  'communications officer': 'comms',
+};
+
+/**
+ * Honorifics that precede a name and are not part of it.
+ *
+ * `mr` covers "Mister" and "Mr." both, because normalisation has already taken
+ * the full stop off by the time anything here runs — and if it has not, the
+ * trim below takes it.
+ */
+const HONORIFICS = [
+  'mister', 'mr', 'mrs', 'ms', 'miss', 'doctor', 'dr', 'nurse',
+  'captain', 'commander', 'lieutenant', 'lt', 'ensign', 'chief', 'admiral',
+  'commodore', 'crewman', 'specialist', 'subcommander', 'major', 'colonel',
+];
+
+/** Lower-cased, punctuation gone — but NOT the comma, which is structure. */
+const strip = (s) => String(s ?? '')
+  .toLowerCase()
+  .replace(/[.!?;:]+/g, ' ')
+  .replace(/\s*,\s*/g, ', ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+/** The same, with the commas taken out too. Names do not contain them. */
+const bare = (s) => strip(s).replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** The part of a name people actually call somebody by. */
+function surnameOf(officer) {
+  const parts = String(officer?.name ?? '').trim().split(/\s+/).filter(Boolean);
+  return (parts[parts.length - 1] ?? '').toLowerCase();
+}
+
+/**
+ * Every string this officer answers to, longest first.
+ *
+ * Longest first matters: "chief engineer" has to be tried before "chief", or
+ * an order to the chief engineer is addressed to a chief petty officer and the
+ * word "engineer" is left in the order for the parser to trip over.
+ */
+function namesFor(officer, station = officer?.station) {
+  const out = new Set();
+  const full = bare(officer?.name);
+  const last = surnameOf(officer);
+  if (full) out.add(full);
+  if (last) out.add(last);
+  for (const nick of officer?.aliases ?? []) {
+    const n = bare(nick);
+    if (n) out.add(n);
+  }
+  for (const [form, post] of Object.entries(BY_POST)) {
+    if (post === station) out.add(form);
+  }
+  return [...out].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Who was spoken to, and what was said to them.
+ *
+ * @param {string} line   the order as the captain typed it
+ * @param {object} crew   the ship's company; only `officers` is read
+ * @returns {{officer: object|null, station: string|null, order: string,
+ *            form: string|null, leading: boolean}}
+ *   `order` is the line with the address removed, and is the whole line
+ *   unchanged when nobody was named — so this is safe to run over every order.
+ */
+function addressedTo(line, crewOrGame) {
+  // Callers hold a game far more often than they hold a crew, and handing one
+  // over used to mean `officers` came back undefined and every address matched
+  // the post table instead of the roster.
+  const crew = crewOrGame?.officers ? crewOrGame : crewOrGame?.crew ?? null;
+  const raw = String(line ?? '');
+  const said = strip(raw);
+  const blank = { officer: null, station: null, order: raw, form: null, leading: false };
+  if (!said) return blank;
+
+  // Only officers who can answer. Addressing a name is how a captain finds out
+  // somebody is in sickbay, so the order still resolves — it just resolves to
+  // whoever is standing that post now, which is what `watchOrder` decides.
+  const officers = (crew?.officers ?? []).filter((o) => o?.alive);
+
+  /** Every (phrase, officer) pair anybody aboard answers to, longest first. */
+  const forms = [];
+  for (const o of officers) {
+    for (const name of namesFor(o)) forms.push([name, o]);
+  }
+  // A post nobody is standing is still a post — "helm, warp six" should reach
+  // the helm even if the helm officer is in sickbay and somebody is covering.
+  for (const [form, station] of Object.entries(BY_POST)) {
+    if (!officers.some((o) => o.station === station)) forms.push([form, { station }]);
+  }
+  forms.sort((a, b) => b[0].length - a[0].length);
+
+  for (const [form, who] of forms) {
+    // An honorific is optional and may be doubled in practice ("Mr. Chief
+    // Engineer" nobody says, but "Lieutenant Commander Data" they do), so the
+    // pattern allows a run of them.
+    const hon = `(?:(?:${HONORIFICS.join('|')})\\s+)*`;
+    const esc = form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Leading: "Mr. Spock, scan it".
+    const lead = new RegExp(`^${hon}${esc}\\b[\\s,]*`, 'i');
+    if (lead.test(said)) {
+      const rest = said.replace(lead, '').trim();
+      // "Spock" on its own is addressing somebody, not ordering them about,
+      // and an empty order is not something the parser can do anything with.
+      if (rest) {
+        return {
+          officer: who.name ? who : null, station: who.station ?? null,
+          order: bare(rest), form, leading: true,
+        };
+      }
+    }
+
+    // Trailing: "Take us out, Mr. Sulu."
+    //
+    // The comma is REQUIRED here and optional at the front, and that asymmetry
+    // is load-bearing. A post is also an ordinary English word: "take me down
+    // to engineering" ends with the name of a station and is not addressed to
+    // anybody, it is a request to walk there. A line that BEGINS with a post
+    // is always an address, because nothing else starts that way.
+    const tail = new RegExp(`,\\s*${hon}${esc}\\s*$`, 'i');
+    if (tail.test(said)) {
+      const rest = said.replace(tail, '').trim();
+      if (rest) {
+        return {
+          officer: who.name ? who : null, station: who.station ?? null,
+          order: bare(rest), form, leading: false,
+        };
+      }
+    }
+  }
+
+  return blank;
+}
+
+/**
+ * The officer who should answer an order, given who was named.
+ *
+ * Naming somebody who cannot answer is not an error and must not swallow the
+ * order: a captain who says "Spock, scan it" while Spock is unconscious in
+ * sickbay has still given a perfectly good order to the science station, and
+ * the person standing it answers. Saying so out loud is the game's job, not
+ * this function's.
+ */
+function answeringFor(address, crewOrGame) {
+  const crew = crewOrGame?.officers ? crewOrGame : crewOrGame?.crew ?? null;
+  if (!address?.station) return address?.officer ?? null;
+  const named = address.officer;
+  if (named?.alive && !named.injured) return named;
+  const onStation = crew?.at?.(address.station);
+  if (onStation?.alive && !onStation.injured) return onStation;
+  return named ?? onStation ?? null;
+}
+
+__exports.surnameOf = surnameOf;
+__exports.namesFor = namesFor;
+__exports.addressedTo = addressedTo;
+__exports.answeringFor = answeringFor;
+
+});
+
 __define("src/ui/orders.js", function (__exports, __require) {
 // Natural-language order parsing.
 //
@@ -16718,13 +16944,20 @@ const { ABILITIES } = __require("src/sim/officers.js");
 const { parseText, CONFIDENT } = __require("src/lang/parse.js");
 const { intentHelp, phraseCount, INTENTS, STATION_AFFINITY } = __require("src/lang/lexicon.js");
 const { findRoom } = __require("src/world/interiors.data.js");
+const { addressedTo } = __require("src/sim/address.js");
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
   nine: 9, ten: 10, half: 0.5, full: 1, maximum: 1, max: 1, all: 1, none: 0, zero: 0,
 };
 
-/** Strip the officer being addressed — "helm," "mister sulu," "tactical," etc. */
+// Strip the officer being addressed, when there is no roster to consult.
+//
+// This is the fallback. It knows honorifics and posts and cannot know a NAME,
+// because a captain may serve with the 1966 crew, the 1987 crew, or seven
+// people the game generated this morning. When a crew is passed to
+// `parseOrder`, src/sim/address.js does this properly and says who was spoken
+// to; this list is what is left for the callers that have no crew to hand.
 const ADDRESS = /^\s*(?:mister|mr\.?|miss|ms\.?|commander|lieutenant|ensign|doctor|chief|number one|helm|tactical|engineering|science|comms?|communications|bridge|computer)\s*,?\s*/i;
 
 function normalize(text) {
@@ -17058,26 +17291,41 @@ function matchAbility(t) {
  *   { error }                           understood, missing something
  *   { unknown: true, suggestions }      not understood
  */
-function parseOrder(raw) {
+function parseOrder(raw, crew = null) {
   if (!raw || !raw.trim()) return { unknown: true };
-  const full = normalize(raw);
-  const t = stripAddress(full);
 
-  const plain = matchPlainOrder(t, raw);
-  const natural = parseText(raw);
+  // Who was spoken to, if the caller knows who is aboard.
+  //
+  // "Mr. Sulu, warp six" and "warp six" are the same order; the difference is
+  // that the first one is said to somebody, and that somebody should be the
+  // one who answers. Resolving it here rather than inside each intent means
+  // every order in the game gets it, including the ones added tomorrow.
+  const address = crew ? addressedTo(raw, crew) : null;
+  const said = address?.order ?? raw;
+
+  const full = normalize(said);
+  const t = crew ? full : stripAddress(full);
+
+  const plain = matchPlainOrder(t, said);
+  const natural = parseText(said);
+
+  // Whatever the order turns out to be, it remembers who it was given to.
+  const to = (order) => (address?.station || address?.officer
+    ? { ...order, raw, addressee: { station: address.station, name: address.officer?.name ?? null, form: address.form } }
+    : { ...order, raw });
 
   const ability = matchAbility(t);
   if (ability) {
     const fallback = plain && !plain.unknown && !plain.error ? plain
       : (natural && !natural.unknown && !natural.confirm ? natural : null);
-    return { action: 'ability', ability, raw, fallback };
+    return to({ action: 'ability', ability, fallback });
   }
 
-  if (natural?.action && natural.confidence >= CONFIDENT) return natural;
-  if (plain && !plain.unknown && !plain.error) return plain;
-  if (natural && !natural.unknown) return natural;
+  if (natural?.action && natural.confidence >= CONFIDENT) return to(natural);
+  if (plain && !plain.unknown && !plain.error) return to(plain);
+  if (natural && !natural.unknown) return to(natural);
 
-  return plain?.error ? plain : natural;
+  return to(plain?.error ? plain : natural);
 }
 
 function matchPlainOrder(t, raw) {
@@ -26113,6 +26361,7 @@ const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
 const { commandReference } = __require("src/ui/orders.js");
+const { namesFor } = __require("src/sim/address.js");
 const { ROOMS, DECKS } = __require("src/world/interiors.data.js");
 const { listBackups, downloadSave } = __require("src/core/save.js");
 const { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } = __require("src/sim/fabrication.js");
@@ -27304,6 +27553,30 @@ function referenceScreen(app) {
     el('p', { class: 'muted', text: 'You can address an officer — "Mister Sulu, come about" — and the order goes to that station. If something is ambiguous the bridge asks rather than guessing.' }),
   ], 'accent'));
 
+  // Who is aboard, and what they answer to.
+  //
+  // Telling a captain they may address an officer and not telling them the
+  // names is half a manual. The roster is per-game — canon crews, a generated
+  // one, whoever has survived — so this is read from the crew that is actually
+  // standing the watch rather than written down anywhere.
+  const crew = app?.game?.crew;
+  if (crew?.officers?.length) {
+    root.append(panel('Who You Can Talk To', [
+      el('p', { class: 'muted', text: 'Put the name at either end of the order. A name at the end needs its comma — "take us out, Mr. Sulu" — because a station is also a place you can walk to.' }),
+      ...crew.officers
+        .filter((o, i, all) => all.findIndex((x) => x.name === o.name) === i)
+        .map((o) => el('div', { class: 'ref-entry' }, [
+          el('div', { class: 'ref-help', text: `${o.rank} ${o.name}${o.alive ? '' : ' — lost'}` }),
+          // `namesFor` sorts longest-first because the MATCHER needs that.
+          // A reader wants the short one first — the surname is what a captain
+          // reaches for, and it is what the list should open with.
+          el('div', { class: 'ref-examples' },
+            namesFor(o).slice().reverse().slice(0, 5)
+              .map((n) => el('span', { class: 'ref-phrase', text: `“${n}”` }))),
+        ])),
+    ]));
+  }
+
   for (const group of ref.groups) {
     root.append(panel(group.label, group.entries.map((e) => el('div', { class: 'ref-entry' }, [
       el('div', { class: 'ref-help', text: e.help }),
@@ -28478,6 +28751,7 @@ const { saveGame, loadSave, hasSave, loadSettings, saveSettings: persistSettings
 const { ABILITIES } = __require("src/sim/officers.js");
 const { WATCHES } = __require("src/sim/watch.js");
 const { Ship, FACINGS } = __require("src/sim/ship.js");
+const { answeringFor } = __require("src/sim/address.js");
 const { parseOrder } = __require("src/ui/orders.js");
 const { SKILLS } = __require("src/sim/skills.js");
 const { RNG } = __require("src/core/rng.js");
@@ -29627,7 +29901,7 @@ class App {
       return;
     }
 
-    const order = parseOrder(text);
+    const order = parseOrder(text, this.game?.crew ?? null);
     this.executeOrder(order, text);
   }
 
@@ -29692,8 +29966,34 @@ class App {
       return;
     }
 
+    // Who answers.
+    //
+    // An order given to somebody by name is answered BY THAT PERSON. "Mr.
+    // Sulu, warp six" used to be acknowledged by whichever station the order
+    // belonged to, which is usually the same officer and sometimes flatly
+    // wrong — and always wrong when the captain deliberately went round the
+    // duty roster to ask a particular person.
+    //
+    // Naming somebody who cannot answer does not swallow the order. The post
+    // still has somebody standing it, they still carry it out, and the log
+    // says why it was not the person who was asked.
+    const spokenTo = order.addressee?.station ?? null;
+    if (spokenTo) {
+      const named = g.crew.officers.find((o) => o.name === order.addressee.name);
+      const answering = answeringFor(
+        { station: spokenTo, officer: named ?? null }, g.crew,
+      );
+      if (named && answering && answering !== named) {
+        g.pushLog(
+          `${named.name} is off duty — ${answering.name} has the station, Captain.`,
+          'computer',
+        );
+      }
+    }
+
     const ack = (station, text) => {
-      const officer = g.officerSays(station, text);
+      // The station the order belongs to, unless the captain named somebody.
+      const officer = g.officerSays(spokenTo ?? station, text);
       if (this.settings.voice && officer) audio.speak(text);
       audio.play('computer_ack');
       haptic('confirm');
@@ -29940,12 +30240,11 @@ class App {
         break;
       }
       case 'hand_over_con': {
-        // Who was named, if anyone. The roster is the only place that knows,
-        // so the match happens here rather than in the parser.
-        const said = String(order.said ?? '').toLowerCase();
-        const named = g.crew.officers.find((o) => o.alive && !o.injured
-          && said.includes(o.name.split(' ').pop().toLowerCase()));
-        const r = g.handOverCon(named ? named.station : null);
+        // Who was named, if anyone. `parseOrder` resolves the address against
+        // the real roster now, so this no longer has to do its own surname
+        // matching — and it gets "Number One", "Bones" and "the chief
+        // engineer" for free, which the old substring test never did.
+        const r = g.handOverCon(order.addressee?.station ?? null);
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
         else { audio.play('ui_deny'); ack('computer', r.reason); }
         break;

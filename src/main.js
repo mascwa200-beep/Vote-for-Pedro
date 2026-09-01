@@ -27,6 +27,7 @@ import {
 import { ABILITIES } from './sim/officers.js';
 import { WATCHES } from './sim/watch.js';
 import { Ship, FACINGS } from './sim/ship.js';
+import { answeringFor } from './sim/address.js';
 import { parseOrder } from './ui/orders.js';
 import { SKILLS } from './sim/skills.js';
 import { RNG } from './core/rng.js';
@@ -1176,7 +1177,7 @@ class App {
       return;
     }
 
-    const order = parseOrder(text);
+    const order = parseOrder(text, this.game?.crew ?? null);
     this.executeOrder(order, text);
   }
 
@@ -1241,8 +1242,34 @@ class App {
       return;
     }
 
+    // Who answers.
+    //
+    // An order given to somebody by name is answered BY THAT PERSON. "Mr.
+    // Sulu, warp six" used to be acknowledged by whichever station the order
+    // belonged to, which is usually the same officer and sometimes flatly
+    // wrong — and always wrong when the captain deliberately went round the
+    // duty roster to ask a particular person.
+    //
+    // Naming somebody who cannot answer does not swallow the order. The post
+    // still has somebody standing it, they still carry it out, and the log
+    // says why it was not the person who was asked.
+    const spokenTo = order.addressee?.station ?? null;
+    if (spokenTo) {
+      const named = g.crew.officers.find((o) => o.name === order.addressee.name);
+      const answering = answeringFor(
+        { station: spokenTo, officer: named ?? null }, g.crew,
+      );
+      if (named && answering && answering !== named) {
+        g.pushLog(
+          `${named.name} is off duty — ${answering.name} has the station, Captain.`,
+          'computer',
+        );
+      }
+    }
+
     const ack = (station, text) => {
-      const officer = g.officerSays(station, text);
+      // The station the order belongs to, unless the captain named somebody.
+      const officer = g.officerSays(spokenTo ?? station, text);
       if (this.settings.voice && officer) audio.speak(text);
       audio.play('computer_ack');
       haptic('confirm');
@@ -1489,12 +1516,11 @@ class App {
         break;
       }
       case 'hand_over_con': {
-        // Who was named, if anyone. The roster is the only place that knows,
-        // so the match happens here rather than in the parser.
-        const said = String(order.said ?? '').toLowerCase();
-        const named = g.crew.officers.find((o) => o.alive && !o.injured
-          && said.includes(o.name.split(' ').pop().toLowerCase()));
-        const r = g.handOverCon(named ? named.station : null);
+        // Who was named, if anyone. `parseOrder` resolves the address against
+        // the real roster now, so this no longer has to do its own surname
+        // matching — and it gets "Number One", "Bones" and "the chief
+        // engineer" for free, which the old substring test never did.
+        const r = g.handOverCon(order.addressee?.station ?? null);
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
         else { audio.play('ui_deny'); ack('computer', r.reason); }
         break;

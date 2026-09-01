@@ -10,6 +10,7 @@ import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { commandReference } from './orders.js';
+import { namesFor } from '../sim/address.js';
 import { ROOMS, DECKS } from '../world/interiors.data.js';
 import { listBackups, downloadSave } from '../core/save.js';
 import { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } from '../sim/fabrication.js';
@@ -1209,6 +1210,30 @@ export function referenceScreen(app) {
     ]),
     el('p', { class: 'muted', text: 'You can address an officer — "Mister Sulu, come about" — and the order goes to that station. If something is ambiguous the bridge asks rather than guessing.' }),
   ], 'accent'));
+
+  // Who is aboard, and what they answer to.
+  //
+  // Telling a captain they may address an officer and not telling them the
+  // names is half a manual. The roster is per-game — canon crews, a generated
+  // one, whoever has survived — so this is read from the crew that is actually
+  // standing the watch rather than written down anywhere.
+  const crew = app?.game?.crew;
+  if (crew?.officers?.length) {
+    root.append(panel('Who You Can Talk To', [
+      el('p', { class: 'muted', text: 'Put the name at either end of the order. A name at the end needs its comma — "take us out, Mr. Sulu" — because a station is also a place you can walk to.' }),
+      ...crew.officers
+        .filter((o, i, all) => all.findIndex((x) => x.name === o.name) === i)
+        .map((o) => el('div', { class: 'ref-entry' }, [
+          el('div', { class: 'ref-help', text: `${o.rank} ${o.name}${o.alive ? '' : ' — lost'}` }),
+          // `namesFor` sorts longest-first because the MATCHER needs that.
+          // A reader wants the short one first — the surname is what a captain
+          // reaches for, and it is what the list should open with.
+          el('div', { class: 'ref-examples' },
+            namesFor(o).slice().reverse().slice(0, 5)
+              .map((n) => el('span', { class: 'ref-phrase', text: `“${n}”` }))),
+        ])),
+    ]));
+  }
 
   for (const group of ref.groups) {
     root.append(panel(group.label, group.entries.map((e) => el('div', { class: 'ref-entry' }, [

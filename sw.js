@@ -89,6 +89,7 @@ const PRECACHE = [
   './src/sim/invariants.js',
   './src/sim/walk.js',
   './src/sim/watch.js',
+  './src/sim/address.js',
   './src/world/interiors.data.js',
 ];
 

@@ -28,6 +28,8 @@ import { INTENTS, lexiconActions, phraseCount } from '../src/lang/lexicon.js';
 import { parseOrder, commandReference, orderHelp } from '../src/ui/orders.js';
 import { article } from '../src/world/encounters.js';
 import { FACTIONS } from '../src/world/factions.data.js';
+import { addressedTo, answeringFor } from '../src/sim/address.js';
+import { Game } from '../src/core/state.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -778,5 +780,131 @@ describe('an addressee is not allowed to eat the order', () => {
     const o = parseText('mister spock you have the con');
     assert.equal(o.action, 'hand_over_con');
     assert.ok(o.said.includes('spock'), o.said);
+  });
+});
+
+// ============================================ who the captain is talking to
+
+describe('an order is said to somebody', () => {
+  // "Mr. Sulu, warp six" and "warp six" are the same order. The difference is
+  // that the first one is said to a person, and until now the game heard none
+  // of it: one regex in main.js matched a surname for the single order that
+  // hands over the con, and every other order was addressed to nobody.
+  //
+  // Resolution is against the ACTUAL ROSTER, because the lexicon cannot know
+  // it — a captain may serve with the 1966 crew, the 1987 crew, or seven
+  // people the game generated this morning.
+
+  const tos = () => new Game({ seed: 3n, crewMode: 'canon', crew: 'tos' });
+
+  test('by surname, with or without an honorific', () => {
+    const g = tos();
+    for (const line of ['Sulu, warp six', 'Mr. Sulu, warp six', 'Lieutenant Sulu, warp six',
+      'mister sulu warp six']) {
+      const a = addressedTo(line, g.crew);
+      assert.equal(a.officer?.station, 'helm', line);
+      assert.equal(a.order, 'warp six', line);
+    }
+  });
+
+  test('by the post, whoever is standing it', () => {
+    const g = tos();
+    for (const [line, station] of [
+      ['helm, all stop', 'helm'],
+      ['tactical, target their engines', 'tactical'],
+      ['engineering, reroute power to shields', 'engineering'],
+      ['communications, open a channel', 'comms'],
+      ['science, full scan', 'science'],
+    ]) {
+      assert.equal(addressedTo(line, g.crew).station, station, line);
+    }
+  });
+
+  test('"Number One" is the first officer, whoever that is', () => {
+    // The point of the form: it is a POST, not a person, so it follows the job
+    // when the job changes hands.
+    const g = tos();
+    assert.equal(addressedTo('number one, you have the con', g.crew).station, 'first_officer');
+    g.crew.at('first_officer').name = 'Somebody Else';
+    assert.equal(addressedTo('number one, take the con', g.crew).officer?.name, 'Somebody Else');
+  });
+
+  test('by what the crew actually calls them', () => {
+    const g = tos();
+    assert.equal(addressedTo('bones, get down here', g.crew).station, 'medical');
+    assert.equal(addressedTo('scotty, i need more power', g.crew).station, 'engineering');
+  });
+
+  test('the address can come last, and then it needs its comma', () => {
+    const g = tos();
+    assert.equal(addressedTo('take us out, mr. sulu', g.crew).station, 'helm');
+    assert.equal(addressedTo('take us out, mr. sulu', g.crew).order, 'take us out');
+
+    // The asymmetry that keeps a station name from eating a destination. A post
+    // is also an ordinary English word: this line ends with the name of a
+    // station and is a request to WALK there.
+    const walk = addressedTo('take me down to engineering', g.crew);
+    assert.equal(walk.station, null, 'a room was mistaken for an officer');
+    assert.equal(walk.order, 'take me down to engineering');
+  });
+
+  test('an order with no address is returned untouched', () => {
+    const g = tos();
+    for (const line of ['red alert', 'fire all weapons', 'set course for vulcan warp eight']) {
+      const a = addressedTo(line, g.crew);
+      assert.equal(a.officer, null, line);
+      assert.equal(a.order, line, line);
+    }
+  });
+
+  test('a name on its own is not an order', () => {
+    // Saying somebody's name gets their attention. It does not do anything,
+    // and it must not be mistaken for the last order given.
+    const g = tos();
+    assert.equal(addressedTo('spock', g.crew).officer, null);
+    assert.equal(addressedTo('mr. sulu', g.crew).officer, null);
+  });
+
+  test('the order survives the address, whichever end it is on', () => {
+    const g = tos();
+    for (const line of ['Mr. Sulu, warp six', 'warp six, mr. sulu']) {
+      const order = parseOrder(line, g);
+      assert.equal(order.action, 'warp_factor', line);
+      assert.equal(order.value ?? order.warp, 6, line);
+      assert.equal(order.addressee?.station, 'helm', line);
+    }
+  });
+
+  test('who was named reaches the order, and the con goes to them', () => {
+    const g = tos();
+    const order = parseOrder('Number One, you have the con', g);
+    assert.equal(order.action, 'hand_over_con');
+    assert.equal(order.addressee.station, 'first_officer');
+    const r = g.handOverCon(order.addressee.station);
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(g.conStation, 'first_officer');
+  });
+
+  test('naming somebody who cannot answer does not swallow the order', () => {
+    // A captain who asks for a specific officer while that officer is in
+    // sickbay has still given a perfectly good order. The post answers.
+    const g = tos();
+    const doc = g.crew.at('medical');
+    doc.injured = true;
+    const address = addressedTo('bones, what is our status', g.crew);
+    assert.equal(address.station, 'medical', 'the order was lost with the officer');
+    assert.equal(answeringFor(address, g.crew)?.station, 'medical');
+  });
+
+  test('a generated crew answers to its own names', () => {
+    // Nothing here is hard-coded to the 1966 roster. A captain who rolled a
+    // crew this morning can address any of them by surname.
+    const g = new Game({ seed: 91n, crewMode: 'original' });
+    for (const o of g.crew.officers) {
+      const surname = o.name.split(' ').pop();
+      const a = addressedTo(`${surname}, report`, g.crew);
+      assert.ok(a.officer, `nobody answered to "${surname}"`);
+      assert.equal(a.order, 'report');
+    }
   });
 });
