@@ -2679,6 +2679,74 @@ try {
     await page.screenshot({ path: join(SHOTS, `${shot}.png`) });
   }
 
+  // ---- The ship's company ----
+  //
+  // The bridge has ten people with names; the roster is the other handful. A
+  // detail sent out has to be visible ON the panel and reachable BY the order,
+  // because a specialist who changes nothing you can see is a name on a list.
+  await nav(page, 'Crew');
+  const company = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const text = () => document.body.textContent ?? '';
+    const before = text();
+
+    // The button, driven the way a thumb drives it.
+    const send = [...document.querySelectorAll('button')]
+      .find((b) => /survey detail/i.test(b.textContent ?? ''));
+    send?.click();
+    await new Promise((r) => setTimeout(r, 60));
+    app.render();
+
+    const job = (g.assignments ?? [])[0];
+    const team = (job?.team ?? [])
+      .map((id) => (g.dutyRoster ?? []).find((p) => p.id === id)?.name)
+      .filter(Boolean);
+
+    return {
+      roster: (g.dutyRoster ?? []).length,
+      namesOnScreen: (g.dutyRoster ?? []).filter((p) => before.includes(p.name)).length,
+      // Every button prints the phrase that does the same thing.
+      phraseOnButton: /send a survey detail/i.test(before),
+      started: !!job,
+      team,
+      // And the panel says where they went, not just that they are gone.
+      saysWhereTheyWent: /Survey detail/i.test(text()) && team.every((n) => text().includes(n)),
+    };
+  });
+  check('the ship’s company is on the crew screen',
+    company.roster > 0 && company.namesOnScreen >= 3,
+    JSON.stringify({ roster: company.roster, named: company.namesOnScreen }));
+  check('and every detail prints the phrase that sends it',
+    company.phraseOnButton, 'no spoken phrase under the button');
+  check('the button actually sends a detail out',
+    company.started && company.team.length > 0, JSON.stringify(company));
+  check('and the panel says who went and where',
+    company.saysWhereTheyWent, JSON.stringify(company.team));
+  await page.screenshot({ path: join(SHOTS, '07b-ships-company.png') });
+
+  // The same thing, said out loud.
+  const spoken = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { parseOrder } = await import('./src/ui/orders.js');
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    const before = (g.assignments ?? []).length;
+    app.executeOrder(parseOrder('send a sensor recalibration', g), 'send a sensor recalibration');
+    await new Promise((r) => setTimeout(r, 60));
+    const after = (g.assignments ?? []).length;
+    app.executeOrder(parseOrder('who is out', g), 'who is out');
+    await new Promise((r) => setTimeout(r, 60));
+    const said = [...document.querySelectorAll('.modal')].map((m) => m.textContent).join(' ');
+    for (const b of document.querySelectorAll('.modal .btn')) b.click();
+    return { before, after, said };
+  });
+  check('a detail can be ordered out in words, not only tapped',
+    spoken.after > spoken.before, JSON.stringify({ before: spoken.before, after: spoken.after }));
+  check('and asking who is out gets an answer',
+    /detail|aboard/i.test(spoken.said), spoken.said.slice(0, 160));
+  await dismissModals(page);
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {

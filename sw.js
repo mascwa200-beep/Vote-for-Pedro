@@ -69,6 +69,7 @@ const PRECACHE = [
   './src/rules/resolve.js',
   './src/campaign/clock.js',
   './src/sim/fabrication.js',
+  './src/sim/duty.js',
   './src/missions/kobayashi.js',
   './src/lang/normalize.js',
   './src/lang/phonetic.js',

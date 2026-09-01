@@ -4,6 +4,7 @@
 // graph is built on the first tap, and the first frame is the game.
 
 import { el, clear, button, modal } from './ui/lcars.js';
+import { ASSIGNMENTS, SPECIALITIES, beginAssignment } from './sim/duty.js';
 import { haptic, configureTouch, requestWakeLock, releaseWakeLock, trackViewportInsets } from './ui/touch.js';
 import { audio } from './audio/engine.js';
 import { TacticalView } from './ui/tactical.js';
@@ -916,6 +917,41 @@ class App {
     audio.play('hail_incoming');
   }
 
+  /**
+   * Send a detail out.
+   *
+   * Picking who goes is the game's job, not a form to fill in: the best
+   * suited people who are actually aboard, up to the size the work takes.
+   * A captain says "send a survey detail" and the first officer decides which
+   * hands to use, which is how it would actually happen — and the panel and
+   * the order both come through here, so they cannot drift apart.
+   */
+  sendDetail(assignmentId) {
+    const g = this.game;
+    const assignment = ASSIGNMENTS[assignmentId];
+    if (!assignment) {
+      audio.play('ui_deny');
+      g.officerSays('comms', 'Which detail, Captain?', 'object');
+      return null;
+    }
+
+    const wanted = SPECIALITIES[assignment.wants];
+    const free = (g.dutyRoster ?? []).filter((p) => p.available);
+    // Best suited first: the matched speciality, then anybody from the same
+    // division, then whoever is left.
+    const ranked = [...free].sort((a, b) => {
+      const rank = (p) => (p.speciality === assignment.wants ? 2
+        : p.division === wanted?.division ? 1 : 0);
+      return (rank(b) - rank(a)) || ((b.expertise ?? 0) - (a.expertise ?? 0));
+    });
+    const team = ranked.slice(0, Math.max(1, assignment.team ?? 1));
+
+    const r = beginAssignment(g, assignmentId, team.map((p) => p.id));
+    if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+    else { audio.play('ui_deny'); g.officerSays('comms', r.reason, 'object'); }
+    return r;
+  }
+
   showCombatResult(outcome) {
     const g = this.game;
     const lines = {
@@ -1592,6 +1628,32 @@ class App {
             `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
             'report');
         }
+        break;
+      }
+      case 'duty_roster': {
+        // A question, so it is answered rather than acted on.
+        const roster = g.dutyRoster ?? [];
+        const out = (g.assignments ?? []).length;
+        if (!roster.length) { ack('comms', 'We have no specialists aboard, Captain.'); break; }
+        const aboard = roster.filter((p) => p.state === 'aboard').length;
+        const hurt = roster.filter((p) => p.state === 'recovering').length;
+        const lines = [
+          `${aboard} aboard, ${out} ${out === 1 ? 'detail' : 'details'} out${hurt ? `, ${hurt} in sickbay` : ''}.`,
+          ...(g.assignments ?? []).map((job) => {
+            const a = ASSIGNMENTS[job.assignmentId];
+            const who = (job.team ?? [])
+              .map((id) => roster.find((p) => p.id === id)?.name)
+              .filter(Boolean).join(', ');
+            return `${a?.name ?? 'A detail'}: ${who} — ${Math.max(0, Math.round(job.hoursRemaining))} hours.`;
+          }),
+        ];
+        for (const line of lines) g.pushLog(line, 'comms');
+        this.showMessage('Ship’s Company', lines);
+        audio.play('computer_ack');
+        break;
+      }
+      case 'assign_detail': {
+        this.sendDetail(order.detail);
         break;
       }
       case 'salvage': {

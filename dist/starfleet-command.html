@@ -1315,6 +1315,1243 @@ __exports.logLine = logLine;
 
 });
 
+__define("src/core/events.js", function (__exports, __require) {
+// Minimal synchronous pub/sub. The sim emits, the UI listens.
+// Synchronous on purpose: an order and its consequence land in the same frame,
+// so nothing ever shows a spinner waiting for a result.
+
+const handlers = new Map();
+function on(event, fn) {
+  if (!handlers.has(event)) handlers.set(event, new Set());
+  handlers.get(event).add(fn);
+  return () => off(event, fn);
+}
+function once(event, fn) {
+  const wrapped = (payload) => { off(event, wrapped); fn(payload); };
+  return on(event, wrapped);
+}
+function off(event, fn) {
+  handlers.get(event)?.delete(fn);
+}
+function emit(event, payload) {
+  const set = handlers.get(event);
+  if (set) {
+    for (const fn of [...set]) {
+      try { fn(payload); } catch (err) { console.error(`[events] ${event}`, err); }
+    }
+  }
+  const wildcard = handlers.get('*');
+  if (wildcard) {
+    for (const fn of [...wildcard]) {
+      try { fn({ event, payload }); } catch (err) { console.error('[events] *', err); }
+    }
+  }
+}
+function clearAll() {
+  handlers.clear();
+}
+
+__exports.on = on;
+__exports.once = once;
+__exports.off = off;
+__exports.emit = emit;
+__exports.clearAll = clearAll;
+
+});
+
+__define("src/rules/resolve.js", function (__exports, __require) {
+// Continuous outcome resolution.
+//
+// This is what replaced the d20 in gameplay.
+//
+// The character sheet is still a role-playing character sheet — ability scores,
+// proficiency, feats, levels, the whole apparatus in rules/character.js, and
+// rules/dice.js is still there to build it. What is gone is rolling a
+// twenty-sided die to decide whether an away team gets through a hull breach.
+//
+// The reason is not that dice are bad. It is that a d20 has a flat
+// distribution, which means a competent officer fails a routine task one time
+// in twenty no matter how good they are, and the size of the failure carries no
+// information. That reads as a board game. What this game wants is the opposite:
+// outcomes that come from the situation and the people, where being better makes
+// you reliably better, and where the *margin* — how comfortably, how badly —
+// is what drives what happens next.
+//
+// So: capability against difficulty, plus a bounded random swing, giving a
+// margin rather than a pass or a fail. Everything downstream reads the margin.
+//
+// The arithmetic is still fully itemised. Nothing about this is less auditable
+// than the die was; the breakdown the player sees is the same list of terms it
+// always was, and the only thing that changed is the shape of the uncertainty.
+
+/**
+ * What an unmodified attempt is worth before capability is added.
+ *
+ * This number is not arbitrary and getting it wrong is the trap this file fell
+ * into first. Every difficulty number in the game — the hazard table, the
+ * mission specs, the difficulty ladder's adjustments — was written against a
+ * d20, where the die itself contributes 10.5 on average and the modifier is a
+ * comparatively small nudge on top. Replacing the die with a swing centred on
+ * zero silently removes that 10.5 from every single check in the game, and
+ * turns a routine survey into a near-certain disaster.
+ *
+ * So the baseline is supplied explicitly, the difficulty numbers keep their
+ * tuned values, and the change is confined to the *shape* of the uncertainty
+ * rather than its centre.
+ */
+const BASELINE = 10.5;
+
+/**
+ * How wide the random swing is.
+ *
+ * A d20 has a standard deviation of about 5.77 and, being flat, spends as much
+ * time at its extremes as at its middle. This is deliberately a little tighter
+ * and normally distributed, so the typical result sits near what the officer is
+ * actually capable of. Compared against the die: a competent officer on routine
+ * work succeeds a little more often, and — the point of the change — no longer
+ * fails catastrophically one time in twenty regardless of how good they are.
+ */
+const SWING = 5.2;
+
+/** Beyond this many points either way, the outcome is exceptional. */
+const EXCEPTIONAL = 7.5;
+
+/** Hard bound on the swing, so nothing is ever truly impossible or certain. */
+const MAX_SWING = 13;
+
+/**
+ * Resolve one contested outcome.
+ *
+ * @param {RNG} rng
+ * @param {object} opts
+ *   capability  the actor's total relevant skill, already itemised by the caller
+ *   difficulty  what they are up against, on the same scale
+ *   advantage   true to take the better of two swings, false for the worse
+ *   steady      0..1; how much the actor's training damps the swing
+ *   luck        difficulty-granted nudge in the actor's favour
+ * @returns {object} margin, success, degree, and the flags the prose reads
+ */
+function resolve(rng, {
+  capability = 0, difficulty = 10, advantage = false, disadvantage = false,
+  steady = 0, luck = 0, label = '',
+} = {}) {
+  const draw = () => {
+    // A normal draw rather than a uniform one: most attempts land near what the
+    // actor is actually capable of, and the extremes are rare rather than
+    // evenly likely. This is the whole difference from a d20.
+    const raw = rng.normal ? rng.normal(0, 1) : (rng.float() + rng.float() + rng.float() - 1.5) / 0.5;
+    return Math.max(-MAX_SWING, Math.min(MAX_SWING, raw * SWING * (1 - 0.35 * steady)));
+  };
+
+  let swing = draw();
+  if (advantage && !disadvantage) swing = Math.max(swing, draw());
+  else if (disadvantage && !advantage) swing = Math.min(swing, draw());
+
+  // Rounded first, and every verdict derived from the rounded value.
+  //
+  // This ordering is load-bearing. Reporting a margin of -0.02 as "0.0" while
+  // deriving failure from the raw number means the card shows the player a
+  // number that contradicts its own verdict — and because JavaScript evaluates
+  // `-0 >= 0` as true, it is not even visible as a sign. It happened about one
+  // attempt in a hundred and CI caught it before a player could.
+  const raw = BASELINE + capability + swing + luck - difficulty;
+  const margin = Math.round(raw * 10) / 10 || 0;   // `|| 0` normalises -0
+  const success = margin >= 0;
+
+  // Degree, on the same scale the old check reported, so callers that branched
+  // on it keep working: 0 is a bare pass, 1 a comfortable one, 2 or more a rout.
+  const degree = Math.max(0, Math.floor(Math.abs(margin) / 5));
+
+  return {
+    label,
+    capability,
+    difficulty,
+    swing: Math.round(swing * 10) / 10,
+    margin,
+    success,
+    degree,
+    exceptional: margin >= EXCEPTIONAL,
+    disaster: margin <= -EXCEPTIONAL,
+    // Named to match what the prose and the consequence table already read.
+    criticalSuccess: margin >= EXCEPTIONAL,
+    criticalFailure: margin <= -EXCEPTIONAL,
+    advantage: advantage && !disadvantage,
+    disadvantage: disadvantage && !advantage,
+  };
+}
+
+/** A one-line summary, for the log. */
+function formatResolution(r, label = r.label) {
+  const sign = r.margin >= 0 ? '+' : '';
+  const verdict = r.criticalSuccess ? 'decisive'
+    : r.criticalFailure ? 'disastrous'
+    : r.success ? 'success' : 'failure';
+  return `${label}: ${sign}${r.margin.toFixed(1)} — ${verdict}`;
+}
+
+/** Plain-language name for a difficulty number, unchanged from the old scale. */
+function describeDifficulty(n) {
+  if (n <= 8) return 'routine';
+  if (n <= 12) return 'straightforward';
+  if (n <= 16) return 'demanding';
+  if (n <= 20) return 'severe';
+  if (n <= 25) return 'forbidding';
+  return 'all but impossible';
+}
+
+/**
+ * Probability of success given a capability edge — used by the tests to assert
+ * the curve is the shape this file claims, rather than trusting the comment.
+ */
+function successChance(edge, { steady = 0 } = {}) {
+  // `edge` is capability minus difficulty; the baseline is added here so
+  // callers reason in the same units the difficulty table is written in.
+  const sd = SWING * (1 - 0.35 * steady);
+  edge += BASELINE;
+  // Normal CDF via an Abramowitz-and-Stegun style erf approximation.
+  const z = edge / (sd * Math.SQRT2);
+  const t = 1 / (1 + 0.3275911 * Math.abs(z));
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+    - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+  const erf = z >= 0 ? y : -y;
+  return 0.5 * (1 + erf);
+}
+
+/**
+ * Named difficulty numbers. The same scale the d20 checks used, kept
+ * deliberately: the numbers were tuned against real play and there is no reason
+ * to re-tune them merely because the distribution around them changed.
+ */
+const DIFFICULTY = {
+  trivial: 5,
+  easy: 10,
+  moderate: 13,
+  hard: 16,
+  formidable: 19,
+  heroic: 22,
+  impossible: 26,
+};
+
+__exports.SWING = SWING;
+__exports.EXCEPTIONAL = EXCEPTIONAL;
+__exports.BASELINE = BASELINE;
+
+__exports.resolve = resolve;
+__exports.formatResolution = formatResolution;
+__exports.describeDifficulty = describeDifficulty;
+__exports.successChance = successChance;
+__exports.DIFFICULTY = DIFFICULTY;
+
+});
+
+__define("src/sim/away.js", function (__exports, __require) {
+// Away teams.
+//
+// You pick who beams down. Outcomes come from capability against difficulty
+// modifiers apply, officers contribute their own expertise, and the result is
+// shown as arithmetic the player can audit. People can be hurt, and people can
+// die, and the ones who die are the ones you sent.
+
+const { emit } = __require("src/core/events.js");
+const { resolve, formatResolution, describeDifficulty, DIFFICULTY: DC } = __require("src/rules/resolve.js");
+const HAZARD_LEVEL = {
+  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy },
+  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate },
+  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06, dc: DC.hard },
+  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14, dc: DC.formidable },
+};
+
+/**
+ * Check types map to a captain ability and to the bridge stations whose
+ * officers are competent at them.
+ */
+const CHECK_TYPES = {
+  science: { label: 'Science', ability: 'science', stations: ['science'], trait: 'expertise' },
+  medical: { label: 'Medicine', ability: 'medicine', stations: ['medical'], trait: 'expertise' },
+  engineering: { label: 'Engineering', ability: 'engineering', stations: ['engineering'], trait: 'expertise' },
+  combat: { label: 'Security', ability: 'tactics', stations: ['tactical'], trait: 'daring' },
+  diplomacy: { label: 'Diplomacy', ability: 'diplomacy', stations: ['first_officer', 'comms'], trait: 'candor' },
+  stealth: { label: 'Stealth', ability: 'tactics', stations: ['tactical', 'helm'], trait: 'daring' },
+  command: { label: 'Command', ability: 'command', stations: ['first_officer'], trait: 'discipline' },
+};
+class AwayTeam {
+  /**
+   * @param {Officer[]} members
+   * @param {object} opts { captainLeads, character, difficulty, security }
+   */
+  constructor(members, opts = {}) {
+    this.members = members.filter((o) => o.available);
+    this.captainLeads = !!opts.captainLeads;
+    this.character = opts.character ?? null;
+    this.difficulty = opts.difficulty ?? null;
+    this.security = opts.security ?? 4;   // they die first, and it matters
+    this.casualties = [];
+    this.rolls = [];                      // full audit trail for the UI
+  }
+
+  get size() { return this.members.length + this.security + (this.captainLeads ? 1 : 0); }
+
+  /** Best relevant officer for a check type. */
+  bestFor(checkType) {
+    const spec = CHECK_TYPES[checkType];
+    if (!spec) return this.members[0];
+    const onSpec = this.members.filter((o) => spec.stations.includes(o.station));
+    const pool = onSpec.length ? onSpec : this.members;
+    return pool.reduce((best, o) =>
+      (o[spec.trait] > (best?.[spec.trait] ?? -1) ? o : best), null);
+  }
+
+  /**
+   * Build the full modifier for a check, itemised so the UI can show where
+   * every point came from.
+   */
+  modifierFor(checkType, situational = 0) {
+    const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
+    const officer = this.bestFor(checkType);
+    const parts = [];
+
+    let total = 0;
+    if (this.character) {
+      const abilityMod = this.character.mod(spec.ability);
+      total += abilityMod;
+      parts.push({ source: `${spec.label} ability`, value: abilityMod });
+      if (this.character.isProficient(spec.ability)) {
+        const prof = this.character.proficiencyBonus;
+        total += prof;
+        parts.push({ source: 'proficiency', value: prof });
+      }
+      if (this.captainLeads) {
+        total += 2;
+        parts.push({ source: 'captain leading', value: 2 });
+      }
+    }
+
+    if (officer) {
+      // An expert officer is worth up to +5 on their own speciality.
+      const officerBonus = Math.round((officer[spec.trait] - 50) / 12);
+      total += officerBonus;
+      parts.push({ source: officer.name, value: officerBonus });
+      if (officer.injured) {
+        total -= 2;
+        parts.push({ source: 'wounded', value: -2 });
+      }
+    }
+
+    // A larger security detail helps with anything physical.
+    if ((checkType === 'combat' || checkType === 'stealth') && this.security > 0) {
+      const detail = Math.min(3, Math.floor(this.security / 2));
+      total += detail;
+      parts.push({ source: 'security detail', value: detail });
+    }
+
+    if (situational) {
+      total += situational;
+      parts.push({ source: 'circumstance', value: situational });
+    }
+
+    return { total, parts, officer, spec };
+  }
+
+  /**
+   * Resolve one check.
+   * @returns {object} the roll, the consequences, and readable prose
+   */
+  check(rng, checkType, { dc = null, hazard = 'elevated', situational = 0, label = '' } = {}) {
+    const level = HAZARD_LEVEL[hazard] ?? HAZARD_LEVEL.elevated;
+    const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
+    const { total: modifier, parts, officer } = this.modifierFor(checkType, situational);
+
+    let targetDC = dc ?? level.dc;
+    if (this.difficulty) targetDC = this.difficulty.dc(targetDC);
+
+    const advantage = this.character?.hasAdvantageOn(spec.ability) ?? false;
+    // Training damps the swing rather than only shifting it. A veteran is not
+    // merely better on average; they are more *consistent*, which is the thing
+    // a flat die could never express and the reason this is not a d20 any more.
+    const steady = this.character?.hasFeat('tactical_genius') ? 0.5
+      : Math.min(0.45, Math.max(0, (modifier - 2) * 0.06));
+
+    const roll = resolve(rng, {
+      capability: modifier,
+      difficulty: targetDC,
+      advantage,
+      steady,
+      luck: this.difficulty?.luck ?? 0,
+      label: label || spec.label,
+    });
+
+    const record = { ...roll, checkType, parts, officer: officer?.name ?? null };
+    this.rolls.push(record);
+
+    const result = {
+      ...roll, checkType, spec, parts, officer,
+      injured: null, killed: null, securityLost: 0,
+      formatted: formatResolution(roll, spec.label),
+      difficultyLabel: describeDifficulty(targetDC),
+    };
+
+    // Consequences scale with how badly it went, not merely whether it failed.
+    // A critical failure is dangerous; a comfortable success is nearly free.
+    const dangerScale = roll.criticalFailure ? 2.5
+      : !roll.success ? 1.6
+      : roll.criticalSuccess ? 0.1
+      : roll.degree >= 1 ? 0.25
+      : 0.5;
+
+    let deathChance = level.death * dangerScale;
+    let injuryChance = level.injury * dangerScale;
+
+    // Medicine aboard, and anything that reduces casualties, applies here.
+    const reduction = this.character?.mechanic('casualtyReduction') ?? 0;
+    deathChance *= (1 - reduction);
+    injuryChance *= (1 - reduction);
+    if (this.difficulty) {
+      const scale = this.difficulty.scale('crewLossScale');
+      deathChance *= scale;
+      injuryChance *= scale;
+    }
+    // Difficulties below Ensign do not kill named officers at all.
+    const lethal = this.difficulty ? this.difficulty.permadeath : true;
+
+    if (rng.chance(deathChance) && this.security > 0) {
+      this.security--;
+      result.securityLost = 1;
+      this.casualties.push({ name: 'Security crewman', killed: true });
+      emit('away:security-lost', { checkType });
+    } else if (officer) {
+      if (lethal && rng.chance(deathChance * 0.5)) {
+        officer.kill(`killed on an away mission (${spec.label.toLowerCase()})`);
+        result.killed = officer;
+        this.casualties.push({ name: officer.name, killed: true });
+        this.members = this.members.filter((o) => o.alive);
+      } else if (rng.chance(injuryChance)) {
+        officer.injure(rng.range(0.3, 0.9));
+        result.injured = officer;
+        this.casualties.push({ name: officer.name, injured: true });
+      }
+    }
+
+    if (this.captainLeads && lethal && rng.chance(deathChance * 0.35)) {
+      result.captainWounded = true;
+    }
+
+    result.text = buildCheckText(spec, result, roll);
+    emit('away:check', result);
+    return result;
+  }
+
+  /** Spend the species reroll, if the character has one left. */
+  canReroll() {
+    return (this.character?.rerollsRemaining ?? 0) > 0;
+  }
+
+  save() {
+    return {
+      members: this.members.map((o) => o.name),
+      captainLeads: this.captainLeads,
+      security: this.security,
+      casualties: this.casualties,
+    };
+  }
+}
+
+function buildCheckText(spec, result, roll) {
+  const who = result.officer ? result.officer.name : 'The team';
+
+  if (roll.criticalSuccess) {
+    return `${who} does it perfectly — better than the plan called for.`;
+  }
+  if (roll.criticalFailure) {
+    if (result.killed) return `It goes wrong at once. ${result.killed.name} does not come back.`;
+    if (result.securityLost) return `It goes badly wrong. We are carrying someone out.`;
+    return `${who} makes it worse. Whatever the plan was, it is gone.`;
+  }
+  if (result.killed) {
+    return `${who} is down. ${roll.success ? 'The work is done, but' : 'It failed, and'} we are bringing a body back.`;
+  }
+  if (result.injured) {
+    return `${who} is hurt — ${roll.success ? 'they finished the job first' : 'and we got nothing for it'}.`;
+  }
+  if (result.securityLost) {
+    return `We lost a crewman. ${roll.success ? 'The objective is secure.' : 'And we still failed.'}`;
+  }
+  if (roll.success) {
+    return roll.degree >= 1
+      ? `${who} handles it cleanly. ${spec.label} objective complete.`
+      : `${who} gets there, barely. ${spec.label} objective complete.`;
+  }
+  return roll.degree === -1
+    ? `${who} very nearly has it, and then does not.`
+    : `${who} could not make it work. We are coming back empty.`;
+}
+
+/** Standard away mission templates used by episodes and encounters. */
+const AWAY_TEMPLATES = {
+  derelict_search: {
+    id: 'derelict_search', title: 'Board the derelict', hazard: 'dangerous',
+    steps: [
+      { check: 'engineering', dc: DC.moderate, text: 'Restore enough power to read the logs.' },
+      { check: 'science', dc: DC.hard, text: 'Determine what killed the crew.' },
+      { check: 'combat', dc: DC.hard, text: 'Whatever it was is still aboard.' },
+    ],
+  },
+  colony_rescue: {
+    id: 'colony_rescue', title: 'Evacuate the colony', hazard: 'elevated',
+    steps: [
+      { check: 'medical', dc: DC.moderate, text: 'Triage the wounded before transport.' },
+      { check: 'engineering', dc: DC.hard, text: 'Get the shelter’s shield generator running.' },
+    ],
+  },
+  diplomatic_landing: {
+    id: 'diplomatic_landing', title: 'Beam down to the capital', hazard: 'routine',
+    steps: [
+      { check: 'diplomacy', dc: DC.hard, text: 'Open the discussion without insulting anyone.' },
+      { check: 'science', dc: DC.moderate, text: 'Verify their claims about the resource survey.' },
+    ],
+  },
+  covert_landing: {
+    id: 'covert_landing', title: 'Covert survey', hazard: 'dangerous',
+    steps: [
+      { check: 'stealth', dc: DC.hard, text: 'Reach the site without being observed.' },
+      { check: 'science', dc: DC.moderate, text: 'Take the readings.' },
+      { check: 'stealth', dc: DC.very_hard, text: 'Get back to the beam-out point.' },
+    ],
+  },
+  boarding_action: {
+    id: 'boarding_action', title: 'Board the hostile', hazard: 'extreme',
+    steps: [
+      { check: 'engineering', dc: DC.hard, text: 'Beam through their shields.' },
+      { check: 'combat', dc: DC.very_hard, text: 'Take the bridge.' },
+      { check: 'command', dc: DC.hard, text: 'Persuade the survivors to stand down.' },
+    ],
+  },
+};
+
+__exports.HAZARD_LEVEL = HAZARD_LEVEL;
+__exports.CHECK_TYPES = CHECK_TYPES;
+__exports.AwayTeam = AwayTeam;
+__exports.AWAY_TEMPLATES = AWAY_TEMPLATES;
+
+});
+
+__define("src/world/crews.data.js", function (__exports, __require) {
+// Senior staff rosters.
+//
+// Two modes, chosen at new-game:
+//   'canon'    — serve with the senior staff of a chosen pre-2000 era
+//   'original' — a generated crew with the same station coverage
+//
+// Canon entries record name, species, rank and station only. No dialogue,
+// scripts, likenesses, or other creative material is reproduced; officers
+// speak lines this game writes for them, driven by their own trait values.
+const DEPARTMENTS = ['command', 'tactical', 'engineering', 'science', 'medical', 'operations'];
+const STATIONS = [
+  { id: 'first_officer', label: 'First Officer', dept: 'command' },
+  { id: 'tactical', label: 'Tactical Officer', dept: 'tactical' },
+  { id: 'engineering', label: 'Chief Engineer', dept: 'engineering' },
+  { id: 'science', label: 'Science Officer', dept: 'science' },
+  { id: 'medical', label: 'Chief Medical Officer', dept: 'medical' },
+  { id: 'helm', label: 'Helm Officer', dept: 'operations' },
+  { id: 'comms', label: 'Communications Officer', dept: 'operations' },
+];
+
+/**
+ * Traits drive both simulation modifiers and the tone of an officer's
+ * acknowledgements. Each is 0..100.
+ *   discipline — how exactly they execute an order they disagree with
+ *   daring     — willingness to attempt low-probability manoeuvres
+ *   candor     — how bluntly they tell you an order is a mistake
+ *   expertise  — raw skill in their department
+ */
+const ERAS = {
+  tos: {
+    id: 'tos', name: 'Original Series era', stardate: 4523.3,
+    shipClass: 'constitution',
+    description: 'Deep space, thin support, and a five-year mission with no relief crew.',
+    crew: [
+      { station: 'first_officer', name: 'Spock', species: 'Vulcan/Human', rank: 'Commander',
+        discipline: 96, daring: 55, candor: 88, expertise: 94, secondary: 'science' },
+      { station: 'medical', name: 'Leonard McCoy', species: 'Human', rank: 'Lieutenant Commander',
+        discipline: 62, daring: 48, candor: 99, expertise: 92, aliases: ['bones'] },
+      { station: 'engineering', name: 'Montgomery Scott', species: 'Human', rank: 'Lieutenant Commander',
+        discipline: 84, daring: 72, candor: 76, expertise: 97, aliases: ['scotty'] },
+      { station: 'helm', name: 'Hikaru Sulu', species: 'Human', rank: 'Lieutenant',
+        discipline: 90, daring: 82, candor: 55, expertise: 88 },
+      { station: 'comms', name: 'Nyota Uhura', species: 'Human', rank: 'Lieutenant',
+        discipline: 92, daring: 68, candor: 62, expertise: 91 },
+      { station: 'tactical', name: 'Pavel Chekov', species: 'Human', rank: 'Ensign',
+        discipline: 88, daring: 78, candor: 58, expertise: 74 },
+      { station: 'science', name: 'Spock', species: 'Vulcan/Human', rank: 'Commander',
+        discipline: 96, daring: 55, candor: 88, expertise: 96, alias: true },
+    ],
+  },
+  tng: {
+    id: 'tng', name: 'Next Generation era', stardate: 44286.5,
+    shipClass: 'excelsior',
+    description: 'A larger fleet, families aboard, and a Prime Directive enforced in writing.',
+    crew: [
+      { station: 'first_officer', name: 'William T. Riker', species: 'Human', rank: 'Commander',
+        discipline: 86, daring: 84, candor: 74, expertise: 89 },
+      { station: 'science', name: 'Data', species: 'Android', rank: 'Lieutenant Commander',
+        discipline: 99, daring: 60, candor: 82, expertise: 98, secondary: 'operations' },
+      { station: 'engineering', name: 'Geordi La Forge', species: 'Human', rank: 'Lieutenant Commander',
+        discipline: 88, daring: 70, candor: 68, expertise: 94 },
+      { station: 'tactical', name: 'Worf', species: 'Klingon', rank: 'Lieutenant',
+        discipline: 94, daring: 90, candor: 86, expertise: 91 },
+      { station: 'medical', name: 'Beverly Crusher', species: 'Human', rank: 'Commander',
+        discipline: 82, daring: 62, candor: 88, expertise: 95 },
+      { station: 'helm', name: 'Wesley Crusher', species: 'Human', rank: 'Ensign',
+        discipline: 80, daring: 86, candor: 60, expertise: 76 },
+      { station: 'comms', name: 'Deanna Troi', species: 'Betazoid/Human', rank: 'Commander',
+        discipline: 78, daring: 58, candor: 92, expertise: 88 },
+    ],
+  },
+  ds9: {
+    id: 'ds9', name: 'Deep Space Nine era', stardate: 48959.1,
+    shipClass: 'miranda',
+    description: 'A border posting, a shooting war coming, and allies who each want something.',
+    crew: [
+      { station: 'first_officer', name: 'Kira Nerys', species: 'Bajoran', rank: 'Major',
+        discipline: 68, daring: 94, candor: 97, expertise: 88 },
+      { station: 'science', name: 'Jadzia Dax', species: 'Trill', rank: 'Lieutenant Commander',
+        discipline: 84, daring: 88, candor: 78, expertise: 95 },
+      { station: 'engineering', name: 'Miles O’Brien', species: 'Human', rank: 'Chief Petty Officer',
+        discipline: 90, daring: 66, candor: 82, expertise: 96 },
+      { station: 'medical', name: 'Julian Bashir', species: 'Human', rank: 'Lieutenant',
+        discipline: 76, daring: 80, candor: 84, expertise: 93 },
+      { station: 'tactical', name: 'Worf', species: 'Klingon', rank: 'Lieutenant Commander',
+        discipline: 94, daring: 90, candor: 86, expertise: 93 },
+      { station: 'helm', name: 'Nog', species: 'Ferengi', rank: 'Ensign',
+        discipline: 82, daring: 76, candor: 64, expertise: 72 },
+      { station: 'comms', name: 'Odo', species: 'Changeling', rank: 'Constable',
+        discipline: 88, daring: 62, candor: 96, expertise: 86 },
+    ],
+  },
+  voy: {
+    id: 'voy', name: 'Voyager era', stardate: 49011.4,
+    shipClass: 'constellation',
+    description: 'No starbase, no resupply, no relief. Every torpedo you fire is one you cannot replace.',
+    crew: [
+      { station: 'first_officer', name: 'Chakotay', species: 'Human', rank: 'Commander',
+        discipline: 74, daring: 82, candor: 86, expertise: 87 },
+      { station: 'science', name: 'Seven of Nine', species: 'Human/ex-Borg', rank: 'Crewman',
+        discipline: 70, daring: 78, candor: 99, expertise: 97 },
+      { station: 'engineering', name: 'B’Elanna Torres', species: 'Klingon/Human', rank: 'Lieutenant',
+        discipline: 66, daring: 90, candor: 94, expertise: 95 },
+      { station: 'tactical', name: 'Tuvok', species: 'Vulcan', rank: 'Lieutenant Commander',
+        discipline: 98, daring: 52, candor: 90, expertise: 92 },
+      { station: 'medical', name: 'The Doctor', species: 'Hologram', rank: 'EMH Mark I',
+        discipline: 72, daring: 66, candor: 98, expertise: 94 },
+      { station: 'helm', name: 'Tom Paris', species: 'Human', rank: 'Lieutenant',
+        discipline: 64, daring: 96, candor: 72, expertise: 90 },
+      { station: 'comms', name: 'Harry Kim', species: 'Human', rank: 'Ensign',
+        discipline: 92, daring: 68, candor: 58, expertise: 78 },
+    ],
+  },
+};
+const ERA_LIST = Object.values(ERAS);
+
+// ---------------------------------------------------------------------------
+// Original crew generation
+// ---------------------------------------------------------------------------
+const SPECIES = [
+  { id: 'human', name: 'Human', weight: 40, bonus: {}, },
+  { id: 'vulcan', name: 'Vulcan', weight: 10, bonus: { discipline: 14, daring: -12, expertise: 6 } },
+  { id: 'andorian', name: 'Andorian', weight: 8, bonus: { daring: 14, candor: 10, discipline: -6 } },
+  { id: 'tellarite', name: 'Tellarite', weight: 6, bonus: { candor: 20, discipline: -4 } },
+  { id: 'betazoid', name: 'Betazoid', weight: 6, bonus: { candor: 12, expertise: 4 } },
+  { id: 'trill', name: 'Trill', weight: 6, bonus: { expertise: 10, discipline: 4 } },
+  { id: 'bolian', name: 'Bolian', weight: 6, bonus: { discipline: 8 } },
+  { id: 'denobulan', name: 'Denobulan', weight: 4, bonus: { expertise: 8, candor: 6 } },
+  { id: 'bajoran', name: 'Bajoran', weight: 5, bonus: { daring: 10, candor: 8, discipline: -4 } },
+  { id: 'klingon', name: 'Klingon', weight: 3, bonus: { daring: 18, candor: 12, discipline: -8 } },
+  { id: 'saurian', name: 'Saurian', weight: 3, bonus: { discipline: 6, expertise: 4 } },
+  { id: 'caitian', name: 'Caitian', weight: 3, bonus: { daring: 8 } },
+];
+
+const GIVEN_NAMES = [
+  'Ayla', 'Marcus', 'Ilyana', 'Toren', 'Sabine', 'Kessler', 'Naomi', 'Davenport',
+  'Ines', 'Corwin', 'Petra', 'Halvorsen', 'Yusuf', 'Amara', 'Dominic', 'Renn',
+  'Teodora', 'Kavi', 'Solene', 'Ashford', 'Miriam', 'Bastian', 'Noor', 'Ravel',
+  'Elise', 'Okonkwo', 'Tam', 'Lindqvist', 'Rosa', 'Ferreira', 'Idris', 'Wen',
+];
+
+const SURNAMES = [
+  'Reyes', 'Okafor', 'Sandoval', 'Whitlock', 'Novak', 'Barrow', 'Castellan',
+  'Duvall', 'Ferris', 'Grayson', 'Hallward', 'Ibarra', 'Kestrel', 'Lavigne',
+  'Marchetti', 'Nakamura', 'Oyelaran', 'Petrov', 'Quill', 'Rasmussen',
+  'Silvestri', 'Thorne', 'Ustinov', 'Vance', 'Wray', 'Yarrow', 'Zheng',
+];
+
+const VULCAN_NAMES = ['T’Pren', 'Sovik', 'T’Lara', 'Selek', 'V’Nara', 'Storek', 'T’Vasi', 'Sepel'];
+const ANDORIAN_NAMES = ['Thessa Zh’Vaar', 'Shran Th’Rell', 'Talas Sh’Ferro', 'Keval Ch’Idris'];
+const TELLARITE_NAMES = ['Gral Bokk', 'Naaz Terev', 'Skalaar Voh', 'Bern Gruut'];
+const KLINGON_NAMES = ['Korrath', 'B’Elanna Vey', 'Kurn’ak', 'Mara Sutai', 'Torvak'];
+const BAJORAN_NAMES = ['Latha Reon', 'Vedra Nol', 'Anjel Ruu', 'Prin Talek'];
+const TRILL_NAMES = ['Ezren Valo', 'Nima Adal', 'Corvan Bex', 'Ilani Rehl'];
+
+const NAMES_BY_SPECIES = {
+  vulcan: VULCAN_NAMES,
+  andorian: ANDORIAN_NAMES,
+  tellarite: TELLARITE_NAMES,
+  klingon: KLINGON_NAMES,
+  bajoran: BAJORAN_NAMES,
+  trill: TRILL_NAMES,
+};
+
+const RANK_BY_STATION = {
+  first_officer: 'Commander',
+  tactical: 'Lieutenant',
+  engineering: 'Lieutenant Commander',
+  science: 'Lieutenant Commander',
+  medical: 'Lieutenant Commander',
+  helm: 'Lieutenant',
+  comms: 'Lieutenant',
+};
+
+const clamp100 = (n) => Math.max(1, Math.min(100, Math.round(n)));
+
+/** Build one original officer for a station. */
+function generateOfficer(rng, station) {
+  const species = rng.weighted(SPECIES);
+  const pool = NAMES_BY_SPECIES[species.id];
+  const name = pool
+    ? rng.pick(pool)
+    : `${rng.pick(GIVEN_NAMES)} ${rng.pick(SURNAMES)}`;
+
+  const base = {
+    discipline: rng.normal(78, 12),
+    daring: rng.normal(70, 16),
+    candor: rng.normal(70, 16),
+    expertise: rng.normal(82, 10),
+  };
+  for (const [k, v] of Object.entries(species.bonus)) base[k] += v;
+
+  return {
+    station,
+    name,
+    species: species.name,
+    speciesId: species.id,
+    rank: RANK_BY_STATION[station] ?? 'Lieutenant',
+    discipline: clamp100(base.discipline),
+    daring: clamp100(base.daring),
+    candor: clamp100(base.candor),
+    expertise: clamp100(base.expertise),
+  };
+}
+
+/** A full original senior staff covering every station. */
+function generateCrew(rng) {
+  return STATIONS.map((s) => generateOfficer(rng, s.id));
+}
+
+/** Resolve the roster for a chosen crew mode. */
+function buildRoster({ mode, era }, rng) {
+  if (mode === 'canon') {
+    const src = ERAS[era] ?? ERAS.tos;
+    // `alias: true` entries are the same person double-hatted at a second
+    // station; keep one canonical record per station.
+    return src.crew.map((c) => ({ ...c, canon: true, speciesId: null }));
+  }
+  return generateCrew(rng);
+}
+
+__exports.DEPARTMENTS = DEPARTMENTS;
+__exports.STATIONS = STATIONS;
+__exports.ERAS = ERAS;
+__exports.ERA_LIST = ERA_LIST;
+__exports.SPECIES = SPECIES;
+__exports.generateOfficer = generateOfficer;
+__exports.generateCrew = generateCrew;
+__exports.buildRoster = buildRoster;
+
+});
+
+__define("src/sim/duty.js", function (__exports, __require) {
+// The rest of the crew, and what you send them to do.
+//
+// A Constitution carries 430 people: 43 officers and 387 enlisted (docs/
+// RESEARCH.md §18). About ten of them stand at bridge stations and have names,
+// opinions and abilities. The other four hundred and twenty were a single
+// integer that went down when the hull was breached — the ship carried a crew
+// and the game had no idea who any of them were.
+//
+// This names a handful of the forty-three. Not all of them: a captain knows the
+// specialists who matter to them, and a row per crewman would be a spreadsheet
+// rather than a ship. The enlisted stay the number they have always been, which
+// is what the casualty count has always counted.
+//
+// The specialities are the ones the show named, sorted into the three divisions
+// Starfleet actually used in the 2260s — so a specialist is a job somebody had
+// rather than one invented to fill a grid. The trap §18 records is communications:
+// Uhura wears operations red, not command gold, and a table built from bridge
+// stations alone puts her and the yeoman in the wrong division.
+
+const { HAZARD_LEVEL } = __require("src/sim/away.js");
+const { emit } = __require("src/core/events.js");
+const { generateOfficer } = __require("src/world/crews.data.js");
+
+/**
+ * What a specialist is trained for.
+ *
+ * `division` is the 2260s Starfleet division, `station` is the bridge post the
+ * speciality lends a hand to when the specialist is aboard, and `label` is what
+ * the crew call them. Several specialities share a station on purpose — a
+ * cartographer and a xenobiologist both help the science officer, differently.
+ */
+const SPECIALITIES = {
+  // --- Command (gold) ---
+  navigator: { id: 'navigator', division: 'command', station: 'navigation', label: 'Navigator' },
+  flight_controller: { id: 'flight_controller', division: 'command', station: 'helm', label: 'Flight Controller' },
+  adjutant: { id: 'adjutant', division: 'command', station: 'helm', label: 'Adjutant' },
+
+  // --- Operations (red) ---
+  engineer: { id: 'engineer', division: 'operations', station: 'engineering', label: 'Engineer' },
+  damage_controlman: { id: 'damage_controlman', division: 'operations', station: 'damagecontrol', label: 'Damage Controlman' },
+  security_officer: { id: 'security_officer', division: 'operations', station: 'security', label: 'Security Officer' },
+  // Operations, not command — see §18. This is the one everybody gets wrong.
+  communications_officer: { id: 'communications_officer', division: 'operations', station: 'comms', label: 'Communications Officer' },
+  yeoman: { id: 'yeoman', division: 'operations', station: 'comms', label: 'Yeoman' },
+  quartermaster: { id: 'quartermaster', division: 'operations', station: 'gravity', label: 'Quartermaster' },
+
+  // --- Sciences (blue) ---
+  sensor_analyst: { id: 'sensor_analyst', division: 'sciences', station: 'science', label: 'Sensor Analyst' },
+  xenobiologist: { id: 'xenobiologist', division: 'sciences', station: 'science', label: 'Xenobiologist' },
+  cartographer: { id: 'cartographer', division: 'sciences', station: 'science', label: 'Cartographer' },
+  surgeon: { id: 'surgeon', division: 'sciences', station: 'environmental', label: 'Surgeon' },
+  medical_technician: { id: 'medical_technician', division: 'sciences', station: 'environmental', label: 'Medical Technician' },
+};
+const SPECIALITY_LIST = Object.values(SPECIALITIES);
+
+/** The three divisions, in the order the uniform colours are usually listed. */
+const DIVISIONS = ['command', 'operations', 'sciences'];
+
+/** Specialities belonging to a division. */
+function specialitiesIn(division) {
+  return SPECIALITY_LIST.filter((s) => s.division === division);
+}
+
+/**
+ * How many of the forty-three are worth naming, for a hull of this size.
+ *
+ * Scaled from the complement rather than a constant: a runabout does not carry
+ * a xenobiologist and a cartographer and a yeoman. Sol's flagship gets a dozen;
+ * the smallest hulls in the game get two or three.
+ */
+function rosterSizeFor(maxCrew) {
+  const crew = Number.isFinite(maxCrew) && maxCrew > 0 ? maxCrew : 0;
+  // 430 crew -> 12. Square root rather than linear, so a battleship with four
+  // times the complement does not get four times the roster.
+  return Math.max(2, Math.min(14, Math.round(Math.sqrt(crew) * 0.58)));
+}
+
+/**
+ * A specialist.
+ *
+ * Deliberately a lighter record than `Officer` and NOT a subclass of it: a duty
+ * officer has no station, no abilities, no cooldowns and no opinion of you.
+ * Sharing the name, species and two of the four scores is enough, and it means
+ * the name tables in `crews.data.js` are the only name tables in the game.
+ */
+class DutyOfficer {
+  constructor(data) {
+    Object.assign(this, {
+      id: 'duty', name: 'Crewman', species: 'Human', speciesId: null,
+      speciality: 'engineer', expertise: 80, discipline: 78,
+      // aboard | assigned | recovering | lost
+      state: 'aboard',
+    }, data);
+  }
+
+  get spec() { return SPECIALITIES[this.speciality] ?? SPECIALITIES.engineer; }
+  get division() { return this.spec.division; }
+  get station() { return this.spec.station; }
+  get label() { return this.spec.label; }
+
+  /** Available to be sent somewhere. */
+  get available() { return this.state === 'aboard'; }
+
+  /** Aboard in any sense — counts toward what the ship can do, unlike the dead. */
+  get alive() { return this.state !== 'lost'; }
+
+  save() {
+    return {
+      id: this.id, name: this.name, species: this.species, speciesId: this.speciesId,
+      speciality: this.speciality, expertise: this.expertise,
+      discipline: this.discipline, state: this.state,
+    };
+  }
+}
+
+/**
+ * Build a ship's duty roster.
+ *
+ * Deterministic from the game's RNG, like everything else here: the same seed
+ * has to produce the same people on every device, forever, because they are
+ * saved and a save has to load into the same ship it was written from.
+ *
+ * Names and species come from `generateOfficer`, which already does exactly
+ * this work for the bridge crew. It wants a station, so it is handed the one
+ * the speciality lends a hand to, and its rank and station are then discarded —
+ * a duty officer has neither.
+ */
+function buildDutyRoster(rng, maxCrew) {
+  const want = rosterSizeFor(maxCrew);
+  const roster = [];
+  const used = new Set();
+
+  for (let i = 0; i < want; i++) {
+    // Round-robin the divisions so a roster is never all one colour, then pick
+    // a speciality inside that division that is not already filled if one is
+    // free. Two engineers is fine; twelve is a department, not a roster.
+    const division = DIVISIONS[i % DIVISIONS.length];
+    const pool = specialitiesIn(division);
+    const fresh = pool.filter((s) => !used.has(s.id));
+    const spec = rng.pick(fresh.length ? fresh : pool);
+    used.add(spec.id);
+
+    const person = generateOfficer(rng, spec.station);
+    roster.push(new DutyOfficer({
+      id: `duty_${i}`,
+      name: person.name,
+      species: person.species,
+      speciesId: person.speciesId,
+      speciality: spec.id,
+      expertise: person.expertise,
+      discipline: person.discipline,
+    }));
+  }
+  return roster;
+}
+
+/**
+ * The details a captain can send out.
+ *
+ * `hours` is campaign time, the same clock fabrication runs on. `wants` is the
+ * speciality that does the work well; anybody can be sent, and sending the
+ * wrong people is a real choice rather than a refusal. `hazard` indexes
+ * `HAZARD_LEVEL` from the away-team rules, so the chance of losing somebody is
+ * the same model the landing parties use rather than a second one.
+ *
+ * `grant` speaks the vocabulary the reputation projects already speak.
+ */
+const ASSIGNMENTS = {
+  survey_detail: {
+    id: 'survey_detail', name: 'Survey detail', hours: 18,
+    wants: 'cartographer', hazard: 'routine', team: 2,
+    grant: { xp: 140 },
+    text: 'A party to chart what the main sensors only glanced at.',
+  },
+  specimen_collection: {
+    id: 'specimen_collection', name: 'Specimen collection', hours: 26,
+    wants: 'xenobiologist', hazard: 'elevated', team: 2,
+    grant: { xp: 180, materials: { isolinear: 8 } },
+    text: 'Samples worth the trip down, and the risk of going.',
+  },
+  sensor_recalibration: {
+    id: 'sensor_recalibration', name: 'Sensor recalibration', hours: 12,
+    wants: 'sensor_analyst', hazard: 'routine', team: 1,
+    grant: { materials: { isolinear: 12 } },
+    text: 'Strip the sensor pallets down and put them back better.',
+  },
+  hull_working_party: {
+    id: 'hull_working_party', name: 'Hull working party', hours: 20,
+    wants: 'damage_controlman', hazard: 'elevated', team: 3,
+    grant: { materials: { duranium: 14 } },
+    text: 'Plating, in vacuum, by hand.',
+  },
+  engine_overhaul: {
+    id: 'engine_overhaul', name: 'Engine overhaul', hours: 34,
+    wants: 'engineer', hazard: 'elevated', team: 3,
+    grant: { materials: { duranium: 10, deuterium: 20 } },
+    text: 'Take the intermix down and rebuild it while nobody is shooting.',
+  },
+  torpedo_workup: {
+    id: 'torpedo_workup', name: 'Torpedo workup', hours: 16,
+    wants: 'quartermaster', hazard: 'routine', team: 2,
+    grant: { torpedoes: 12 },
+    text: 'Assemble warheads from stores and rack them.',
+  },
+  sickbay_rotation: {
+    id: 'sickbay_rotation', name: 'Sickbay rotation', hours: 22,
+    wants: 'surgeon', hazard: 'routine', team: 2,
+    grant: { heal: true, xp: 90 },
+    text: 'Get the injured back on their feet sooner.',
+  },
+  diplomatic_attache: {
+    id: 'diplomatic_attache', name: 'Diplomatic attaché', hours: 40,
+    wants: 'communications_officer', hazard: 'routine', team: 1,
+    grant: { xp: 220, standing: 6 },
+    text: 'Somebody at the table when you are not.',
+  },
+  boarding_drill: {
+    id: 'boarding_drill', name: 'Boarding drill', hours: 14,
+    wants: 'security_officer', hazard: 'elevated', team: 3,
+    grant: { xp: 160 },
+    text: 'Rehearse repelling people who are already aboard.',
+  },
+  salvage_party: {
+    id: 'salvage_party', name: 'Salvage party', hours: 24,
+    wants: 'engineer', hazard: 'dangerous', team: 3,
+    grant: { materials: { salvage: 18, duranium: 8 } },
+    text: 'Board the hulk and strip what is left of it.',
+    // Only worth offering when there is something out there to board.
+    requires: (game) => !!game.wreckHere,
+  },
+};
+const ASSIGNMENT_LIST = Object.values(ASSIGNMENTS);
+
+/** Assignments this ship could actually start right now. */
+function availableAssignments(game) {
+  if (!game) return [];
+  return ASSIGNMENT_LIST.filter((a) => !a.requires || a.requires(game));
+}
+
+/**
+ * How well a team is suited to the work.
+ *
+ * Returns a modifier, not a verdict. A matched speciality is worth a great deal
+ * and a good officer is worth some; sending nobody suitable is allowed and is
+ * simply worse, which is what makes choosing who to send a decision.
+ */
+function teamFitness(assignment, team) {
+  if (!assignment || !team?.length) return 0;
+  let best = 0;
+  for (const person of team) {
+    const matched = person.speciality === assignment.wants;
+    const sameDivision = person.division === SPECIALITIES[assignment.wants]?.division;
+    const skill = ((person.expertise ?? 0) + (person.discipline ?? 0)) / 2;
+    // The speciality is the big term; the person's own quality is the small one.
+    const fit = (matched ? 40 : sameDivision ? 14 : 0) + (skill - 70) * 0.5;
+    if (fit > best) best = fit;
+  }
+  // Hands help, up to a point: the fourth person on a two-person job is stood
+  // around watching.
+  const hands = Math.min(team.length, assignment.team ?? 1);
+  return best + hands * 4;
+}
+
+/**
+ * Send a detail out.
+ *
+ * Unlike fabrication, several of these run at once — and that difference is
+ * deliberate. There is one machine shop and one chief engineer, so being made
+ * to choose between two builds is the whole interest of that mechanic. There
+ * are four hundred people, so the limit here is not the shop, it is how many
+ * hands the ship can spare: `slots`, which falls as the roster is hurt.
+ */
+function beginAssignment(game, assignmentId, officerIds = []) {
+  const assignment = ASSIGNMENTS[assignmentId];
+  if (!assignment) return { ok: false, reason: 'No such detail, Captain.' };
+  if (assignment.requires && !assignment.requires(game)) {
+    return { ok: false, reason: 'There is nothing out there for them to do.' };
+  }
+  // Not while people are shooting. Sending a working party out in a firefight
+  // is the same class of order as docking mid-battle, and refused for the same
+  // reason.
+  if (game.engagement && !game.engagement.over) {
+    return { ok: false, reason: 'Not while we are under fire, Captain.' };
+  }
+
+  game.assignments = game.assignments ?? [];
+  if (game.assignments.some((a) => a.assignmentId === assignmentId)) {
+    return { ok: false, reason: `${assignment.name} is already under way.` };
+  }
+  if (game.assignments.length >= dutySlots(game)) {
+    return { ok: false, reason: 'We have no one else to spare, Captain.' };
+  }
+
+  const roster = game.dutyRoster ?? [];
+  const team = officerIds
+    .map((id) => roster.find((p) => p.id === id))
+    .filter((p) => p && p.available);
+  if (!team.length) return { ok: false, reason: 'Nobody was named for it.' };
+
+  for (const person of team) person.state = 'assigned';
+  game.assignments.push({
+    assignmentId,
+    team: team.map((p) => p.id),
+    hoursRemaining: assignment.hours,
+    hoursTotal: assignment.hours,
+  });
+
+  const names = team.map((p) => p.name).join(', ');
+  game.officerSays('comms', `${assignment.name}: ${names} are on it, Captain.`, 'report');
+  emit('assignment:begin', { assignment, team });
+  return { ok: true, assignment, team };
+}
+
+/** How many details this ship can have out at once. */
+function dutySlots(game) {
+  const able = (game?.dutyRoster ?? []).filter((p) => p.alive).length;
+  // One detail per three people who can still be sent, and never more than
+  // four: past that the ship is a staffing agency rather than a starship.
+  return Math.max(1, Math.min(4, Math.floor(able / 3)));
+}
+
+/**
+ * Advance every running detail by campaign hours.
+ *
+ * Called from the same place fabrication is advanced, so work continues while
+ * the app is closed — which is the whole point of a job measured in days.
+ */
+function advanceAssignments(game, hours, rng = game?.rng) {
+  if (!game?.assignments?.length || hours <= 0) return [];
+
+  const done = [];
+  const still = [];
+  for (const job of game.assignments) {
+    job.hoursRemaining -= hours;
+    if (job.hoursRemaining > 0) still.push(job);
+    else done.push(job);
+  }
+  game.assignments = still;
+
+  return done.map((job) => resolveAssignment(game, job, rng)).filter(Boolean);
+}
+
+/**
+ * What a detail came back with, and who did not come back.
+ *
+ * The hazard model is the away teams', not a second one: `HAZARD_LEVEL` gives
+ * the chance of a death and of an injury, and a well-suited team shortens both
+ * because people who know the work get hurt less doing it.
+ */
+function resolveAssignment(game, job, rng = game?.rng) {
+  const assignment = ASSIGNMENTS[job.assignmentId];
+  if (!assignment) return null;
+
+  const roster = game.dutyRoster ?? [];
+  const team = job.team.map((id) => roster.find((p) => p.id === id)).filter(Boolean);
+  const fitness = teamFitness(assignment, team);
+  const hazard = HAZARD_LEVEL[assignment.hazard] ?? HAZARD_LEVEL.routine;
+
+  // Competence is protection. A matched speciality roughly halves the risk;
+  // sending people with no idea what they are doing does not raise it above
+  // what the hazard already says it is.
+  const shield = Math.max(0.45, 1 - Math.max(0, fitness) / 90);
+  const lost = [];
+  const hurt = [];
+  for (const person of team) {
+    if (rng?.chance?.(hazard.death * shield)) {
+      person.state = 'lost';
+      lost.push(person);
+    } else if (rng?.chance?.(hazard.injury * shield)) {
+      person.state = 'recovering';
+      hurt.push(person);
+    } else {
+      person.state = 'aboard';
+    }
+  }
+
+  // A well-suited team brings back more of what it went for.
+  const share = Math.max(0.4, Math.min(1.6, 1 + fitness / 120));
+  const paid = payAssignment(game, assignment, share);
+
+  for (const person of lost) {
+    game.ledger?.record?.('lives_lost', {
+      count: 1,
+      text: `${person.name}, ${person.label}, lost on ${assignment.name.toLowerCase()}`,
+      system: game.locationId,
+    });
+    // One of the four hundred and twenty, and now a name.
+    game.ship.crew = Math.max(0, game.ship.crew - 1);
+  }
+
+  const said = lost.length
+    ? `${assignment.name} is back. We lost ${lost.map((p) => p.name).join(' and ')}.`
+    : hurt.length
+      ? `${assignment.name} is back. ${hurt.map((p) => p.name).join(' and ')} are in sickbay.`
+      : `${assignment.name} is back, Captain. ${paid}`;
+  game.officerSays(lost.length ? 'comms' : 'engineering', said, 'report');
+
+  emit('assignment:complete', { assignment, team, lost, hurt, text: paid });
+  return { assignment, team, lost, hurt, text: paid };
+}
+
+/** Hand over what a detail earned, in the vocabulary the projects already use. */
+function payAssignment(game, assignment, share) {
+  const grant = assignment.grant ?? {};
+  const parts = [];
+
+  if (grant.materials) {
+    game.stores = game.stores ?? {};
+    for (const [material, amount] of Object.entries(grant.materials)) {
+      const got = Math.max(1, Math.round(amount * share));
+      game.stores[material] = (game.stores[material] ?? 0) + got;
+      parts.push(`${got} ${material}`);
+    }
+  }
+  if (grant.torpedoes) {
+    const got = Math.max(1, Math.round(grant.torpedoes * share));
+    game.ship.torpedoes = Math.min(game.ship.maxTorpedoes ?? Infinity,
+      (game.ship.torpedoes ?? 0) + got);
+    parts.push(`${got} torpedoes`);
+  }
+  if (grant.xp) {
+    const got = Math.round(grant.xp * share);
+    game.awardXP?.(got, { silent: true });
+    parts.push(`${got} experience out of it`);
+  }
+  if (grant.standing) {
+    game.earnReputation?.('mission_complete');
+    parts.push('and we look better for it');
+  }
+  if (grant.heal) {
+    for (const officer of game.crew?.officers ?? []) {
+      if (officer.injured) officer.heal?.(0.5);
+    }
+    for (const person of game.dutyRoster ?? []) {
+      if (person.state === 'recovering') person.state = 'aboard';
+    }
+    parts.push('the injured are back on their feet');
+  }
+
+  return parts.length ? parts.join(', ') + '.' : 'Nothing to report.';
+}
+
+/**
+ * What having the right specialist aboard is worth at a bridge station.
+ *
+ * A cartographer does not fire the phasers, but a science officer with a
+ * sensor analyst and a xenobiologist backing them up gets more out of an
+ * order than one working alone. Expressed as a multiplier on how long a
+ * station's abilities hold, because duration is the one term a player can
+ * actually watch, and because it does not touch the balance of damage.
+ *
+ * Only people who are ABOARD count. Somebody out on a detail, in sickbay, or
+ * dead is not at the back of the bridge helping — which is the whole reason
+ * losing one matters.
+ */
+function specialistBonusFor(game, station) {
+  if (!game || !station) return 1;
+  const helping = (game.dutyRoster ?? []).filter(
+    (p) => p.state === 'aboard' && p.station === station,
+  ).length;
+  // A quarter more per specialist, and never more than half again: a station
+  // with three of them is well supported, not twice the ship.
+  return 1 + Math.min(0.5, helping * 0.25);
+}
+
+__exports.SPECIALITIES = SPECIALITIES;
+__exports.SPECIALITY_LIST = SPECIALITY_LIST;
+__exports.DIVISIONS = DIVISIONS;
+__exports.specialitiesIn = specialitiesIn;
+__exports.rosterSizeFor = rosterSizeFor;
+__exports.DutyOfficer = DutyOfficer;
+__exports.buildDutyRoster = buildDutyRoster;
+__exports.ASSIGNMENTS = ASSIGNMENTS;
+__exports.ASSIGNMENT_LIST = ASSIGNMENT_LIST;
+__exports.availableAssignments = availableAssignments;
+__exports.teamFitness = teamFitness;
+__exports.beginAssignment = beginAssignment;
+__exports.dutySlots = dutySlots;
+__exports.advanceAssignments = advanceAssignments;
+__exports.resolveAssignment = resolveAssignment;
+__exports.specialistBonusFor = specialistBonusFor;
+
+});
+
 __define("src/ui/touch.js", function (__exports, __require) {
 // Touch, haptics, wake lock, and the other things a phone needs that a
 // desktop build never thinks about.
@@ -3305,50 +4542,6 @@ __exports.SHIP_LIST = SHIP_LIST;
 __exports.getShipClass = getShipClass;
 __exports.commandableAt = commandableAt;
 __exports.FEDERATION_REGISTRIES = FEDERATION_REGISTRIES;
-
-});
-
-__define("src/core/events.js", function (__exports, __require) {
-// Minimal synchronous pub/sub. The sim emits, the UI listens.
-// Synchronous on purpose: an order and its consequence land in the same frame,
-// so nothing ever shows a spinner waiting for a result.
-
-const handlers = new Map();
-function on(event, fn) {
-  if (!handlers.has(event)) handlers.set(event, new Set());
-  handlers.get(event).add(fn);
-  return () => off(event, fn);
-}
-function once(event, fn) {
-  const wrapped = (payload) => { off(event, wrapped); fn(payload); };
-  return on(event, wrapped);
-}
-function off(event, fn) {
-  handlers.get(event)?.delete(fn);
-}
-function emit(event, payload) {
-  const set = handlers.get(event);
-  if (set) {
-    for (const fn of [...set]) {
-      try { fn(payload); } catch (err) { console.error(`[events] ${event}`, err); }
-    }
-  }
-  const wildcard = handlers.get('*');
-  if (wildcard) {
-    for (const fn of [...wildcard]) {
-      try { fn({ event, payload }); } catch (err) { console.error('[events] *', err); }
-    }
-  }
-}
-function clearAll() {
-  handlers.clear();
-}
-
-__exports.on = on;
-__exports.once = once;
-__exports.off = off;
-__exports.emit = emit;
-__exports.clearAll = clearAll;
 
 });
 
@@ -13761,239 +14954,6 @@ __exports.chairPanel = chairPanel;
 
 });
 
-__define("src/world/crews.data.js", function (__exports, __require) {
-// Senior staff rosters.
-//
-// Two modes, chosen at new-game:
-//   'canon'    — serve with the senior staff of a chosen pre-2000 era
-//   'original' — a generated crew with the same station coverage
-//
-// Canon entries record name, species, rank and station only. No dialogue,
-// scripts, likenesses, or other creative material is reproduced; officers
-// speak lines this game writes for them, driven by their own trait values.
-const DEPARTMENTS = ['command', 'tactical', 'engineering', 'science', 'medical', 'operations'];
-const STATIONS = [
-  { id: 'first_officer', label: 'First Officer', dept: 'command' },
-  { id: 'tactical', label: 'Tactical Officer', dept: 'tactical' },
-  { id: 'engineering', label: 'Chief Engineer', dept: 'engineering' },
-  { id: 'science', label: 'Science Officer', dept: 'science' },
-  { id: 'medical', label: 'Chief Medical Officer', dept: 'medical' },
-  { id: 'helm', label: 'Helm Officer', dept: 'operations' },
-  { id: 'comms', label: 'Communications Officer', dept: 'operations' },
-];
-
-/**
- * Traits drive both simulation modifiers and the tone of an officer's
- * acknowledgements. Each is 0..100.
- *   discipline — how exactly they execute an order they disagree with
- *   daring     — willingness to attempt low-probability manoeuvres
- *   candor     — how bluntly they tell you an order is a mistake
- *   expertise  — raw skill in their department
- */
-const ERAS = {
-  tos: {
-    id: 'tos', name: 'Original Series era', stardate: 4523.3,
-    shipClass: 'constitution',
-    description: 'Deep space, thin support, and a five-year mission with no relief crew.',
-    crew: [
-      { station: 'first_officer', name: 'Spock', species: 'Vulcan/Human', rank: 'Commander',
-        discipline: 96, daring: 55, candor: 88, expertise: 94, secondary: 'science' },
-      { station: 'medical', name: 'Leonard McCoy', species: 'Human', rank: 'Lieutenant Commander',
-        discipline: 62, daring: 48, candor: 99, expertise: 92, aliases: ['bones'] },
-      { station: 'engineering', name: 'Montgomery Scott', species: 'Human', rank: 'Lieutenant Commander',
-        discipline: 84, daring: 72, candor: 76, expertise: 97, aliases: ['scotty'] },
-      { station: 'helm', name: 'Hikaru Sulu', species: 'Human', rank: 'Lieutenant',
-        discipline: 90, daring: 82, candor: 55, expertise: 88 },
-      { station: 'comms', name: 'Nyota Uhura', species: 'Human', rank: 'Lieutenant',
-        discipline: 92, daring: 68, candor: 62, expertise: 91 },
-      { station: 'tactical', name: 'Pavel Chekov', species: 'Human', rank: 'Ensign',
-        discipline: 88, daring: 78, candor: 58, expertise: 74 },
-      { station: 'science', name: 'Spock', species: 'Vulcan/Human', rank: 'Commander',
-        discipline: 96, daring: 55, candor: 88, expertise: 96, alias: true },
-    ],
-  },
-  tng: {
-    id: 'tng', name: 'Next Generation era', stardate: 44286.5,
-    shipClass: 'excelsior',
-    description: 'A larger fleet, families aboard, and a Prime Directive enforced in writing.',
-    crew: [
-      { station: 'first_officer', name: 'William T. Riker', species: 'Human', rank: 'Commander',
-        discipline: 86, daring: 84, candor: 74, expertise: 89 },
-      { station: 'science', name: 'Data', species: 'Android', rank: 'Lieutenant Commander',
-        discipline: 99, daring: 60, candor: 82, expertise: 98, secondary: 'operations' },
-      { station: 'engineering', name: 'Geordi La Forge', species: 'Human', rank: 'Lieutenant Commander',
-        discipline: 88, daring: 70, candor: 68, expertise: 94 },
-      { station: 'tactical', name: 'Worf', species: 'Klingon', rank: 'Lieutenant',
-        discipline: 94, daring: 90, candor: 86, expertise: 91 },
-      { station: 'medical', name: 'Beverly Crusher', species: 'Human', rank: 'Commander',
-        discipline: 82, daring: 62, candor: 88, expertise: 95 },
-      { station: 'helm', name: 'Wesley Crusher', species: 'Human', rank: 'Ensign',
-        discipline: 80, daring: 86, candor: 60, expertise: 76 },
-      { station: 'comms', name: 'Deanna Troi', species: 'Betazoid/Human', rank: 'Commander',
-        discipline: 78, daring: 58, candor: 92, expertise: 88 },
-    ],
-  },
-  ds9: {
-    id: 'ds9', name: 'Deep Space Nine era', stardate: 48959.1,
-    shipClass: 'miranda',
-    description: 'A border posting, a shooting war coming, and allies who each want something.',
-    crew: [
-      { station: 'first_officer', name: 'Kira Nerys', species: 'Bajoran', rank: 'Major',
-        discipline: 68, daring: 94, candor: 97, expertise: 88 },
-      { station: 'science', name: 'Jadzia Dax', species: 'Trill', rank: 'Lieutenant Commander',
-        discipline: 84, daring: 88, candor: 78, expertise: 95 },
-      { station: 'engineering', name: 'Miles O’Brien', species: 'Human', rank: 'Chief Petty Officer',
-        discipline: 90, daring: 66, candor: 82, expertise: 96 },
-      { station: 'medical', name: 'Julian Bashir', species: 'Human', rank: 'Lieutenant',
-        discipline: 76, daring: 80, candor: 84, expertise: 93 },
-      { station: 'tactical', name: 'Worf', species: 'Klingon', rank: 'Lieutenant Commander',
-        discipline: 94, daring: 90, candor: 86, expertise: 93 },
-      { station: 'helm', name: 'Nog', species: 'Ferengi', rank: 'Ensign',
-        discipline: 82, daring: 76, candor: 64, expertise: 72 },
-      { station: 'comms', name: 'Odo', species: 'Changeling', rank: 'Constable',
-        discipline: 88, daring: 62, candor: 96, expertise: 86 },
-    ],
-  },
-  voy: {
-    id: 'voy', name: 'Voyager era', stardate: 49011.4,
-    shipClass: 'constellation',
-    description: 'No starbase, no resupply, no relief. Every torpedo you fire is one you cannot replace.',
-    crew: [
-      { station: 'first_officer', name: 'Chakotay', species: 'Human', rank: 'Commander',
-        discipline: 74, daring: 82, candor: 86, expertise: 87 },
-      { station: 'science', name: 'Seven of Nine', species: 'Human/ex-Borg', rank: 'Crewman',
-        discipline: 70, daring: 78, candor: 99, expertise: 97 },
-      { station: 'engineering', name: 'B’Elanna Torres', species: 'Klingon/Human', rank: 'Lieutenant',
-        discipline: 66, daring: 90, candor: 94, expertise: 95 },
-      { station: 'tactical', name: 'Tuvok', species: 'Vulcan', rank: 'Lieutenant Commander',
-        discipline: 98, daring: 52, candor: 90, expertise: 92 },
-      { station: 'medical', name: 'The Doctor', species: 'Hologram', rank: 'EMH Mark I',
-        discipline: 72, daring: 66, candor: 98, expertise: 94 },
-      { station: 'helm', name: 'Tom Paris', species: 'Human', rank: 'Lieutenant',
-        discipline: 64, daring: 96, candor: 72, expertise: 90 },
-      { station: 'comms', name: 'Harry Kim', species: 'Human', rank: 'Ensign',
-        discipline: 92, daring: 68, candor: 58, expertise: 78 },
-    ],
-  },
-};
-const ERA_LIST = Object.values(ERAS);
-
-// ---------------------------------------------------------------------------
-// Original crew generation
-// ---------------------------------------------------------------------------
-const SPECIES = [
-  { id: 'human', name: 'Human', weight: 40, bonus: {}, },
-  { id: 'vulcan', name: 'Vulcan', weight: 10, bonus: { discipline: 14, daring: -12, expertise: 6 } },
-  { id: 'andorian', name: 'Andorian', weight: 8, bonus: { daring: 14, candor: 10, discipline: -6 } },
-  { id: 'tellarite', name: 'Tellarite', weight: 6, bonus: { candor: 20, discipline: -4 } },
-  { id: 'betazoid', name: 'Betazoid', weight: 6, bonus: { candor: 12, expertise: 4 } },
-  { id: 'trill', name: 'Trill', weight: 6, bonus: { expertise: 10, discipline: 4 } },
-  { id: 'bolian', name: 'Bolian', weight: 6, bonus: { discipline: 8 } },
-  { id: 'denobulan', name: 'Denobulan', weight: 4, bonus: { expertise: 8, candor: 6 } },
-  { id: 'bajoran', name: 'Bajoran', weight: 5, bonus: { daring: 10, candor: 8, discipline: -4 } },
-  { id: 'klingon', name: 'Klingon', weight: 3, bonus: { daring: 18, candor: 12, discipline: -8 } },
-  { id: 'saurian', name: 'Saurian', weight: 3, bonus: { discipline: 6, expertise: 4 } },
-  { id: 'caitian', name: 'Caitian', weight: 3, bonus: { daring: 8 } },
-];
-
-const GIVEN_NAMES = [
-  'Ayla', 'Marcus', 'Ilyana', 'Toren', 'Sabine', 'Kessler', 'Naomi', 'Davenport',
-  'Ines', 'Corwin', 'Petra', 'Halvorsen', 'Yusuf', 'Amara', 'Dominic', 'Renn',
-  'Teodora', 'Kavi', 'Solene', 'Ashford', 'Miriam', 'Bastian', 'Noor', 'Ravel',
-  'Elise', 'Okonkwo', 'Tam', 'Lindqvist', 'Rosa', 'Ferreira', 'Idris', 'Wen',
-];
-
-const SURNAMES = [
-  'Reyes', 'Okafor', 'Sandoval', 'Whitlock', 'Novak', 'Barrow', 'Castellan',
-  'Duvall', 'Ferris', 'Grayson', 'Hallward', 'Ibarra', 'Kestrel', 'Lavigne',
-  'Marchetti', 'Nakamura', 'Oyelaran', 'Petrov', 'Quill', 'Rasmussen',
-  'Silvestri', 'Thorne', 'Ustinov', 'Vance', 'Wray', 'Yarrow', 'Zheng',
-];
-
-const VULCAN_NAMES = ['T’Pren', 'Sovik', 'T’Lara', 'Selek', 'V’Nara', 'Storek', 'T’Vasi', 'Sepel'];
-const ANDORIAN_NAMES = ['Thessa Zh’Vaar', 'Shran Th’Rell', 'Talas Sh’Ferro', 'Keval Ch’Idris'];
-const TELLARITE_NAMES = ['Gral Bokk', 'Naaz Terev', 'Skalaar Voh', 'Bern Gruut'];
-const KLINGON_NAMES = ['Korrath', 'B’Elanna Vey', 'Kurn’ak', 'Mara Sutai', 'Torvak'];
-const BAJORAN_NAMES = ['Latha Reon', 'Vedra Nol', 'Anjel Ruu', 'Prin Talek'];
-const TRILL_NAMES = ['Ezren Valo', 'Nima Adal', 'Corvan Bex', 'Ilani Rehl'];
-
-const NAMES_BY_SPECIES = {
-  vulcan: VULCAN_NAMES,
-  andorian: ANDORIAN_NAMES,
-  tellarite: TELLARITE_NAMES,
-  klingon: KLINGON_NAMES,
-  bajoran: BAJORAN_NAMES,
-  trill: TRILL_NAMES,
-};
-
-const RANK_BY_STATION = {
-  first_officer: 'Commander',
-  tactical: 'Lieutenant',
-  engineering: 'Lieutenant Commander',
-  science: 'Lieutenant Commander',
-  medical: 'Lieutenant Commander',
-  helm: 'Lieutenant',
-  comms: 'Lieutenant',
-};
-
-const clamp100 = (n) => Math.max(1, Math.min(100, Math.round(n)));
-
-/** Build one original officer for a station. */
-function generateOfficer(rng, station) {
-  const species = rng.weighted(SPECIES);
-  const pool = NAMES_BY_SPECIES[species.id];
-  const name = pool
-    ? rng.pick(pool)
-    : `${rng.pick(GIVEN_NAMES)} ${rng.pick(SURNAMES)}`;
-
-  const base = {
-    discipline: rng.normal(78, 12),
-    daring: rng.normal(70, 16),
-    candor: rng.normal(70, 16),
-    expertise: rng.normal(82, 10),
-  };
-  for (const [k, v] of Object.entries(species.bonus)) base[k] += v;
-
-  return {
-    station,
-    name,
-    species: species.name,
-    speciesId: species.id,
-    rank: RANK_BY_STATION[station] ?? 'Lieutenant',
-    discipline: clamp100(base.discipline),
-    daring: clamp100(base.daring),
-    candor: clamp100(base.candor),
-    expertise: clamp100(base.expertise),
-  };
-}
-
-/** A full original senior staff covering every station. */
-function generateCrew(rng) {
-  return STATIONS.map((s) => generateOfficer(rng, s.id));
-}
-
-/** Resolve the roster for a chosen crew mode. */
-function buildRoster({ mode, era }, rng) {
-  if (mode === 'canon') {
-    const src = ERAS[era] ?? ERAS.tos;
-    // `alias: true` entries are the same person double-hatted at a second
-    // station; keep one canonical record per station.
-    return src.crew.map((c) => ({ ...c, canon: true, speciesId: null }));
-  }
-  return generateCrew(rng);
-}
-
-__exports.DEPARTMENTS = DEPARTMENTS;
-__exports.STATIONS = STATIONS;
-__exports.ERAS = ERAS;
-__exports.ERA_LIST = ERA_LIST;
-__exports.SPECIES = SPECIES;
-__exports.generateOfficer = generateOfficer;
-__exports.generateCrew = generateCrew;
-__exports.buildRoster = buildRoster;
-
-});
-
 __define("src/sim/officers.js", function (__exports, __require) {
 // Bridge officers: abilities on cooldowns, and opinions about your orders.
 //
@@ -16333,6 +17293,58 @@ const INTENTS = [
     keywords: { longer: 2 },
     veto: ['course', 'warp', 'fire'],
     build: () => ({ action: 'work_shop' }),
+  },
+  {
+    // The duty roster: who is aboard, and sending them somewhere.
+    //
+    // Two intents rather than one, because "who is out" and "send a party out"
+    // are different questions and answering the first with the second would be
+    // a button that does something other than what it says.
+    id: 'duty_roster',
+    help: 'Ask who is aboard and what they are doing',
+    // "Duty roster" deliberately NOT among these: the watch bill already owns
+    // that phrase and owns it correctly — the bridge watch IS a duty roster,
+    // and two intents fighting over a phrase means one of them loses at random.
+    // These are about the specialists and what they are away doing.
+    phrases: [
+      'who is aboard', 'who do we have aboard', 'the ship\u2019s specialists',
+      'the ships specialists', 'read me the personnel report',
+      'who is on assignment', 'who is out', 'what details are out',
+      'personnel report', 'specialist report', 'what parties are out',
+    ],
+    keywords: { specialist: 3, aboard: 2, personnel: 3, detail: 1.6, assignment: 2 },
+    build: () => ({ action: 'duty_roster' }),
+  },
+  {
+    id: 'assign_detail',
+    help: 'Send a working party out',
+    phrases: [
+      'send a survey detail', 'send a survey party', 'survey detail',
+      'send a working party', 'send a repair detail', 'hull working party',
+      'send a salvage party', 'salvage party', 'engine overhaul',
+      'sensor recalibration', 'torpedo workup', 'sickbay rotation',
+      'boarding drill', 'specimen collection', 'diplomatic attach\u00e9',
+      'assign a detail', 'detail a party',
+    ],
+    keywords: { send: 1.4, detail: 2.6, party: 2.2, assign: 2.4, survey: 1.8, overhaul: 2 },
+    build: (c) => {
+      const t = c.text;
+      // Which detail, from the words. The panel names them all; this catches
+      // the ones a captain would actually say out loud.
+      const named = [
+        [/\bsalvage\b/, 'salvage_party'],
+        [/\bsurvey\b/, 'survey_detail'],
+        [/\bspecimen|biolog/, 'specimen_collection'],
+        [/\bsensor|recalibrat/, 'sensor_recalibration'],
+        [/\bhull|plating\b/, 'hull_working_party'],
+        [/\bengine|intermix|overhaul\b/, 'engine_overhaul'],
+        [/\btorpedo|warhead\b/, 'torpedo_workup'],
+        [/\bsickbay|medical|infirmar/, 'sickbay_rotation'],
+        [/\bdiplomat|attach/, 'diplomatic_attache'],
+        [/\bboarding|repel\b/, 'boarding_drill'],
+      ].find(([re]) => re.test(t));
+      return { action: 'assign_detail', detail: named?.[1] ?? null };
+    },
   },
   {
     id: 'salvage',
@@ -20782,481 +21794,6 @@ __exports.buildHostiles = buildHostiles;
 
 });
 
-__define("src/rules/resolve.js", function (__exports, __require) {
-// Continuous outcome resolution.
-//
-// This is what replaced the d20 in gameplay.
-//
-// The character sheet is still a role-playing character sheet — ability scores,
-// proficiency, feats, levels, the whole apparatus in rules/character.js, and
-// rules/dice.js is still there to build it. What is gone is rolling a
-// twenty-sided die to decide whether an away team gets through a hull breach.
-//
-// The reason is not that dice are bad. It is that a d20 has a flat
-// distribution, which means a competent officer fails a routine task one time
-// in twenty no matter how good they are, and the size of the failure carries no
-// information. That reads as a board game. What this game wants is the opposite:
-// outcomes that come from the situation and the people, where being better makes
-// you reliably better, and where the *margin* — how comfortably, how badly —
-// is what drives what happens next.
-//
-// So: capability against difficulty, plus a bounded random swing, giving a
-// margin rather than a pass or a fail. Everything downstream reads the margin.
-//
-// The arithmetic is still fully itemised. Nothing about this is less auditable
-// than the die was; the breakdown the player sees is the same list of terms it
-// always was, and the only thing that changed is the shape of the uncertainty.
-
-/**
- * What an unmodified attempt is worth before capability is added.
- *
- * This number is not arbitrary and getting it wrong is the trap this file fell
- * into first. Every difficulty number in the game — the hazard table, the
- * mission specs, the difficulty ladder's adjustments — was written against a
- * d20, where the die itself contributes 10.5 on average and the modifier is a
- * comparatively small nudge on top. Replacing the die with a swing centred on
- * zero silently removes that 10.5 from every single check in the game, and
- * turns a routine survey into a near-certain disaster.
- *
- * So the baseline is supplied explicitly, the difficulty numbers keep their
- * tuned values, and the change is confined to the *shape* of the uncertainty
- * rather than its centre.
- */
-const BASELINE = 10.5;
-
-/**
- * How wide the random swing is.
- *
- * A d20 has a standard deviation of about 5.77 and, being flat, spends as much
- * time at its extremes as at its middle. This is deliberately a little tighter
- * and normally distributed, so the typical result sits near what the officer is
- * actually capable of. Compared against the die: a competent officer on routine
- * work succeeds a little more often, and — the point of the change — no longer
- * fails catastrophically one time in twenty regardless of how good they are.
- */
-const SWING = 5.2;
-
-/** Beyond this many points either way, the outcome is exceptional. */
-const EXCEPTIONAL = 7.5;
-
-/** Hard bound on the swing, so nothing is ever truly impossible or certain. */
-const MAX_SWING = 13;
-
-/**
- * Resolve one contested outcome.
- *
- * @param {RNG} rng
- * @param {object} opts
- *   capability  the actor's total relevant skill, already itemised by the caller
- *   difficulty  what they are up against, on the same scale
- *   advantage   true to take the better of two swings, false for the worse
- *   steady      0..1; how much the actor's training damps the swing
- *   luck        difficulty-granted nudge in the actor's favour
- * @returns {object} margin, success, degree, and the flags the prose reads
- */
-function resolve(rng, {
-  capability = 0, difficulty = 10, advantage = false, disadvantage = false,
-  steady = 0, luck = 0, label = '',
-} = {}) {
-  const draw = () => {
-    // A normal draw rather than a uniform one: most attempts land near what the
-    // actor is actually capable of, and the extremes are rare rather than
-    // evenly likely. This is the whole difference from a d20.
-    const raw = rng.normal ? rng.normal(0, 1) : (rng.float() + rng.float() + rng.float() - 1.5) / 0.5;
-    return Math.max(-MAX_SWING, Math.min(MAX_SWING, raw * SWING * (1 - 0.35 * steady)));
-  };
-
-  let swing = draw();
-  if (advantage && !disadvantage) swing = Math.max(swing, draw());
-  else if (disadvantage && !advantage) swing = Math.min(swing, draw());
-
-  // Rounded first, and every verdict derived from the rounded value.
-  //
-  // This ordering is load-bearing. Reporting a margin of -0.02 as "0.0" while
-  // deriving failure from the raw number means the card shows the player a
-  // number that contradicts its own verdict — and because JavaScript evaluates
-  // `-0 >= 0` as true, it is not even visible as a sign. It happened about one
-  // attempt in a hundred and CI caught it before a player could.
-  const raw = BASELINE + capability + swing + luck - difficulty;
-  const margin = Math.round(raw * 10) / 10 || 0;   // `|| 0` normalises -0
-  const success = margin >= 0;
-
-  // Degree, on the same scale the old check reported, so callers that branched
-  // on it keep working: 0 is a bare pass, 1 a comfortable one, 2 or more a rout.
-  const degree = Math.max(0, Math.floor(Math.abs(margin) / 5));
-
-  return {
-    label,
-    capability,
-    difficulty,
-    swing: Math.round(swing * 10) / 10,
-    margin,
-    success,
-    degree,
-    exceptional: margin >= EXCEPTIONAL,
-    disaster: margin <= -EXCEPTIONAL,
-    // Named to match what the prose and the consequence table already read.
-    criticalSuccess: margin >= EXCEPTIONAL,
-    criticalFailure: margin <= -EXCEPTIONAL,
-    advantage: advantage && !disadvantage,
-    disadvantage: disadvantage && !advantage,
-  };
-}
-
-/** A one-line summary, for the log. */
-function formatResolution(r, label = r.label) {
-  const sign = r.margin >= 0 ? '+' : '';
-  const verdict = r.criticalSuccess ? 'decisive'
-    : r.criticalFailure ? 'disastrous'
-    : r.success ? 'success' : 'failure';
-  return `${label}: ${sign}${r.margin.toFixed(1)} — ${verdict}`;
-}
-
-/** Plain-language name for a difficulty number, unchanged from the old scale. */
-function describeDifficulty(n) {
-  if (n <= 8) return 'routine';
-  if (n <= 12) return 'straightforward';
-  if (n <= 16) return 'demanding';
-  if (n <= 20) return 'severe';
-  if (n <= 25) return 'forbidding';
-  return 'all but impossible';
-}
-
-/**
- * Probability of success given a capability edge — used by the tests to assert
- * the curve is the shape this file claims, rather than trusting the comment.
- */
-function successChance(edge, { steady = 0 } = {}) {
-  // `edge` is capability minus difficulty; the baseline is added here so
-  // callers reason in the same units the difficulty table is written in.
-  const sd = SWING * (1 - 0.35 * steady);
-  edge += BASELINE;
-  // Normal CDF via an Abramowitz-and-Stegun style erf approximation.
-  const z = edge / (sd * Math.SQRT2);
-  const t = 1 / (1 + 0.3275911 * Math.abs(z));
-  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
-    - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
-  const erf = z >= 0 ? y : -y;
-  return 0.5 * (1 + erf);
-}
-
-/**
- * Named difficulty numbers. The same scale the d20 checks used, kept
- * deliberately: the numbers were tuned against real play and there is no reason
- * to re-tune them merely because the distribution around them changed.
- */
-const DIFFICULTY = {
-  trivial: 5,
-  easy: 10,
-  moderate: 13,
-  hard: 16,
-  formidable: 19,
-  heroic: 22,
-  impossible: 26,
-};
-
-__exports.SWING = SWING;
-__exports.EXCEPTIONAL = EXCEPTIONAL;
-__exports.BASELINE = BASELINE;
-
-__exports.resolve = resolve;
-__exports.formatResolution = formatResolution;
-__exports.describeDifficulty = describeDifficulty;
-__exports.successChance = successChance;
-__exports.DIFFICULTY = DIFFICULTY;
-
-});
-
-__define("src/sim/away.js", function (__exports, __require) {
-// Away teams.
-//
-// You pick who beams down. Outcomes come from capability against difficulty
-// modifiers apply, officers contribute their own expertise, and the result is
-// shown as arithmetic the player can audit. People can be hurt, and people can
-// die, and the ones who die are the ones you sent.
-
-const { emit } = __require("src/core/events.js");
-const { resolve, formatResolution, describeDifficulty, DIFFICULTY: DC } = __require("src/rules/resolve.js");
-const HAZARD_LEVEL = {
-  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy },
-  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate },
-  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06, dc: DC.hard },
-  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14, dc: DC.formidable },
-};
-
-/**
- * Check types map to a captain ability and to the bridge stations whose
- * officers are competent at them.
- */
-const CHECK_TYPES = {
-  science: { label: 'Science', ability: 'science', stations: ['science'], trait: 'expertise' },
-  medical: { label: 'Medicine', ability: 'medicine', stations: ['medical'], trait: 'expertise' },
-  engineering: { label: 'Engineering', ability: 'engineering', stations: ['engineering'], trait: 'expertise' },
-  combat: { label: 'Security', ability: 'tactics', stations: ['tactical'], trait: 'daring' },
-  diplomacy: { label: 'Diplomacy', ability: 'diplomacy', stations: ['first_officer', 'comms'], trait: 'candor' },
-  stealth: { label: 'Stealth', ability: 'tactics', stations: ['tactical', 'helm'], trait: 'daring' },
-  command: { label: 'Command', ability: 'command', stations: ['first_officer'], trait: 'discipline' },
-};
-class AwayTeam {
-  /**
-   * @param {Officer[]} members
-   * @param {object} opts { captainLeads, character, difficulty, security }
-   */
-  constructor(members, opts = {}) {
-    this.members = members.filter((o) => o.available);
-    this.captainLeads = !!opts.captainLeads;
-    this.character = opts.character ?? null;
-    this.difficulty = opts.difficulty ?? null;
-    this.security = opts.security ?? 4;   // they die first, and it matters
-    this.casualties = [];
-    this.rolls = [];                      // full audit trail for the UI
-  }
-
-  get size() { return this.members.length + this.security + (this.captainLeads ? 1 : 0); }
-
-  /** Best relevant officer for a check type. */
-  bestFor(checkType) {
-    const spec = CHECK_TYPES[checkType];
-    if (!spec) return this.members[0];
-    const onSpec = this.members.filter((o) => spec.stations.includes(o.station));
-    const pool = onSpec.length ? onSpec : this.members;
-    return pool.reduce((best, o) =>
-      (o[spec.trait] > (best?.[spec.trait] ?? -1) ? o : best), null);
-  }
-
-  /**
-   * Build the full modifier for a check, itemised so the UI can show where
-   * every point came from.
-   */
-  modifierFor(checkType, situational = 0) {
-    const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
-    const officer = this.bestFor(checkType);
-    const parts = [];
-
-    let total = 0;
-    if (this.character) {
-      const abilityMod = this.character.mod(spec.ability);
-      total += abilityMod;
-      parts.push({ source: `${spec.label} ability`, value: abilityMod });
-      if (this.character.isProficient(spec.ability)) {
-        const prof = this.character.proficiencyBonus;
-        total += prof;
-        parts.push({ source: 'proficiency', value: prof });
-      }
-      if (this.captainLeads) {
-        total += 2;
-        parts.push({ source: 'captain leading', value: 2 });
-      }
-    }
-
-    if (officer) {
-      // An expert officer is worth up to +5 on their own speciality.
-      const officerBonus = Math.round((officer[spec.trait] - 50) / 12);
-      total += officerBonus;
-      parts.push({ source: officer.name, value: officerBonus });
-      if (officer.injured) {
-        total -= 2;
-        parts.push({ source: 'wounded', value: -2 });
-      }
-    }
-
-    // A larger security detail helps with anything physical.
-    if ((checkType === 'combat' || checkType === 'stealth') && this.security > 0) {
-      const detail = Math.min(3, Math.floor(this.security / 2));
-      total += detail;
-      parts.push({ source: 'security detail', value: detail });
-    }
-
-    if (situational) {
-      total += situational;
-      parts.push({ source: 'circumstance', value: situational });
-    }
-
-    return { total, parts, officer, spec };
-  }
-
-  /**
-   * Resolve one check.
-   * @returns {object} the roll, the consequences, and readable prose
-   */
-  check(rng, checkType, { dc = null, hazard = 'elevated', situational = 0, label = '' } = {}) {
-    const level = HAZARD_LEVEL[hazard] ?? HAZARD_LEVEL.elevated;
-    const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
-    const { total: modifier, parts, officer } = this.modifierFor(checkType, situational);
-
-    let targetDC = dc ?? level.dc;
-    if (this.difficulty) targetDC = this.difficulty.dc(targetDC);
-
-    const advantage = this.character?.hasAdvantageOn(spec.ability) ?? false;
-    // Training damps the swing rather than only shifting it. A veteran is not
-    // merely better on average; they are more *consistent*, which is the thing
-    // a flat die could never express and the reason this is not a d20 any more.
-    const steady = this.character?.hasFeat('tactical_genius') ? 0.5
-      : Math.min(0.45, Math.max(0, (modifier - 2) * 0.06));
-
-    const roll = resolve(rng, {
-      capability: modifier,
-      difficulty: targetDC,
-      advantage,
-      steady,
-      luck: this.difficulty?.luck ?? 0,
-      label: label || spec.label,
-    });
-
-    const record = { ...roll, checkType, parts, officer: officer?.name ?? null };
-    this.rolls.push(record);
-
-    const result = {
-      ...roll, checkType, spec, parts, officer,
-      injured: null, killed: null, securityLost: 0,
-      formatted: formatResolution(roll, spec.label),
-      difficultyLabel: describeDifficulty(targetDC),
-    };
-
-    // Consequences scale with how badly it went, not merely whether it failed.
-    // A critical failure is dangerous; a comfortable success is nearly free.
-    const dangerScale = roll.criticalFailure ? 2.5
-      : !roll.success ? 1.6
-      : roll.criticalSuccess ? 0.1
-      : roll.degree >= 1 ? 0.25
-      : 0.5;
-
-    let deathChance = level.death * dangerScale;
-    let injuryChance = level.injury * dangerScale;
-
-    // Medicine aboard, and anything that reduces casualties, applies here.
-    const reduction = this.character?.mechanic('casualtyReduction') ?? 0;
-    deathChance *= (1 - reduction);
-    injuryChance *= (1 - reduction);
-    if (this.difficulty) {
-      const scale = this.difficulty.scale('crewLossScale');
-      deathChance *= scale;
-      injuryChance *= scale;
-    }
-    // Difficulties below Ensign do not kill named officers at all.
-    const lethal = this.difficulty ? this.difficulty.permadeath : true;
-
-    if (rng.chance(deathChance) && this.security > 0) {
-      this.security--;
-      result.securityLost = 1;
-      this.casualties.push({ name: 'Security crewman', killed: true });
-      emit('away:security-lost', { checkType });
-    } else if (officer) {
-      if (lethal && rng.chance(deathChance * 0.5)) {
-        officer.kill(`killed on an away mission (${spec.label.toLowerCase()})`);
-        result.killed = officer;
-        this.casualties.push({ name: officer.name, killed: true });
-        this.members = this.members.filter((o) => o.alive);
-      } else if (rng.chance(injuryChance)) {
-        officer.injure(rng.range(0.3, 0.9));
-        result.injured = officer;
-        this.casualties.push({ name: officer.name, injured: true });
-      }
-    }
-
-    if (this.captainLeads && lethal && rng.chance(deathChance * 0.35)) {
-      result.captainWounded = true;
-    }
-
-    result.text = buildCheckText(spec, result, roll);
-    emit('away:check', result);
-    return result;
-  }
-
-  /** Spend the species reroll, if the character has one left. */
-  canReroll() {
-    return (this.character?.rerollsRemaining ?? 0) > 0;
-  }
-
-  save() {
-    return {
-      members: this.members.map((o) => o.name),
-      captainLeads: this.captainLeads,
-      security: this.security,
-      casualties: this.casualties,
-    };
-  }
-}
-
-function buildCheckText(spec, result, roll) {
-  const who = result.officer ? result.officer.name : 'The team';
-
-  if (roll.criticalSuccess) {
-    return `${who} does it perfectly — better than the plan called for.`;
-  }
-  if (roll.criticalFailure) {
-    if (result.killed) return `It goes wrong at once. ${result.killed.name} does not come back.`;
-    if (result.securityLost) return `It goes badly wrong. We are carrying someone out.`;
-    return `${who} makes it worse. Whatever the plan was, it is gone.`;
-  }
-  if (result.killed) {
-    return `${who} is down. ${roll.success ? 'The work is done, but' : 'It failed, and'} we are bringing a body back.`;
-  }
-  if (result.injured) {
-    return `${who} is hurt — ${roll.success ? 'they finished the job first' : 'and we got nothing for it'}.`;
-  }
-  if (result.securityLost) {
-    return `We lost a crewman. ${roll.success ? 'The objective is secure.' : 'And we still failed.'}`;
-  }
-  if (roll.success) {
-    return roll.degree >= 1
-      ? `${who} handles it cleanly. ${spec.label} objective complete.`
-      : `${who} gets there, barely. ${spec.label} objective complete.`;
-  }
-  return roll.degree === -1
-    ? `${who} very nearly has it, and then does not.`
-    : `${who} could not make it work. We are coming back empty.`;
-}
-
-/** Standard away mission templates used by episodes and encounters. */
-const AWAY_TEMPLATES = {
-  derelict_search: {
-    id: 'derelict_search', title: 'Board the derelict', hazard: 'dangerous',
-    steps: [
-      { check: 'engineering', dc: DC.moderate, text: 'Restore enough power to read the logs.' },
-      { check: 'science', dc: DC.hard, text: 'Determine what killed the crew.' },
-      { check: 'combat', dc: DC.hard, text: 'Whatever it was is still aboard.' },
-    ],
-  },
-  colony_rescue: {
-    id: 'colony_rescue', title: 'Evacuate the colony', hazard: 'elevated',
-    steps: [
-      { check: 'medical', dc: DC.moderate, text: 'Triage the wounded before transport.' },
-      { check: 'engineering', dc: DC.hard, text: 'Get the shelter’s shield generator running.' },
-    ],
-  },
-  diplomatic_landing: {
-    id: 'diplomatic_landing', title: 'Beam down to the capital', hazard: 'routine',
-    steps: [
-      { check: 'diplomacy', dc: DC.hard, text: 'Open the discussion without insulting anyone.' },
-      { check: 'science', dc: DC.moderate, text: 'Verify their claims about the resource survey.' },
-    ],
-  },
-  covert_landing: {
-    id: 'covert_landing', title: 'Covert survey', hazard: 'dangerous',
-    steps: [
-      { check: 'stealth', dc: DC.hard, text: 'Reach the site without being observed.' },
-      { check: 'science', dc: DC.moderate, text: 'Take the readings.' },
-      { check: 'stealth', dc: DC.very_hard, text: 'Get back to the beam-out point.' },
-    ],
-  },
-  boarding_action: {
-    id: 'boarding_action', title: 'Board the hostile', hazard: 'extreme',
-    steps: [
-      { check: 'engineering', dc: DC.hard, text: 'Beam through their shields.' },
-      { check: 'combat', dc: DC.very_hard, text: 'Take the bridge.' },
-      { check: 'command', dc: DC.hard, text: 'Persuade the survivors to stand down.' },
-    ],
-  },
-};
-
-__exports.HAZARD_LEVEL = HAZARD_LEVEL;
-__exports.CHECK_TYPES = CHECK_TYPES;
-__exports.AwayTeam = AwayTeam;
-__exports.AWAY_TEMPLATES = AWAY_TEMPLATES;
-
-});
-
 __define("src/sim/walk.js", function (__exports, __require) {
 // Walking around inside the ship.
 //
@@ -21975,6 +22512,9 @@ const LIMITS = {
  */
 const LEGAL_MODES = new Set(['bridge', 'transit', 'combat', 'mission', 'encounter']);
 
+/** The states a member of the duty roster can be in. Mirrors `DutyOfficer`. */
+const DUTY_STATES = new Set(['aboard', 'assigned', 'recovering', 'lost']);
+
 const SEVERITY = { fatal: 0, error: 1, warn: 2 };
 
 /** Sort worst-first. Exported so callers report the same order the fuzzer does. */
@@ -22320,6 +22860,41 @@ function checkGame(game) {
         `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
     }
 
+    // The duty roster, and the details that are out on it.
+    //
+    // These are people, and a fight can hurt them: somebody counted as both
+    // lost and out on an assignment is a casualty who is still working, and a
+    // detail naming somebody who is not on the roster pays out to nobody.
+    const roster = game.dutyRoster ?? [];
+    for (const person of roster) {
+      r.must(DUTY_STATES.has(person.state), 'duty.state', 'error',
+        `${person.name} is "${person.state}", which is not a state`, person.name);
+      r.must(ok(person.expertise) && ok(person.discipline), 'duty.scores', 'error',
+        `${person.name} has scores of ${person.expertise}/${person.discipline}`, person.name);
+    }
+    const assigned = new Set();
+    for (const job of game.assignments ?? []) {
+      r.must(ok(job.hoursRemaining), 'duty.assignment.hours', 'error',
+        `a detail has ${job.hoursRemaining} hours left on it`);
+      for (const id of job.team ?? []) {
+        const person = roster.find((p) => p.id === id);
+        r.must(!!person, 'duty.assignment.ghost', 'error',
+          `a detail names ${id}, who is not aboard`);
+        r.must(person?.state !== 'lost', 'duty.assignment.dead', 'error',
+          `${person?.name ?? id} is out on a detail and also dead`, person?.name);
+        r.must(!assigned.has(id), 'duty.assignment.twice', 'error',
+          `${person?.name ?? id} is out on two details at once`, person?.name);
+        assigned.add(id);
+      }
+    }
+    // Somebody marked as out who is not on any detail is a person the roster
+    // will never offer again — the state leaks and the slot never comes back.
+    for (const person of roster) {
+      if (person.state !== 'assigned') continue;
+      r.must(assigned.has(person.id), 'duty.stranded', 'error',
+        `${person.name} is marked as out and is on no detail`, person.name);
+    }
+
     r.must(ok(game.latinum) && game.latinum >= 0, 'game.latinum', 'error',
       `latinum is ${game.latinum}`);
     for (const [k, v] of Object.entries(game.stores ?? {})) {
@@ -22432,6 +23007,7 @@ class Watchdog {
 
 __exports.LIMITS = LIMITS;
 __exports.LEGAL_MODES = LEGAL_MODES;
+__exports.DUTY_STATES = DUTY_STATES;
 __exports.bySeverity = bySeverity;
 __exports.checkCombat = checkCombat;
 __exports.checkGame = checkGame;
@@ -22703,6 +23279,7 @@ __define("src/sim/powers.js", function (__exports, __require) {
 
 const { FACINGS } = __require("src/sim/ship.js");
 const { ABILITIES } = __require("src/sim/officers.js");
+const { specialistBonusFor } = __require("src/sim/duty.js");
 
 /** The weakest facing on a ship, for a scan report. */
 function weakestFacing(ship) {
@@ -22741,8 +23318,13 @@ function applyAbility(game, officer, ability) {
   officer.startCooldown(a.id);
 
   if (a.mods) {
+    // The specialists at the back of the bridge get a say in how long it holds.
+    // A science officer with a sensor analyst and a xenobiologist aboard gets
+    // more out of the same order than one working alone — and loses it when
+    // they are out on a detail or in sickbay.
+    const support = specialistBonusFor(game, officer.station);
     game.ship.addBuff({
-      id: a.id, label: a.name, until: a.duration || 12, mods: a.mods,
+      id: a.id, label: a.name, until: (a.duration || 12) * support, mods: a.mods,
     });
   }
 
@@ -25551,6 +26133,7 @@ const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
+const { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer } = __require("src/sim/duty.js");
 const { resolveHail, STANDING_EFFECTS, HAIL_ENDING } = __require("src/sim/diplomacy.js");
 const { applyAbility, applySignature, applyDevice } = __require("src/sim/powers.js");
 
@@ -25650,6 +26233,21 @@ class Game {
     const classId = options.shipClass ?? eraDef?.shipClass ?? 'constitution';
     this.progress = new CaptainProgress(options.progress);
     this.loadout = startingLoadout(getShipClass(classId));
+
+    // The rest of the crew. Sized from the hull's complement rather than a
+    // constant — a runabout does not carry a xenobiologist and a cartographer
+    // and a yeoman. See docs/RESEARCH.md §18.
+    //
+    // Built from its OWN stream, derived from the seed, rather than from
+    // `this.rng`. Drawing a dozen names out of the main stream shifts every
+    // random number the game makes afterwards, which silently re-rolls every
+    // seeded outcome in the campaign — the balance tests noticed within a
+    // minute of it being written. A derived stream gives the same people for
+    // the same seed forever and leaves everything downstream exactly as it was.
+    this.dutyRoster = buildDutyRoster(
+      new RNG(hashSeed(`duty:${this.seed}`)), getShipClass(classId)?.crew ?? 0,
+    );
+    this.assignments = [];
     this.ship = new Ship(classId, {
       name: options.shipName ?? 'Enterprise',
       registry: options.registry ?? FEDERATION_REGISTRIES[0],
@@ -26582,6 +27180,12 @@ class Game {
     if (!t) return;
     this.locationId = t.to.id;
     this.clock.advanceStardate(t.totalHours / 24);
+    // A detail sent out before a two-day voyage is finished when you arrive.
+    // The transit is where the bulk of a commission's hours actually pass, and
+    // nothing aboard used to notice them going by.
+    for (const back of advanceAssignments(this, t.totalHours, this.rng)) {
+      this.pushLog(`${back.assignment.name} finished on the way. ${back.text}`, 'comms');
+    }
     this.transit = null;
     // Arriving somewhere new is not arriving in orbit. The order to make orbit
     // is a separate one and the captain gives it.
@@ -27835,6 +28439,8 @@ class Game {
       campaign: this.campaign?.save() ?? null,
       stores: this.stores,
       fabrication: this.fabrication,
+      dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
+      assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
 
@@ -27933,6 +28539,14 @@ class Game {
     const finished = fighting ? null : advanceFabrication(this, pending);
     if (finished) {
       this.pushLog(`${finished.recipe.name} completed while you were away. ${finished.text}`, 'engineering');
+    }
+
+    // And the details that were out. Same clock, same reason: a survey party
+    // sent out on Tuesday is back on Thursday whether anybody was watching.
+    if (!fighting) {
+      for (const back of advanceAssignments(this, pending, this.rng)) {
+        this.pushLog(`${back.assignment.name} finished while you were away. ${back.text}`, 'comms');
+      }
     }
 
     // One stardate unit is roughly a day.
@@ -28159,7 +28773,18 @@ class Game {
     if (this.engagement && !this.engagement.over) {
       return { ok: false, error: 'Not while we are under fire, Captain.' };
     }
-    if (!this.fabrication) return { ok: false, reason: 'Nothing on the bench, Captain.' };
+    // The details out are not the machine shop, and they do not wait on it.
+    // Spending hours is spending hours: this used to sit below the guard
+    // beneath it, so a survey party sent out on a ship with nothing on the
+    // bench never came back at all.
+    const back = advanceAssignments(this, hours, this.rng);
+    if (!this.fabrication) {
+      if (back.length) {
+        this.clock.advanceStardate(hours / 24);
+        return { ok: true, done: null, back, remaining: 0 };
+      }
+      return { ok: false, reason: 'Nothing on the bench, Captain.' };
+    }
     const done = advanceFabrication(this, hours);
     this.clock.advanceStardate(hours / 24);
     return { ok: true, done, remaining: this.fabrication?.hoursRemaining ?? 0 };
@@ -28256,6 +28881,13 @@ class Game {
 
     g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };
     g.fabrication = data.fabrication ?? null;
+    // The roster is rebuilt from the seed by the constructor, so a save that
+    // predates it still has one. What loads here is what happened TO them:
+    // who is out, who is in sickbay, and who did not come back.
+    if (Array.isArray(data.dutyRoster) && data.dutyRoster.length) {
+      g.dutyRoster = data.dutyRoster.map((p) => new DutyOfficer(p));
+    }
+    g.assignments = Array.isArray(data.assignments) ? data.assignments : [];
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
 
@@ -28347,6 +28979,7 @@ const { namesFor } = __require("src/sim/address.js");
 const { ROOMS, DECKS } = __require("src/world/interiors.data.js");
 const { listBackups, downloadSave } = __require("src/core/save.js");
 const { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } = __require("src/sim/fabrication.js");
+const { DIVISIONS, SPECIALITIES, ASSIGNMENTS, availableAssignments, dutySlots } = __require("src/sim/duty.js");
 const { SCENARIO: KOBAYASHI, GAMBIT_TIER } = __require("src/missions/kobayashi.js");
 
 const { MODES } = __require("src/core/state.js");
@@ -29338,6 +29971,70 @@ function systemDetail(app, sys) {
 }
 
 // ================================================================ CREW
+
+/**
+ * The rest of the crew, and where they are.
+ *
+ * The bridge has ten people with names. This is the other handful worth
+ * knowing — and it is where they visibly stop being a list: somebody out on a
+ * detail is not at the back of the bridge helping their station, and the panel
+ * says so rather than leaving it to be inferred from a number that changed.
+ */
+const DIVISION_LABEL = {
+  command: 'Command', operations: 'Operations', sciences: 'Sciences',
+};
+function dutyPanel(app) {
+  const g = app.game;
+  const roster = g.dutyRoster ?? [];
+  if (!roster.length) return null;
+
+  const out = new Map();
+  for (const job of g.assignments ?? []) {
+    for (const id of job.team ?? []) out.set(id, job);
+  }
+
+  const nodes = [];
+  for (const division of DIVISIONS) {
+    const here = roster.filter((p) => p.division === division);
+    if (!here.length) continue;
+    nodes.push(el('h3', { text: DIVISION_LABEL[division] ?? division }));
+    for (const person of here) {
+      const job = out.get(person.id);
+      const doing = job
+        ? `${ASSIGNMENTS[job.assignmentId]?.name ?? 'a detail'} — ${Math.max(0, Math.round(job.hoursRemaining))}h`
+        : person.state === 'recovering' ? 'in sickbay'
+          : person.state === 'lost' ? 'lost' : 'aboard';
+      // One line each, the way In Memoriam does it. `.row` is styled only
+      // inside the tactical overlay, so using it here put the name and the
+      // rating hard against each other with no space between them —
+      // "Solene ThorneNavigator". Visible in a screenshot and in nothing else.
+      nodes.push(el('p', {
+        class: person.state === 'lost' ? 'danger' : 'muted',
+        text: `${person.name} — ${person.label} · ${doing}`,
+      }));
+    }
+  }
+
+  // What can be sent out, and the words that send it. Every button prints the
+  // phrase that does the same thing, which is the rule for all of them.
+  const slots = dutySlots(g);
+  const running = (g.assignments ?? []).length;
+  nodes.push(el('h3', { text: `Details — ${running} of ${slots} out` }));
+  for (const a of availableAssignments(g)) {
+    const already = (g.assignments ?? []).some((j) => j.assignmentId === a.id);
+    const hours = a.hours < 24 ? `${a.hours}h` : `${(a.hours / 24).toFixed(1)}d`;
+    const wants = SPECIALITIES[a.wants]?.label ?? a.wants;
+    nodes.push(button(a.name, tap(() => {
+      app.sendDetail(a.id);
+      app.render();
+    }, 'computer_ack'), {
+      color: already ? 'grey' : 'blue',
+      sub: already ? 'already under way' : `"send a ${a.name.toLowerCase()}" — ${hours}, wants a ${wants}`,
+    }));
+  }
+
+  return panel('Ship\u2019s Company', nodes);
+}
 function crewScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'scroll' });
@@ -29352,6 +30049,9 @@ function crewScreen(app) {
       ]);
     }),
   ]));
+
+  const duty = dutyPanel(app);
+  if (duty) root.append(duty);
 
   const lost = g.ledger.lostOfficers;
   if (lost.length) {
@@ -30207,6 +30907,7 @@ __exports.tacticalScreen = tacticalScreen;
 __exports.powerPanel = powerPanel;
 __exports.galaxyScreen = galaxyScreen;
 __exports.systemDetail = systemDetail;
+__exports.dutyPanel = dutyPanel;
 __exports.crewScreen = crewScreen;
 __exports.officerDetail = officerDetail;
 __exports.captainScreen = captainScreen;
@@ -30787,6 +31488,7 @@ __define("src/main.js", function (__exports, __require) {
 // graph is built on the first tap, and the first frame is the game.
 
 const { el, clear, button, modal } = __require("src/ui/lcars.js");
+const { ASSIGNMENTS, SPECIALITIES, beginAssignment } = __require("src/sim/duty.js");
 const { haptic, configureTouch, requestWakeLock, releaseWakeLock, trackViewportInsets } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { TacticalView } = __require("src/ui/tactical.js");
@@ -31696,6 +32398,41 @@ class App {
     audio.play('hail_incoming');
   }
 
+  /**
+   * Send a detail out.
+   *
+   * Picking who goes is the game's job, not a form to fill in: the best
+   * suited people who are actually aboard, up to the size the work takes.
+   * A captain says "send a survey detail" and the first officer decides which
+   * hands to use, which is how it would actually happen — and the panel and
+   * the order both come through here, so they cannot drift apart.
+   */
+  sendDetail(assignmentId) {
+    const g = this.game;
+    const assignment = ASSIGNMENTS[assignmentId];
+    if (!assignment) {
+      audio.play('ui_deny');
+      g.officerSays('comms', 'Which detail, Captain?', 'object');
+      return null;
+    }
+
+    const wanted = SPECIALITIES[assignment.wants];
+    const free = (g.dutyRoster ?? []).filter((p) => p.available);
+    // Best suited first: the matched speciality, then anybody from the same
+    // division, then whoever is left.
+    const ranked = [...free].sort((a, b) => {
+      const rank = (p) => (p.speciality === assignment.wants ? 2
+        : p.division === wanted?.division ? 1 : 0);
+      return (rank(b) - rank(a)) || ((b.expertise ?? 0) - (a.expertise ?? 0));
+    });
+    const team = ranked.slice(0, Math.max(1, assignment.team ?? 1));
+
+    const r = beginAssignment(g, assignmentId, team.map((p) => p.id));
+    if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+    else { audio.play('ui_deny'); g.officerSays('comms', r.reason, 'object'); }
+    return r;
+  }
+
   showCombatResult(outcome) {
     const g = this.game;
     const lines = {
@@ -32372,6 +33109,32 @@ class App {
             `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
             'report');
         }
+        break;
+      }
+      case 'duty_roster': {
+        // A question, so it is answered rather than acted on.
+        const roster = g.dutyRoster ?? [];
+        const out = (g.assignments ?? []).length;
+        if (!roster.length) { ack('comms', 'We have no specialists aboard, Captain.'); break; }
+        const aboard = roster.filter((p) => p.state === 'aboard').length;
+        const hurt = roster.filter((p) => p.state === 'recovering').length;
+        const lines = [
+          `${aboard} aboard, ${out} ${out === 1 ? 'detail' : 'details'} out${hurt ? `, ${hurt} in sickbay` : ''}.`,
+          ...(g.assignments ?? []).map((job) => {
+            const a = ASSIGNMENTS[job.assignmentId];
+            const who = (job.team ?? [])
+              .map((id) => roster.find((p) => p.id === id)?.name)
+              .filter(Boolean).join(', ');
+            return `${a?.name ?? 'A detail'}: ${who} — ${Math.max(0, Math.round(job.hoursRemaining))} hours.`;
+          }),
+        ];
+        for (const line of lines) g.pushLog(line, 'comms');
+        this.showMessage('Ship’s Company', lines);
+        audio.play('computer_ack');
+        break;
+      }
+      case 'assign_detail': {
+        this.sendDetail(order.detail);
         break;
       }
       case 'salvage': {
