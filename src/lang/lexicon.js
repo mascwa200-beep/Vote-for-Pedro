@@ -1048,6 +1048,22 @@ export const INTENTS = [
     build: () => ({ action: 'work_shop' }),
   },
   {
+    id: 'abandon_mission',
+    help: 'Break off the episode you are in the middle of',
+    phrases: [
+      'abandon the mission', 'break off the mission', 'give up the mission',
+      'we are done with this mission', 'close out the mission',
+      'abort the mission', 'leave the mission', 'drop the mission',
+    ],
+    keywords: { abandon: 3, abort: 2.6, mission: 2.4, break: 1.2 },
+    // No `confirm` flag here: that is the PARSER's wrapper shape for a reading
+    // it is unsure of ({ confirm, order, alternatives }), not a field a built
+    // order carries — setting it would hand the dispatcher `order.order`,
+    // which is undefined. Saying "abandon the mission" is deliberate enough,
+    // and the ledger keeps the fact either way.
+    build: () => ({ action: 'abandon_mission' }),
+  },
+  {
     // The duty roster: who is aboard, and sending them somewhere.
     //
     // Two intents rather than one, because "who is out" and "send a party out"

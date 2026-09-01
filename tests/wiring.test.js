@@ -998,6 +998,58 @@ describe('every episode graph is sound', () => {
       'winning paid something other than what the choice promised');
   });
 
+  test('starting a second episode does not quietly destroy the first', () => {
+    // `MissionBook.start` was a bare assignment. Starting another episode
+    // replaced the one in progress: never marked complete, never written to
+    // the ledger, and offered again later from its opening stage — with every
+    // point of experience it had already paid still paid. Measured on
+    // `shakedown`: a hundred experience, banked, and the episode back on the
+    // board. Repeat as often as you like.
+    const g = gameWith({ seed: 3n });
+    g.progress.addXP(200000, { ledger: g.ledger });
+
+    const [first, second] = EPISODES;
+    const m = g.missions.start(first.id, g);
+    const open = m.choices().filter((c) => !c.locked);
+    if (open.length) m.choose(open[0].id);
+    assert.equal(m.complete, false, 'the first episode finished by itself');
+    const xpBanked = g.progress.xp;
+
+    // The engine refuses...
+    assert.equal(g.missions.start(second.id, g), null,
+      'a second episode started over a half-finished one');
+    assert.equal(g.missions.active?.id, first.id, 'the first episode was replaced');
+
+    // ...and so does the game, with a reason the captain can hear.
+    const r = g.startMission(second.id);
+    assert.equal(r.ok, false, 'the game started a second episode anyway');
+    assert.match(r.error, new RegExp(first.title.split(' ')[0], 'i'));
+    assert.equal(g.progress.xp, xpBanked, 'the refusal paid something');
+  });
+
+  test('but you can walk away on purpose, and the record says so', () => {
+    const g = gameWith({ seed: 3n });
+    g.progress.addXP(200000, { ledger: g.ledger });
+    const [first, second] = EPISODES;
+    g.missions.start(first.id, g);
+
+    const gave = g.abandonMission();
+    assert.equal(gave.ok, true, gave.error);
+    assert.equal(g.missions.active, null, 'the episode is still running');
+    // Not "completed" — it was not. But it IS on the record.
+    assert.equal(g.missions.completed.has(first.id), false,
+      'walking away counted as finishing it');
+    assert.ok((g.ledger.entries ?? []).some((e) => e.mission === first.id),
+      'nothing in the ledger says the episode was broken off');
+
+    // And now another can start.
+    assert.ok(g.missions.start(second.id, g), 'could not start another after abandoning');
+
+    // Abandoning nothing is refused rather than silently accepted.
+    const again = new Game({ seed: 3n, crewMode: 'original' }).abandonMission();
+    assert.equal(again.ok, false);
+  });
+
   test('an episode waiting on a battle that is not coming is a rule violation', () => {
     // Holding the reward means holding the stage, and that is a soft-lock if
     // the fight never starts. The episode walker found it the moment the hold

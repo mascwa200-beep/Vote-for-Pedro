@@ -1701,6 +1701,21 @@ export function missionPanel(app) {
       say: c.locked ? '' : spoken[i],
     }))));
 
+  // And the way out. Starting another episode used to be the way out — it
+  // replaced this one silently, kept everything it had already paid, and put
+  // it back on the board to be run again. Walking away is now a thing you do
+  // on purpose, and the ledger says you did.
+  wrap.append(panel('', [
+    button('Break off the mission', tap(() => {
+      app.game.abandonMission();
+      app.render();
+    }, 'ui_deny'), {
+      color: 'ghost',
+      sub: 'nothing this episode has not already paid is paid',
+      say: 'abandon the mission',
+    }),
+  ]));
+
   return wrap;
 }
 

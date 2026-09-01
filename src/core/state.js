@@ -1718,11 +1718,32 @@ export class Game {
 
   // ------------------------------------------------------------------ missions
 
+  /** Give up the episode in progress. Recorded, because it was a decision. */
+  abandonMission() {
+    const running = this.missions.active;
+    if (!running || running.complete) {
+      return { ok: false, error: 'We are not in the middle of anything, Captain.' };
+    }
+    this.missions.abandon(this);
+    if (this.mode === MODES.MISSION) this.mode = MODES.BRIDGE;
+    this.pushLog(`${running.title}: broken off.`, 'captain');
+    this.officerSays('comms', `Logged, Captain. ${running.title} is closed out unfinished.`, 'report');
+    return { ok: true, mission: running };
+  }
+
   availableMissions() {
     return this.missions.availableAt(this.locationId, this);
   }
 
   startMission(id) {
+    // One episode at a time. Starting a second used to replace the first
+    // silently — see MissionBook.start.
+    const running = this.missions.active;
+    if (running && !running.complete) {
+      const why = `We are still in the middle of ${running.title}, Captain.`;
+      this.officerSays('comms', why, 'object');
+      return { ok: false, error: why, active: running };
+    }
     const m = this.missions.start(id, this);
     if (m) {
       // Not while people are shooting.
