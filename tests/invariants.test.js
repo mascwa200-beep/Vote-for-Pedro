@@ -29,7 +29,9 @@ import {
 } from '../src/sim/invariants.js';
 import { Game } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
-import { ARENA_RADIUS } from '../src/sim/combat.js';
+import {
+  ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES,
+} from '../src/sim/combat.js';
 import { parseOrder } from '../src/ui/orders.js';
 
 const STEP = 1 / 30;
@@ -1391,4 +1393,32 @@ test('nothing brings the dead back on duty', () => {
   officer.kill('test');
   assert.equal(officer.heal(), false, 'the dead were returned to duty');
   assert.equal(officer.alive, false);
+});
+
+test('an enemy ship has a name, whoever fielded it', () => {
+  // Three code paths put hostiles on the board — a random encounter, a mission
+  // stage, and the Kobayashi Maru — and they carried two copies of a name
+  // table between them. The mission-stage path had neither and fielded
+  // "klingon vessel 1" while an ordinary encounter with the identical ship
+  // called it the IKS Rotarran.
+  const g = new Game({ seed: 6n, crewMode: 'original' });
+  const named = (s) => s.name && !/^\w+ vessel \d+$/i.test(s.name) && !/^Hostile/i.test(s.name);
+
+  assert.equal(hostileName('klingon', 0), HOSTILE_NAMES.klingon[0]);
+  assert.equal(hostileName('klingon', HOSTILE_NAMES.klingon.length), HOSTILE_NAMES.klingon[0],
+    'the list does not wrap');
+  assert.equal(hostileName('nobody_in_particular', 0), 'Unknown Vessel');
+
+  const fleet = buildHostiles(g.rng, 'romulan', 3, ['warbird', 'scoutship']);
+  assert.equal(fleet.length, 3);
+  for (const s of fleet) assert.ok(named(s), `an unnamed hostile: ${s.name}`);
+  assert.equal(new Set(fleet.map((s) => s.name)).size, 3, 'three ships, one name');
+
+  // And the relief that answers a distress call comes from the same table.
+  g.startCombat([new Ship('d7', { name: 'Hostile' })]);
+  const call = g.callForHelp();
+  if (call.answered) {
+    assert.ok(HOSTILE_NAMES.federation.includes(call.ship),
+      `${call.ship} is not on the Starfleet list`);
+  }
 });

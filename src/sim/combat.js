@@ -757,25 +757,54 @@ export class Engagement {
 }
 
 /** Build a hostile group appropriate to a faction and difficulty. */
+/**
+ * What an enemy ship is called.
+ *
+ * This table existed twice — here and in world/encounters.js — and a third
+ * code path, the one a mission stage uses to start a fight, had neither and
+ * named its ships "klingon vessel 1". Two copies of a list is one copy too
+ * many; three ways of naming the same thing is a game that reads as unfinished
+ * in the one place the player is looking hardest.
+ */
+export const HOSTILE_NAMES = {
+  klingon: ['IKS Vor’cha', 'IKS Ch’Tang', 'IKS Bortas', 'IKS Rotarran', 'IKS Ning’tao'],
+  romulan: ['IRW Terix', 'IRW Belak', 'IRW Valdore', 'IRW Khazara', 'IRW Devoras'],
+  cardassian: ['CDS Prakesh', 'CDS Aldara', 'CDS Vetar', 'CDS Groumall'],
+  ferengi: ['Kreechta', 'Krayton', 'Quark’s Fortune'],
+  orion: ['Syndicate Raider', 'Green Wind', 'Profit Margin'],
+  tholian: ['Assembly Spinner', 'Lattice Warden'],
+  dominion: ['Jem’Hadar 4-7', 'Jem’Hadar 9-1', 'Jem’Hadar 2-2'],
+  borg: ['Borg Cube'],
+  // Starfleet is in here because ships of the line turn up on your side as
+  // well as in front of you — a relief answering a distress call is named from
+  // the same table as a hostile, because a ship is a ship.
+  federation: [
+    'USS Farragut', 'USS Potemkin', 'USS Lexington', 'USS Exeter', 'USS Yorktown',
+    'USS Hood', 'USS Republic', 'USS Defiance', 'USS Endeavour', 'USS Kongo',
+  ],
+  independent: ['SS Vico', 'SS Odin', 'SS Norkova'],
+};
+
+/** The nth ship of a faction in one engagement. */
+export function hostileName(factionId, index = 0) {
+  const list = HOSTILE_NAMES[factionId] ?? ['Unknown Vessel'];
+  return list[index % list.length];
+}
+
+/**
+ * A hostile force of a given strength, drawn from a pool of classes.
+ *
+ * Written when combat was, and called from nowhere for the whole life of the
+ * project: `world/encounters.js` grew its own copy rather than importing this
+ * one. It is the single builder now.
+ */
 export function buildHostiles(rng, factionId, strength = 1, classPool = []) {
-  const names = {
-    klingon: ['IKS Vor’cha', 'IKS Ch’Tang', 'IKS Bortas', 'IKS Rotarran', 'IKS Ning’tao'],
-    romulan: ['IRW Terix', 'IRW Belak', 'IRW Valdore', 'IRW Khazara', 'IRW Devoras'],
-    cardassian: ['CDS Prakesh', 'CDS Aldara', 'CDS Vetar', 'CDS Groumall'],
-    ferengi: ['Kreechta', 'Krayton', 'Quark’s Fortune'],
-    orion: ['Syndicate Raider', 'Green Wind', 'Profit Margin'],
-    tholian: ['Assembly Spinner', 'Lattice Warden'],
-    dominion: ['Jem’Hadar 4-7', 'Jem’Hadar 9-1', 'Jem’Hadar 2-2'],
-    borg: ['Borg Cube'],
-    independent: ['SS Vico', 'SS Odin', 'SS Norkova'],
-  };
   const count = Math.max(1, Math.round(strength));
-  const nameList = names[factionId] ?? ['Unknown Vessel'];
   const out = [];
   for (let i = 0; i < count; i++) {
     const cls = rng.pick(classPool);
     if (!cls) break;
-    out.push(new Ship(cls, { name: nameList[i % nameList.length], faction: factionId }));
+    out.push(new Ship(cls, { name: hostileName(factionId, i), faction: factionId }));
   }
   return out;
 }

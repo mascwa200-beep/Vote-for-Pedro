@@ -9,7 +9,7 @@ import { Ship } from '../sim/ship.js';
 import { Crew, Officer } from '../sim/officers.js';
 import { CaptainProgress, combatXP } from '../sim/skills.js';
 import { Loadout, startingLoadout } from '../sim/loadout.js';
-import { Engagement, ARENA_RADIUS } from '../sim/combat.js';
+import { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } from '../sim/combat.js';
 import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } from '../sim/away.js';
 import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
@@ -1407,8 +1407,11 @@ export class Game {
     // A stage can start a fight.
     if (result.effects?.combat) {
       const spec = result.effects.combat;
+      // Named, like every other hostile in the game. A mission stage used to
+      // field "klingon vessel 1" while an ordinary encounter with the same
+      // ship called it the IKS Rotarran.
       const ships = (spec.ships ?? []).map((cls, i) =>
-        new Ship(cls, { name: `${spec.faction} vessel ${i + 1}`, faction: spec.faction }));
+        new Ship(cls, { name: hostileName(spec.faction, i), faction: spec.faction }));
       this.pendingCombat = { ships, returnToMission: true };
     }
 
@@ -1740,14 +1743,16 @@ export class Game {
     // What answers scales with the record. A commendable captain gets a
     // cruiser; a new one gets whatever was closest.
     const classId = tier >= 3 ? 'excelsior' : (tier >= 1 ? 'constitution' : 'miranda');
-    const name = this.rng.pick([
-      'Farragut', 'Potemkin', 'Lexington', 'Exeter', 'Yorktown', 'Hood',
-      'Republic', 'Defiance', 'Endeavour', 'Kongo',
-    ]);
+    // From the one ship-name table in src/sim/combat.js. A fourth private list
+    // of Starfleet names is how the same vessel ends up called two things.
+    const name = hostileName(
+      'federation',
+      Math.floor(this.rng.float() * HOSTILE_NAMES.federation.length),
+    );
     // Between eighteen and forty seconds of holding on.
     const eta = 18 + this.rng.float() * 22;
     this.helpCalled = true;
-    this.helpInbound = { classId, name: `USS ${name}`, eta };
+    this.helpInbound = { classId, name, eta };
     this.pushLog(
       `${this.helpInbound.name} answers, Captain — she is coming about now. `
       + `Estimated ${Math.round(eta)} seconds.`,
