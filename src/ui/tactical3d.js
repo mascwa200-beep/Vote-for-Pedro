@@ -397,7 +397,16 @@ export class TacticalView3D {
     const { aspect } = this.renderer.resize(rect.width || 320, rect.height || 320, dpr);
 
     if (!this.renderer.beginFrame()) return;
-    if (!engagement) return;
+    if (!engagement) {
+      // The labels, the hull bars and the target reticle live on a separate 2D
+      // canvas that keeps whatever was last drawn on it. `beginFrame` clears
+      // the GL side and this returned before ever reaching `drawOverlay`, so
+      // the final frame of a battle — the dead fleet's names and health, and a
+      // reticle locked to a ship that no longer exists — stayed painted over
+      // an empty plot until something else happened to redraw it.
+      this.clearOverlay(rect);
+      return;
+    }
 
     this.playerShip = engagement.player;
     this.hullReach = hullScale(engagement.player?.classId) * 1.1;
@@ -492,12 +501,24 @@ export class TacticalView3D {
       // Open the screen pointed at something worth seeing rather than at an
       // arbitrary patch of empty sky.
       const f = this.vistaSource.focus;
-      if (f) {
+      // Only when the screen is free to look.
+      //
+      // A bearing is anywhere in the full circle, and this wrote it straight
+      // into the pan — past the `panLimit` clamp the rest of this class
+      // enforces, and without asking whether a fight was on. Opening the main
+      // viewer during a battle therefore snapped the screen up to 171 degrees
+      // off the bow toward whichever planet happened to be nearest, and the
+      // slaved spring took about five seconds to bring it back, with the enemy
+      // showing only as an arrow on the bezel for all of it. That is precisely
+      // what the pan limit exists to prevent.
+      if (f && this.freeLook) {
         // The pan rotates the bow by +yaw about world up, and at rest the bow
         // is +x — so the yaw that lands on a body IS its bearing. It was
         // negated here at first, which opened the viewer aimed at the exact
         // opposite patch of empty sky from the planet it had chosen.
-        this.look.targetYaw = bearingOf(f);
+        const want = bearingOf(f);
+        const limit = this.panLimit ?? Math.PI;
+        this.look.targetYaw = Math.max(-limit, Math.min(limit, want));
         this.look.yaw = this.look.targetYaw;
       }
     }
@@ -701,6 +722,14 @@ export class TacticalView3D {
   }
 
   // -------------------------------------------------------------- overlay
+
+  /** Wipe the 2D chrome. Used when there is nothing left to label. */
+  clearOverlay(rect) {
+    this.overlay.style.width = `${rect.width}px`;
+    this.overlay.style.height = `${rect.height}px`;
+    const { ctx, width, height } = fitCanvas(this.overlay);
+    ctx.clearRect(0, 0, width, height);
+  }
 
   /** LCARS chrome: names, hull bars, the target reticle. Plain 2D, on top. */
   drawOverlay(engagement, rect) {

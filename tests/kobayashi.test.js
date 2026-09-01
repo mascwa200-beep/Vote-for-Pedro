@@ -277,7 +277,7 @@ describe('what you say is judged against what you did', () => {
   });
 
   test('what was actually said is recorded, not just that it worked', () => {
-    const g = decorated(gameWith());
+    const g = inAFight(decorated(gameWith()));
     forceChannel(g);
     g.makeAppeal(kirk);
     const entry = g.ledger.entries.find((e) => e.kind === 'kobayashi_maru_solved');
