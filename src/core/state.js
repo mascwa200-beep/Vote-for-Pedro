@@ -1547,6 +1547,7 @@ export class Game {
       hostiles: eng.hostiles.length,
       hullLeft: this.ship.hullPct,
       crewLost: lost,
+      shotsFired: eng.shotsFired ?? 0,
       seconds: Math.round(eng.time),
       systemId: this.locationId,
       stardate: this.clock.stardate,

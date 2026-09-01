@@ -662,6 +662,30 @@ test('talking your way out pays what the talking is worth, not a battle', () => 
   assert.equal(tried.length, 4, `only ${tried.join(', ')} ever succeeded`);
 });
 
+test('the after-action record knows whether anybody actually fired', () => {
+  // The panel says "Nobody fired a shot" after a parley, and until this counter
+  // existed there was no way to tell that apart from a parley reached after two
+  // minutes of shooting. A message that cannot be wrong is worth four lines.
+  const quiet = new Game({ seed: 5150n });
+  quiet.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Quiet' })], { name: 'Quiet' });
+  quiet.engagement.end('parley');
+  quiet.update(1 / 30);
+  assert.equal(quiet.lastCombat.shotsFired, 0, 'shots were counted in a fight nobody fought');
+
+  const loud = new Game({ seed: 5150n });
+  loud.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Loud' })], { name: 'Loud' });
+  const eng = loud.engagement;
+  for (const h of eng.hostiles) { h.x = 200; h.y = 0; h.z = 0; }
+  loud.ship.x = 0; loud.ship.y = 0; loud.ship.z = 0; loud.ship.heading = 0;
+  for (let t = 0; t < 90; t++) { eng.fireAll(); loud.update(1 / 30); }
+  const fired = eng.shotsFired;
+  assert.ok(fired > 0, 'a fight full of shooting counted none');
+  eng.end('parley');
+  loud.update(1 / 30);
+  assert.equal(loud.lastCombat.shotsFired, fired,
+    'the record disagrees with the fight it describes');
+});
+
 // ---------------------------------------------------------------- orders
 
 test('the order parser handles a full natural course order', () => {
