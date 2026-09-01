@@ -285,6 +285,35 @@ describe('the orders', () => {
     }
   });
 
+  test('naming the officer survives normalisation', () => {
+    // The address is stripped before an intent is scored, and the address IS
+    // the officer's name — so the order has to carry the raw line or there is
+    // nobody in it to hand the ship to.
+    for (const [said, name] of [
+      ['mister spock you have the con', 'spock'],
+      ['number one you have the con', 'number one'],
+      ['scott, you have the con', 'scott'],
+    ]) {
+      const o = parseOrder(said);
+      assert.equal(o.action, 'hand_over_con', JSON.stringify(o));
+      assert.ok(o.said.includes(name),
+        `the address was normalised away: "${said}" -> "${o.said}"`);
+    }
+  });
+
+  test('an officer named in the order is the one who gets it', () => {
+    // Same match main.js makes: surname against the roster.
+    const g = commissioned();
+    const said = parseOrder('mister scott, you have the con').said.toLowerCase();
+    const named = g.crew.officers.find((o) => o.alive && !o.injured
+      && said.includes(o.name.split(' ').pop().toLowerCase()));
+    assert.ok(named, `nobody matched in "${said}"`);
+    assert.equal(named.station, 'engineering');
+    const r = g.handOverCon(named.station);
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(g.conOfficer.name, named.name);
+  });
+
   test('the con orders did not steal anybody else\'s words', () => {
     assert.equal(parseOrder('take the chair').action, 'chair');
     assert.equal(parseOrder('stand up').action, 'chair');

@@ -236,10 +236,11 @@ class App {
     });
 
     on('combat:begin', () => { this.go('tactical'); });
-    on('combat:end', ({ outcome }) => {
-      this.game.finishCombat(outcome);
-      this.showCombatResult(outcome);
-    });
+    // Presentation only. The game settles the fight itself on its own tick —
+    // see the COMBAT case in Game.update — and says so with `combat:resolved`.
+    // This listener used to be the thing that awarded the experience and took
+    // the salvage, which meant the rules of the game lived in the UI.
+    on('combat:resolved', ({ outcome }) => { this.showCombatResult(outcome); });
 
     on('combat:fire', ({ attacker, weapon, type }) => {
       if (type === 'torpedo') audio.play('torpedo_launch', { throttle: 120 });
@@ -1444,6 +1445,12 @@ class App {
         const r = g.takeCon();
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
         else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'diagnostic': {
+        const r = g.diagnostic(order.level);
+        audio.play(r.clean ? 'computer_ack' : 'ui_deny');
+        if (!r.clean) haptic('alert');
         break;
       }
       case 'watch_bill': {

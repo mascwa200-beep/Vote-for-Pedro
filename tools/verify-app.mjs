@@ -682,6 +682,49 @@ try {
     broken.orbit === false && broken.drawing === true, JSON.stringify(broken));
   await dismissModals(page);
 
+  // ---- The ship checks itself ----
+  //
+  // A level one diagnostic is the invariant sweep given as an order. The point
+  // of driving it here rather than only in unit tests is that the checker has
+  // to be running inside the real app, on the real game object, with a renderer
+  // attached — which is exactly where a defect would otherwise go unnoticed.
+  await page.fill('.orderbar input', 'run a level one diagnostic');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(400);
+  const diag = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    const said = g.log.slice(-12).map((e) => e.text);
+    return {
+      said,
+      anomalies: said.filter((t) => /ANOMALY/.test(t)),
+      hasHull: said.some((t) => /Hull integrity/.test(t)),
+      watchdog: !!g.watchdog,
+      seen: g.watchdog?.total ?? -1,
+    };
+  });
+  check('a typed order runs a level one diagnostic',
+    diag.hasHull === true, diag.said.join(' | '));
+  check('the diagnostic reports no anomaly in a healthy ship',
+    diag.anomalies.length === 0, diag.anomalies.join(' | '));
+  check('the simulation is watching itself in the running app',
+    diag.watchdog === true && diag.seen === 0, JSON.stringify({ w: diag.watchdog, seen: diag.seen }));
+
+  // And it must actually notice. Poison one number and confirm the running
+  // game reports it rather than carrying on with a broken ship.
+  const caught = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const before = g.ship.x;
+    g.ship.x = NaN;
+    const r = g.diagnostic(1);
+    g.ship.x = before;
+    g.watchdog?.reset();
+    return { clean: r.clean, codes: r.violations.map((v) => v.code) };
+  });
+  check('and it catches a poisoned number in the live game',
+    caught.clean === false && caught.codes.includes('ship.x.finite'), JSON.stringify(caught));
+  await dismissModals(page);
+
   // ---- The watch, and who has the con ----
   //
   // The bridge is never empty. Driven through the order bar and through a real

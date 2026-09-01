@@ -757,23 +757,43 @@ function signaturePanel(app) {
 export function powerPanel(app) {
   const g = app.game;
   return panel('Power Distribution', [
+    // Every preset carries the phrase that sets it. `PRESETS[id].order` is
+    // already the words an officer would use — "power to weapons" — so the
+    // button and the order line say the same thing by construction rather than
+    // by two lists being kept in step by hand.
     el('div', { class: 'grid-3' }, PRESET_LIST.slice(0, 3).map((p) =>
       button(p.label, tap(() => {
         g.ship.power.applyPreset(p.id);
         audio.play('power_reroute');
         app.render();
-      }), { color: g.ship.power.preset === p.id ? 'green' : 'blue' }))),
+      }), {
+        color: g.ship.power.preset === p.id ? 'green' : 'blue',
+        say: `${p.id} posture`,
+      }))),
     el('div', { class: 'grid-2' }, PRESET_LIST.slice(3).map((p) =>
       button(p.label, tap(() => {
         g.ship.power.applyPreset(p.id);
         audio.play('power_reroute');
         app.render();
-      }), { color: g.ship.power.preset === p.id ? 'green' : 'blue' }))),
+      }), {
+        color: g.ship.power.preset === p.id ? 'green' : 'blue',
+        say: `${p.id} posture`,
+      }))),
     ...SUBSYSTEMS.map((s) => powerSlider(SUBSYSTEM_LABEL[s], g.ship.power.target[s], (v) => {
       g.ship.power.set(s, v);
       audio.play('ui_tap', { throttle: 80 });
     })),
     el('p', { class: 'hint', text: `Total ${Math.round(g.ship.power.total)} of ${g.ship.power.cap}. Levels settle over a few seconds — the EPS grid is not instant.` }),
+    // The engineering console is where a diagnostic is actually run from.
+    button('Run a diagnostic', tap(() => {
+      const r = g.diagnostic(1);
+      audio.play(r.clean ? 'computer_ack' : 'ui_deny');
+      app.render();
+    }), {
+      color: 'ghost',
+      sub: 'Level one — every system, by hand',
+      say: 'run a level one diagnostic',
+    }),
   ]);
 }
 

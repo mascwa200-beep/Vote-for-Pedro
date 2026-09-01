@@ -408,6 +408,7 @@ const STATION_OF = (() => {
     intercom: 'chair', alert: 'chair', jettison_pod: 'chair',
     viewscreen: 'chair', magnify: 'chair', log_entry: 'chair',
     hand_over_con: 'chair', take_con: 'chair', watch_bill: 'chair',
+    diagnostic: 'engineering',
     fabricate: 'engineering', work_shop: 'engineering', salvage: 'engineering',
   });
   return map;

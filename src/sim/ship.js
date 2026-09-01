@@ -404,7 +404,12 @@ export class Ship {
 
     // Fires burn crew and hull until damage control gets to them.
     if (this.fires > 0) {
-      this.hull -= this.fires * 6 * dt;
+      // Floored, like every other write to the hull. This one was not, and it
+      // is the only place damage is applied outside takeDamage: a ship burning
+      // at zero hull kept subtracting, so hullPct went negative and every
+      // percentage read off it — the bars, the AI's break-off threshold, the
+      // condition line — read nonsense until the breach timer finally ran out.
+      this.hull = Math.max(0, this.hull - this.fires * 6 * dt);
       if (rng && rng.chance(0.4 * dt)) this.crew = Math.max(0, this.crew - 1);
       // Auxiliary power runs damage control.
       const control = 0.06 * this.power.factor('auxiliary') * this.mod('repairRate') * dt;

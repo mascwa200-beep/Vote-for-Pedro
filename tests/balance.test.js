@@ -53,7 +53,10 @@ function duel({ playerClass, enemyClass, difficulty, runs = 12, allies = 0 }) {
       if (i % 15 === 0) pilot(g);
       g.update(1 / 30);
     }
-    const outcome = g.engagement?.outcome;
+    // Read from the after-action record, not from the engagement. The game
+    // clears the engagement the moment it finishes the fight, which is the
+    // whole point of `lastCombat` existing.
+    const outcome = g.lastCombat?.outcome ?? g.engagement?.outcome;
     if (outcome === 'destroyed') lost++; else survived++;
   }
   return { survived, lost, runs, survivalRate: survived / runs };
@@ -151,7 +154,7 @@ test('being outnumbered is survivable by disengaging', () => {
       }
       g.update(1 / 30);
     }
-    if (g.engagement?.outcome === 'escaped') escaped++;
+    if ((g.lastCombat?.outcome ?? g.engagement?.outcome) === 'escaped') escaped++;
   }
   assert.ok(escaped >= runs * 0.8,
     `a captain who breaks off should get away: ${escaped}/${runs}`);

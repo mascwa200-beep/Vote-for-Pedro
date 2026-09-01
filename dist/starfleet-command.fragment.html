@@ -3678,7 +3678,12 @@ class Ship {
 
     // Fires burn crew and hull until damage control gets to them.
     if (this.fires > 0) {
-      this.hull -= this.fires * 6 * dt;
+      // Floored, like every other write to the hull. This one was not, and it
+      // is the only place damage is applied outside takeDamage: a ship burning
+      // at zero hull kept subtracting, so hullPct went negative and every
+      // percentage read off it — the bars, the AI's break-off threshold, the
+      // condition line — read nonsense until the breach timer finally ran out.
+      this.hull = Math.max(0, this.hull - this.fires * 6 * dt);
       if (rng && rng.chance(0.4 * dt)) this.crew = Math.max(0, this.crew - 1);
       // Auxiliary power runs damage control.
       const control = 0.06 * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
@@ -14053,8 +14058,14 @@ const INTENTS = [
     ],
     keywords: { posture: 3, configuration: 2.5, preset: 3, distribution: 2, stance: 2.5 },
     build: (c) => {
-      const t = c.text;
-      const preset = /\battack\b|\bcombat\b|\boffensive\b/.test(t) ? 'attack'
+      // The FULL line, not the normalised one. Science and engineering are
+      // station names, so "science configuration" had the one word that picks
+      // the preset stripped off the front as an address and arrived here as
+      // "configuration" — which fell through to balanced. The same order given
+      // as "Science, attack posture" still reads as attack, because attack is
+      // tested first and an addressee never changes what was ordered.
+      const t = c.full ?? c.text;
+      const preset = /\battack\b|\bcombat\b|\boffensive\b|\bbattle\b/.test(t) ? 'attack'
         : /\bdefense\b|\bdefensive\b/.test(t) ? 'defense'
         : /\bspeed\b|\bfast\b|\brun\b/.test(t) ? 'speed'
         : /\bscience\b|\bscan\b|\bsensor\b/.test(t) ? 'science'
@@ -14452,6 +14463,36 @@ const INTENTS = [
     keywords: { con: 3, conn: 3, relieve: 2.2, watch: 1.6 },
     veto: ['you', 'your', 'yours', 'she', 'he', 'they', 'who', 'which'],
     build: () => ({ action: 'take_con' }),
+  },
+  {
+    // The one order that reads the simulation's own conscience out loud. A
+    // level one diagnostic is a real thing in this franchise and it is exactly
+    // an invariant sweep — every system checked by hand against what it is
+    // supposed to be — so it is wired to the checker the game actually runs.
+    id: 'diagnostic',
+    help: 'Run a level one diagnostic',
+    phrases: [
+      'run a diagnostic', 'run a level one diagnostic', 'run a level two diagnostic',
+      'run a level three diagnostic', 'run a level five diagnostic',
+      'run a full diagnostic', 'run diagnostics', 'begin a diagnostic',
+      'start a diagnostic', 'diagnostic', 'run a system check',
+      'check the systems', 'run a self test', 'systems check',
+      'i want a diagnostic', 'give me a diagnostic', 'full systems diagnostic',
+      'run every check', 'check everything',
+    ],
+    keywords: { diagnostic: 3, diagnostics: 3, selftest: 2 },
+    // "Damage report" is a summary an officer gives from what they already
+    // know. A diagnostic is work the crew goes off and does.
+    veto: ['damage', 'sensor', 'scan'],
+    build: (c) => {
+      const m = /\blevel\s+(one|two|three|four|five|[1-5])\b/.exec(c.text);
+      const word = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+      const deep = /\b(?:full|complete|thorough|everything|every check)\b/.test(c.text);
+      return {
+        action: 'diagnostic',
+        level: m ? (word[m[1]] ?? Number(m[1])) : (deep ? 1 : 5),
+      };
+    },
   },
   {
     id: 'watch_bill',
@@ -15210,6 +15251,14 @@ function extract(norm) {
   return {
     text,
     tokens,
+    // The line as it was typed, before the addressee was stripped off it.
+    //
+    // Some orders need the words normalisation removes. Science and
+    // engineering are station names as well as things you can ask for, so
+    // "science configuration" arrived as "configuration" and the one word that
+    // chose the power preset was gone; and an officer's name is the address, so
+    // an order handing them the con could not say who.
+    full: norm.full ?? text,
     station: norm.station,
     urgent: norm.urgent,
     negated: norm.negated,
@@ -15886,6 +15935,7 @@ const STATION_OF = (() => {
     intercom: 'chair', alert: 'chair', jettison_pod: 'chair',
     viewscreen: 'chair', magnify: 'chair', log_entry: 'chair',
     hand_over_con: 'chair', take_con: 'chair', watch_bill: 'chair',
+    diagnostic: 'engineering',
     fabricate: 'engineering', work_shop: 'engineering', salvage: 'engineering',
   });
   return map;
@@ -19434,6 +19484,445 @@ __exports.handbackReport = handbackReport;
 
 });
 
+__define("src/sim/invariants.js", function (__exports, __require) {
+// Everything that must be true, checked while it is running.
+//
+// Combat is the part of this game with the most moving state and the least
+// forgiving failure mode. A ship whose position goes NaN never recovers, for
+// the rest of the save. An engagement that satisfies no end condition is a
+// permanent soft-lock when you are not allowed to warp out. Both of those have
+// happened here, both were found by fuzzing, and both were fixed one at a time
+// by a test that knew to look for that specific thing.
+//
+// This file is the other approach: state every rule the simulation must obey,
+// once, and check all of them every tick. A rule written here is checked
+// against every fight the fuzzer runs and every fight the player has with the
+// debug flag on, including the fights nobody thought to write a test for.
+//
+// Three properties this file has to keep, or it is worse than nothing:
+//
+//   It never throws. A checker that crashes while checking for crashes turns a
+//   cosmetic bug into a black screen. Everything below is defensive.
+//
+//   It never mutates. Reading `ship.hullPct` is fine; nothing here may write.
+//
+//   It is cheap enough to leave on. The whole sweep is O(ships + projectiles)
+//   with no allocation per ship, so a 6-hull fight costs a few hundred
+//   comparisons per tick against a budget of 33 milliseconds.
+//
+// Violations are data, not exceptions. The caller decides whether to throw
+// (tests), log (the debug overlay), or count (the fuzzer).
+
+const { FACINGS } = __require("src/sim/ship.js");
+
+/**
+ * How far outside the arena a ship may be before it counts as escaped.
+ *
+ * `holdTheArena` clamps to exactly ARENA_RADIUS, and a ship moves before it is
+ * clamped, so the true bound is the radius plus one tick of travel. A metre of
+ * slack keeps floating point out of it.
+ */
+const ARENA_SLACK = 1.0;
+
+/** Nothing legitimate produces this many at once; past it, something leaks. */
+const LIMITS = {
+  projectiles: 400,
+  effects: 300,
+  logLines: 200,
+  ships: 24,
+  combatSeconds: 60 * 60,
+};
+
+const SEVERITY = { fatal: 0, error: 1, warn: 2 };
+
+/** Sort worst-first. Exported so callers report the same order the fuzzer does. */
+function bySeverity(a, b) {
+  return (SEVERITY[a.severity] ?? 9) - (SEVERITY[b.severity] ?? 9);
+}
+
+/**
+ * A finite number, treating undefined `z` as 0 the way the rest of the sim does.
+ * Explicitly NOT Number.isFinite alone: `null` is not finite but `0` is, and
+ * several fields are legitimately absent until first written.
+ */
+const num = (v) => (v === undefined || v === null ? 0 : v);
+const ok = (v) => Number.isFinite(num(v));
+
+class Report {
+  constructor() { this.violations = []; }
+
+  /**
+   * @param {boolean} condition what must be TRUE
+   * @param {string} code stable identifier, so a fuzzer can group repeats
+   * @param {string} severity fatal | error | warn
+   * @param {string} text what went wrong, in words, with the actual value in it
+   * @param {string} [subject] which ship or projectile
+   */
+  must(condition, code, severity, text, subject = null) {
+    if (condition) return;
+    this.violations.push({ code, severity, text, subject });
+  }
+}
+
+/**
+ * Check one ship.
+ *
+ * `arenaRadius` is passed rather than imported so this module does not depend
+ * on combat.js — the ship rules also hold outside a fight, where there is no
+ * arena at all.
+ */
+function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
+  if (!s || typeof s !== 'object') {
+    r.must(false, 'ship.missing', 'fatal', `${label} is not a ship: ${String(s)}`);
+    return;
+  }
+  const who = s.name ?? s.classId ?? label;
+
+  // ---- position and attitude ----
+  for (const k of ['x', 'y', 'z', 'heading', 'pitch', 'roll', 'throttle']) {
+    r.must(ok(s[k]), `ship.${k}.finite`, 'fatal',
+      `${who}: ${k} is ${s[k]}`, who);
+  }
+  for (const k of ['x', 'y', 'z']) {
+    r.must(ok(s.velocity?.[k]), 'ship.velocity.finite', 'fatal',
+      `${who}: velocity.${k} is ${s.velocity?.[k]}`, who);
+  }
+  r.must(num(s.throttle) >= 0 && num(s.throttle) <= 1, 'ship.throttle.range', 'error',
+    `${who}: throttle is ${s.throttle}, outside 0..1`, who);
+  r.must(Math.abs(num(s.pitch)) <= 90.001, 'ship.pitch.range', 'error',
+    `${who}: pitch is ${s.pitch} degrees`, who);
+
+  if (arenaRadius !== null && ok(s.x) && ok(s.y) && ok(s.z)) {
+    const d = Math.hypot(s.x, s.y, num(s.z));
+    r.must(d <= arenaRadius + ARENA_SLACK, 'ship.arena', 'fatal',
+      `${who}: ${Math.round(d)} units from centre, outside the ${arenaRadius}-unit arena`, who);
+  }
+
+  // ---- damage model ----
+  r.must(ok(s.hull), 'ship.hull.finite', 'fatal', `${who}: hull is ${s.hull}`, who);
+  r.must(num(s.hull) >= 0, 'ship.hull.negative', 'error',
+    `${who}: hull is ${s.hull}`, who);
+  r.must(num(s.hull) <= num(s.maxHull) + 1e-6, 'ship.hull.overmax', 'error',
+    `${who}: hull ${s.hull} exceeds max ${s.maxHull}`, who);
+  r.must(num(s.maxHull) > 0, 'ship.maxHull', 'error',
+    `${who}: maxHull is ${s.maxHull}`, who);
+
+  for (const f of FACINGS) {
+    const v = s.shields?.[f];
+    r.must(ok(v), 'ship.shield.finite', 'fatal', `${who}: shields.${f} is ${v}`, who);
+    r.must(num(v) >= 0, 'ship.shield.negative', 'error',
+      `${who}: shields.${f} is ${v}`, who);
+    r.must(num(v) <= num(s.maxShield) + 1e-6, 'ship.shield.overmax', 'error',
+      `${who}: shields.${f} is ${v}, above max ${s.maxShield}`, who);
+  }
+
+  for (const [k, v] of Object.entries(s.subsystems ?? {})) {
+    r.must(ok(v), 'ship.subsystem.finite', 'fatal', `${who}: subsystem ${k} is ${v}`, who);
+    r.must(num(v) >= -1e-9 && num(v) <= 1 + 1e-9, 'ship.subsystem.range', 'error',
+      `${who}: subsystem ${k} is ${v}, outside 0..1`, who);
+  }
+
+  r.must(ok(s.crew) && num(s.crew) >= 0, 'ship.crew', 'error',
+    `${who}: crew is ${s.crew}`, who);
+  r.must(num(s.crew) <= num(s.maxCrew) + 1e-6, 'ship.crew.overmax', 'error',
+    `${who}: crew ${s.crew} exceeds complement ${s.maxCrew}`, who);
+  r.must(ok(s.fires) && num(s.fires) >= 0, 'ship.fires', 'error',
+    `${who}: fires is ${s.fires}`, who);
+  r.must(ok(s.torpedoes) && num(s.torpedoes) >= 0, 'ship.torpedoes', 'error',
+    `${who}: torpedoes is ${s.torpedoes}`, who);
+
+  // ---- weapons ----
+  for (const w of s.weapons ?? []) {
+    r.must(ok(w.cooldown), 'weapon.cooldown.finite', 'fatal',
+      `${who}: ${w.name ?? w.type} cooldown is ${w.cooldown}`, who);
+    r.must(num(w.cooldown) >= -1e-9, 'weapon.cooldown.negative', 'error',
+      `${who}: ${w.name ?? w.type} cooldown is ${w.cooldown}`, who);
+  }
+
+  // ---- the one rule that ties the model together ----
+  //
+  // A ship at zero hull that is not flagged destroyed keeps taking part in the
+  // fight, and a ship flagged destroyed with hull left is a wreck the AI still
+  // considers a threat. Either way the board disagrees with itself.
+  if (s.destroyed) {
+    r.must(num(s.hull) <= 1e-6, 'ship.destroyed.hull', 'error',
+      `${who} is destroyed but has ${s.hull} hull`, who);
+  } else {
+    // Zero hull is legal for as long as the core is counting down. That is a
+    // deliberate beat — the ship is finished and the explosion takes twenty
+    // seconds, which is the only window in which ejecting the core saves you.
+    // What must never happen is a hull at zero with no breach running: that
+    // ship is dead, is not going to die, and sits on the board forever.
+    r.must(num(s.hull) > 0 || s.breaching === true, 'ship.zerohull.adrift', 'error',
+      `${who} has ${s.hull} hull, is not destroyed, and no breach is running`, who);
+  }
+}
+
+/**
+ * Check a live engagement.
+ *
+ * @param {object} eng the Engagement
+ * @param {object} opts `arenaRadius` from combat.js, so this file imports nothing from it
+ * @returns {Array<{code,severity,text,subject}>} empty when everything holds
+ */
+function checkCombat(eng, { arenaRadius = 2600 } = {}) {
+  const r = new Report();
+  if (!eng) return r.violations;
+
+  try {
+    r.must(ok(eng.time) && eng.time >= 0, 'eng.time', 'fatal',
+      `engagement time is ${eng.time}`);
+    r.must(num(eng.time) < LIMITS.combatSeconds, 'eng.runaway', 'error',
+      `engagement has run ${Math.round(num(eng.time))} simulated seconds`);
+
+    const ships = eng.allShips ?? [];
+    r.must(Array.isArray(ships), 'eng.ships.array', 'fatal', 'allShips is not an array');
+    r.must(ships.length <= LIMITS.ships, 'eng.ships.count', 'warn',
+      `${ships.length} ships in one engagement`);
+
+    // The same hull appearing twice takes damage twice and is drawn twice.
+    const seen = new Set();
+    for (const s of ships) {
+      r.must(!seen.has(s), 'eng.ships.duplicate', 'error',
+        `${s?.name ?? 'a ship'} appears more than once in the engagement`, s?.name);
+      seen.add(s);
+      checkShip(r, s, { arenaRadius });
+    }
+    r.must(!!eng.player, 'eng.player', 'fatal', 'the engagement has no player ship');
+    r.must(!eng.hostiles?.includes?.(eng.player), 'eng.player.hostile', 'fatal',
+      'the player is in their own hostile list');
+
+    // ---- the target ----
+    //
+    // A target reference held after the ship leaves the board is what makes the
+    // camera chase a wreck and auto-fire shoot at nothing.
+    if (eng.target) {
+      r.must(seen.has(eng.target), 'eng.target.absent', 'error',
+        `target ${eng.target.name ?? '?'} is not in this engagement`, eng.target.name);
+      if (!eng.over) {
+        r.must(!eng.target.withdrawn, 'eng.target.withdrawn', 'error',
+          `target ${eng.target.name ?? '?'} has already left the fight`, eng.target.name);
+      }
+    }
+
+    // ---- projectiles ----
+    const shots = eng.projectiles ?? [];
+    r.must(shots.length <= LIMITS.projectiles, 'eng.projectiles.leak', 'error',
+      `${shots.length} projectiles in flight`);
+    for (const p of shots) {
+      const tag = `${p?.weapon?.name ?? 'torpedo'} from ${p?.attacker?.name ?? '?'}`;
+      r.must(ok(p.x) && ok(p.y) && ok(p.z), 'projectile.finite', 'fatal',
+        `${tag}: position is ${p.x},${p.y},${p.z}`, tag);
+      r.must(ok(p.life), 'projectile.life.finite', 'fatal',
+        `${tag}: life is ${p.life}`, tag);
+      r.must(num(p.speed) > 0, 'projectile.speed', 'error',
+        `${tag}: speed is ${p.speed}`, tag);
+      r.must(!!p.target, 'projectile.target', 'error', `${tag}: has no target`, tag);
+      r.must(!!p.attacker, 'projectile.attacker', 'error', `${tag}: has no attacker`, tag);
+    }
+
+    // ---- effects and log ----
+    const fx = eng.effects ?? [];
+    r.must(fx.length <= LIMITS.effects, 'eng.effects.leak', 'error',
+      `${fx.length} visual effects alive at once`);
+    for (const e of fx) {
+      r.must(ok(e.life), 'effect.life.finite', 'fatal', `an effect has life ${e.life}`);
+      r.must(ok(e.x) && ok(e.y) && ok(e.z), 'effect.finite', 'error',
+        `an effect is at ${e.x},${e.y},${e.z}`);
+    }
+    r.must((eng.log?.length ?? 0) <= LIMITS.logLines, 'eng.log.leak', 'warn',
+      `${eng.log?.length} combat log lines retained`);
+
+    // ---- resolution ----
+    //
+    // The soft-lock rule. If the fight is not over, at least one of the things
+    // that could end it must still be possible: somebody left to fight, or a
+    // player who is done for.
+    if (eng.over) {
+      r.must(!!eng.outcome, 'eng.outcome', 'error',
+        'the engagement is over with no outcome recorded');
+    } else {
+      const live = eng.liveHostiles ?? [];
+      r.must(live.length > 0 || eng.player?.destroyed === true || num(eng.warpOutTimer) > 0,
+        'eng.unresolved', 'fatal',
+        'no live hostiles, the player is alive, and the engagement has not ended');
+    }
+
+    for (const k of ['warpOutTimer', 'separationTimer', 'decoyTimer']) {
+      r.must(ok(eng[k]) && num(eng[k]) >= 0, `eng.${k}`, 'error',
+        `${k} is ${eng[k]}`);
+    }
+  } catch (err) {
+    // A checker that throws is worse than no checker. Report the failure as a
+    // violation and let the caller decide.
+    r.violations.push({
+      code: 'checker.threw', severity: 'error',
+      text: `the invariant checker itself failed: ${err?.message ?? err}`, subject: null,
+    });
+  }
+
+  return r.violations.sort(bySeverity);
+}
+
+/**
+ * Check the game around the fight — the state a fight leaves behind.
+ *
+ * The player's complaint was never only about the shooting. It was that "the
+ * stuff that comes after it is also messed up": a mode that does not go back,
+ * an engagement object left lying around for other code to trip over, a captain
+ * who is somehow ashore during a battle.
+ */
+function checkGame(game) {
+  const r = new Report();
+  if (!game) return r.violations;
+
+  try {
+    if (game.ship) checkShip(r, game.ship, { label: 'player' });
+
+    const eng = game.engagement;
+    const fighting = !!eng && !eng.over;
+
+    if (fighting) {
+      r.must(eng.player === game.ship, 'game.engagement.ship', 'fatal',
+        'the engagement is fighting a different ship object than the game owns');
+      r.must(game.walk?.roomId !== 'surface', 'game.combat.ashore', 'error',
+        'a battle is running while the captain is standing on a planet');
+      r.must(!game.transit, 'game.combat.transit', 'error',
+        'a battle is running while the ship is at warp');
+      r.must(!game.over, 'game.combat.after-end', 'error',
+        'a battle is running after the game itself ended');
+    }
+
+    if (eng?.over) {
+      r.must(game.mode !== 'combat' || game.over, 'game.mode.stuck', 'error',
+        `the fight is over but the game is still in ${game.mode} mode`);
+    }
+
+    // The con is a bridge thing, and a fight is the moment it matters most.
+    if (game.conStation) {
+      r.must(!!game.crew?.at?.(game.conStation), 'game.con.ghost', 'error',
+        `the con is held by ${game.conStation}, and nobody alive is at that post`);
+    }
+
+    r.must(ok(game.latinum) && game.latinum >= 0, 'game.latinum', 'error',
+      `latinum is ${game.latinum}`);
+    for (const [k, v] of Object.entries(game.stores ?? {})) {
+      r.must(ok(v) && v >= 0, 'game.stores', 'error', `stores.${k} is ${v}`);
+    }
+    for (const o of game.crew?.officers ?? []) {
+      r.must(ok(o.xp) && o.xp >= 0, 'officer.xp', 'error',
+        `${o.name}: xp is ${o.xp}`, o.name);
+      r.must(o.alive || !o.injured, 'officer.dead-and-injured', 'warn',
+        `${o.name} is dead and also flagged injured`, o.name);
+    }
+  } catch (err) {
+    r.violations.push({
+      code: 'checker.threw', severity: 'error',
+      text: `the game invariant checker itself failed: ${err?.message ?? err}`, subject: null,
+    });
+  }
+
+  return r.violations.sort(bySeverity);
+}
+
+/**
+ * Everything, in one call.
+ *
+ * @param {object} game
+ * @param {object} opts arenaRadius, so this module stays free of combat.js
+ */
+function checkAll(game, opts = {}) {
+  return [...checkGame(game), ...checkCombat(game?.engagement, opts)].sort(bySeverity);
+}
+
+/**
+ * A watchdog that remembers what it has already complained about.
+ *
+ * Running the checker every tick and logging every violation would produce
+ * thirty identical lines a second for one broken number, which buries the
+ * second bug under the first. Each distinct code is reported once per session
+ * with a count kept behind it.
+ */
+class Watchdog {
+  /**
+   * @param {object} opts
+   *   `onViolation(v, count)` — called the first time each code is seen.
+   *   `throwOn` — 'fatal' | 'error' | 'never'. Tests use 'error'.
+   *   `every` — check one tick in N. 1 is every tick.
+   */
+  constructor({ onViolation = null, throwOn = 'never', every = 1 } = {}) {
+    this.onViolation = onViolation;
+    this.throwOn = throwOn;
+    this.every = Math.max(1, Math.floor(every) || 1);
+    this.counts = new Map();
+    this.firsts = [];
+    this.ticks = 0;
+    this.checked = 0;
+  }
+
+  /** Total violations seen, counting repeats. */
+  get total() {
+    let n = 0;
+    for (const c of this.counts.values()) n += c;
+    return n;
+  }
+
+  /** The distinct problems, worst first — what a bug report should contain. */
+  get summary() {
+    return this.firsts
+      .map((v) => ({ ...v, count: this.counts.get(v.code) ?? 0 }))
+      .sort(bySeverity);
+  }
+
+  /**
+   * Run one check. Cheap to call every tick.
+   * @returns {Array} the violations found this tick
+   */
+  tick(game, opts = {}) {
+    this.ticks++;
+    if (this.ticks % this.every !== 0) return [];
+    this.checked++;
+
+    const found = checkAll(game, opts);
+    for (const v of found) {
+      const seen = this.counts.get(v.code) ?? 0;
+      this.counts.set(v.code, seen + 1);
+      if (seen === 0) {
+        this.firsts.push(v);
+        this.onViolation?.(v, 1);
+      }
+    }
+
+    if (this.throwOn !== 'never') {
+      const bar = SEVERITY[this.throwOn] ?? 0;
+      const worst = found.find((v) => (SEVERITY[v.severity] ?? 9) <= bar);
+      if (worst) {
+        const e = new Error(`invariant violated [${worst.code}]: ${worst.text}`);
+        e.violation = worst;
+        e.all = found;
+        throw e;
+      }
+    }
+    return found;
+  }
+
+  reset() {
+    this.counts.clear();
+    this.firsts.length = 0;
+    this.ticks = 0;
+    this.checked = 0;
+  }
+}
+
+__exports.LIMITS = LIMITS;
+__exports.bySeverity = bySeverity;
+__exports.checkCombat = checkCombat;
+__exports.checkGame = checkGame;
+__exports.checkAll = checkAll;
+__exports.Watchdog = Watchdog;
+
+});
+
 __define("src/sim/diplomacy.js", function (__exports, __require) {
 // Hails, negotiation, and what talking actually gets you.
 //
@@ -22101,10 +22590,11 @@ const { Ship } = __require("src/sim/ship.js");
 const { Crew, Officer } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
-const { Engagement } = __require("src/sim/combat.js");
+const { Engagement, ARENA_RADIUS } = __require("src/sim/combat.js");
 const { AwayTeam } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom } = __require("src/sim/walk.js");
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
+const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { resolveHail, STANDING_EFFECTS } = __require("src/sim/diplomacy.js");
 
@@ -22239,6 +22729,25 @@ class Game {
     // commission starts — in the chair, on the bridge, at the top of alpha
     // watch. Anything else is a station id, because a station is unique in a
     // roster and an officer object cannot survive a save.
+    //
+    // The simulation watching itself, first. A full invariant sweep of a
+    // six-ship fight costs 24 microseconds and a simulation tick costs 0.4, so
+    // checking every tick would be sixty times the cost of the thing being
+    // checked. Twice a second is not — it is under a thousandth of the frame
+    // budget, and nothing that goes wrong in this simulation goes wrong for
+    // less than half a second.
+    //
+    // What it buys is that a glitch in the field is REPORTED rather than
+    // silently wrong. Each distinct fault reaches the ship's log once, as an
+    // anomaly with its code, so a player who sees something strange has
+    // something to send back instead of a description of how it looked.
+    this.watchdog = options.watchdog === false ? null : new Watchdog({
+      every: options.debug ? 1 : 15,
+      onViolation: (v) => {
+        this.pushLog(`Computer: internal anomaly [${v.code}] — ${v.text}`, 'computer');
+        emit('anomaly', v);
+      },
+    });
     this.conStation = null;
     // Whether the watch officer took it because the captain walked away, or
     // was given it. Given, they keep it until they are told otherwise; taken,
@@ -22518,6 +23027,68 @@ class Game {
     this.walkOrder = { toId: room.id, memory: {}, elapsed: 0 };
     this.pushLog(`Making for ${room.name}.`, 'captain');
     return { ok: true, room };
+  }
+
+  // -------------------------------------------------------- the diagnostic
+
+  /**
+   * Run a diagnostic on the ship.
+   *
+   * A level one diagnostic is a real thing in this franchise and it is exactly
+   * an invariant sweep: every system checked against what it is supposed to be,
+   * by hand, taking hours, because the automated pass missed something. So the
+   * order the show gives is wired to the checker this game actually has.
+   *
+   * Levels run 1 (everything, slowest) to 5 (a quick look). The level decides
+   * how much is reported and how long the crew is busy with it, not whether the
+   * invariants are checked — those are always all checked, because a checker
+   * that skips rules to save time is a checker that reports a clean ship that
+   * is not.
+   *
+   * @param {number} level 1..5
+   * @returns {{level, clean, violations, lines, hours}}
+   */
+  diagnostic(level = 5) {
+    const lvl = Math.min(5, Math.max(1, Math.round(Number(level) || 5)));
+    const violations = checkAll(this, { arenaRadius: ARENA_RADIUS });
+    const s = this.ship;
+    const lines = [];
+
+    lines.push(`Level ${['one', 'two', 'three', 'four', 'five'][lvl - 1]} diagnostic, ${s.name}.`);
+    lines.push(`Hull integrity ${Math.round(s.hullPct * 100)} percent. Shields ${Math.round(s.shieldPct * 100)} percent${s.shieldsUp ? '' : ', down'}.`);
+
+    // The deeper the level, the more of the ship is actually itemised. A level
+    // five is the glance you get on the bridge; a level one is every system.
+    const faults = Object.entries(s.subsystems)
+      .filter(([, v]) => v < 0.999)
+      .sort((a, b) => a[1] - b[1]);
+    const show = lvl <= 2 ? faults : faults.slice(0, lvl <= 3 ? 3 : 1);
+    for (const [k, v] of show) {
+      lines.push(`${k} at ${Math.round(v * 100)} percent.`);
+    }
+    if (!faults.length) lines.push('All systems nominal.');
+    if (s.fires > 0) lines.push(`${s.fires} fire${s.fires === 1 ? '' : 's'} still burning.`);
+    if (s.breaching) lines.push(`Warp core breach in ${Math.round(s.breachTimer)} seconds.`);
+    if (lvl <= 2) {
+      lines.push(`Crew ${Math.round(s.crew)} of ${s.maxCrew}. Antimatter ${Math.round(s.antimatter)} percent.`);
+      const casualties = this.crew.officers.filter((o) => !o.alive || o.injured);
+      for (const o of casualties) {
+        lines.push(`${o.rank} ${o.name} is ${o.alive ? 'in sickbay' : 'dead'}.`);
+      }
+    }
+
+    // The part that is not in the show. A violation here is a fault in the
+    // simulation rather than in the ship, and saying so plainly beats a silent
+    // wrong number — this is the readout that tells you the game is broken
+    // instead of leaving you to guess why the bars look odd.
+    for (const v of violations) {
+      lines.push(`ANOMALY [${v.code}] ${v.text}`);
+    }
+
+    const hours = [8, 4, 2, 1, 0.25][lvl - 1];
+    for (const line of lines) this.pushLog(line, 'engineering');
+    emit('diagnostic', { level: lvl, violations, lines });
+    return { level: lvl, clean: violations.length === 0, violations, lines, hours };
   }
 
   // --------------------------------------------------------------- the con
@@ -23216,6 +23787,25 @@ class Game {
       });
     }
 
+    // The after-action record.
+    //
+    // The engagement itself is thrown away here, and it used to be the only
+    // place the result of a fight existed — so anything that wanted to know how
+    // the last battle went had to read a live engagement before it was cleared,
+    // which is a race dressed up as an API. This survives the fight, which is
+    // what an after-action report is for.
+    this.lastCombat = {
+      outcome,
+      name: eng.name,
+      killed: killed.length,
+      hostiles: eng.hostiles.length,
+      hullLeft: this.ship.hullPct,
+      crewLost: Math.max(0, Math.round(this.ship.maxCrew - this.ship.crew)),
+      seconds: Math.round(eng.time),
+      systemId: this.locationId,
+      stardate: this.clock.stardate,
+    };
+
     this.engagement = null;
     this.firstStrike = false;
     // The scenario and any channel forced open inside it end with the fight.
@@ -23368,6 +23958,7 @@ class Game {
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
     this.updateWalk(dt);
+    this.watchdog?.tick(this, { arenaRadius: ARENA_RADIUS });
 
     switch (this.mode) {
       case MODES.TRANSIT: {
@@ -23392,6 +23983,22 @@ class Game {
       case MODES.COMBAT: {
         if (!this.engagement) { this.mode = MODES.BRIDGE; break; }
         this.engagement.update(dt);
+        // The game finishes its own fights.
+        //
+        // Everything that happens after a battle — the experience, the salvage,
+        // the faction standing, the casualty record, losing the ship — used to
+        // run from one `on('combat:end')` listener in main.js, which is to say
+        // it only ran when a screen was attached. Headless, a fight ended and
+        // nothing followed it: the engagement stayed non-null and over, the
+        // mode stayed COMBAT, and every test that fought a battle went on to
+        // assert against a state the real app never has.
+        //
+        // Doing it here rather than in the event also stops it being
+        // re-entrant. `end()` emits from inside `engagement.update()`, so the
+        // old listener nulled `this.engagement` while the engagement's own
+        // update was still on the stack, one frame short of touching a field
+        // on an object the game had already thrown away.
+        if (this.engagement?.over) this.finishCombat(this.engagement.outcome);
         break;
       }
 
@@ -24557,23 +25164,43 @@ function signaturePanel(app) {
 function powerPanel(app) {
   const g = app.game;
   return panel('Power Distribution', [
+    // Every preset carries the phrase that sets it. `PRESETS[id].order` is
+    // already the words an officer would use — "power to weapons" — so the
+    // button and the order line say the same thing by construction rather than
+    // by two lists being kept in step by hand.
     el('div', { class: 'grid-3' }, PRESET_LIST.slice(0, 3).map((p) =>
       button(p.label, tap(() => {
         g.ship.power.applyPreset(p.id);
         audio.play('power_reroute');
         app.render();
-      }), { color: g.ship.power.preset === p.id ? 'green' : 'blue' }))),
+      }), {
+        color: g.ship.power.preset === p.id ? 'green' : 'blue',
+        say: `${p.id} posture`,
+      }))),
     el('div', { class: 'grid-2' }, PRESET_LIST.slice(3).map((p) =>
       button(p.label, tap(() => {
         g.ship.power.applyPreset(p.id);
         audio.play('power_reroute');
         app.render();
-      }), { color: g.ship.power.preset === p.id ? 'green' : 'blue' }))),
+      }), {
+        color: g.ship.power.preset === p.id ? 'green' : 'blue',
+        say: `${p.id} posture`,
+      }))),
     ...SUBSYSTEMS.map((s) => powerSlider(SUBSYSTEM_LABEL[s], g.ship.power.target[s], (v) => {
       g.ship.power.set(s, v);
       audio.play('ui_tap', { throttle: 80 });
     })),
     el('p', { class: 'hint', text: `Total ${Math.round(g.ship.power.total)} of ${g.ship.power.cap}. Levels settle over a few seconds — the EPS grid is not instant.` }),
+    // The engineering console is where a diagnostic is actually run from.
+    button('Run a diagnostic', tap(() => {
+      const r = g.diagnostic(1);
+      audio.play(r.clean ? 'computer_ack' : 'ui_deny');
+      app.render();
+    }), {
+      color: 'ghost',
+      sub: 'Level one — every system, by hand',
+      say: 'run a level one diagnostic',
+    }),
   ]);
 }
 
@@ -26347,10 +26974,11 @@ class App {
     });
 
     on('combat:begin', () => { this.go('tactical'); });
-    on('combat:end', ({ outcome }) => {
-      this.game.finishCombat(outcome);
-      this.showCombatResult(outcome);
-    });
+    // Presentation only. The game settles the fight itself on its own tick —
+    // see the COMBAT case in Game.update — and says so with `combat:resolved`.
+    // This listener used to be the thing that awarded the experience and took
+    // the salvage, which meant the rules of the game lived in the UI.
+    on('combat:resolved', ({ outcome }) => { this.showCombatResult(outcome); });
 
     on('combat:fire', ({ attacker, weapon, type }) => {
       if (type === 'torpedo') audio.play('torpedo_launch', { throttle: 120 });
@@ -27555,6 +28183,12 @@ class App {
         const r = g.takeCon();
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
         else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'diagnostic': {
+        const r = g.diagnostic(order.level);
+        audio.play(r.clean ? 'computer_ack' : 'ui_deny');
+        if (!r.clean) haptic('alert');
         break;
       }
       case 'watch_bill': {

@@ -85,6 +85,7 @@ const PRECACHE = [
   './src/gfx/vista.js',
   './src/gfx/room.js',
   './src/ui/firstperson.js',
+  './src/sim/invariants.js',
   './src/sim/walk.js',
   './src/sim/watch.js',
   './src/world/interiors.data.js',

@@ -740,6 +740,10 @@ describe('the phrases printed on the buttons are real orders', () => {
       'steady as she goes', 'request docking', 'get us out of here',
       'target their weapons', 'target their shields', 'target their engines',
       'take me to the sickbay',
+      'you have the con', 'i have the con', 'who has the con',
+      'run a level one diagnostic',
+      'balanced posture', 'attack posture', 'defense posture', 'speed posture',
+      'science posture',
     ];
     const dud = [];
     for (const phrase of printed) {
@@ -747,5 +751,32 @@ describe('the phrases printed on the buttons are real orders', () => {
       if (r.unknown || (!r.action && !r.order?.action)) dud.push(phrase);
     }
     assert.deepEqual(dud, []);
+  });
+});
+
+describe('an addressee is not allowed to eat the order', () => {
+  // Normalisation strips who you addressed, and several stations are also
+  // things you can ask for. "Science configuration" arrived at the power
+  // preset builder as "configuration" — the one word that chose the preset had
+  // been taken off the front as an address — and quietly set balanced power.
+  test('a preset named after a station still selects that preset', () => {
+    for (const [said, preset] of [
+      ['science posture', 'science'],
+      ['science configuration', 'science'],
+      ['engineering, defense posture', 'defense'],
+      ['science, attack posture', 'attack'],
+      ['rig for battle', 'attack'],
+      ['rig for speed', 'speed'],
+      ['standard distribution', 'balanced'],
+    ]) {
+      assert.equal(parseText(said).preset, preset, `"${said}"`);
+    }
+  });
+
+  test('the raw line reaches the builders that need it', () => {
+    // Anything that has to read a name or a stripped word depends on this.
+    const o = parseText('mister spock you have the con');
+    assert.equal(o.action, 'hand_over_con');
+    assert.ok(o.said.includes('spock'), o.said);
   });
 });

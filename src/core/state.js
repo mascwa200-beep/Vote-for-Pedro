@@ -9,10 +9,11 @@ import { Ship } from '../sim/ship.js';
 import { Crew, Officer } from '../sim/officers.js';
 import { CaptainProgress, combatXP } from '../sim/skills.js';
 import { Loadout, startingLoadout } from '../sim/loadout.js';
-import { Engagement } from '../sim/combat.js';
+import { Engagement, ARENA_RADIUS } from '../sim/combat.js';
 import { AwayTeam } from '../sim/away.js';
 import { Walker, stepToward, findRoom } from '../sim/walk.js';
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
+import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import { resolveHail, STANDING_EFFECTS } from '../sim/diplomacy.js';
 
@@ -151,6 +152,25 @@ export class Game {
     // commission starts — in the chair, on the bridge, at the top of alpha
     // watch. Anything else is a station id, because a station is unique in a
     // roster and an officer object cannot survive a save.
+    //
+    // The simulation watching itself, first. A full invariant sweep of a
+    // six-ship fight costs 24 microseconds and a simulation tick costs 0.4, so
+    // checking every tick would be sixty times the cost of the thing being
+    // checked. Twice a second is not — it is under a thousandth of the frame
+    // budget, and nothing that goes wrong in this simulation goes wrong for
+    // less than half a second.
+    //
+    // What it buys is that a glitch in the field is REPORTED rather than
+    // silently wrong. Each distinct fault reaches the ship's log once, as an
+    // anomaly with its code, so a player who sees something strange has
+    // something to send back instead of a description of how it looked.
+    this.watchdog = options.watchdog === false ? null : new Watchdog({
+      every: options.debug ? 1 : 15,
+      onViolation: (v) => {
+        this.pushLog(`Computer: internal anomaly [${v.code}] — ${v.text}`, 'computer');
+        emit('anomaly', v);
+      },
+    });
     this.conStation = null;
     // Whether the watch officer took it because the captain walked away, or
     // was given it. Given, they keep it until they are told otherwise; taken,
@@ -430,6 +450,68 @@ export class Game {
     this.walkOrder = { toId: room.id, memory: {}, elapsed: 0 };
     this.pushLog(`Making for ${room.name}.`, 'captain');
     return { ok: true, room };
+  }
+
+  // -------------------------------------------------------- the diagnostic
+
+  /**
+   * Run a diagnostic on the ship.
+   *
+   * A level one diagnostic is a real thing in this franchise and it is exactly
+   * an invariant sweep: every system checked against what it is supposed to be,
+   * by hand, taking hours, because the automated pass missed something. So the
+   * order the show gives is wired to the checker this game actually has.
+   *
+   * Levels run 1 (everything, slowest) to 5 (a quick look). The level decides
+   * how much is reported and how long the crew is busy with it, not whether the
+   * invariants are checked — those are always all checked, because a checker
+   * that skips rules to save time is a checker that reports a clean ship that
+   * is not.
+   *
+   * @param {number} level 1..5
+   * @returns {{level, clean, violations, lines, hours}}
+   */
+  diagnostic(level = 5) {
+    const lvl = Math.min(5, Math.max(1, Math.round(Number(level) || 5)));
+    const violations = checkAll(this, { arenaRadius: ARENA_RADIUS });
+    const s = this.ship;
+    const lines = [];
+
+    lines.push(`Level ${['one', 'two', 'three', 'four', 'five'][lvl - 1]} diagnostic, ${s.name}.`);
+    lines.push(`Hull integrity ${Math.round(s.hullPct * 100)} percent. Shields ${Math.round(s.shieldPct * 100)} percent${s.shieldsUp ? '' : ', down'}.`);
+
+    // The deeper the level, the more of the ship is actually itemised. A level
+    // five is the glance you get on the bridge; a level one is every system.
+    const faults = Object.entries(s.subsystems)
+      .filter(([, v]) => v < 0.999)
+      .sort((a, b) => a[1] - b[1]);
+    const show = lvl <= 2 ? faults : faults.slice(0, lvl <= 3 ? 3 : 1);
+    for (const [k, v] of show) {
+      lines.push(`${k} at ${Math.round(v * 100)} percent.`);
+    }
+    if (!faults.length) lines.push('All systems nominal.');
+    if (s.fires > 0) lines.push(`${s.fires} fire${s.fires === 1 ? '' : 's'} still burning.`);
+    if (s.breaching) lines.push(`Warp core breach in ${Math.round(s.breachTimer)} seconds.`);
+    if (lvl <= 2) {
+      lines.push(`Crew ${Math.round(s.crew)} of ${s.maxCrew}. Antimatter ${Math.round(s.antimatter)} percent.`);
+      const casualties = this.crew.officers.filter((o) => !o.alive || o.injured);
+      for (const o of casualties) {
+        lines.push(`${o.rank} ${o.name} is ${o.alive ? 'in sickbay' : 'dead'}.`);
+      }
+    }
+
+    // The part that is not in the show. A violation here is a fault in the
+    // simulation rather than in the ship, and saying so plainly beats a silent
+    // wrong number — this is the readout that tells you the game is broken
+    // instead of leaving you to guess why the bars look odd.
+    for (const v of violations) {
+      lines.push(`ANOMALY [${v.code}] ${v.text}`);
+    }
+
+    const hours = [8, 4, 2, 1, 0.25][lvl - 1];
+    for (const line of lines) this.pushLog(line, 'engineering');
+    emit('diagnostic', { level: lvl, violations, lines });
+    return { level: lvl, clean: violations.length === 0, violations, lines, hours };
   }
 
   // --------------------------------------------------------------- the con
@@ -1128,6 +1210,25 @@ export class Game {
       });
     }
 
+    // The after-action record.
+    //
+    // The engagement itself is thrown away here, and it used to be the only
+    // place the result of a fight existed — so anything that wanted to know how
+    // the last battle went had to read a live engagement before it was cleared,
+    // which is a race dressed up as an API. This survives the fight, which is
+    // what an after-action report is for.
+    this.lastCombat = {
+      outcome,
+      name: eng.name,
+      killed: killed.length,
+      hostiles: eng.hostiles.length,
+      hullLeft: this.ship.hullPct,
+      crewLost: Math.max(0, Math.round(this.ship.maxCrew - this.ship.crew)),
+      seconds: Math.round(eng.time),
+      systemId: this.locationId,
+      stardate: this.clock.stardate,
+    };
+
     this.engagement = null;
     this.firstStrike = false;
     // The scenario and any channel forced open inside it end with the fight.
@@ -1280,6 +1381,7 @@ export class Game {
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
     this.updateWalk(dt);
+    this.watchdog?.tick(this, { arenaRadius: ARENA_RADIUS });
 
     switch (this.mode) {
       case MODES.TRANSIT: {
@@ -1304,6 +1406,22 @@ export class Game {
       case MODES.COMBAT: {
         if (!this.engagement) { this.mode = MODES.BRIDGE; break; }
         this.engagement.update(dt);
+        // The game finishes its own fights.
+        //
+        // Everything that happens after a battle — the experience, the salvage,
+        // the faction standing, the casualty record, losing the ship — used to
+        // run from one `on('combat:end')` listener in main.js, which is to say
+        // it only ran when a screen was attached. Headless, a fight ended and
+        // nothing followed it: the engagement stayed non-null and over, the
+        // mode stayed COMBAT, and every test that fought a battle went on to
+        // assert against a state the real app never has.
+        //
+        // Doing it here rather than in the event also stops it being
+        // re-entrant. `end()` emits from inside `engagement.update()`, so the
+        // old listener nulled `this.engagement` while the engagement's own
+        // update was still on the stack, one frame short of touching a field
+        // on an object the game had already thrown away.
+        if (this.engagement?.over) this.finishCombat(this.engagement.outcome);
         break;
       }
 

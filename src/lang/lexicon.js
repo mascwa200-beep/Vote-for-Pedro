@@ -445,8 +445,14 @@ export const INTENTS = [
     ],
     keywords: { posture: 3, configuration: 2.5, preset: 3, distribution: 2, stance: 2.5 },
     build: (c) => {
-      const t = c.text;
-      const preset = /\battack\b|\bcombat\b|\boffensive\b/.test(t) ? 'attack'
+      // The FULL line, not the normalised one. Science and engineering are
+      // station names, so "science configuration" had the one word that picks
+      // the preset stripped off the front as an address and arrived here as
+      // "configuration" — which fell through to balanced. The same order given
+      // as "Science, attack posture" still reads as attack, because attack is
+      // tested first and an addressee never changes what was ordered.
+      const t = c.full ?? c.text;
+      const preset = /\battack\b|\bcombat\b|\boffensive\b|\bbattle\b/.test(t) ? 'attack'
         : /\bdefense\b|\bdefensive\b/.test(t) ? 'defense'
         : /\bspeed\b|\bfast\b|\brun\b/.test(t) ? 'speed'
         : /\bscience\b|\bscan\b|\bsensor\b/.test(t) ? 'science'
@@ -844,6 +850,36 @@ export const INTENTS = [
     keywords: { con: 3, conn: 3, relieve: 2.2, watch: 1.6 },
     veto: ['you', 'your', 'yours', 'she', 'he', 'they', 'who', 'which'],
     build: () => ({ action: 'take_con' }),
+  },
+  {
+    // The one order that reads the simulation's own conscience out loud. A
+    // level one diagnostic is a real thing in this franchise and it is exactly
+    // an invariant sweep — every system checked by hand against what it is
+    // supposed to be — so it is wired to the checker the game actually runs.
+    id: 'diagnostic',
+    help: 'Run a level one diagnostic',
+    phrases: [
+      'run a diagnostic', 'run a level one diagnostic', 'run a level two diagnostic',
+      'run a level three diagnostic', 'run a level five diagnostic',
+      'run a full diagnostic', 'run diagnostics', 'begin a diagnostic',
+      'start a diagnostic', 'diagnostic', 'run a system check',
+      'check the systems', 'run a self test', 'systems check',
+      'i want a diagnostic', 'give me a diagnostic', 'full systems diagnostic',
+      'run every check', 'check everything',
+    ],
+    keywords: { diagnostic: 3, diagnostics: 3, selftest: 2 },
+    // "Damage report" is a summary an officer gives from what they already
+    // know. A diagnostic is work the crew goes off and does.
+    veto: ['damage', 'sensor', 'scan'],
+    build: (c) => {
+      const m = /\blevel\s+(one|two|three|four|five|[1-5])\b/.exec(c.text);
+      const word = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+      const deep = /\b(?:full|complete|thorough|everything|every check)\b/.test(c.text);
+      return {
+        action: 'diagnostic',
+        level: m ? (word[m[1]] ?? Number(m[1])) : (deep ? 1 : 5),
+      };
+    },
   },
   {
     id: 'watch_bill',
