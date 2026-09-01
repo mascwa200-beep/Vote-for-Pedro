@@ -135,6 +135,20 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
       `${who}: subsystem ${k} is ${v}, outside 0..1`, who);
   }
 
+  // The grid never draws more than it has. `normalize` exists to guarantee
+  // this and had two ways to fail: a protected subsystem was exempt from the
+  // cap rather than only from being drained, and rounding four numbers up
+  // could put the total back over it.
+  if (s.power?.target) {
+    let draw = 0;
+    for (const v of Object.values(s.power.target)) {
+      r.must(ok(v) && v >= 0, 'power.level', 'error', `${who}: a power level is ${v}`, who);
+      draw += num(v);
+    }
+    r.must(draw <= num(s.power.cap) + 1e-6, 'power.overcap', 'error',
+      `${who}: drawing ${Math.round(draw)} against a cap of ${s.power.cap}`, who);
+  }
+
   r.must(ok(s.crew) && num(s.crew) >= 0, 'ship.crew', 'error',
     `${who}: crew is ${s.crew}`, who);
   r.must(num(s.crew) <= num(s.maxCrew) + 1e-6, 'ship.crew.overmax', 'error',

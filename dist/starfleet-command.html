@@ -2662,6 +2662,13 @@ class PowerGrid {
     // Rebalancing is not instant — the EPS grid takes a moment to settle.
     this.target = { ...this.levels };
     this.transferRate = 55; // power units per second
+    // Balanced is 50 to each of four subsystems, which is 200 — and plenty of
+    // hulls have a smaller grid than that. A Bird-of-Prey has a cap of 190, so
+    // it was built drawing 200 and was over its own budget from the first tick
+    // of its existence, with every `factor()` reading computed off a
+    // distribution the ship could not actually supply.
+    this.normalize();
+    this.levels = { ...this.target };
   }
 
   get total() {
@@ -2717,6 +2724,29 @@ class PowerGrid {
       excess = this.total - budget;
     }
     for (const s of SUBSYSTEMS) this.target[s] = Math.max(0, Math.round(this.target[s]));
+
+    // The protected subsystem is protected from being DRAINED, not exempt from
+    // the cap. With the donors emptied and the total still over budget it was
+    // simply left there — so after ejecting the warp core, which cuts the cap
+    // to 45 per cent, asking for 100 to weapons kept 100 to weapons and the
+    // whole point of the ejection penalty went away.
+    if (protectedSub && this.total > budget) {
+      const others = SUBSYSTEMS.reduce((n, s) => (s === protectedSub ? n : n + this.target[s]), 0);
+      this.target[protectedSub] = Math.max(0, Math.round(budget - others));
+    }
+
+    // Rounding four numbers up can put the total back over the cap by a couple
+    // of points, which is how a grid at 92 of 90 survived a function whose
+    // entire job is "keep the sum at or under cap". Shave the largest until it
+    // does not.
+    let over = this.total - budget;
+    while (over > 0) {
+      const biggest = SUBSYSTEMS.reduce((a, b) => (this.target[a] >= this.target[b] ? a : b));
+      if (this.target[biggest] <= 0) break;
+      const take = Math.min(over, this.target[biggest]);
+      this.target[biggest] -= take;
+      over -= take;
+    }
   }
 
   /** Ease actual levels toward target. Called every sim step. */
@@ -9855,7 +9885,7 @@ __define("src/ui/firstperson.js", function (__exports, __require) {
 // The order matters and so does the depth range: clearing depth between passes
 // instead would let the forward bulkhead paint over the screen.
 
-const { vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project, quatFromTo, quatAxisAngle } = __require("src/gfx/math.js");
+const { vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project, quatFromTo, quatAxisAngle, quatFromEuler } = __require("src/gfx/math.js");
 const { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } = __require("src/gfx/room.js");
 const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME } = __require("src/gfx/scene.js");
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
@@ -10401,9 +10431,25 @@ class FirstPersonView {
     // longer needs to be a separate screen: the enemy is ON the viewer.
     if (eng) {
       for (const s of [...eng.hostiles, ...eng.allies]) {
-        if (!s || s.destroyed) continue;
+        // A ship that has gone to warp is not out there any more.
+        if (!s || s.destroyed || s.withdrawn) continue;
         this._pos[0] = s.x; this._pos[1] = s.z ?? 0; this._pos[2] = s.y;
-        compose(this._pos, quat(), hullScale(s.classId), this._model);
+        // Pointed where it is actually going.
+        //
+        // This passed a bare `quat()` — the identity — so every hostile and
+        // ally on the main viewer faced the same fixed direction no matter what
+        // it was doing. A Bird-of-Prey could make a firing run straight across
+        // the screen without ever appearing to turn, which is the single most
+        // obvious thing wrong with looking out of the window during a fight.
+        // The tactical plot has always oriented its hulls correctly; the
+        // viewscreen simply never did.
+        quatFromEuler(
+          -(s.pitch ?? 0) * Math.PI / 180,
+          -(s.heading ?? 0) * Math.PI / 180,
+          (s.roll ?? 0) * Math.PI / 180,
+          this._quat,
+        );
+        compose(this._pos, this._quat, hullScale(s.classId), this._model);
         r.draw(`hull:${s.classId}:${s.faction}`, hullMesh(s.classId, s.faction), {
           model: this._model,
           normalMatrix: normalMatrix(this._model),
@@ -17838,7 +17884,12 @@ function chooseAction(ship, engagement, dt, opts = {}) {
 
   // ---- Jem'Hadar ram ----
   if (ship.cls.ramsWhenDoomed && hullPct < 0.2) {
-    steerTo(ship, target.x, target.y);
+    // In three dimensions, because `distance` is measured in three. Steering
+    // in the plane at a target twenty degrees above you closes the horizontal
+    // gap and nothing else, so the 40-unit contact test was never satisfied: a
+    // doomed attack ship flew past, under, and out of the fight instead of
+    // doing the one thing its whole doctrine exists to do.
+    steerTo(ship, target.x, target.y, target.z ?? 0);
     ship.throttle = 1;
     if (distance < 40) {
       target.takeDamage(ship.maxHull * 0.35, { direction: target.directionFrom(ship), type: 'kinetic', rng });
@@ -19917,6 +19968,20 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
     r.must(ok(v), 'ship.subsystem.finite', 'fatal', `${who}: subsystem ${k} is ${v}`, who);
     r.must(num(v) >= -1e-9 && num(v) <= 1 + 1e-9, 'ship.subsystem.range', 'error',
       `${who}: subsystem ${k} is ${v}, outside 0..1`, who);
+  }
+
+  // The grid never draws more than it has. `normalize` exists to guarantee
+  // this and had two ways to fail: a protected subsystem was exempt from the
+  // cap rather than only from being drained, and rounding four numbers up
+  // could put the total back over it.
+  if (s.power?.target) {
+    let draw = 0;
+    for (const v of Object.values(s.power.target)) {
+      r.must(ok(v) && v >= 0, 'power.level', 'error', `${who}: a power level is ${v}`, who);
+      draw += num(v);
+    }
+    r.must(draw <= num(s.power.cap) + 1e-6, 'power.overcap', 'error',
+      `${who}: drawing ${Math.round(draw)} against a cap of ${s.power.cap}`, who);
   }
 
   r.must(ok(s.crew) && num(s.crew) >= 0, 'ship.crew', 'error',

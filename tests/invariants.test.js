@@ -730,3 +730,60 @@ describe('nothing repairs the ship mid-firefight', () => {
     assert.equal(g.workTheShop(4).ok, false, 'hours were worked under fire');
   });
 });
+
+describe('the grid never draws more than it has', () => {
+  test('ejecting the core actually costs you the power', () => {
+    // `normalize` protects a subsystem from being DRAINED; it was also
+    // exempting it from the cap. After ejecting the warp core — which cuts the
+    // cap to 45 per cent — asking for 100 to weapons kept 100 to weapons, and
+    // the whole point of the ejection penalty went away.
+    const s = new Ship('constitution', { isPlayer: true });
+    s.beginBreach(20);
+    s.ejectCore();
+    s.power.set('weapons', 100);
+    assert.ok(s.power.total <= s.power.cap,
+      `drawing ${s.power.total} against a cap of ${s.power.cap}`);
+  });
+
+  test('no preset and no request can exceed the cap', () => {
+    const s = new Ship('constitution', { isPlayer: true });
+    for (const cap of [s.power.cap, 90, 40, 10]) {
+      s.power.cap = cap;
+      for (const preset of ['attack', 'defense', 'speed', 'science', 'balanced']) {
+        s.power.applyPreset(preset);
+        assert.ok(s.power.total <= cap, `${preset} drew ${s.power.total} of ${cap}`);
+      }
+      for (const sub of Object.keys(s.power.target)) {
+        s.power.set(sub, 100);
+        assert.ok(s.power.total <= cap, `${sub} at full drew ${s.power.total} of ${cap}`);
+      }
+    }
+  });
+
+  test('the checker notices an overdrawn grid', () => {
+    const g = fight();
+    g.ship.power.target.weapons = 500;
+    assert.ok(checkAll(g, OPTS).some((v) => v.code === 'power.overcap'));
+  });
+});
+
+test('a doomed attack ship can actually reach what it is ramming', () => {
+  // The ram steered in the plane while the contact test measured distance in
+  // three dimensions, so a target even slightly above or below was never
+  // reached: the ship flew past, under, and out of the fight instead of doing
+  // the one thing its doctrine exists for.
+  const g = new Game({ seed: 17n, crewMode: 'original' });
+  g.startCombat([new Ship('jem_hadar_attack', { name: 'Doomed' })], { relentless: true });
+  const eng = g.engagement;
+  const foe = eng.hostiles[0];
+  foe.hull = foe.maxHull * 0.1;
+  // Put it clearly above the player, which is the case that never worked.
+  foe.x = 600; foe.y = 0; foe.z = 400;
+  g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+  g.ship.throttle = 0;
+
+  for (let t = 0; t < 30 * 120 && g.engagement && !g.engagement.over; t++) g.update(STEP);
+  const closed = Math.hypot(foe.x - g.ship.x, foe.y - g.ship.y, (foe.z ?? 0) - (g.ship.z ?? 0));
+  assert.ok(foe.destroyed || closed < 400,
+    `it never closed: ${Math.round(closed)} units away, destroyed=${foe.destroyed}`);
+});

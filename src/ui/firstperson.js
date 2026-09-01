@@ -28,7 +28,7 @@
 
 import {
   vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project,
-  quatFromTo, quatAxisAngle,
+  quatFromTo, quatAxisAngle, quatFromEuler,
 } from '../gfx/math.js';
 import { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } from '../gfx/room.js';
 import {
@@ -580,9 +580,25 @@ export class FirstPersonView {
     // longer needs to be a separate screen: the enemy is ON the viewer.
     if (eng) {
       for (const s of [...eng.hostiles, ...eng.allies]) {
-        if (!s || s.destroyed) continue;
+        // A ship that has gone to warp is not out there any more.
+        if (!s || s.destroyed || s.withdrawn) continue;
         this._pos[0] = s.x; this._pos[1] = s.z ?? 0; this._pos[2] = s.y;
-        compose(this._pos, quat(), hullScale(s.classId), this._model);
+        // Pointed where it is actually going.
+        //
+        // This passed a bare `quat()` — the identity — so every hostile and
+        // ally on the main viewer faced the same fixed direction no matter what
+        // it was doing. A Bird-of-Prey could make a firing run straight across
+        // the screen without ever appearing to turn, which is the single most
+        // obvious thing wrong with looking out of the window during a fight.
+        // The tactical plot has always oriented its hulls correctly; the
+        // viewscreen simply never did.
+        quatFromEuler(
+          -(s.pitch ?? 0) * Math.PI / 180,
+          -(s.heading ?? 0) * Math.PI / 180,
+          (s.roll ?? 0) * Math.PI / 180,
+          this._quat,
+        );
+        compose(this._pos, this._quat, hullScale(s.classId), this._model);
         r.draw(`hull:${s.classId}:${s.faction}`, hullMesh(s.classId, s.faction), {
           model: this._model,
           normalMatrix: normalMatrix(this._model),
