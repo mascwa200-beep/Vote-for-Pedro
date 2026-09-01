@@ -5,6 +5,51 @@
 // `links` are the charted lanes; travel between unlinked systems is possible
 // but costs a navigational penalty (see world/galaxy.js).
 
+/**
+ * How far each sector sits above or below the plane of the chart, in light
+ * years. See docs/RESEARCH.md §12.
+ *
+ * The local stellar neighbourhood is not a disc. Inside twenty light years the
+ * galactic disc is a thousand light years thick, so the nearest stars sit above
+ * and below Sol as readily as beside it — Alpha Centauri is sixty-one degrees
+ * below the celestial equator and 61 Cygni is thirty-nine above it. A sector
+ * map drawn on a tabletop is not a simplification of that, it is a different
+ * arrangement.
+ *
+ * Depth is assigned per sector rather than per star. The x and y in this file
+ * are an authored layout — the travel times between neighbours are what the
+ * campaign is balanced on, and Rigel is twenty-two units away here against 860
+ * light years in the sky — so inventing astrometry for the third axis and not
+ * the other two would be a pretence. What the sectors buy instead is
+ * STRUCTURE: the political blocs sit at different heights, so the map reads as
+ * a volume with something in it rather than a scatter.
+ *
+ * Where a system has a real counterpart, the SIGN follows the real
+ * declination. Alpha Centauri is below the plane and 61 Cygni is above it,
+ * because that part is free to be true.
+ */
+export const SECTOR_DEPTH = {
+  sol: 0,             // the origin, by definition
+  vulcan: -1.4,       // 40 Eridani A and 61 Cygni pull opposite ways; Vulcan is below
+  andor: -3.2,        // Epsilon Indi, 57 degrees south
+  rigel: -2.1,
+  donatu: 2.6,
+  archanis: 3.4,
+  qonos: 4.8,         // the Empire sits high off the plane, and stays there
+  neutral: -1.1,
+  romulus: -4.4,      // and the Star Empire low, on the other side of the zone
+  bajor: 1.7,
+  cardassia: 2.9,
+  badlands: 0.8,      // the one place where the plane itself is unreliable
+  tholia: -5.6,       // the Assembly is the furthest thing from anybody
+  risa: -0.9,
+  betazed: 1.2,
+  gamma: 6.2,         // through the wormhole, and nothing about it is nearby
+  ferenginar: 3.1,
+  frontier: -2.7,
+  deepspace: 5.1,
+};
+
 export const SECTORS = {
   sol: { id: 'sol', name: 'Sector 001', owner: 'federation', color: '#9cf' },
   vulcan: { id: 'vulcan', name: 'Vulcan Sector', owner: 'federation', color: '#9cf' },
@@ -315,9 +360,76 @@ export function getSystem(id) {
 }
 
 /** Straight-line distance in light-years. */
+/**
+ * Chart distance between two systems, in light years.
+ *
+ * PLANAR, DELIBERATELY. `systemDepth` gives every system a third axis so the
+ * sector map can be looked at from somewhere other than directly above, and
+ * that axis is an authored layout rather than astrometry — see
+ * docs/RESEARCH.md §12. Folding it into this function would change the length
+ * of every lane in the game, and therefore every warp transit, every fuel cost
+ * and the whole balance of the campaign, in exchange for accuracy that does not
+ * exist. The depth is for the eye. The distance is for the helm.
+ *
+ * There is a test that holds this apart, because it is exactly the sort of
+ * thing somebody tidies up later without noticing what it costs.
+ */
 export function distanceLy(a, b) {
   const sa = typeof a === 'string' ? SYSTEM_BY_ID[a] : a;
   const sb = typeof b === 'string' ? SYSTEM_BY_ID[b] : b;
   if (!sa || !sb) return Infinity;
   return Math.hypot(sa.x - sb.x, sa.y - sb.y);
+}
+
+/**
+ * Declination of the real star a system stands in for, in degrees.
+ *
+ * Seven of these places have a published counterpart in the sky. Nothing else
+ * about the layout is astrometric, but the SIGN of the depth can be, and where
+ * it can be it is: Alpha Centauri sits below the plane and 61 Cygni above it,
+ * because that is where they actually are.
+ */
+export const REAL_DECLINATION = {
+  sol: 0,                 // the origin
+  alpha_centauri: -60.83, // Alpha Centauri
+  wolf359: 7.01,          // Wolf 359
+  vulcan: -7.65,          // 40 Eridani A
+  tellar: 38.75,          // 61 Cygni
+  andoria: -56.79,        // Epsilon Indi
+  vega: 38.78,            // Vega
+  frontier_1: -62.50,     // Beta Reticuli, standing in for Zeta Reticuli
+};
+
+/**
+ * How far above or below the plane of the chart a system sits, in light years.
+ *
+ * The sector sets the magnitude; a system's own id sets a small offset inside
+ * it, so two worlds in one sector are not coplanar. The offset is a hash rather
+ * than a random number because this has to give the same answer in every
+ * session, on every device, forever — the map is drawn from it and a save made
+ * on one build has to load into the same galaxy on the next.
+ */
+export function systemDepth(system) {
+  const sys = typeof system === 'string' ? SYSTEM_BY_ID[system] : system;
+  if (!sys) return 0;
+
+  const base = SECTOR_DEPTH[sys.sector] ?? 0;
+
+  // FNV-1a over the id, the same hash the saves are checksummed with, mapped
+  // to roughly ±1.2 light years of scatter within the sector.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < sys.id.length; i++) {
+    h ^= sys.id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  const jitter = ((h % 2401) / 2400 - 0.5) * 2.4;
+
+  const dec = REAL_DECLINATION[sys.id];
+  if (dec === undefined) return base + jitter;
+
+  // A real star: the magnitude still comes from the sector, so the map keeps
+  // its structure, but it goes on the side of the plane the star is really on.
+  const size = Math.abs(base) + Math.abs(jitter);
+  if (dec === 0) return 0;
+  return Math.sign(dec) * size;
 }

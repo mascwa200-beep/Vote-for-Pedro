@@ -470,6 +470,67 @@ Sources: [Memory Alpha — Constitution class decks](https://memory-alpha.fandom
 
 ---
 
+## 12. The sector map has a third axis, and the real one is not flat
+
+The galaxy map in this game is drawn flat, and flat is the wrong shape.
+
+**The local neighbourhood is not a disc.** Within about 20 light years of Sol
+there are roughly a hundred stars, and they are spread through that volume in
+every direction. The galactic disc near Sol is on the order of a thousand light
+years thick, so at twenty light years there is no flattening to speak of: the
+nearest stars really do sit above and below as often as beside. Alpha Centauri
+is nearly sixty-one degrees *below* the celestial equator; 61 Cygni is
+thirty-nine degrees above it. A map that puts them both on a tabletop is not a
+simplification of the real arrangement, it is a different arrangement.
+
+**Trek's own maps are flat for a different reason.** The quadrant charts are
+drawn as a disc because at that scale the galaxy really is one: about a hundred
+thousand light years across and about a thousand thick, which is a ratio of a
+hundred to one. Flat is honest for a quadrant and dishonest for a sector.
+
+**Which of these places are real stars.** Several are, and the identifications
+are published rather than invented:
+
+| In the game | Real star | Distance | Declination |
+|---|---|---|---|
+| Vulcan | 40 Eridani A | 16.3 ly | −7° 39′ |
+| Alpha Centauri | Alpha Centauri | 4.37 ly | −60° 50′ |
+| Wolf 359 | Wolf 359 | 7.86 ly | +7° 01′ |
+| Tellar Prime | 61 Cygni | 11.4 ly | +38° 45′ |
+| Andoria | Epsilon Indi | 11.9 ly | −56° 47′ |
+| Vega Colony | Vega | 25.0 ly | +38° 47′ |
+| Beta Reticuli | Zeta Reticuli | 39 ly | −62° 30′ |
+
+The Vulcan identification is the strongest of them: Roddenberry co-signed a
+letter to *Sky & Telescope* in July 1991, with three astronomers, naming 40
+Eridani A as Vulcan's sun. The rest come from Geoffrey Mandel's *Star Trek Star
+Charts*, which is the closest thing the franchise has to a published atlas.
+
+**What the build takes from this, and what it does not.** It does not take the
+coordinates. The game's `x` and `y` are an authored layout — they were chosen so
+the sectors read clearly and so the travel times between neighbours are the ones
+the campaign is balanced around, and Rigel is 22 units away in this game against
+860 light years in the sky. Replacing them with astrometry would move every
+system, change every warp transit, and rebalance the whole campaign to buy
+accuracy nobody can see.
+
+What it takes is the **shape**: the map is given a third axis with a spread
+comparable to the other two, because that is what the real neighbourhood looks
+like, and because a sector map you can only look at from above is the one thing
+Star Trek Online's does that this one could not. Depth is assigned per sector
+rather than per star, so the political blocs sit at different heights and the
+map reads as a volume with structure in it instead of a scatter. Where a system
+has a real counterpart in the table above, the SIGN of its depth follows the
+real declination — Alpha Centauri below the plane, 61 Cygni above it — so the
+one thing that is free to be true is true.
+
+Sources: [Sky & Telescope — the 1991 letter identifying 40 Eridani A](https://skyandtelescope.org/astronomy-news/vulcan-40-eridani/),
+[Memory Beta — Star Trek Star Charts](https://memory-beta.fandom.com/wiki/Star_Trek:_Star_Charts),
+[SIMBAD astronomical database](https://simbad.u-strasbg.fr/simbad/),
+[NASA — the Milky Way's structure](https://science.nasa.gov/resource/the-milky-way-galaxy/)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

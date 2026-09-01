@@ -16,6 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { Game } from '../src/core/state.js';
+import {
+  SYSTEMS, systemDepth, distanceLy, REAL_DECLINATION,
+} from '../src/world/systems.data.js';
 import { Ship, FACINGS } from '../src/sim/ship.js';
 import { RNG } from '../src/core/rng.js';
 import { Character, CAREERS } from '../src/rules/character.js';
@@ -1008,5 +1011,76 @@ describe('every sound cue is reachable', () => {
     // losing her, with one way out. It was silent.
     assert.ok(/['"`]core_breach_warning['"`]/.test(UI_SRC),
       'the core breach warning is still never played');
+  });
+});
+
+// ================================================ the chart has a third axis
+
+describe('the sector map is a volume', () => {
+  test('the systems are not all on one plane', () => {
+    const zs = SYSTEMS.map((s) => systemDepth(s));
+    const spread = Math.max(...zs) - Math.min(...zs);
+    assert.ok(spread > 6, `the whole galaxy is ${spread.toFixed(1)} light years thick`);
+    const offPlane = zs.filter((z) => Math.abs(z) > 0.5).length;
+    assert.ok(offPlane > SYSTEMS.length * 0.7,
+      `${offPlane} of ${SYSTEMS.length} systems are off the plane`);
+  });
+
+  test('two systems in one sector are not stacked on each other', () => {
+    // The sector sets the height and the id sets a small offset inside it, so
+    // a sector reads as a group rather than as one dot.
+    const bySector = new Map();
+    for (const s of SYSTEMS) {
+      if (!bySector.has(s.sector)) bySector.set(s.sector, []);
+      bySector.get(s.sector).push(systemDepth(s));
+    }
+    for (const [sector, zs] of bySector) {
+      if (zs.length < 2) continue;
+      assert.equal(new Set(zs.map((z) => z.toFixed(4))).size, zs.length,
+        `two systems in ${sector} sit at exactly the same depth`);
+    }
+  });
+
+  test('depth is the same in every session, on every device', () => {
+    // The map is drawn from it and a save made on one build has to load into
+    // the same galaxy on the next, so this is a hash and never a random number.
+    for (const s of SYSTEMS) {
+      assert.equal(systemDepth(s), systemDepth(s.id), `${s.id} disagrees with itself`);
+      assert.ok(Number.isFinite(systemDepth(s)), `${s.id} has a depth of ${systemDepth(s)}`);
+    }
+    assert.equal(systemDepth('nowhere_at_all'), 0, 'an unknown system was given a height');
+    assert.equal(systemDepth(null), 0);
+  });
+
+  test('a real star sits on the side of the plane it really occupies', () => {
+    // Seven of these places have a published counterpart. The magnitude is
+    // authored; the sign is not.
+    for (const [id, dec] of Object.entries(REAL_DECLINATION)) {
+      const z = systemDepth(id);
+      if (dec === 0) { assert.equal(z, 0, `${id} should be on the plane`); continue; }
+      assert.equal(Math.sign(z), Math.sign(dec),
+        `${id}: declination ${dec} but depth ${z.toFixed(2)}`);
+    }
+  });
+
+  test('every system named in the declination table exists', () => {
+    for (const id of Object.keys(REAL_DECLINATION)) {
+      assert.ok(SYSTEMS.some((s) => s.id === id), `${id} is not a system in this game`);
+    }
+  });
+
+  test('the third axis does not change a single travel time', () => {
+    // The whole campaign is balanced on these distances, and the depth is an
+    // authored layout rather than astrometry — see docs/RESEARCH.md §12. This
+    // is the guard on somebody tidying `distanceLy` into three dimensions
+    // later and silently rebalancing the game.
+    for (const a of SYSTEMS) {
+      for (const b of SYSTEMS) {
+        if (a === b) continue;
+        const planar = Math.hypot(a.x - b.x, a.y - b.y);
+        assert.ok(Math.abs(distanceLy(a.id, b.id) - planar) < 1e-9,
+          `${a.id} -> ${b.id} is no longer a planar distance`);
+      }
+    }
   });
 });

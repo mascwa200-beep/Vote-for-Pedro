@@ -834,6 +834,24 @@ export function galaxyScreen(app) {
   root.append(wrap);
   app.galaxyCanvas = canvas;
 
+  // The chart has a third axis. An axis you cannot look along is decoration,
+  // so here are the two controls that move it — and the phrases that do the
+  // same thing, as everywhere else.
+  root.append(el('div', { class: 'chip-row' }, [
+    button('Tilt', tap(() => {
+      app.map?.setTilt((app.map.tilt ?? 0) > 0.02 ? 0 : 0.75);
+      app.needsRender = true;
+    }), {
+      color: 'blue',
+      say: (app.map?.tilt ?? 0) > 0.02 ? 'level the chart' : 'tilt the chart',
+      sub: (app.map?.tilt ?? 0) > 0.02 ? 'Back to plan view' : 'Look along the third axis',
+    }),
+    button('Rotate', tap(() => {
+      app.map?.setSpin((app.map.spin ?? 0) + 0.6);
+      app.needsRender = true;
+    }), { color: 'blue', say: 'rotate the chart', sub: 'Turn it about the vertical' }),
+  ]));
+
   const detail = el('div', { class: 'scroll', style: { flex: '0 0 auto', maxHeight: '52%' } });
   root.append(detail);
   app.galaxyDetail = detail;
