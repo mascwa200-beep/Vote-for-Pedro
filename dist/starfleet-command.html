@@ -27904,21 +27904,29 @@ class App {
     // Remembered so the console can be rebuilt when the state it shows changes.
     // Without this, throwing a warp switch set the factor and left the switch
     // drawn in its old position — the order worked and the console lied.
-    this.consoleOpen = { key, station };
+    //
+    // Only for the consoles that actually open one. Half the keys below are
+    // navigation: they change screen and return without a modal, and marking
+    // those as an open console left `consoleOpen` set with nothing to rebuild
+    // — so the next time anything marked the console dirty, the refresh in
+    // `render` called back in here and navigated the player to that screen
+    // again. Every order given after using Weapons Control teleported you to
+    // the tactical plot.
     const body = [];
     switch (key) {
-      case 'galaxy': this.go('galaxy'); return;
-      case 'tactical': this.go('tactical'); return;
-      case 'log': this.go('log'); return;
-      case 'captain': this.go('captain'); return;
-      case 'crew': this.go('crew'); return;
-      case 'ship': this.go('ship'); return;
-      case 'chair': this.go('chair'); return;
+      case 'galaxy': this.consoleOpen = null; this.go('galaxy'); return;
+      case 'tactical': this.consoleOpen = null; this.go('tactical'); return;
+      case 'log': this.consoleOpen = null; this.go('log'); return;
+      case 'captain': this.consoleOpen = null; this.go('captain'); return;
+      case 'crew': this.consoleOpen = null; this.go('crew'); return;
+      case 'ship': this.consoleOpen = null; this.go('ship'); return;
+      case 'chair': this.consoleOpen = null; this.go('chair'); return;
       case 'power': body.push(screens.powerPanel(this)); break;
       case 'shop': body.push(screens.machineShopPanel(this)); break;
       case 'comms':
         // Hailing is an ORDER, not a console read-out: it goes through the same
         // dispatch a typed "open a channel" does, so there is one path.
+        this.consoleOpen = null;
         this.executeOrder({ action: 'hail' }, 'hailing frequencies open');
         return;
       case 'science': {
@@ -27991,6 +27999,9 @@ class App {
         body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
         break;
     }
+    // Set here rather than at the top: everything above that navigates has
+    // already returned, so what is left is a console that is genuinely open.
+    this.consoleOpen = { key, station };
     this.showConsole(station?.label ?? 'Console', body);
   }
 
@@ -28226,6 +28237,8 @@ class App {
 
     const career = c.career;
     let line = '';
+    // A power that ends in a screen of its own rather than a confirmation.
+    let openAfter = null;
 
     switch (c.careerId) {
       case 'command': {
@@ -28279,10 +28292,14 @@ class App {
       }
       case 'diplomatic': {
         // Parley — they will hear you out whatever their doctrine says.
-        if (!eng) { audio.play('ui_deny'); return false; }
+        if (!eng || eng.over) { audio.play('ui_deny'); return false; }
         g.parleyForced = true;
         line = 'Channel forced open. They are listening whether they meant to or not.';
-        this.openHail(eng.hostiles[0]?.faction);
+        // Opened AFTER the announcement, not before it. `showMessage` replaces
+        // whatever modal is up, so opening the channel here meant the power's
+        // own confirmation dialog immediately closed the channel it had just
+        // forced open — the one thing the ability exists to do.
+        openAfter = () => this.openHail(eng.hostiles[0]?.faction);
         break;
       }
       case 'intelligence': {
@@ -28311,7 +28328,11 @@ class App {
     audio.play('ui_confirm');
     audio.play('computer_ack');
     haptic('confirm');
-    this.showMessage(career.signature, [line]);
+    // A power whose whole result is a screen of its own shows that instead of
+    // a dialog it would only have to close again. The line is in the log
+    // either way.
+    if (openAfter) openAfter();
+    else this.showMessage(career.signature, [line]);
     this.render();
     return true;
   }
@@ -28477,13 +28498,17 @@ class App {
       case 'course': {
         const r = g.setCourse(order.system, order.warp);
         if (r.ok) { audio.play('warp_engage'); haptic('warp'); audio.setAlertLevel('warp'); }
-        else audio.play('ui_deny');
+        // A refusal that is only a beep is a bug report waiting to happen: the
+        // order had a reason and the helm never said it. "We are under fire,
+        // Captain" is the difference between a game that ignored you and a
+        // crew that answered.
+        else { audio.play('ui_deny'); ack('helm', r.error ?? 'We cannot, Captain.'); }
         break;
       }
       case 'orbit': {
         const r = g.enterOrbit();
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
-        else audio.play('ui_deny');
+        else { audio.play('ui_deny'); ack('helm', r.error ?? 'We cannot, Captain.'); }
         break;
       }
       case 'break_orbit': {
