@@ -14143,6 +14143,12 @@ const EQUIVALENCES = [
   [/\badm\b/g, 'admiral'],
   [/\bens\b/g, 'ensign'],
   [/\bcpo\b/g, 'chief'],
+  // "The conn" is the watch, not the station. Rewriting it to "helm" — which
+  // is right for "Conn, ahead warp five" — turned "take the conn" into "take
+  // the helm", whereupon the station stripper removed the helm and left "take
+  // the": the whole bridge-shift feature was unreachable by the spelling most
+  // people use for it, while "take the con" worked perfectly.
+  [/\bthe conn\b/g, 'the con'],
   [/\bconn\b/g, 'helm'],
   [/\bnav\b/g, 'navigation'],
   [/\btac\b/g, 'tactical'],
@@ -15930,6 +15936,74 @@ const INTENTS = [
     build: () => ({ action: 'salvage' }),
   },
   // ------------------------------------------------------------------
+  // What the captain spends: the career signature and the locker.
+  //
+  // Both were buttons and only buttons. Every ability a bridge officer has
+  // could already be spoken — all eighteen of them — and the two things that
+  // belong to the captain personally could not be said at all.
+  // ------------------------------------------------------------------
+  {
+    id: 'signature',
+    // One power per career, so the phrasing covers all seven and the order
+    // fires whichever one is actually yours. A tactical captain who says
+    // "work a miracle" gets Called Shot, and the log says so — which is a
+    // better answer than "say again, Captain?".
+    help: 'Use your career signature — once per engagement',
+    phrases: [
+      'use my signature', 'signature power', 'captains prerogative',
+      'this is what i do', 'my move', 'now or never', 'time to earn it',
+      // Command — Take the Conn. Not by that name: "take the conn" is the
+      // order that hands the bridge to somebody else, and it has been that
+      // for far longer than this power has existed.
+      'all stations report ready', 'reset every station', 'look alive',
+      // Tactical — Called Shot.
+      'called shot', 'called shot on them', 'one shot one kill',
+      // Engineering — Miracle Worker.
+      'work a miracle', 'i need a miracle', 'miracle worker',
+      // Science — Insight.
+      'full spectrum analysis', 'show me everything', 'i see it now',
+      // Medical — Triage.
+      'triage', 'triage the wounded', 'get them back on their feet',
+      // Diplomatic — Parley.
+      'i want a parley', 'they will hear me out', 'parley with them',
+      // Intelligence — Prior Knowledge.
+      'prior knowledge', 'i know what they will do', 'we saw this coming',
+    ],
+    keywords: {
+      signature: 3, prerogative: 3, miracle: 2.6, triage: 3, parley: 2.6,
+      insight: 2.6, called: 1.6,
+    },
+    // The bridge-officer powers and the con handover share a lot of language
+    // with this, and both of them are more specific than it is.
+    veto: ['con', 'conn', 'pattern', 'evasive', 'brace', 'harmonics', 'tachyon'],
+    build: () => ({ action: 'signature' }),
+  },
+  {
+    id: 'device',
+    help: 'Break out a battery or a hull patch',
+    phrases: [
+      'shield battery', 'use the shield battery', 'discharge the shield battery',
+      'weapons battery', 'use the weapons battery',
+      'engine battery', 'use the engine battery',
+      'break out a hull patch', 'use a hull patch', 'emergency hull patch',
+      'crack open a battery', 'break out a battery', 'use a battery',
+      'get the batteries out', 'we have a patch for that',
+    ],
+    keywords: { battery: 3, batteries: 3 },
+    // Building a patch in the machine shop is a different order that shares
+    // the word, and rerouting power is a different order that shares the rest.
+    veto: ['fabricate', 'build', 'make me', 'reroute', 'divert'],
+    build: (c) => {
+      const t = c.text;
+      const device = /\bshield/.test(t) ? 'shield_battery'
+        : /\bweapon/.test(t) ? 'weapons_battery'
+          : /\bengine|\bimpulse/.test(t) ? 'engine_battery'
+            : /\bhull|\bpatch/.test(t) ? 'hull_patch'
+              : null;
+      return { action: 'device', device };
+    },
+  },
+  // ------------------------------------------------------------------
   // The gambit. Making someone answer who has no intention of answering.
   // ------------------------------------------------------------------
   {
@@ -17018,12 +17092,23 @@ function addressedTo(line, crewOrGame) {
     const esc = form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     // Leading: "Mr. Spock, scan it".
-    const lead = new RegExp(`^${hon}${esc}\\b[\\s,]*`, 'i');
-    if (lead.test(said)) {
-      const rest = said.replace(lead, '').trim();
+    const lead = new RegExp(`^${hon}${esc}\\b([\\s,]*)`, 'i');
+    const m = said.match(lead);
+    if (m) {
+      const rest = said.slice(m[0].length).trim();
+      // A post is also an ordinary English word, and at the front of a line it
+      // is more often half a compound noun than an address: "weapons battery"
+      // is a thing in the locker, not an order to the tactical officer to
+      // battery something. So an uncomma'd post has to leave a real order
+      // behind it — more than one word — before it counts as an address.
+      // A comma settles it either way, and a person's NAME at the front is
+      // never anything but an address, so neither of those is restricted.
+      const punctuated = m[1].includes(',');
+      const isPost = Object.hasOwn(BY_POST, form);
+      const enough = punctuated || !isPost || rest.split(/\s+/).length > 1;
       // "Spock" on its own is addressing somebody, not ordering them about,
       // and an empty order is not something the parser can do anything with.
-      if (rest) {
+      if (rest && enough) {
         return {
           officer: who.name ? who : null, station: who.station ?? null,
           order: bare(rest), form, leading: true,
@@ -31248,6 +31333,35 @@ class App {
         }
         break;
       }
+
+      case 'signature': {
+        // The captain's own power, spoken. `useSignature` announces it, opens
+        // the channel for a diplomat, and refuses with a reason for a tactical
+        // captain on an empty bridge — this only has to say what the refusal
+        // was, because a deny beep on its own is not an answer.
+        if (!this.useSignature()) {
+          const why = g.character?.signatureUsed
+            ? 'We have already played that card this engagement, Captain.'
+            : 'There is nothing to use it on, Captain.';
+          ack('computer', why);
+        }
+        break;
+      }
+
+      case 'device': {
+        if (!order.device) {
+          audio.play('ui_deny');
+          ack('engineering', 'Which one, Captain? A battery, or a hull patch?');
+          break;
+        }
+        const before = g.loadout.equipped.device.length;
+        this.useDevice(order.device);
+        if (g.loadout.equipped.device.length === before) {
+          ack('engineering', 'We are out of those, Captain.');
+        }
+        break;
+      }
+
       case 'away_team': {
         // This used to assemble a team and say it was standing by, and that was
         // the whole order — a landing party that never went anywhere. The five

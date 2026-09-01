@@ -110,6 +110,12 @@ const EQUIVALENCES = [
   [/\badm\b/g, 'admiral'],
   [/\bens\b/g, 'ensign'],
   [/\bcpo\b/g, 'chief'],
+  // "The conn" is the watch, not the station. Rewriting it to "helm" — which
+  // is right for "Conn, ahead warp five" — turned "take the conn" into "take
+  // the helm", whereupon the station stripper removed the helm and left "take
+  // the": the whole bridge-shift feature was unreachable by the spelling most
+  // people use for it, while "take the con" worked perfectly.
+  [/\bthe conn\b/g, 'the con'],
   [/\bconn\b/g, 'helm'],
   [/\bnav\b/g, 'navigation'],
   [/\btac\b/g, 'tactical'],

@@ -781,6 +781,91 @@ describe('an addressee is not allowed to eat the order', () => {
     assert.equal(o.action, 'hand_over_con');
     assert.ok(o.said.includes('spock'), o.said);
   });
+
+  test('"the conn" is the watch, not the helm', () => {
+    // A blanket rewrite turned every "conn" into "helm", which is right for
+    // "Conn, ahead warp five" and wrong for the order that hands over the
+    // ship: "take the conn" became "take the helm", the station stripper then
+    // removed the helm, and the line the parser scored was "take the". The
+    // entire bridge-shift feature was unreachable by the spelling most people
+    // use for it, while "take the con" worked perfectly.
+    for (const said of [
+      'take the conn', 'you have the conn', 'the conn is yours',
+      'mister spock, take the conn',
+    ]) {
+      assert.equal(parseText(said).action, 'hand_over_con', `"${said}"`);
+    }
+    assert.equal(parseText('i have the conn').action, 'take_con');
+    // And addressing the conn is still addressing the helm.
+    assert.equal(normalize('conn, come about').station, 'helm');
+  });
+
+  test('a post at the front of a compound noun is not an address', () => {
+    const g = new Game({ seed: 9n, crewMode: 'original' });
+    // "Weapons" is the tactical officer and it is also the first half of
+    // "weapons battery". Stripped as an address, the order that reached the
+    // parser was the single word "battery", which names no device at all.
+    const o = parseOrder('weapons battery', g);
+    assert.equal(o.action, 'device');
+    assert.equal(o.device, 'weapons_battery');
+
+    // A comma settles it, and so does a real order behind the post.
+    assert.equal(parseOrder('weapons, fire at will', g).addressee?.station, 'tactical');
+    assert.equal(parseOrder('helm come about', g).addressee?.station, 'helm');
+    // A name is never an ordinary word, so one word behind it is still an order.
+    const tos2 = new Game({ seed: 4n, crewMode: 'canon', crew: 'tos' });
+    assert.ok(parseOrder('spock report', tos2).addressee?.name?.includes('Spock'));
+  });
+});
+
+describe('the captain can say what the captain can tap', () => {
+  // Every bridge officer power could already be spoken. The two things that
+  // belong to the captain personally — the career signature and the devices in
+  // the locker — were buttons and only buttons, which the project's own rule
+  // says they may not be.
+
+  test('every career signature has a phrase that fires it', () => {
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    for (const said of [
+      'use my signature', 'signature power', 'this is what i do',
+      'all stations report ready', 'called shot', 'work a miracle',
+      'full spectrum analysis', 'triage the wounded', 'i want a parley',
+      'prior knowledge',
+    ]) {
+      assert.equal(parseOrder(said, g).action, 'signature', `"${said}"`);
+    }
+  });
+
+  test('and every device names itself', () => {
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    for (const [said, device] of [
+      ['shield battery', 'shield_battery'],
+      ['discharge the shield battery', 'shield_battery'],
+      ['weapons battery', 'weapons_battery'],
+      ['engine battery', 'engine_battery'],
+      ['use a hull patch', 'hull_patch'],
+      ['emergency hull patch', 'hull_patch'],
+    ]) {
+      const o = parseOrder(said, g);
+      assert.equal(o.action, 'device', `"${said}"`);
+      assert.equal(o.device, device, `"${said}"`);
+    }
+  });
+
+  test('and neither has taken an order that already existed', () => {
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    for (const [said, action] of [
+      ['take the conn', 'hand_over_con'],
+      ['patch the hull', 'fabricate'],
+      ['brace for impact', 'ability'],
+      ['evasive manoeuvres', 'ability'],
+      ['attack pattern alpha', 'ability'],
+      ['strip the wreck', 'salvage'],
+      ['force the channel', 'force_channel'],
+    ]) {
+      assert.equal(parseOrder(said, g).action, action, `"${said}"`);
+    }
+  });
 });
 
 // ============================================ who the captain is talking to

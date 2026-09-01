@@ -1587,6 +1587,35 @@ class App {
         }
         break;
       }
+
+      case 'signature': {
+        // The captain's own power, spoken. `useSignature` announces it, opens
+        // the channel for a diplomat, and refuses with a reason for a tactical
+        // captain on an empty bridge — this only has to say what the refusal
+        // was, because a deny beep on its own is not an answer.
+        if (!this.useSignature()) {
+          const why = g.character?.signatureUsed
+            ? 'We have already played that card this engagement, Captain.'
+            : 'There is nothing to use it on, Captain.';
+          ack('computer', why);
+        }
+        break;
+      }
+
+      case 'device': {
+        if (!order.device) {
+          audio.play('ui_deny');
+          ack('engineering', 'Which one, Captain? A battery, or a hull patch?');
+          break;
+        }
+        const before = g.loadout.equipped.device.length;
+        this.useDevice(order.device);
+        if (g.loadout.equipped.device.length === before) {
+          ack('engineering', 'We are out of those, Captain.');
+        }
+        break;
+      }
+
       case 'away_team': {
         // This used to assemble a team and say it was standing by, and that was
         // the whole order — a landing party that never went anywhere. The five

@@ -1059,6 +1059,74 @@ export const INTENTS = [
     build: () => ({ action: 'salvage' }),
   },
   // ------------------------------------------------------------------
+  // What the captain spends: the career signature and the locker.
+  //
+  // Both were buttons and only buttons. Every ability a bridge officer has
+  // could already be spoken — all eighteen of them — and the two things that
+  // belong to the captain personally could not be said at all.
+  // ------------------------------------------------------------------
+  {
+    id: 'signature',
+    // One power per career, so the phrasing covers all seven and the order
+    // fires whichever one is actually yours. A tactical captain who says
+    // "work a miracle" gets Called Shot, and the log says so — which is a
+    // better answer than "say again, Captain?".
+    help: 'Use your career signature — once per engagement',
+    phrases: [
+      'use my signature', 'signature power', 'captains prerogative',
+      'this is what i do', 'my move', 'now or never', 'time to earn it',
+      // Command — Take the Conn. Not by that name: "take the conn" is the
+      // order that hands the bridge to somebody else, and it has been that
+      // for far longer than this power has existed.
+      'all stations report ready', 'reset every station', 'look alive',
+      // Tactical — Called Shot.
+      'called shot', 'called shot on them', 'one shot one kill',
+      // Engineering — Miracle Worker.
+      'work a miracle', 'i need a miracle', 'miracle worker',
+      // Science — Insight.
+      'full spectrum analysis', 'show me everything', 'i see it now',
+      // Medical — Triage.
+      'triage', 'triage the wounded', 'get them back on their feet',
+      // Diplomatic — Parley.
+      'i want a parley', 'they will hear me out', 'parley with them',
+      // Intelligence — Prior Knowledge.
+      'prior knowledge', 'i know what they will do', 'we saw this coming',
+    ],
+    keywords: {
+      signature: 3, prerogative: 3, miracle: 2.6, triage: 3, parley: 2.6,
+      insight: 2.6, called: 1.6,
+    },
+    // The bridge-officer powers and the con handover share a lot of language
+    // with this, and both of them are more specific than it is.
+    veto: ['con', 'conn', 'pattern', 'evasive', 'brace', 'harmonics', 'tachyon'],
+    build: () => ({ action: 'signature' }),
+  },
+  {
+    id: 'device',
+    help: 'Break out a battery or a hull patch',
+    phrases: [
+      'shield battery', 'use the shield battery', 'discharge the shield battery',
+      'weapons battery', 'use the weapons battery',
+      'engine battery', 'use the engine battery',
+      'break out a hull patch', 'use a hull patch', 'emergency hull patch',
+      'crack open a battery', 'break out a battery', 'use a battery',
+      'get the batteries out', 'we have a patch for that',
+    ],
+    keywords: { battery: 3, batteries: 3 },
+    // Building a patch in the machine shop is a different order that shares
+    // the word, and rerouting power is a different order that shares the rest.
+    veto: ['fabricate', 'build', 'make me', 'reroute', 'divert'],
+    build: (c) => {
+      const t = c.text;
+      const device = /\bshield/.test(t) ? 'shield_battery'
+        : /\bweapon/.test(t) ? 'weapons_battery'
+          : /\bengine|\bimpulse/.test(t) ? 'engine_battery'
+            : /\bhull|\bpatch/.test(t) ? 'hull_patch'
+              : null;
+      return { action: 'device', device };
+    },
+  },
+  // ------------------------------------------------------------------
   // The gambit. Making someone answer who has no intention of answering.
   // ------------------------------------------------------------------
   {

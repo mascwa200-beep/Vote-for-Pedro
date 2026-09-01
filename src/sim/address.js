@@ -158,12 +158,23 @@ export function addressedTo(line, crewOrGame) {
     const esc = form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     // Leading: "Mr. Spock, scan it".
-    const lead = new RegExp(`^${hon}${esc}\\b[\\s,]*`, 'i');
-    if (lead.test(said)) {
-      const rest = said.replace(lead, '').trim();
+    const lead = new RegExp(`^${hon}${esc}\\b([\\s,]*)`, 'i');
+    const m = said.match(lead);
+    if (m) {
+      const rest = said.slice(m[0].length).trim();
+      // A post is also an ordinary English word, and at the front of a line it
+      // is more often half a compound noun than an address: "weapons battery"
+      // is a thing in the locker, not an order to the tactical officer to
+      // battery something. So an uncomma'd post has to leave a real order
+      // behind it — more than one word — before it counts as an address.
+      // A comma settles it either way, and a person's NAME at the front is
+      // never anything but an address, so neither of those is restricted.
+      const punctuated = m[1].includes(',');
+      const isPost = Object.hasOwn(BY_POST, form);
+      const enough = punctuated || !isPost || rest.split(/\s+/).length > 1;
       // "Spock" on its own is addressing somebody, not ordering them about,
       // and an empty order is not something the parser can do anything with.
-      if (rest) {
+      if (rest && enough) {
         return {
           officer: who.name ? who : null, station: who.station ?? null,
           order: bare(rest), form, leading: true,
