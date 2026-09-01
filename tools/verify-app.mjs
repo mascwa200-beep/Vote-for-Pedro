@@ -10,7 +10,7 @@
 //   NODE_PATH=/tmp/pw/node_modules node tools/verify-app.mjs
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync, openSync, statSync } from 'node:fs';
+import { mkdirSync, existsSync, openSync, statSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -2018,7 +2018,20 @@ try {
       });
     } catch { /* handled by the existsSync below */ }
 
+    // The package has to carry the game that is in the tree.
+    //
+    // The harness has always BOOTED the APK's payload and never asked whether
+    // it was the current one, so a run of commits that rebuilt the single-file
+    // build and not the package around it passed everything here and failed in
+    // CI, which does make the comparison. Catching it locally is the whole
+    // point of having a local harness.
     if (existsSync(extracted) && statSync(extracted).size > 1000) {
+      const inApk = readFileSync(extracted, 'utf8');
+      const current = readFileSync(join(ROOT, 'dist', 'starfleet-command.html'), 'utf8');
+      check('the committed APK carries the current build',
+        inApk === current,
+        inApk === current ? '' : 'rebuild it: ANDROID_HOME=... ./tools/build-apk.sh');
+
       const apkCtx = await browser.newContext({
         viewport: VIEWPORT, deviceScaleFactor: DPR, isMobile: true, hasTouch: true,
       });
