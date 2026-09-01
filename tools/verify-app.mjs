@@ -1172,7 +1172,11 @@ try {
     g.update(1 / 30);
     g.ship.restore?.();
     g.ship.crew = g.ship.maxCrew;
-    g.startCombat([new Ship('d7', { name: 'Klingon cruiser' })]);
+    // `relentless` so nobody breaks off. A hostile beaten to the point where
+    // it can be boarded is also a hostile about to run, and on a slow machine
+    // it was gone — fight resolved, nothing to board — before the order the
+    // harness types could reach it.
+    g.startCombat([new Ship('d7', { name: 'Klingon cruiser' })], { relentless: true });
     const before = g.availableAwayMissions().map((t) => t.id);
 
     // Beat it: shields flat, hull low, alongside.
@@ -1198,6 +1202,19 @@ try {
   // Ending the previous fight raises the after-action panel, and a modal
   // swallows the click on the order bar.
   await dismissModals(page);
+  // And put the hostile back where the check needs it. Dismissing a modal and
+  // typing a line take real time, and the clock does not stop for either.
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    const foe = g.engagement?.hostiles?.[0];
+    if (!foe) return;
+    for (const f of Object.keys(foe.shields)) foe.shields[f] = 0;
+    foe.hull = foe.maxHull * 0.2;
+    foe.fleeing = false;
+    foe.withdrawn = false;
+    foe.x = 200; foe.y = 0; foe.z = 0;
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+  });
   await page.fill('.orderbar input', 'board them');
   await page.click('.orderbar button.send');
   // Photographed BEFORE the clock runs on. The report is what the captain is
