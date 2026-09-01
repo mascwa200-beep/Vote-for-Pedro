@@ -14,6 +14,9 @@ import { namesFor } from '../sim/address.js';
 import { ROOMS, DECKS } from '../world/interiors.data.js';
 import { listBackups, downloadSave } from '../core/save.js';
 import { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } from '../sim/fabrication.js';
+import {
+  DIVISIONS, SPECIALITIES, ASSIGNMENTS, availableAssignments, dutySlots,
+} from '../sim/duty.js';
 import { SCENARIO as KOBAYASHI, GAMBIT_TIER } from '../missions/kobayashi.js';
 
 import { MODES } from '../core/state.js';
@@ -1011,6 +1014,71 @@ export function systemDetail(app, sys) {
 
 // ================================================================ CREW
 
+/**
+ * The rest of the crew, and where they are.
+ *
+ * The bridge has ten people with names. This is the other handful worth
+ * knowing — and it is where they visibly stop being a list: somebody out on a
+ * detail is not at the back of the bridge helping their station, and the panel
+ * says so rather than leaving it to be inferred from a number that changed.
+ */
+const DIVISION_LABEL = {
+  command: 'Command', operations: 'Operations', sciences: 'Sciences',
+};
+
+export function dutyPanel(app) {
+  const g = app.game;
+  const roster = g.dutyRoster ?? [];
+  if (!roster.length) return null;
+
+  const out = new Map();
+  for (const job of g.assignments ?? []) {
+    for (const id of job.team ?? []) out.set(id, job);
+  }
+
+  const nodes = [];
+  for (const division of DIVISIONS) {
+    const here = roster.filter((p) => p.division === division);
+    if (!here.length) continue;
+    nodes.push(el('h3', { text: DIVISION_LABEL[division] ?? division }));
+    for (const person of here) {
+      const job = out.get(person.id);
+      const doing = job
+        ? `${ASSIGNMENTS[job.assignmentId]?.name ?? 'a detail'} — ${Math.max(0, Math.round(job.hoursRemaining))}h`
+        : person.state === 'recovering' ? 'in sickbay'
+          : person.state === 'lost' ? 'lost' : 'aboard';
+      // One line each, the way In Memoriam does it. `.row` is styled only
+      // inside the tactical overlay, so using it here put the name and the
+      // rating hard against each other with no space between them —
+      // "Solene ThorneNavigator". Visible in a screenshot and in nothing else.
+      nodes.push(el('p', {
+        class: person.state === 'lost' ? 'danger' : 'muted',
+        text: `${person.name} — ${person.label} · ${doing}`,
+      }));
+    }
+  }
+
+  // What can be sent out, and the words that send it. Every button prints the
+  // phrase that does the same thing, which is the rule for all of them.
+  const slots = dutySlots(g);
+  const running = (g.assignments ?? []).length;
+  nodes.push(el('h3', { text: `Details — ${running} of ${slots} out` }));
+  for (const a of availableAssignments(g)) {
+    const already = (g.assignments ?? []).some((j) => j.assignmentId === a.id);
+    const hours = a.hours < 24 ? `${a.hours}h` : `${(a.hours / 24).toFixed(1)}d`;
+    const wants = SPECIALITIES[a.wants]?.label ?? a.wants;
+    nodes.push(button(a.name, tap(() => {
+      app.sendDetail(a.id);
+      app.render();
+    }, 'computer_ack'), {
+      color: already ? 'grey' : 'blue',
+      sub: already ? 'already under way' : `"send a ${a.name.toLowerCase()}" — ${hours}, wants a ${wants}`,
+    }));
+  }
+
+  return panel('Ship\u2019s Company', nodes);
+}
+
 export function crewScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'scroll' });
@@ -1025,6 +1093,9 @@ export function crewScreen(app) {
       ]);
     }),
   ]));
+
+  const duty = dutyPanel(app);
+  if (duty) root.append(duty);
 
   const lost = g.ledger.lostOfficers;
   if (lost.length) {

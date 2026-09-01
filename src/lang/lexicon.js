@@ -1048,6 +1048,58 @@ export const INTENTS = [
     build: () => ({ action: 'work_shop' }),
   },
   {
+    // The duty roster: who is aboard, and sending them somewhere.
+    //
+    // Two intents rather than one, because "who is out" and "send a party out"
+    // are different questions and answering the first with the second would be
+    // a button that does something other than what it says.
+    id: 'duty_roster',
+    help: 'Ask who is aboard and what they are doing',
+    // "Duty roster" deliberately NOT among these: the watch bill already owns
+    // that phrase and owns it correctly — the bridge watch IS a duty roster,
+    // and two intents fighting over a phrase means one of them loses at random.
+    // These are about the specialists and what they are away doing.
+    phrases: [
+      'who is aboard', 'who do we have aboard', 'the ship\u2019s specialists',
+      'the ships specialists', 'read me the personnel report',
+      'who is on assignment', 'who is out', 'what details are out',
+      'personnel report', 'specialist report', 'what parties are out',
+    ],
+    keywords: { specialist: 3, aboard: 2, personnel: 3, detail: 1.6, assignment: 2 },
+    build: () => ({ action: 'duty_roster' }),
+  },
+  {
+    id: 'assign_detail',
+    help: 'Send a working party out',
+    phrases: [
+      'send a survey detail', 'send a survey party', 'survey detail',
+      'send a working party', 'send a repair detail', 'hull working party',
+      'send a salvage party', 'salvage party', 'engine overhaul',
+      'sensor recalibration', 'torpedo workup', 'sickbay rotation',
+      'boarding drill', 'specimen collection', 'diplomatic attach\u00e9',
+      'assign a detail', 'detail a party',
+    ],
+    keywords: { send: 1.4, detail: 2.6, party: 2.2, assign: 2.4, survey: 1.8, overhaul: 2 },
+    build: (c) => {
+      const t = c.text;
+      // Which detail, from the words. The panel names them all; this catches
+      // the ones a captain would actually say out loud.
+      const named = [
+        [/\bsalvage\b/, 'salvage_party'],
+        [/\bsurvey\b/, 'survey_detail'],
+        [/\bspecimen|biolog/, 'specimen_collection'],
+        [/\bsensor|recalibrat/, 'sensor_recalibration'],
+        [/\bhull|plating\b/, 'hull_working_party'],
+        [/\bengine|intermix|overhaul\b/, 'engine_overhaul'],
+        [/\btorpedo|warhead\b/, 'torpedo_workup'],
+        [/\bsickbay|medical|infirmar/, 'sickbay_rotation'],
+        [/\bdiplomat|attach/, 'diplomatic_attache'],
+        [/\bboarding|repel\b/, 'boarding_drill'],
+      ].find(([re]) => re.test(t));
+      return { action: 'assign_detail', detail: named?.[1] ?? null };
+    },
+  },
+  {
     id: 'salvage',
     help: 'Strip the wreck',
     phrases: [
