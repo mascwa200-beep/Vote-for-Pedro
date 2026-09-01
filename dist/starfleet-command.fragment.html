@@ -1353,7 +1353,7 @@ document.addEventListener('visibilitychange', () => {
  * { x, y, scale } that the renderer reads each frame.
  */
 function attachPanZoom(canvas, view, opts = {}) {
-  const { minScale = 0.4, maxScale = 6, onTap = null } = opts;
+  const { minScale = 0.4, maxScale = 6, onTap = null, onUserView = null } = opts;
   const pointers = new Map();
   let lastDistance = 0;
   let moved = false;
@@ -1394,7 +1394,7 @@ function attachPanZoom(canvas, view, opts = {}) {
     if (pointers.size === 1) {
       const dx = next.x - prev.x;
       const dy = next.y - prev.y;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) { moved = true; onUserView?.(); }
       view.x += dx / view.scale;
       view.y += dy / view.scale;
     }
@@ -1402,6 +1402,7 @@ function attachPanZoom(canvas, view, opts = {}) {
 
     if (pointers.size === 2) {
       moved = true;
+      onUserView?.();
       const [a, b] = [...pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       if (lastDistance > 0) {
@@ -1428,6 +1429,7 @@ function attachPanZoom(canvas, view, opts = {}) {
   // Desktop convenience; harmless on touch.
   listen('wheel', (e) => {
     e.preventDefault();
+    onUserView?.();
     view.scale = Math.max(minScale, Math.min(maxScale, view.scale * (e.deltaY < 0 ? 1.1 : 0.9)));
   }, { passive: false });
 
@@ -12905,10 +12907,53 @@ class GalaxyMap {
     this.onSelect = null;
     this.selectedId = null;
     this.game = null;
+    // Until the player drives the chart themselves, it frames itself on what
+    // is actually in it. The fixed opening view was chosen against one canvas
+    // and wasted more than half of a tall phone's: the stars sat in a band
+    // across the middle with black above and below.
+    this.userView = false;
+    this.fitKey = '';
     attachPanZoom(canvas, this.view, {
       minScale: 1.6, maxScale: 26,
       onTap: (px, py) => this.handleTap(px, py),
+      onUserView: () => { this.userView = true; },
     });
+  }
+
+  /**
+   * Frame the whole chart in the canvas it has.
+   *
+   * Laying the chart over or spinning it changes the extent of what is drawn,
+   * so this reruns when the projection or the canvas does. `fitKey` is what
+   * says whether anything moved, because refitting on every frame would fight
+   * the pan handler for control of the view.
+   */
+  fitChart(width, height) {
+    const systems = this.game?.galaxy?.systems;
+    if (!systems?.length || !width || !height) return;
+
+    const key = `${width}x${height}:${this.tilt.toFixed(3)}:${this.spin.toFixed(3)}:${systems.length}`;
+    if (key === this.fitKey) return;
+    this.fitKey = key;
+
+    let lo = { u: Infinity, v: Infinity };
+    let hi = { u: -Infinity, v: -Infinity };
+    const p = { u: 0, v: 0, depth: 0 };
+    for (const s of systems) {
+      this.at(s, p);
+      lo = { u: Math.min(lo.u, p.u), v: Math.min(lo.v, p.v) };
+      hi = { u: Math.max(hi.u, p.u), v: Math.max(hi.v, p.v) };
+    }
+    const spanU = Math.max(1e-3, hi.u - lo.u);
+    const spanV = Math.max(1e-3, hi.v - lo.v);
+
+    // Margin for the things that hang off a system: the territory bubbles are
+    // wider than the stars in them, and a name is drawn under its dot.
+    const MARGIN = 1.3;
+    const scale = Math.min(width / (spanU * MARGIN), height / (spanV * MARGIN));
+    this.view.scale = Math.max(1.6, Math.min(26, scale));
+    this.view.x = -(lo.u + hi.u) / 2;
+    this.view.y = -(lo.v + hi.v) / 2;
   }
 
   /**
@@ -13023,6 +13068,7 @@ class GalaxyMap {
     this.game = game;
     const { ctx, width, height } = fitCanvas(this.canvas);
     ctx.clearRect(0, 0, width, height);
+    if (!this.userView) this.fitChart(width, height);
 
     ctx.save();
     ctx.translate(width / 2, height / 2);
@@ -13038,6 +13084,9 @@ class GalaxyMap {
     const chart = new Map();
     for (const s of g.systems) chart.set(s.id, this.at(s));
     const P = (id) => chart.get(id);
+
+    // Boxes of names already on the chart, so the next one can stand aside.
+    const labelled = [];
 
     // Charted lanes.
     ctx.strokeStyle = 'rgba(110,130,190,0.28)';
@@ -13213,8 +13262,32 @@ class GalaxyMap {
         const fs = 11 / this.view.scale;
         ctx.font = `${fs}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillStyle = visited ? 'rgba(255,220,180,0.9)' : 'rgba(180,180,200,0.55)';
-        ctx.fillText(visited || s.type !== 'anomaly' ? s.name : 'Unsurveyed', u, v + r * 2 + fs);
+        const text = visited || s.type !== 'anomaly' ? s.name : 'Unsurveyed';
+        const ly = v + r * 2 + fs;
+        // A name that would land on one already drawn is not drawn. Twenty
+        // systems in the Federation core all wanted the same forty pixels, and
+        // the result was "Vega Colony" written through "Starbase 11" written
+        // through "Rigel" — three names, none of them readable. The ones that
+        // matter are claimed first, below.
+        const half = ctx.measureText(text).width / 2;
+        // Padded, because two names that merely touch are as unreadable as
+        // two that overlap.
+        const pad = fs * 0.25;
+        const boxed = {
+          x0: u - half - pad, x1: u + half + pad,
+          y0: ly - fs - pad, y1: ly + fs * 0.3 + pad,
+        };
+        // Where you are, what you have selected and anywhere with something to
+        // do are drawn whatever else is there — those three are the reason a
+        // captain opened the chart.
+        const mustShow = here || s.id === this.selectedId || hasMission;
+        const clash = !mustShow && labelled.some((b) =>
+          boxed.x0 < b.x1 && boxed.x1 > b.x0 && boxed.y0 < b.y1 && boxed.y1 > b.y0);
+        if (!clash) {
+          labelled.push(boxed);
+          ctx.fillStyle = visited ? 'rgba(255,220,180,0.9)' : 'rgba(180,180,200,0.55)';
+          ctx.fillText(text, u, ly);
+        }
       }
     }
 

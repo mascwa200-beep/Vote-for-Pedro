@@ -1024,6 +1024,39 @@ try {
   check('and the chart has real depth in it, not one plane',
     tiltedChart.depths > tiltedChart.systems * 0.9, JSON.stringify(tiltedChart));
   await page.waitForTimeout(300);
+
+  // The chart has to USE the canvas it is given. The opening view was a fixed
+  // scale chosen against one window, and on a tall phone it put every star in
+  // a band across the middle with black above and below — more than half the
+  // chart area drawing nothing at all. This measures what fraction of the
+  // canvas the stars actually span, in both directions.
+  const chartFraming = await page.evaluate(() => {
+    const m = globalThis.__app.map;
+    const g = globalThis.__app.game;
+    const rect = m.canvas.getBoundingClientRect();
+    let lo = { u: Infinity, v: Infinity };
+    let hi = { u: -Infinity, v: -Infinity };
+    for (const s of g.galaxy.systems) {
+      const p = m.at(s);
+      const x = (p.u + m.view.x) * m.view.scale + rect.width / 2;
+      const y = (p.v + m.view.y) * m.view.scale + rect.height / 2;
+      lo = { u: Math.min(lo.u, x), v: Math.min(lo.v, y) };
+      hi = { u: Math.max(hi.u, x), v: Math.max(hi.v, y) };
+    }
+    return {
+      across: (hi.u - lo.u) / rect.width,
+      down: (hi.v - lo.v) / rect.height,
+      // And nothing may be off the edge, which is the failure mode a naive
+      // "make it bigger" fix would introduce.
+      inside: lo.u > -2 && lo.v > -2 && hi.u < rect.width + 2 && hi.v < rect.height + 2,
+      w: Math.round(rect.width), h: Math.round(rect.height),
+    };
+  });
+  check('the chart fills the canvas it is drawn in',
+    chartFraming.across > 0.7, JSON.stringify(chartFraming));
+  check('and nothing is drawn off the edge of it',
+    chartFraming.inside === true, JSON.stringify(chartFraming));
+
   await page.screenshot({ path: join(SHOTS, '15b-chart-tilted.png') });
 
   await page.fill('.orderbar input', 'rotate the chart');
