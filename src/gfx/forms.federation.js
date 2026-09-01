@@ -277,7 +277,10 @@ export const FEDERATION_FORMS = {
   compact(mb, p, b) {
     const wide = b.ratioBeam ?? 0.7;
     const high = b.ratioHeight ?? 0.19;
-    const bl = b.bodyLength ?? 0.94;
+    // The sweep adds its own displacement to the length, so the box is built
+    // shorter than the ship: 0.78 plus a 0.23 rake is the one unit every
+    // other hull here spans.
+    const bl = b.bodyLength ?? 0.78;
     const bh = b.bodyHeight ?? high * 0.86;
     const bw = b.bodyWidth ?? wide;
 

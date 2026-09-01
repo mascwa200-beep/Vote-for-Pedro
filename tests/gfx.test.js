@@ -1810,8 +1810,15 @@ describe('no two Federation classes are the same shape', () => {
         if (a >= b) continue;
         const pa = prints.get(a);
         const pb = prints.get(b);
+        // 0.2, raised from 0.12. Building every hull to its published beam and
+        // height pulls the fingerprints together — proportions that used to
+        // differ by accident now agree on purpose — so the margin has to come
+        // from real structural difference instead. The closest pair went to
+        // 0.146 on that change and is back at 0.239, because an Intrepid now
+        // has the slight secondary hull and high short nacelles it is known
+        // for and a Sovereign has no neck at all.
         const diff = pa.reduce((n, v, i) => n + Math.abs(v - pb[i]), 0);
-        if (diff < 0.12) same.push(`${a} and ${b} (${diff.toFixed(3)})`);
+        if (diff < 0.2) same.push(`${a} and ${b} (${diff.toFixed(3)})`);
       }
     }
     assert.deepEqual(same, [],

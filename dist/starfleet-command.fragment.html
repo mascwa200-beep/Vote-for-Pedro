@@ -5841,7 +5841,10 @@ const FEDERATION_FORMS = {
   compact(mb, p, b) {
     const wide = b.ratioBeam ?? 0.7;
     const high = b.ratioHeight ?? 0.19;
-    const bl = b.bodyLength ?? 0.94;
+    // The sweep adds its own displacement to the length, so the box is built
+    // shorter than the ship: 0.78 plus a 0.23 rake is the one unit every
+    // other hull here spans.
+    const bl = b.bodyLength ?? 0.78;
     const bh = b.bodyHeight ?? high * 0.86;
     const bw = b.bodyWidth ?? wide;
 
@@ -5994,12 +5997,15 @@ const FORMS = {
       });
     }
 
-    // The secondary hull, tapering aft.
+    // The secondary hull, tapering aft. `hullThick` is how heavy it is for the
+    // ship's height — an Intrepid's is famously slight, a Galaxy's is most of
+    // the vessel — and `hullReach` how far forward it runs under the saucer.
+    const thick = b.hullThick ?? 1;
     tube(mb, {
       origin: vec3(-0.5, hy, 0),
-      length: b.hullLength ?? 0.5 + sx * 0.85,
-      r0: b.hullR0 ?? high * 0.17,
-      r1: b.hullR1 ?? high * 0.23,
+      length: b.hullLength ?? 0.5 + sx * (b.hullReach ?? 0.85),
+      r0: b.hullR0 ?? high * 0.17 * thick,
+      r1: b.hullR1 ?? high * 0.23 * thick,
       segments: 12,
       color: p.hull,
     });
@@ -6428,14 +6434,14 @@ const BLUEPRINTS = {
   constitution_refit: { form: 'starfleet', length: 305, domeRatio: 0.52, domeFlat: 0.22, nacelleHigh: 0.3, pylonSweep: 0.08 },
   miranda: { form: 'rollbar', length: 278, neck: false },
   oberth: { form: 'twinhull', length: 120, lowerY: -0.06 },
-  excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, nacelleHigh: 0.34, pylonSweep: 0.02 },
+  excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, hullReach: 1.15, nacelleHigh: 0.46, nacelleWide: 0.68, pylonSweep: 0.02 },
   constellation: { form: 'quadnacelle', length: 260 },
   ambassador: { form: 'starfleet', length: 526, nacelleHigh: 0.3, pylonSweep: 0.08 },
   galaxy: { form: 'starfleet', length: 641, saucerStretch: 0.95, nacelleHigh: 0.4, nacelleWide: 0.86, pylonSweep: 0.14 },
   nebula: { form: 'podded', length: 442, saucerStretch: 0.95 },
-  intrepid: { form: 'starfleet', length: 345, saucerStretch: 1.12, nacelleHigh: 0.4, pylonSweep: 0.12 },
+  intrepid: { form: 'starfleet', length: 345, saucerStretch: 1.12, hullThick: 0.62, hullReach: 0.5, nacelleHigh: 0.52, nacelleWide: 0.66, nacelleLength: 0.44, pylonSweep: 0.12 },
   defiant: { form: 'compact', length: 171 },
-  sovereign: { form: 'starfleet', length: 685, saucerStretch: 1.2, domeRatio: 0.26, nacelleHigh: 0.34, pylonSweep: 0.22 },
+  sovereign: { form: 'starfleet', length: 685, saucerStretch: 1.34, domeRatio: 0.26, domeFlat: 0.08, neck: false, hullThick: 1.25, hullReach: 1.1, nacelleHigh: 0.4, nacelleWide: 0.92, nacelleLength: 0.62, pylonSweep: 0.3 },
   runabout: { form: 'compact', length: 23, segments: 12 },
 
   // ---- Klingon ----
