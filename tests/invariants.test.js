@@ -1422,3 +1422,162 @@ test('an enemy ship has a name, whoever fielded it', () => {
       `${call.ship} is not on the Starfleet list`);
   }
 });
+
+// =========================================== the same idea, one layer down
+
+describe('the game survives being called wrongly', () => {
+  // The order monkey in tools/verify-app.mjs gives every phrasing to a running
+  // app, which is the right test for "an order at the wrong moment". It cannot
+  // be the test for "a method with the wrong argument", because the parser
+  // never produces one — and every one of these methods is public, is called
+  // from a UI that can be mid-render, and several are reachable from a save
+  // file somebody edited.
+  //
+  // So: call them, with plausible arguments and with rubbish, in a shuffled
+  // order, thousands of times, and require the same two things the app
+  // requires. Nothing throws. Nothing breaks a rule.
+
+  /** Deterministic, so a failure names a sequence rather than a mood. */
+  function stream(seed) {
+    let s = seed >>> 0 || 1;
+    return () => {
+      s ^= s << 13; s >>>= 0;
+      s ^= s >> 17;
+      s ^= s << 5; s >>>= 0;
+      return s / 0x100000000;
+    };
+  }
+
+  const JUNK = [
+    undefined, null, NaN, Infinity, -Infinity, 0, -1, 1e9, '', 'nonsense',
+    {}, [], true, false, -0.5, '7', { id: 'nope' },
+  ];
+
+  test('no public call throws or breaks a rule, whatever it is handed', () => {
+    const rand = stream(0x9e3779b9);
+    const pick = (list) => list[Math.floor(rand() * list.length)];
+
+    const g = new Game({ seed: 31n, crewMode: 'original', difficulty: 'commander' });
+    const systems = g.galaxy.systems.map((s) => s.id);
+    const bodies = (g.galaxy.systems.find((s) => s.id === g.locationId)?.bodies ?? [])
+      .map((b) => b.id);
+    const rooms = ['bridge', 'sickbay', 'engineering', 'transporter', 'nowhere', ''];
+    const facings = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral', 'sideways'];
+    const subsystems = ['weapons', 'shields', 'engines', 'warpcore', 'transporter', 'wings'];
+
+    // Every call the UI can make, with the arguments the UI can make it with —
+    // and with rubbish, because a save file is a thing a person can edit.
+    const CALLS = [
+      () => g.setCourse(pick([...systems, ...JUNK]), pick([1, 6, 9, ...JUNK])),
+      () => g.enterOrbit(pick([...bodies, ...JUNK])),
+      () => g.breakOrbit(),
+      () => g.beamDown(),
+      () => g.beamUp(),
+      () => g.dock(),
+      () => g.hail(pick(['identify', 'warn', 'negotiate', 'threaten', ...JUNK])),
+      () => g.callForHelp(),
+      () => g.awayMission(pick(['boarding_action', 'derelict_search', 'colony_rescue', ...JUNK])),
+      () => g.availableAwayMissions(),
+      () => g.stripWreck(),
+      () => g.fabricate(pick([...JUNK, 'torpedoes'])),
+      () => g.workTheShop(pick([1, 8, ...JUNK])),
+      () => g.setAlert(pick(['red', 'yellow', 'normal', 'blue', ...JUNK])),
+      () => g.handOverCon(pick(['first_officer', 'helm', ...JUNK])),
+      () => g.takeCon(),
+      () => g.diagnostic(pick([1, 5, ...JUNK])),
+      () => g.startCombat([new Ship(pick(['d7', 'bird_of_prey']), { name: 'Fuzz' })]),
+      () => g.engagement?.setThrottle(pick([0, 0.5, 1, ...JUNK])),
+      () => g.engagement?.setHeading(pick([0, 180, 359, ...JUNK])),
+      () => g.engagement?.fireAll(pick(['all', 'beam', 'torpedo', ...JUNK])),
+      () => g.engagement?.targetSubsystem(pick([...subsystems, ...JUNK])),
+      () => g.engagement?.cycleTarget(),
+      () => g.engagement?.beginWarpOut(),
+      () => g.engagement?.end(pick(['victory', 'routed', 'escaped', ...JUNK])),
+      () => g.ship.reinforceShield(pick([...facings, ...JUNK])),
+      () => { g.ship.shieldsUp = pick([true, false]); },
+      () => g.ship.cloak(),
+      () => g.ship.decloak(),
+      () => g.ship.ejectCore(),
+      () => g.ship.damageSubsystem(pick([...subsystems, ...JUNK]), pick([0.2, 5, ...JUNK])),
+      () => g.ship.takeDamage(pick([50, 5000, ...JUNK]), { facing: pick(facings) }),
+      () => g.ship.repair(pick([10, 1000, ...JUNK])),
+      () => g.ship.power.set(pick(['weapons', 'shields', 'engines', ...JUNK]), pick([0, 50, 200, ...JUNK])),
+      () => g.walk.enter(pick(rooms)),
+      () => g.walk.step(
+        { forward: pick([1, 0, -1, ...JUNK]), turn: pick([0, 1, ...JUNK]) },
+        pick([1 / 30, 0, 10, ...JUNK]),
+      ),
+      () => g.walk.useExit(pick([...rooms, ...JUNK])),
+      () => g.walk.sit(pick([true, false])),
+      () => g.buildAwayTeam(),
+      () => g.surveyFeature(pick([...JUNK, 'feature0', 'feature1'])),
+      () => g.update(1 / 30),
+    ];
+
+    const threw = [];
+    const broke = new Set();
+    for (let i = 0; i < 4000; i++) {
+      const call = pick(CALLS);
+      try {
+        call();
+      } catch (err) {
+        threw.push(`call ${i}: ${err?.message ?? err}`);
+        if (threw.length > 3) break;
+      }
+      // A dead captain stops the sweep testing anything; put the ship back.
+      if (g.over) {
+        g.over = false;
+        g.overReason = null;
+        g.ship.restore();
+        g.ship.crew = g.ship.maxCrew;
+      }
+      for (const v of checkAll(g, OPTS)) broke.add(`${v.code} — ${v.text}`);
+    }
+
+    assert.deepEqual(threw, [], 'a public call threw');
+    assert.deepEqual([...broke], [], 'a public call left the simulation broken');
+  });
+});
+
+test('ejecting the core does not put a hull back together', () => {
+  // Found by the API fuzzer. `ejectCore` cleared `breaching` unconditionally,
+  // so a ship already at zero hull came out of it not destroyed, not breaching
+  // and not repairable — the one state `ship.zerohull.adrift` exists to forbid.
+  // The fight could then never end on 'destroyed' and the campaign carried on
+  // with a wreck the game did not know was a wreck.
+  const g = fight('d7');
+  g.ship.beginBreach(20);
+  g.ship.hull = 0;
+  assert.deepEqual(checkAll(g, OPTS), [], 'zero hull mid-breach is legal and was reported');
+
+  g.ship.ejectCore();
+  assert.equal(g.ship.destroyed, true, 'the ship came out of a breach at zero hull, intact');
+  assert.deepEqual(checkAll(g, OPTS), []);
+});
+
+test('ejecting the core with a hull left is still the way out', () => {
+  // The other half: the order has to keep working, or the fix above is just a
+  // way of losing the ship.
+  const g = fight('d7');
+  g.ship.hull = g.ship.maxHull * 0.4;
+  g.ship.beginBreach(20);
+  assert.equal(g.ship.ejectCore(), true);
+  assert.equal(g.ship.destroyed, false, 'ejecting the core killed a ship that was fine');
+  assert.equal(g.ship.breaching, false);
+  assert.equal(g.ship.subsystems.warpcore, 0);
+  assert.deepEqual(checkAll(g, OPTS), []);
+});
+
+test('a subsystem cannot be damaged to nonsense', () => {
+  // `takeDamage` clamps through a NaN-safe helper; `damageSubsystem` did raw
+  // arithmetic, and one non-finite write to a number the damage model, the
+  // power grid and the AI all read every tick is permanent.
+  const g = fight('d7');
+  for (const bad of [NaN, Infinity, -Infinity, undefined, null, 'lots', {}]) {
+    g.ship.damageSubsystem('engines', bad);
+    assert.ok(Number.isFinite(g.ship.subsystems.engines),
+      `damageSubsystem('engines', ${String(bad)}) left ${g.ship.subsystems.engines}`);
+    assert.ok(g.ship.subsystems.engines >= 0 && g.ship.subsystems.engines <= 1);
+  }
+  assert.deepEqual(checkAll(g, OPTS), []);
+});

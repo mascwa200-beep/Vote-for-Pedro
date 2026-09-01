@@ -3910,7 +3910,16 @@ class Ship {
 
   damageSubsystem(key, amount) {
     if (!(key in this.subsystems)) return;
-    this.subsystems[key] = Math.max(0, this.subsystems[key] - amount);
+    // Guarded the same way `repair` and `takeDamage` are, and for the same
+    // reason: a subsystem is a number between zero and one that the whole
+    // damage model, the power grid and the AI read every tick, and one
+    // non-finite write to it is permanent. `takeDamage` clamps through
+    // `clamp`, which is NaN-safe; this did raw arithmetic and did not.
+    //
+    // Found by the API fuzzer in tests/invariants.test.js, which calls every
+    // public method with rubbish precisely because a save file is a thing a
+    // person can edit and a computed damage figure is a thing that can go NaN.
+    this.subsystems[key] = clamp(this.subsystems[key] - clamp(amount, 0, 1), 0, 1);
     if (key === 'warpcore' && this.subsystems.warpcore <= 0.15 && !this.breaching) {
       this.beginBreach(this.subsystems.warpcore <= 0 ? 12 : 28);
     }
@@ -3945,6 +3954,16 @@ class Ship {
     this.subsystems.warpcore = 0;
     this.power.cap = Math.round(this.cls.powerCap * 0.45);
     this.power.normalize();
+
+    // Ejecting the core stops the antimatter going up. It does not put a hull
+    // back together.
+    //
+    // Clearing `breaching` unconditionally was a soft-lock: a ship already at
+    // zero hull came out of it not destroyed, not breaching and not repairable
+    // — the one state `ship.zerohull.adrift` exists to forbid — so the fight
+    // could never end on 'destroyed' and the campaign carried on with a wreck
+    // that the game did not know was a wreck. Found by the API fuzzer.
+    if (this.hull <= 0) this.destroy('hull failure with the core clear');
     return true;
   }
 
