@@ -272,9 +272,15 @@ test('a tour of duty: fight after fight, on one commission', () => {
         eng.setThrottle(0.35 + rand() * 0.65);
         // A captain who is losing breaks off, which is what the ladder is
         // designed around and what makes a tour last more than one fight.
-        // It also walks the "escaped" path and everything downstream of it
-        // without having to stage a withdrawal artificially.
-        if (g.ship.hullPct < 0.35 && eng.warpOutTimer <= 0) {
+        //
+        // One fight in every tour is also broken off on purpose, because a
+        // captain who is winning never triggers the clause above — and once
+        // the tour started awarding experience between engagements the
+        // captains stopped losing, so the "escaped" path and everything
+        // downstream of it went unwalked. As a per-tick roll this drowned the
+        // tour instead: a fight is thousands of ticks long, so even a
+        // one-in-a-thousand chance decided almost every engagement.
+        if ((g.ship.hullPct < 0.35 && eng.warpOutTimer <= 0) || (f === 5 && t === 900)) {
           eng.beginWarpOut();
           eng.evasive(true);
         }
@@ -341,6 +347,13 @@ test('a tour of duty: fight after fight, on one commission', () => {
         () => g.workTheShop(1),
         () => g.availableMissions(),
         () => g.setAlert('normal'),
+        () => g.awardXP(2500),
+        () => {
+          if (g.pendingFeats > 0) g.takeFeat('unshakeable');
+        },
+        () => {
+          if (g.progress.unspent > 0) g.spendSkill('beam_weapons');
+        },
       ];
       for (let i = 0; i < 8; i++) {
         pick(between)();
@@ -1680,6 +1693,17 @@ describe('the game survives being called wrongly', () => {
       },
       () => g.useAbility(pick([...JUNK, 'helm', 'tactical']), pick([...JUNK, 'fire_at_will', 'eject_core'])),
       () => g.useDevice(pick([...JUNK, 'shield_battery', 'hull_patch'])),
+
+      // Everything that used to live in the screen, now that it can be
+      // reached: the promotion ladder and both of its payoffs, the standing
+      // projects, and breaking off a course under way.
+      () => g.awardXP(pick([50, 1e6, ...JUNK])),
+      () => g.takeFeat(pick([...JUNK, 'unshakeable', 'improviser', 'ability_score']),
+        pick([null, ['command', 'daring'], ...JUNK])),
+      () => g.spendSkill(pick([...JUNK, 'sensors', 'leadership', 'beam_weapons'])),
+      () => g.buyProject(pick([...JUNK, 'federation', 'klingon']),
+        pick([...JUNK, 'fed_t1_torpedoes', 'rom_t3_cloak'])),
+      () => g.dropOutOfWarp(),
       () => g.crew.at(pick(['helm', 'science', ...JUNK])),
       () => g.crew.officers[0]?.injure(pick([0.5, 5, ...JUNK])),
 
