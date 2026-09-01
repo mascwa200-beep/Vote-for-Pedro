@@ -511,13 +511,41 @@ test('the shop works while the app is closed', () => {
   assert.equal(g.fabricationStatus, null, 'the job did not finish while we were away');
 });
 
-test('destroying a ship leaves stores behind', () => {
+test('destroying a ship leaves a wreck, and the wreck is worth stripping', () => {
+  // The hulk is not stripped automatically any more. It is left in space where
+  // the fight happened, because "strip the wreck" was an order that asked for
+  // no wreck, no fight and no cooldown, and stripping on a win made that order
+  // pure duplication of something the game had already done.
   const g = gameWith();
   const before = { ...g.stores };
   g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
   g.engagement.hostiles[0].destroyed = true;
   g.finishCombat('victory');
+
+  assert.ok(g.wreckHere, 'a destroyed ship left nothing adrift');
+  assert.deepEqual(g.stores, before, 'the wreck stripped itself');
+
+  const r = g.stripWreck();
+  assert.equal(r.ok, true, r.reason);
   assert.ok(g.stores.salvage > before.salvage, 'the wreck gave up nothing');
+
+  // And once. This is the exploit the order used to be.
+  const after = { ...g.stores };
+  const again = g.stripWreck();
+  assert.equal(again.ok, false, 'the same wreck was stripped twice');
+  assert.deepEqual(g.stores, after, 'stripping nothing still paid out');
+});
+
+test('a wreck does not follow the ship to the next system', () => {
+  const g = gameWith();
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  g.engagement.hostiles[0].destroyed = true;
+  g.finishCombat('victory');
+  assert.ok(g.wreckHere);
+
+  g.locationId = g.locationId === 'sol' ? 'vulcan' : 'sol';
+  assert.equal(g.wreckHere, null, 'the hulk was towed across the sector');
+  assert.equal(g.stripWreck().ok, false);
 });
 
 test('a trap has no way out that involves shooting', () => {

@@ -145,23 +145,36 @@ describe('the mixer is loud enough to hear', () => {
     const { engine, ctx } = bootedEngine();
     const quiet = [];
 
+    // Some cues are deliberately varied — the panel bleep picks a fresh pitch
+    // and level every time, because a single repeated note reads as an alarm
+    // rather than as a room full of instruments. Measuring one draw of a
+    // random cue tests one draw: this test failed about one run in thirty
+    // because the bottom of the bleep's level range sat just under the floor.
+    // Sampling many draws and keeping the QUIETEST is what actually asserts
+    // the property, which is that no bleep is ever inaudible.
+    const DRAWS = 40;
+
     for (const name of Object.keys(CUES)) {
       const bus = engine.buses[busFor(name)] ?? engine.buses.sfx;
-      const made = [];
+      let made = [];
+      let worst = Infinity;
       const realCreateGain = ctx.createGain;
-      ctx.createGain = () => { const g = realCreateGain(); made.push(g); return g; };
-      try { CUES[name](ctx, bus, {}); } catch { /* a cue that throws is another test */ }
-      ctx.createGain = realCreateGain;
+      for (let draw = 0; draw < DRAWS; draw++) {
+        made = [];
+        ctx.createGain = () => { const g = realCreateGain(); made.push(g); return g; };
+        try { CUES[name](ctx, bus, {}); } catch { /* a cue that throws is another test */ }
+        ctx.createGain = realCreateGain;
+        worst = Math.min(worst, made
+          .filter((g) => reaches(g, bus))
+          .reduce((m, g) => Math.max(m, Math.abs(g.gain.peak)), 0));
+      }
 
       // Only gains that actually reach the bus are amplitudes. `fmTone` builds
       // a gain node whose value is the modulation index — 340, 900, numbers
       // like that — and connects it to an oscillator's frequency AudioParam.
       // Counting those as loudness reads a cue as +55 dBFS and makes this
       // whole test pass while measuring nothing.
-      const voicePeak = made
-        .filter((g) => reaches(g, bus))
-        .reduce((m, g) => Math.max(m, Math.abs(g.gain.peak)), 0);
-      const peak = voicePeak * chainGain(engine, name);
+      const peak = worst * chainGain(engine, name);
       if (peak < AUDIBLE) quiet.push(`${name} peaks at ${peak.toFixed(3)}`);
     }
 

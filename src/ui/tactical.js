@@ -30,6 +30,20 @@ export class TacticalView {
     });
   }
 
+  /**
+   * Let go of the canvas.
+   *
+   * `main.js` has always called `this.tactical?.dispose?.()` when it swaps
+   * views; this class simply had no such method, so the optional call did
+   * nothing and the pointer handlers accumulated on a canvas that is reused
+   * for the life of the session.
+   */
+  dispose() {
+    this.view.detach?.();
+    this.onSelect = null;
+    this.lastShips = [];
+  }
+
   handleTap(px, py) {
     if (!this.onSelect) return;
     const { width, height } = this.canvas.getBoundingClientRect();

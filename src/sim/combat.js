@@ -10,7 +10,7 @@
 // character sheet, not to whether a phaser connects.
 
 import { emit } from '../core/events.js';
-import { Ship, FACINGS, inArc, facingForBearing, facingForDirection } from './ship.js';
+import { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } from './ship.js';
 import { chooseAction } from './ai.js';
 import { clamp, wrapDegrees, finite } from '../core/num.js';
 
@@ -89,12 +89,30 @@ export class Engagement {
     // hostile that could be routed would make the no-win scenario winnable by
     // flying — which is the one thing it must never be.
     this.relentless = opts.relentless === true;
+    // How many people were aboard when this started.
+    //
+    // Crew losses are permanent, so the standing deficit is the whole
+    // campaign's dead and not this battle's. Without a mark at the start,
+    // every fight reported every death that had ever happened.
+    this.crewAtStart = player?.crew ?? 0;
+    // Ships whose destruction has already been announced. A death is a
+    // one-time event and the sweep that finds it runs every tick.
+    this.mourned = new Set();
 
     this.placeCombatants();
   }
 
+  /**
+   * Everything still physically present.
+   *
+   * A ship that has broken off and gone to warp is NOT. It used to be: it kept
+   * being stepped, kept being clamped back inside the arena by holdTheArena,
+   * and so a hostile the log had just announced as gone came about at the
+   * boundary and flew back through the middle of the fight — still drawn, still
+   * solid, and no longer targetable, because `liveHostiles` had written it off.
+   */
   get allShips() {
-    return [this.player, ...this.allies, ...this.hostiles];
+    return [this.player, ...this.allies, ...this.hostiles.filter((s) => !s.withdrawn)];
   }
 
   /**
@@ -152,7 +170,10 @@ export class Engagement {
   // ---------------- orders ----------------
 
   setTarget(ship) {
-    if (ship && !ship.destroyed) {
+    // `validTarget` rather than a bare destroyed check: a hostile that has
+    // broken off and gone to warp is not destroyed either, and locking onto one
+    // pointed the guns and the camera at a ship that is no longer there.
+    if (this.validTarget(ship)) {
       this.target = ship;
       this.pushLog(`Target locked: ${ship.name}.`, 'tactical');
       emit('combat:target', ship);
@@ -166,9 +187,24 @@ export class Engagement {
     this.setTarget(live[(idx + 1) % live.length]);
   }
 
+  /**
+   * Aim for one system rather than the hull.
+   *
+   * Only a system that exists. "Target their bridge" is a thing a captain says
+   * and no ship in this game has a `bridge` subsystem, so the order set
+   * `targetedSubsystem = 'bridge'`, every shot asked to damage a key that was
+   * not in the table, `damageSubsystem` returned early — and the result was an
+   * order that removed ALL subsystem damage from the fight while reporting
+   * that it had been given.
+   */
   targetSubsystem(key) {
-    this.targetedSubsystem = key;
+    if (key && !SUBSYSTEM_KEYS.includes(key)) {
+      this.pushLog(`We have no firing solution on their ${key}, Captain.`, 'tactical');
+      return false;
+    }
+    this.targetedSubsystem = key ?? null;
     this.pushLog(key ? `Targeting ${key}.` : 'Targeting hull.', 'tactical');
+    return true;
   }
 
   // Every one of these goes through a NaN-safe guard rather than a bare
@@ -221,10 +257,26 @@ export class Engagement {
   // ---------------- firing ----------------
 
   /** Fire everything that bears on the current target. */
-  fireAll() {
-    if (!this.target || this.target.destroyed) return 0;
+  /**
+   * Open fire.
+   *
+   * @param {string} type 'all', or one of the weapon types — 'beam',
+   *        'cannon', 'torpedo'. The parser has always read this off the order
+   *        ("fire phasers" gives 'beam') and it was thrown away here, so every
+   *        order to fire fired everything: asking for phasers launched photon
+   *        torpedoes, and a captain holding torpedoes for one shot could not.
+   */
+  fireAll(type = 'all') {
+    if (!this.validTarget(this.target)) return 0;
+    const wanted = this.player.weapons.filter(
+      (w) => type === 'all' || type === undefined || w.type === type,
+    );
+    if (!wanted.length) {
+      this.pushLog(`We have no ${type} weapons, Captain.`, 'tactical');
+      return 0;
+    }
     let fired = 0;
-    for (const w of this.player.weapons) {
+    for (const w of wanted) {
       if (this.fireWeapon(this.player, w, this.target)) fired++;
     }
     if (!fired) this.pushLog('No weapons bear on the target.', 'tactical');
@@ -336,10 +388,56 @@ export class Engagement {
     return { hit: true, damage, crit, ...result };
   }
 
-  onDestroyed(ship, killer) {
+  /**
+   * A ship dies once, however it died.
+   *
+   * This used to be called from exactly one place — straight after a hit
+   * landed, on `if (target.destroyed)`. The trouble is that a hit never
+   * destroys anything: `takeDamage` takes the hull to zero and starts a warp
+   * core breach, and the ship is not flagged destroyed until that countdown
+   * runs out twenty seconds later, inside `Ship.update`. So the explosion, the
+   * sound, the `combat:destroyed` event and the log line fired only in the rare
+   * case of a ship being hit again while already breaching. Almost every kill
+   * in this game happened in complete silence.
+   *
+   * `reportDeaths` now sweeps for anything that died on this tick whatever
+   * killed it — the breach, a fire, a hull that finally gave, the last of the
+   * crew — and the set makes saying it twice impossible.
+   */
+  onDestroyed(ship, killer = null) {
+    if (!ship || this.mourned.has(ship)) return;
+    this.mourned.add(ship);
     this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, z: ship.z ?? 0, life: 1.6 });
     emit('combat:destroyed', { ship, killer, byPlayer: killer === this.player });
-    this.pushLog(`${ship.name} destroyed.`, 'tactical');
+    const cause = ship.destroyCause && ship.destroyCause !== 'destroyed'
+      ? ` — ${ship.destroyCause}` : '';
+    this.pushLog(`${ship.name} destroyed${cause}.`, 'tactical');
+  }
+
+  /** Everything that died since the last tick, reported once each. */
+  reportDeaths() {
+    for (const s of this.allShips) {
+      if (s.destroyed) this.onDestroyed(s, null);
+    }
+    // A ship that withdrew is out of `allShips`, and one that dies on the way
+    // out still died. Checked separately rather than by widening the sweep,
+    // because widening it would put wrecks back inside the arena clamp.
+    for (const s of this.hostiles) {
+      if (s.withdrawn && s.destroyed) this.onDestroyed(s, null);
+    }
+  }
+
+  /**
+   * Something you can actually shoot: present, alive, and still in this fight.
+   *
+   * A target reference outlives the ship it points at. That is what made
+   * auto-fire go quiet halfway through every battle — the guns kept their lock
+   * on a wreck and the `!this.target.destroyed` guard turned them off for the
+   * rest of the engagement, with no indication that anything had happened.
+   */
+  validTarget(ship) {
+    return !!ship && !ship.destroyed && !ship.withdrawn
+      && (this.hostiles.includes(ship) || this.allies.includes(ship));
   }
 
   // ---------------- step ----------------
@@ -349,6 +447,26 @@ export class Engagement {
     this.time += dt;
 
     for (const s of this.allShips) s.update(dt, this.rng);
+
+    // Whatever died on that step gets its explosion before anything else acts.
+    this.reportDeaths();
+
+    // The guns keep looking for something to shoot at.
+    //
+    // Without this the lock survives the ship: auto-fire held a dead target,
+    // failed its own `!destroyed` guard, and silently stopped firing for the
+    // rest of the battle. Re-acquiring is what a tactical officer does without
+    // being told, and it is the difference between a fight and a slideshow.
+    if (!this.validTarget(this.target)) {
+      const next = this.liveHostiles[0] ?? null;
+      if (next) {
+        this.target = next;
+        emit('combat:target', next);
+        this.pushLog(`Target destroyed. Re-acquiring: ${next.name}.`, 'tactical');
+      } else {
+        this.target = null;
+      }
+    }
 
     // Hostile and allied captains act.
     for (const s of this.liveHostiles) {
@@ -371,14 +489,30 @@ export class Engagement {
     this.updateProjectiles(dt);
     this.updateEffects(dt);
 
+    // Resolution. The player's own survival is decided FIRST.
+    //
+    // The warp-out countdown used to be checked ahead of it, so dying on the
+    // very tick the eight seconds ran out ended the fight as 'escaped' — with
+    // a destroyed ship. Nothing then took the ship away from you, because
+    // losing the ship hangs off the 'destroyed' outcome, and the campaign
+    // carried on with a wreck.
+    if (this.player.destroyed) return this.end('destroyed');
+
     // Disengagement.
     if (this.warpOutTimer > 0) {
-      this.warpOutTimer -= dt;
-      if (this.warpOutTimer <= 0) return this.end('escaped');
+      // The escape has to keep being possible for the whole eight seconds. It
+      // was checked once, at the order, and never again — so a core ejected
+      // mid-countdown, or a Tholian web closing around you, still got you to
+      // warp on a ship with no warp drive.
+      if (!this.canWarpOut || this.player.coreEjected
+        || this.player.subsystems.warpcore < 0.2) {
+        this.warpOutTimer = 0;
+        this.pushLog('We have lost the warp drive — we are not going anywhere.', 'engineering');
+      } else {
+        this.warpOutTimer -= dt;
+        if (this.warpOutTimer <= 0) return this.end('escaped');
+      }
     }
-
-    // Resolution.
-    if (this.player.destroyed) return this.end('destroyed');
     if (!this.liveHostiles.length) {
       // An empty board is a win only if you emptied it. Anyone who withdrew
       // under their own power was routed, not destroyed, and the ledger cares
@@ -406,9 +540,16 @@ export class Engagement {
       const dz = (p.target.z ?? 0) - (p.z ?? 0);
       const dist = Math.hypot(dx, dy, dz);
       if (dist < 26) {
-        const result = this.resolveHit(p.attacker, p.target, p.weapon,
-          p.attacker.distanceTo(p.target), p.subsystem);
-  emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y, z: p.z ?? 0 });
+        // A torpedo that has arrived has arrived.
+        //
+        // The range used here was the LAUNCHER's distance to the target at the
+        // moment of impact, not the torpedo's. Torpedoes fly for up to six
+        // seconds and both ships keep moving, so a shooter that had since
+        // drifted past the 1,200-unit torpedo range made `rangeFactor` return
+        // zero — and the torpedo arrived, exploded, and did nothing at all.
+        // Passing zero says what is true: the weapon is touching the hull.
+        const result = this.resolveHit(p.attacker, p.target, p.weapon, 0, p.subsystem);
+        emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y, z: p.z ?? 0 });
         p.dead = true;
         continue;
       }
@@ -431,7 +572,26 @@ export class Engagement {
     emit('combat:end', { outcome, engagement: this });
   }
 
+  /**
+   * Say something, once.
+   *
+   * The combat log holds sixty lines. `fireAll` reports "No weapons bear on
+   * the target" every time the trigger is pulled with the enemy outside an
+   * arc, which in a stern chase is thirty times a second — so a minute of
+   * manoeuvring flushed the entire log and the line that said a ship had blown
+   * up was gone before anybody could read it.
+   *
+   * A repeat of the line already at the bottom becomes a count on that line
+   * instead of a new one. Nothing is lost and nothing is drowned.
+   */
   pushLog(text, source = 'bridge') {
+    const last = this.log[this.log.length - 1];
+    if (last && last.text === text && last.source === source) {
+      last.repeats = (last.repeats ?? 1) + 1;
+      last.time = this.time;
+      emit('combat:log', last);
+      return;
+    }
     const entry = { text, source, time: this.time };
     this.log.push(entry);
     if (this.log.length > 60) this.log.shift();

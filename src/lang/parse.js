@@ -55,6 +55,14 @@ function extract(norm) {
   return {
     text,
     tokens,
+    // The line as it was typed, before the addressee was stripped off it.
+    //
+    // Some orders need the words normalisation removes. Science and
+    // engineering are station names as well as things you can ask for, so
+    // "science configuration" arrived as "configuration" and the one word that
+    // chose the power preset was gone; and an officer's name is the address, so
+    // an order handing them the con could not say who.
+    full: norm.full ?? text,
     station: norm.station,
     urgent: norm.urgent,
     negated: norm.negated,

@@ -110,7 +110,12 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
 
   // ---- Jem'Hadar ram ----
   if (ship.cls.ramsWhenDoomed && hullPct < 0.2) {
-    steerTo(ship, target.x, target.y);
+    // In three dimensions, because `distance` is measured in three. Steering
+    // in the plane at a target twenty degrees above you closes the horizontal
+    // gap and nothing else, so the 40-unit contact test was never satisfied: a
+    // doomed attack ship flew past, under, and out of the fight instead of
+    // doing the one thing its whole doctrine exists to do.
+    steerTo(ship, target.x, target.y, target.z ?? 0);
     ship.throttle = 1;
     if (distance < 40) {
       target.takeDamage(ship.maxHull * 0.35, { direction: target.directionFrom(ship), type: 'kinetic', rng });

@@ -267,7 +267,13 @@ export const CUES = {
       // enforce. A bed mixed under that floor is a bed nobody on a phone ever
       // hears, which is the complaint this whole audio pass started from — and
       // the bleeps were continuous on the show, not subliminal.
-      gain: 0.13 + Math.random() * 0.05,
+      //
+      // The FLOOR of the range is what has to clear the bar, not the middle of
+      // it. The ambience bus reaches the speaker at 1.52, so the audibility
+      // threshold of 0.2 is a cue gain of 0.132 — and this range used to start
+      // at 0.13, so the quietest few per cent of bleeps were inaudible and the
+      // mixer test failed at random about one run in thirty.
+      gain: 0.15 + Math.random() * 0.05,
       release: 0.04,
     });
     // Half of them are a pair, a step apart, which is what makes the bed sound
@@ -276,7 +282,7 @@ export const CUES = {
       fmTone(ctx, bus, {
         at: 0.06 + Math.random() * 0.05,
         carrier: base * (rising ? 1.34 : 0.76),
-        ratio: 3, index: 180, duration: 0.04, gain: 0.12, release: 0.04,
+        ratio: 3, index: 180, duration: 0.04, gain: 0.15, release: 0.04,
       });
     }
   },

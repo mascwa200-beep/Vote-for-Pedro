@@ -1367,14 +1367,26 @@ function attachPanZoom(canvas, view, opts = {}) {
     };
   };
 
-  canvas.addEventListener('pointerdown', (e) => {
+  // Every listener this attaches, so it can be taken off again. The canvas is
+  // a singleton that is MOVED between screens rather than rebuilt — a WebGL
+  // context is expensive and browsers cap how many can exist — so a view that
+  // attaches and is thrown away without detaching leaves its handlers on a
+  // node that outlives it. Five per fight, and every stale generation still
+  // fired its onTap into an engagement that no longer existed.
+  const attached = [];
+  const listen = (type, fn, opts) => {
+    canvas.addEventListener(type, fn, opts);
+    attached.push([type, fn, opts]);
+  };
+
+  listen('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 1) { moved = false; downAt = performance.now(); }
     lastDistance = 0;
   });
 
-  canvas.addEventListener('pointermove', (e) => {
+  listen('pointermove', (e) => {
     const prev = pointers.get(e.pointerId);
     if (!prev) return;
     const next = { x: e.clientX, y: e.clientY };
@@ -1410,15 +1422,22 @@ function attachPanZoom(canvas, view, opts = {}) {
       onTap(e.clientX - rect.left, e.clientY - rect.top);
     }
   };
-  canvas.addEventListener('pointerup', release);
-  canvas.addEventListener('pointercancel', release);
+  listen('pointerup', release);
+  listen('pointercancel', release);
 
   // Desktop convenience; harmless on touch.
-  canvas.addEventListener('wheel', (e) => {
+  listen('wheel', (e) => {
     e.preventDefault();
     view.scale = Math.max(minScale, Math.min(maxScale, view.scale * (e.deltaY < 0 ? 1.1 : 0.9)));
   }, { passive: false });
 
+  // The view is what callers have always used; `detach` is hung off it so
+  // nothing that already destructures the return value has to change.
+  view.detach = () => {
+    for (const [type, fn, opts] of attached) canvas.removeEventListener(type, fn, opts);
+    attached.length = 0;
+    pointers.clear();
+  };
   return view;
 }
 
@@ -2077,7 +2096,13 @@ const CUES = {
       // enforce. A bed mixed under that floor is a bed nobody on a phone ever
       // hears, which is the complaint this whole audio pass started from — and
       // the bleeps were continuous on the show, not subliminal.
-      gain: 0.13 + Math.random() * 0.05,
+      //
+      // The FLOOR of the range is what has to clear the bar, not the middle of
+      // it. The ambience bus reaches the speaker at 1.52, so the audibility
+      // threshold of 0.2 is a cue gain of 0.132 — and this range used to start
+      // at 0.13, so the quietest few per cent of bleeps were inaudible and the
+      // mixer test failed at random about one run in thirty.
+      gain: 0.15 + Math.random() * 0.05,
       release: 0.04,
     });
     // Half of them are a pair, a step apart, which is what makes the bed sound
@@ -2086,7 +2111,7 @@ const CUES = {
       fmTone(ctx, bus, {
         at: 0.06 + Math.random() * 0.05,
         carrier: base * (rising ? 1.34 : 0.76),
-        ratio: 3, index: 180, duration: 0.04, gain: 0.12, release: 0.04,
+        ratio: 3, index: 180, duration: 0.04, gain: 0.15, release: 0.04,
       });
     }
   },
@@ -2616,6 +2641,13 @@ class PowerGrid {
     // Rebalancing is not instant — the EPS grid takes a moment to settle.
     this.target = { ...this.levels };
     this.transferRate = 55; // power units per second
+    // Balanced is 50 to each of four subsystems, which is 200 — and plenty of
+    // hulls have a smaller grid than that. A Bird-of-Prey has a cap of 190, so
+    // it was built drawing 200 and was over its own budget from the first tick
+    // of its existence, with every `factor()` reading computed off a
+    // distribution the ship could not actually supply.
+    this.normalize();
+    this.levels = { ...this.target };
   }
 
   get total() {
@@ -2671,6 +2703,29 @@ class PowerGrid {
       excess = this.total - budget;
     }
     for (const s of SUBSYSTEMS) this.target[s] = Math.max(0, Math.round(this.target[s]));
+
+    // The protected subsystem is protected from being DRAINED, not exempt from
+    // the cap. With the donors emptied and the total still over budget it was
+    // simply left there — so after ejecting the warp core, which cuts the cap
+    // to 45 per cent, asking for 100 to weapons kept 100 to weapons and the
+    // whole point of the ejection penalty went away.
+    if (protectedSub && this.total > budget) {
+      const others = SUBSYSTEMS.reduce((n, s) => (s === protectedSub ? n : n + this.target[s]), 0);
+      this.target[protectedSub] = Math.max(0, Math.round(budget - others));
+    }
+
+    // Rounding four numbers up can put the total back over the cap by a couple
+    // of points, which is how a grid at 92 of 90 survived a function whose
+    // entire job is "keep the sum at or under cap". Shave the largest until it
+    // does not.
+    let over = this.total - budget;
+    while (over > 0) {
+      const biggest = SUBSYSTEMS.reduce((a, b) => (this.target[a] >= this.target[b] ? a : b));
+      if (this.target[biggest] <= 0) break;
+      const take = Math.min(over, this.target[biggest]);
+      this.target[biggest] -= take;
+      over -= take;
+    }
   }
 
   /** Ease actual levels toward target. Called every sim step. */
@@ -3394,6 +3449,9 @@ class Ship {
     this.shields = Object.fromEntries(FACINGS.map((f) => [f, this.maxShield]));
     this.shieldRegen = cls.shieldRegen / FACINGS.length;
     this.shieldsUp = true;
+    // Lowered deliberately, as opposed to shot out. Only the first stays down
+    // once the emitter is repaired.
+    this.shieldsDown = false;
 
     // ---- crew ----
     this.maxCrew = cls.crew;
@@ -3464,8 +3522,12 @@ class Ship {
     const prevMaxShield = this.maxShield;
     const prevMaxHull = this.maxHull;
 
-    this.maxHull = this.cls.hull * this.mods.hullMax;
-    this.maxShield = (this.cls.shields / FACINGS.length) * this.mods.shieldMax;
+    // `mod()` rather than `mods`, so a BUFF counts. Reading the raw table meant
+    // every temporary shieldMax or hullMax an officer ability granted was
+    // computed, reported in the UI, and then silently ignored by the only two
+    // numbers it was supposed to change.
+    this.maxHull = this.cls.hull * this.mod('hullMax');
+    this.maxShield = (this.cls.shields / FACINGS.length) * this.mod('shieldMax');
 
     if (prevMaxShield > 0) {
       const ratio = this.maxShield / prevMaxShield;
@@ -3493,6 +3555,10 @@ class Ship {
   addBuff(buff) {
     this.buffs = this.buffs.filter((b) => b.id !== buff.id);
     this.buffs.push(buff);
+    // A buff can raise a maximum, and the maxima are cached. Without this the
+    // ability took effect only the next time something else happened to
+    // recompute them, which for most of a fight is never.
+    this.recomputeDerived();
   }
 
   hasBuff(id) {
@@ -3620,11 +3686,14 @@ class Ship {
 
     this.power.update(dt);
 
-    // Buffs expire.
+    // Buffs expire. A buff that raised a maximum has to give it back, so the
+    // maxima are recomputed on the tick anything actually left.
     if (this.buffs.length) {
+      const before = this.buffs.length;
       this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
       for (const b of this.buffs) if (b.until !== undefined) b.until -= dt;
       this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
+      if (this.buffs.length !== before) this.recomputeDerived();
     }
 
     // Movement — yaw, then pitch, then integrate along the nose.
@@ -3660,12 +3729,33 @@ class Ship {
     this.y += this.velocity.y * dt;
     this.z = (this.z ?? 0) + this.velocity.z * dt;
 
+    // The emitter is back, so the shields are back — unless they were lowered
+    // on purpose, which is a different thing and stays that way.
+    if (!this.shieldsUp && !this.shieldsDown && !this.cloaked && this.subsystems.shields > 0.25) {
+      this.shieldsUp = true;
+      emit('ship:shields', { ship: this, up: true, reason: 'emitter restored' });
+    }
+
     // Shield regeneration — suppressed while cloaked or shields down.
     if (this.shieldsUp && !this.cloaked && this.subsystems.shields > 0.05) {
       const rate = this.shieldRegen * this.power.factor('shields')
         * this.subsystems.shields * this.mod('shieldRegen') * dt;
       for (const f of FACINGS) {
+        // Regeneration RAISES a shield. It must never lower one, and it did:
+        // the clamp was a flat Math.min against maxShield, so the twenty per
+        // cent overcharge that `reinforceShield` had just moved onto the bow
+        // was deleted on the very next tick. The order took charge off five
+        // facings and destroyed it — strictly worse than not giving it.
+        if (this.shields[f] >= this.maxShield) continue;
         this.shields[f] = Math.min(this.maxShield, this.shields[f] + rate);
+      }
+    }
+
+    // An overcharged facing bleeds back toward its normal ceiling rather than
+    // holding forever. Slow enough to survive the pass it was called for.
+    for (const f of FACINGS) {
+      if (this.shields[f] > this.maxShield) {
+        this.shields[f] = Math.max(this.maxShield, this.shields[f] - this.maxShield * 0.012 * dt);
       }
     }
 
@@ -3678,7 +3768,12 @@ class Ship {
 
     // Fires burn crew and hull until damage control gets to them.
     if (this.fires > 0) {
-      this.hull -= this.fires * 6 * dt;
+      // Floored, like every other write to the hull. This one was not, and it
+      // is the only place damage is applied outside takeDamage: a ship burning
+      // at zero hull kept subtracting, so hullPct went negative and every
+      // percentage read off it — the bars, the AI's break-off threshold, the
+      // condition line — read nonsense until the breach timer finally ran out.
+      this.hull = Math.max(0, this.hull - this.fires * 6 * dt);
       if (rng && rng.chance(0.4 * dt)) this.crew = Math.max(0, this.crew - 1);
       // Auxiliary power runs damage control.
       const control = 0.06 * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
@@ -3804,6 +3899,11 @@ class Ship {
     if (key === 'warpcore' && this.subsystems.warpcore <= 0.15 && !this.breaching) {
       this.beginBreach(this.subsystems.warpcore <= 0 ? 12 : 28);
     }
+    // Losing the emitter drops the shields. Getting it back has to raise them
+    // again, and nothing did — passive repair walked `subsystems.shields` from
+    // zero to a clean 1.0 over ten minutes and left `shieldsUp` false forever,
+    // so one hit on the shield generator cost you shields for the rest of the
+    // commission. `shieldsDown` remembers whether it was the captain's doing.
     if (key === 'shields' && this.subsystems.shields <= 0.05) this.shieldsUp = false;
   }
 
@@ -3930,6 +4030,12 @@ class Ship {
       crew: this.crew, injured: this.injured,
       subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
       fires: this.fires, coreEjected: this.coreEjected, mods: this.mods,
+      // A breach in progress is state, not decoration. Left out, a save taken
+      // during the twenty seconds you have to eject the core came back as a
+      // ship sitting at zero hull with no countdown running and no way to die
+      // — undamaged by anything that followed, and never destroyed.
+      breaching: this.breaching, breachTimer: this.breachTimer,
+      destroyed: this.destroyed, destroyCause: this.destroyCause ?? null,
       power: this.power.save(),
     };
   }
@@ -3949,7 +4055,15 @@ class Ship {
       crew: data.crew, injured: data.injured ?? 0,
       torpedoes: data.torpedoes ?? s.torpedoes, antimatter: data.antimatter ?? 100,
       fires: data.fires ?? 0, coreEjected: data.coreEjected ?? false,
+      breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
+      destroyed: data.destroyed === true,
+      destroyCause: data.destroyCause ?? null,
     });
+    // A record written before a breach was saved, restored onto a hull that is
+    // already gone, would load as the very thing the invariant checker calls
+    // `ship.zerohull.adrift` — dead, not dying, and on the board forever. Give
+    // it the countdown it should have had.
+    if (s.hull <= 0 && !s.destroyed && !s.breaching) s.beginBreach();
     // Shield migration, from four facings to six.
     //
     // A save written before the third axis existed has no dorsal or ventral
@@ -4163,6 +4277,20 @@ class TacticalView {
       minScale: 0.08, maxScale: 1.6,
       onTap: (px, py) => this.handleTap(px, py),
     });
+  }
+
+  /**
+   * Let go of the canvas.
+   *
+   * `main.js` has always called `this.tactical?.dispose?.()` when it swaps
+   * views; this class simply had no such method, so the optional call did
+   * nothing and the pointer handlers accumulated on a canvas that is reused
+   * for the life of the session.
+   */
+  dispose() {
+    this.view.detach?.();
+    this.onSelect = null;
+    this.lastShips = [];
   }
 
   handleTap(px, py) {
@@ -7026,6 +7154,8 @@ class TacticalView3D {
     this._model = mat4();
     this._pos = vec3();
     this._quat = quat();
+    // Scratch for the normal matrix; see the note in firstperson.js.
+    this._normal = new Float64Array(9);
     this._nose = vec3();
     this._eyeTmp = vec3();
     this._look = vec3();
@@ -7446,7 +7576,7 @@ class TacticalView3D {
       compose(this._pos, this._quat, b.radius, this._model);
       this.renderer.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: b.emissive,
         tint: b.tint,
         // Scenery is meant to be far away. Fogging it against a falloff tuned
@@ -7465,7 +7595,7 @@ class TacticalView3D {
     compose(this.eye(), quat(), 1, this._model);
     this.renderer.draw('stars', stars, {
       model: this._model,
-      normalMatrix: normalMatrix(this._model),
+      normalMatrix: normalMatrix(this._model, this._normal),
       emissive: 1,
       tint: [1, 1, 1],
       // The sky is not a distant object in the scene, it is the backdrop. It
@@ -7482,7 +7612,7 @@ class TacticalView3D {
     identity(this._model);
     this.renderer.draw('grid', gridMesh(), {
       model: this._model,
-      normalMatrix: normalMatrix(this._model),
+      normalMatrix: normalMatrix(this._model, this._normal),
       emissive: 1,
       alpha: 0.55,
       tint: [1, 1, 1],
@@ -7503,7 +7633,7 @@ class TacticalView3D {
 
     this.renderer.draw(`hull:${ship.classId}:${ship.faction}`, mesh, {
       model: this._model,
-      normalMatrix: normalMatrix(this._model),
+      normalMatrix: normalMatrix(this._model, this._normal),
       tint,
       alpha: ship.cloaked ? 0.22 : 1,
     });
@@ -7516,7 +7646,7 @@ class TacticalView3D {
       this._model[5] = Math.abs(alt);      // stretch the unit line to the drop
       this.renderer.draw('dropline', dropLineMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         alpha: 0.4,
         tint: [1, 1, 1],
@@ -7532,7 +7662,7 @@ class TacticalView3D {
       const p = paletteFor(ship.faction);
       this.renderer.draw('shield', shieldMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         alpha: 0.04 + 0.07 * (ship.shieldPct ?? 0),
         tint: p.glow,
@@ -7554,7 +7684,7 @@ class TacticalView3D {
       const p = paletteFor(e.faction);
       this.renderer.draw('beam', beamMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         alpha: clamp(e.life * 2.4, 0, 0.9),
         tint: p.glow,
@@ -7565,7 +7695,7 @@ class TacticalView3D {
       compose(vec3(p.x, p.z ?? 0, p.y), quat(), 9, this._model);
       this.renderer.draw('torpedo', torpedoMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         tint: [1, 1, 1],
       });
@@ -7577,7 +7707,7 @@ class TacticalView3D {
       compose(vec3(e.x, e.z ?? 0, e.y), quat(), 30 + age * 130, this._model);
       this.renderer.draw('explosion', explosionMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         alpha: 1 - age,
         tint: [1, 1, 1],
@@ -9736,7 +9866,7 @@ __define("src/ui/firstperson.js", function (__exports, __require) {
 // The order matters and so does the depth range: clearing depth between passes
 // instead would let the forward bulkhead paint over the screen.
 
-const { vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project, quatFromTo, quatAxisAngle } = __require("src/gfx/math.js");
+const { vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project, quatFromTo, quatAxisAngle, quatFromEuler } = __require("src/gfx/math.js");
 const { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } = __require("src/gfx/room.js");
 const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME } = __require("src/gfx/scene.js");
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
@@ -9790,6 +9920,12 @@ class FirstPersonView {
     this._at = vec3();
     this._pos = vec3();
     this._quat = quat();
+    // Scratch for the normal matrix. `normalMatrix` allocates a fresh
+    // Float64Array when it is not given somewhere to write, and it is called
+    // once per draw call — so the one part of this renderer documented as
+    // allocation-free was producing nine doubles of garbage per hull, per
+    // frame. The uniform is uploaded synchronously, so one buffer is safe.
+    this._normal = new Float64Array(9);
     this._nose = vec3();
     this._screenVP = mat4();
     // How far the warp field has streamed past. Wraps every WARP_LENGTH, which
@@ -10205,7 +10341,7 @@ class FirstPersonView {
       compose(this._pos, along, 1, this._model);
       r.draw('warp', warpfield(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
@@ -10215,7 +10351,7 @@ class FirstPersonView {
       compose(eye, quat(), 1, this._model);
       r.draw('stars', starfield(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
@@ -10232,7 +10368,7 @@ class FirstPersonView {
       compose(this._pos, this._quat, body.radius, this._model);
       r.draw(`world:${body.kind}`, worldMesh(body.kind, body.ordinal ?? 0), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: emisOf(0),
         tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
@@ -10243,7 +10379,7 @@ class FirstPersonView {
       compose(this._pos, this._quat, body.radius, this._model);
       r.draw(`limb:${body.kind}`, limbMesh(body.kind), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         tint: tintOf([1, 1, 1]),
         alpha: 0.8,
@@ -10269,7 +10405,7 @@ class FirstPersonView {
         compose(this._pos, quat(), b.radius, this._model);
         r.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
           model: this._model,
-          normalMatrix: normalMatrix(this._model),
+          normalMatrix: normalMatrix(this._model, this._normal),
           emissive: emisOf(b.emissive),
           tint: tintOf(b.tint),
           fogFar: 90000,
@@ -10282,12 +10418,28 @@ class FirstPersonView {
     // longer needs to be a separate screen: the enemy is ON the viewer.
     if (eng) {
       for (const s of [...eng.hostiles, ...eng.allies]) {
-        if (!s || s.destroyed) continue;
+        // A ship that has gone to warp is not out there any more.
+        if (!s || s.destroyed || s.withdrawn) continue;
         this._pos[0] = s.x; this._pos[1] = s.z ?? 0; this._pos[2] = s.y;
-        compose(this._pos, quat(), hullScale(s.classId), this._model);
+        // Pointed where it is actually going.
+        //
+        // This passed a bare `quat()` — the identity — so every hostile and
+        // ally on the main viewer faced the same fixed direction no matter what
+        // it was doing. A Bird-of-Prey could make a firing run straight across
+        // the screen without ever appearing to turn, which is the single most
+        // obvious thing wrong with looking out of the window during a fight.
+        // The tactical plot has always oriented its hulls correctly; the
+        // viewscreen simply never did.
+        quatFromEuler(
+          -(s.pitch ?? 0) * Math.PI / 180,
+          -(s.heading ?? 0) * Math.PI / 180,
+          (s.roll ?? 0) * Math.PI / 180,
+          this._quat,
+        );
+        compose(this._pos, this._quat, hullScale(s.classId), this._model);
         r.draw(`hull:${s.classId}:${s.faction}`, hullMesh(s.classId, s.faction), {
           model: this._model,
-          normalMatrix: normalMatrix(this._model),
+          normalMatrix: normalMatrix(this._model, this._normal),
           tint: tintOf([1, 1, 1]),
           emissive: emisOf(0),
           alpha: s.cloaked ? 0.22 : 1,
@@ -10302,7 +10454,7 @@ class FirstPersonView {
     const m = roomMeshes(room.id);
     if (!m) return;
     compose(vec3(0, 0, 0), quat(), 1, this._model);
-    const nm = normalMatrix(this._model);
+    const nm = normalMatrix(this._model, this._normal);
     // Rooms are 10 metres across, not 3,000 — the tactical falloff would fog a
     // bulkhead you are standing next to.
     this.renderer.draw(`room:${room.id}`, m.solid, {
@@ -10351,7 +10503,7 @@ class FirstPersonView {
       compose(this._pos, this._quat, 1, this._model);
       this.renderer.draw(`crew:${st.crew}:${st.mounted}`, officerMesh(st.crew, st.mounted), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         fogFar: 1e6,
       });
     }
@@ -12621,10 +12773,20 @@ class Officer {
     for (const k of Object.keys(this.cooldowns)) {
       if (this.cooldowns[k] > 0) this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
     }
-    if (this.injured && this.injurySeverity > 0) {
-      this.injurySeverity = Math.max(0, this.injurySeverity - dt * 0.02);
-      if (this.injurySeverity <= 0) this.injured = false;
-    }
+    // One recovery rule, not two.
+    //
+    // This used to heal at `dt * 0.02`, which is a full recovery in fifty
+    // seconds of sitting on the bridge — while `recover(hours)` says the same
+    // injury takes 120 hours. The campaign-time sickbay could therefore never
+    // have an effect, because the injury was always gone before the app was
+    // closed, and an officer hurt in a battle was back at their post before the
+    // wreck had finished burning. A casualty that heals itself in under a
+    // minute is not a casualty.
+    //
+    // Simulation seconds are converted to ship hours and handed to the one
+    // rule that owns this. Getting hurt now costs you that officer until time
+    // passes or the ship docks.
+    this.recover(dt / 3600);
   }
 
   /**
@@ -13838,7 +14000,14 @@ const INTENTS = [
     // the extracted elevation is the only thing that identifies it.
     mustHave: ['elevation'],
     requires: ['elevation'],
-    build: (c) => ({ action: 'pitch', value: c.elevation ?? 0 }),
+    build: (c) => ({
+      action: 'pitch',
+      value: c.elevation ?? 0,
+      // A named angle is an attitude to come to. A bare "climb" is a step from
+      // wherever the nose is now, which is what the button does and what makes
+      // saying it twice mean twice as much.
+      relative: (c.elevation ?? 0) !== 0 && !/\d/.test(c.text),
+    }),
   },
   {
     id: 'turn',
@@ -14053,8 +14222,14 @@ const INTENTS = [
     ],
     keywords: { posture: 3, configuration: 2.5, preset: 3, distribution: 2, stance: 2.5 },
     build: (c) => {
-      const t = c.text;
-      const preset = /\battack\b|\bcombat\b|\boffensive\b/.test(t) ? 'attack'
+      // The FULL line, not the normalised one. Science and engineering are
+      // station names, so "science configuration" had the one word that picks
+      // the preset stripped off the front as an address and arrived here as
+      // "configuration" — which fell through to balanced. The same order given
+      // as "Science, attack posture" still reads as attack, because attack is
+      // tested first and an addressee never changes what was ordered.
+      const t = c.full ?? c.text;
+      const preset = /\battack\b|\bcombat\b|\boffensive\b|\bbattle\b/.test(t) ? 'attack'
         : /\bdefense\b|\bdefensive\b/.test(t) ? 'defense'
         : /\bspeed\b|\bfast\b|\brun\b/.test(t) ? 'speed'
         : /\bscience\b|\bscan\b|\bsensor\b/.test(t) ? 'science'
@@ -14409,6 +14584,92 @@ const INTENTS = [
       // same way round.
       sit: !/\b(?:stand|get up|leave|out of|on my feet)\b/.test(c.text),
     }),
+  },
+  {
+    // Handing the con over is the single most-repeated piece of business on
+    // the bridge, and the three orders here are separated from each other by
+    // one pronoun. "You have the con", "I have the con" and "who has the con"
+    // share every other word in the sentence, so the pronoun does all the work
+    // and each intent vetoes the other two on it.
+    id: 'hand_over_con',
+    help: 'You have the con / Mr. Spock, take the con',
+    phrases: [
+      'you have the con', 'you have the conn', 'take the con', 'take the conn',
+      'the con is yours', 'you have the bridge', 'take the bridge',
+      'you have the watch', 'take the watch', 'stand the watch',
+      'hand over the con', 'the bridge is yours', 'relieve me',
+      'mind the store', 'she has the con', 'he has the con',
+      // Addressing an officer by rank strips the pronoun with it: "Number One,
+      // you have the con" normalises down to "have the con", and without these
+      // the most natural way to say the order is the one that does not work.
+      'have the con', 'have the conn', 'have the bridge', 'have the watch',
+    ],
+    keywords: { con: 3, conn: 3, watch: 2, bridge: 1.4, relieve: 2.2 },
+    // "me" is deliberately absent: "relieve me" is this order, and it is the
+    // way a tired captain actually says it.
+    veto: ['i', 'my', 'mine', 'who', 'which', 'give'],
+    // The whole line, so the officer named in it can be found against the
+    // actual roster — the lexicon does not know who is aboard.
+    // The line as it was actually typed, not the normalised one — normalising
+    // strips the address, and the address is the name of the officer being
+    // handed the ship.
+    build: (c) => ({ action: 'hand_over_con', said: c.full ?? c.text }),
+  },
+  {
+    id: 'take_con',
+    help: 'I have the con',
+    phrases: [
+      'i have the con', 'i have the conn', 'i have the bridge',
+      'i will take the con', 'i am taking the con', 'i have the watch',
+      'give me the con', 'the con is mine', 'i am taking the bridge',
+      'i will take the watch', 'i am back', 'i am relieving you',
+    ],
+    keywords: { con: 3, conn: 3, relieve: 2.2, watch: 1.6 },
+    veto: ['you', 'your', 'yours', 'she', 'he', 'they', 'who', 'which'],
+    build: () => ({ action: 'take_con' }),
+  },
+  {
+    // The one order that reads the simulation's own conscience out loud. A
+    // level one diagnostic is a real thing in this franchise and it is exactly
+    // an invariant sweep — every system checked by hand against what it is
+    // supposed to be — so it is wired to the checker the game actually runs.
+    id: 'diagnostic',
+    help: 'Run a level one diagnostic',
+    phrases: [
+      'run a diagnostic', 'run a level one diagnostic', 'run a level two diagnostic',
+      'run a level three diagnostic', 'run a level five diagnostic',
+      'run a full diagnostic', 'run diagnostics', 'begin a diagnostic',
+      'start a diagnostic', 'diagnostic', 'run a system check',
+      'check the systems', 'run a self test', 'systems check',
+      'i want a diagnostic', 'give me a diagnostic', 'full systems diagnostic',
+      'run every check', 'check everything',
+    ],
+    keywords: { diagnostic: 3, diagnostics: 3, selftest: 2 },
+    // "Damage report" is a summary an officer gives from what they already
+    // know. A diagnostic is work the crew goes off and does.
+    veto: ['damage', 'sensor', 'scan'],
+    build: (c) => {
+      const m = /\blevel\s+(one|two|three|four|five|[1-5])\b/.exec(c.text);
+      const word = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+      const deep = /\b(?:full|complete|thorough|everything|every check)\b/.test(c.text);
+      return {
+        action: 'diagnostic',
+        level: m ? (word[m[1]] ?? Number(m[1])) : (deep ? 1 : 5),
+      };
+    },
+  },
+  {
+    id: 'watch_bill',
+    help: 'Who has the con? / read me the watch bill',
+    phrases: [
+      'who has the con', 'who has the conn', 'who has the bridge',
+      'who is standing watch', 'who has the watch', 'what is the watch',
+      'read me the watch bill', 'the watch bill', 'watch bill',
+      'what watch is it', 'which watch is standing', 'duty roster',
+      'read the duty roster', 'who is on duty', 'watch rotation',
+    ],
+    keywords: { watch: 2.6, bill: 2.4, roster: 2.4, duty: 2, who: 1.6 },
+    build: () => ({ action: 'watch_bill' }),
   },
   {
     // The one order that is about the game rather than the ship. It exists
@@ -15062,9 +15323,15 @@ function findElevation(text, tokens = text.split(/\s+/).filter(Boolean)) {
 
   if (up === down) return null;   // neither, or a contradictory both
 
-  // "climb 30 degrees" is exact; a bare "climb" is a decisive but sane angle.
+  // "climb 30 degrees" names an attitude and is exact. A bare "climb" is a
+  // step, and the step is twenty degrees because that is what the Climb button
+  // on the helm console does — a button and the phrase printed on it have to
+  // be the same order, and they were not: the button moved the nose twenty
+  // degrees from where it was pointed and the word set it to thirty-five
+  // absolute, so pressing twice gave forty and saying it twice gave
+  // thirty-five.
   const m = text.match(/\b(-?\d{1,2})\s*(?:deg|degrees?)?\b/);
-  const magnitude = m ? Math.min(70, Math.abs(parseInt(m[1], 10))) : 35;
+  const magnitude = m ? Math.min(70, Math.abs(parseInt(m[1], 10))) : 20;
   return (up ? 1 : -1) * magnitude;
 }
 
@@ -15154,6 +15421,14 @@ function extract(norm) {
   return {
     text,
     tokens,
+    // The line as it was typed, before the addressee was stripped off it.
+    //
+    // Some orders need the words normalisation removes. Science and
+    // engineering are station names as well as things you can ask for, so
+    // "science configuration" arrived as "configuration" and the one word that
+    // chose the power preset was gone; and an officer's name is the address, so
+    // an order handing them the con could not say who.
+    full: norm.full ?? text,
     station: norm.station,
     urgent: norm.urgent,
     negated: norm.negated,
@@ -15829,6 +16104,8 @@ const STATION_OF = (() => {
   Object.assign(map, {
     intercom: 'chair', alert: 'chair', jettison_pod: 'chair',
     viewscreen: 'chair', magnify: 'chair', log_entry: 'chair',
+    hand_over_con: 'chair', take_con: 'chair', watch_bill: 'chair',
+    diagnostic: 'engineering',
     fabricate: 'engineering', work_shop: 'engineering', salvage: 'engineering',
   });
   return map;
@@ -16751,6 +17028,18 @@ function scoreAppeal(text, record) {
  * this is what finally earns it as a general technique.
  */
 function forceChannel(game) {
+  // There has to be somebody on the other end.
+  //
+  // The technique reroutes the order line: while the channel is open, whatever
+  // the captain types is what they SAY to the commander rather than an order to
+  // their own crew. With no gate on this at all it could be used on an empty
+  // bridge in an empty system — which forced a channel to nobody and left every
+  // order for the rest of the session being read as an appeal to a Klingon who
+  // was never there.
+  const eng = game.engagement;
+  if (!eng || eng.over || !eng.liveHostiles?.length) {
+    return { ok: false, reasons: ['There is nobody out there to hail, Captain.'] };
+  }
   const status = gambitStatus(game);
   if (!status.unlocked) {
     return { ok: false, reasons: status.reasons };
@@ -16965,7 +17254,18 @@ class Ledger {
    * @param {object} detail  { stardate, system, text, count, faction, ... }
    */
   record(kind, detail = {}) {
-    const entry = { kind, ...detail, seq: this.entries.length };
+    // Everything that happens, happens on a date.
+    //
+    // `stardate` was only ever recorded when a caller thought to pass it, and
+    // most did not — so the Service Record, which is the whole point of keeping
+    // this, rendered most of a five-year commission as "SD —". The ledger now
+    // carries the current date and stamps anything that did not bring its own.
+    const entry = {
+      kind,
+      stardate: this.stardate ?? null,
+      ...detail,
+      seq: this.entries.length,
+    };
     this.entries.push(entry);
     this.counters[kind] = (this.counters[kind] ?? 0) + (detail.count ?? 1);
 
@@ -17594,7 +17894,12 @@ function chooseAction(ship, engagement, dt, opts = {}) {
 
   // ---- Jem'Hadar ram ----
   if (ship.cls.ramsWhenDoomed && hullPct < 0.2) {
-    steerTo(ship, target.x, target.y);
+    // In three dimensions, because `distance` is measured in three. Steering
+    // in the plane at a target twenty degrees above you closes the horizontal
+    // gap and nothing else, so the 40-unit contact test was never satisfied: a
+    // doomed attack ship flew past, under, and out of the fight instead of
+    // doing the one thing its whole doctrine exists to do.
+    steerTo(ship, target.x, target.y, target.z ?? 0);
     ship.throttle = 1;
     if (distance < 40) {
       target.takeDamage(ship.maxHull * 0.35, { direction: target.directionFrom(ship), type: 'kinetic', rng });
@@ -17713,7 +18018,7 @@ __define("src/sim/combat.js", function (__exports, __require) {
 // character sheet, not to whether a phaser connects.
 
 const { emit } = __require("src/core/events.js");
-const { Ship, FACINGS, inArc, facingForBearing, facingForDirection } = __require("src/sim/ship.js");
+const { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } = __require("src/sim/ship.js");
 const { chooseAction } = __require("src/sim/ai.js");
 const { clamp, wrapDegrees, finite } = __require("src/core/num.js");
 const WEAPON_RANGE = {
@@ -17790,12 +18095,30 @@ class Engagement {
     // hostile that could be routed would make the no-win scenario winnable by
     // flying — which is the one thing it must never be.
     this.relentless = opts.relentless === true;
+    // How many people were aboard when this started.
+    //
+    // Crew losses are permanent, so the standing deficit is the whole
+    // campaign's dead and not this battle's. Without a mark at the start,
+    // every fight reported every death that had ever happened.
+    this.crewAtStart = player?.crew ?? 0;
+    // Ships whose destruction has already been announced. A death is a
+    // one-time event and the sweep that finds it runs every tick.
+    this.mourned = new Set();
 
     this.placeCombatants();
   }
 
+  /**
+   * Everything still physically present.
+   *
+   * A ship that has broken off and gone to warp is NOT. It used to be: it kept
+   * being stepped, kept being clamped back inside the arena by holdTheArena,
+   * and so a hostile the log had just announced as gone came about at the
+   * boundary and flew back through the middle of the fight — still drawn, still
+   * solid, and no longer targetable, because `liveHostiles` had written it off.
+   */
   get allShips() {
-    return [this.player, ...this.allies, ...this.hostiles];
+    return [this.player, ...this.allies, ...this.hostiles.filter((s) => !s.withdrawn)];
   }
 
   /**
@@ -17853,7 +18176,10 @@ class Engagement {
   // ---------------- orders ----------------
 
   setTarget(ship) {
-    if (ship && !ship.destroyed) {
+    // `validTarget` rather than a bare destroyed check: a hostile that has
+    // broken off and gone to warp is not destroyed either, and locking onto one
+    // pointed the guns and the camera at a ship that is no longer there.
+    if (this.validTarget(ship)) {
       this.target = ship;
       this.pushLog(`Target locked: ${ship.name}.`, 'tactical');
       emit('combat:target', ship);
@@ -17867,9 +18193,24 @@ class Engagement {
     this.setTarget(live[(idx + 1) % live.length]);
   }
 
+  /**
+   * Aim for one system rather than the hull.
+   *
+   * Only a system that exists. "Target their bridge" is a thing a captain says
+   * and no ship in this game has a `bridge` subsystem, so the order set
+   * `targetedSubsystem = 'bridge'`, every shot asked to damage a key that was
+   * not in the table, `damageSubsystem` returned early — and the result was an
+   * order that removed ALL subsystem damage from the fight while reporting
+   * that it had been given.
+   */
   targetSubsystem(key) {
-    this.targetedSubsystem = key;
+    if (key && !SUBSYSTEM_KEYS.includes(key)) {
+      this.pushLog(`We have no firing solution on their ${key}, Captain.`, 'tactical');
+      return false;
+    }
+    this.targetedSubsystem = key ?? null;
     this.pushLog(key ? `Targeting ${key}.` : 'Targeting hull.', 'tactical');
+    return true;
   }
 
   // Every one of these goes through a NaN-safe guard rather than a bare
@@ -17922,10 +18263,26 @@ class Engagement {
   // ---------------- firing ----------------
 
   /** Fire everything that bears on the current target. */
-  fireAll() {
-    if (!this.target || this.target.destroyed) return 0;
+  /**
+   * Open fire.
+   *
+   * @param {string} type 'all', or one of the weapon types — 'beam',
+   *        'cannon', 'torpedo'. The parser has always read this off the order
+   *        ("fire phasers" gives 'beam') and it was thrown away here, so every
+   *        order to fire fired everything: asking for phasers launched photon
+   *        torpedoes, and a captain holding torpedoes for one shot could not.
+   */
+  fireAll(type = 'all') {
+    if (!this.validTarget(this.target)) return 0;
+    const wanted = this.player.weapons.filter(
+      (w) => type === 'all' || type === undefined || w.type === type,
+    );
+    if (!wanted.length) {
+      this.pushLog(`We have no ${type} weapons, Captain.`, 'tactical');
+      return 0;
+    }
     let fired = 0;
-    for (const w of this.player.weapons) {
+    for (const w of wanted) {
       if (this.fireWeapon(this.player, w, this.target)) fired++;
     }
     if (!fired) this.pushLog('No weapons bear on the target.', 'tactical');
@@ -18037,10 +18394,56 @@ class Engagement {
     return { hit: true, damage, crit, ...result };
   }
 
-  onDestroyed(ship, killer) {
+  /**
+   * A ship dies once, however it died.
+   *
+   * This used to be called from exactly one place — straight after a hit
+   * landed, on `if (target.destroyed)`. The trouble is that a hit never
+   * destroys anything: `takeDamage` takes the hull to zero and starts a warp
+   * core breach, and the ship is not flagged destroyed until that countdown
+   * runs out twenty seconds later, inside `Ship.update`. So the explosion, the
+   * sound, the `combat:destroyed` event and the log line fired only in the rare
+   * case of a ship being hit again while already breaching. Almost every kill
+   * in this game happened in complete silence.
+   *
+   * `reportDeaths` now sweeps for anything that died on this tick whatever
+   * killed it — the breach, a fire, a hull that finally gave, the last of the
+   * crew — and the set makes saying it twice impossible.
+   */
+  onDestroyed(ship, killer = null) {
+    if (!ship || this.mourned.has(ship)) return;
+    this.mourned.add(ship);
     this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, z: ship.z ?? 0, life: 1.6 });
     emit('combat:destroyed', { ship, killer, byPlayer: killer === this.player });
-    this.pushLog(`${ship.name} destroyed.`, 'tactical');
+    const cause = ship.destroyCause && ship.destroyCause !== 'destroyed'
+      ? ` — ${ship.destroyCause}` : '';
+    this.pushLog(`${ship.name} destroyed${cause}.`, 'tactical');
+  }
+
+  /** Everything that died since the last tick, reported once each. */
+  reportDeaths() {
+    for (const s of this.allShips) {
+      if (s.destroyed) this.onDestroyed(s, null);
+    }
+    // A ship that withdrew is out of `allShips`, and one that dies on the way
+    // out still died. Checked separately rather than by widening the sweep,
+    // because widening it would put wrecks back inside the arena clamp.
+    for (const s of this.hostiles) {
+      if (s.withdrawn && s.destroyed) this.onDestroyed(s, null);
+    }
+  }
+
+  /**
+   * Something you can actually shoot: present, alive, and still in this fight.
+   *
+   * A target reference outlives the ship it points at. That is what made
+   * auto-fire go quiet halfway through every battle — the guns kept their lock
+   * on a wreck and the `!this.target.destroyed` guard turned them off for the
+   * rest of the engagement, with no indication that anything had happened.
+   */
+  validTarget(ship) {
+    return !!ship && !ship.destroyed && !ship.withdrawn
+      && (this.hostiles.includes(ship) || this.allies.includes(ship));
   }
 
   // ---------------- step ----------------
@@ -18050,6 +18453,26 @@ class Engagement {
     this.time += dt;
 
     for (const s of this.allShips) s.update(dt, this.rng);
+
+    // Whatever died on that step gets its explosion before anything else acts.
+    this.reportDeaths();
+
+    // The guns keep looking for something to shoot at.
+    //
+    // Without this the lock survives the ship: auto-fire held a dead target,
+    // failed its own `!destroyed` guard, and silently stopped firing for the
+    // rest of the battle. Re-acquiring is what a tactical officer does without
+    // being told, and it is the difference between a fight and a slideshow.
+    if (!this.validTarget(this.target)) {
+      const next = this.liveHostiles[0] ?? null;
+      if (next) {
+        this.target = next;
+        emit('combat:target', next);
+        this.pushLog(`Target destroyed. Re-acquiring: ${next.name}.`, 'tactical');
+      } else {
+        this.target = null;
+      }
+    }
 
     // Hostile and allied captains act.
     for (const s of this.liveHostiles) {
@@ -18072,14 +18495,30 @@ class Engagement {
     this.updateProjectiles(dt);
     this.updateEffects(dt);
 
+    // Resolution. The player's own survival is decided FIRST.
+    //
+    // The warp-out countdown used to be checked ahead of it, so dying on the
+    // very tick the eight seconds ran out ended the fight as 'escaped' — with
+    // a destroyed ship. Nothing then took the ship away from you, because
+    // losing the ship hangs off the 'destroyed' outcome, and the campaign
+    // carried on with a wreck.
+    if (this.player.destroyed) return this.end('destroyed');
+
     // Disengagement.
     if (this.warpOutTimer > 0) {
-      this.warpOutTimer -= dt;
-      if (this.warpOutTimer <= 0) return this.end('escaped');
+      // The escape has to keep being possible for the whole eight seconds. It
+      // was checked once, at the order, and never again — so a core ejected
+      // mid-countdown, or a Tholian web closing around you, still got you to
+      // warp on a ship with no warp drive.
+      if (!this.canWarpOut || this.player.coreEjected
+        || this.player.subsystems.warpcore < 0.2) {
+        this.warpOutTimer = 0;
+        this.pushLog('We have lost the warp drive — we are not going anywhere.', 'engineering');
+      } else {
+        this.warpOutTimer -= dt;
+        if (this.warpOutTimer <= 0) return this.end('escaped');
+      }
     }
-
-    // Resolution.
-    if (this.player.destroyed) return this.end('destroyed');
     if (!this.liveHostiles.length) {
       // An empty board is a win only if you emptied it. Anyone who withdrew
       // under their own power was routed, not destroyed, and the ledger cares
@@ -18107,9 +18546,16 @@ class Engagement {
       const dz = (p.target.z ?? 0) - (p.z ?? 0);
       const dist = Math.hypot(dx, dy, dz);
       if (dist < 26) {
-        const result = this.resolveHit(p.attacker, p.target, p.weapon,
-          p.attacker.distanceTo(p.target), p.subsystem);
-  emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y, z: p.z ?? 0 });
+        // A torpedo that has arrived has arrived.
+        //
+        // The range used here was the LAUNCHER's distance to the target at the
+        // moment of impact, not the torpedo's. Torpedoes fly for up to six
+        // seconds and both ships keep moving, so a shooter that had since
+        // drifted past the 1,200-unit torpedo range made `rangeFactor` return
+        // zero — and the torpedo arrived, exploded, and did nothing at all.
+        // Passing zero says what is true: the weapon is touching the hull.
+        const result = this.resolveHit(p.attacker, p.target, p.weapon, 0, p.subsystem);
+        emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y, z: p.z ?? 0 });
         p.dead = true;
         continue;
       }
@@ -18132,7 +18578,26 @@ class Engagement {
     emit('combat:end', { outcome, engagement: this });
   }
 
+  /**
+   * Say something, once.
+   *
+   * The combat log holds sixty lines. `fireAll` reports "No weapons bear on
+   * the target" every time the trigger is pulled with the enemy outside an
+   * arc, which in a stern chase is thirty times a second — so a minute of
+   * manoeuvring flushed the entire log and the line that said a ship had blown
+   * up was gone before anybody could read it.
+   *
+   * A repeat of the line already at the bottom becomes a count on that line
+   * instead of a new one. Nothing is lost and nothing is drowned.
+   */
   pushLog(text, source = 'bridge') {
+    const last = this.log[this.log.length - 1];
+    if (last && last.text === text && last.source === source) {
+      last.repeats = (last.repeats ?? 1) + 1;
+      last.time = this.time;
+      emit('combat:log', last);
+      return;
+    }
     const entry = { text, source, time: this.time };
     this.log.push(entry);
     if (this.log.length > 60) this.log.shift();
@@ -19207,6 +19672,626 @@ __exports.Walker = Walker;
 __exports.stepToward = stepToward;
 __exports.route = route;
 __exports.connectivity = connectivity;
+
+});
+
+__define("src/sim/watch.js", function (__exports, __require) {
+// The bridge watch, and who has the con.
+//
+// A starship is crewed around the clock and the captain is one person. The
+// game has run for its whole life as though the bridge were empty whenever the
+// player was not looking at it — you closed the app mid-sector and the ship
+// simply stopped, then a summary panel told you what had happened as though
+// nobody had been there.
+//
+// Somebody was there. Handing the con over is the single most-repeated piece of
+// business on that show, and it is the thing that makes the ship feel crewed
+// rather than driven: you leave the bridge, the next ranking officer takes it,
+// they hold it while you are gone, and they tell you what happened when you get
+// back.
+//
+// Pure functions over a crew, with no game object and no renderer, so all of it
+// is testable outside a browser.
+
+/**
+ * Seniority, most senior first.
+ *
+ * Rank first, then the post: at equal rank a first officer outranks a helmsman
+ * for the purposes of the watch, which is a real thing and not a tiebreak
+ * invented for convenience — the first officer is the captain's relief.
+ */
+const RANK_ORDER = [
+  'Admiral', 'Vice Admiral', 'Rear Admiral', 'Commodore', 'Fleet Captain',
+  'Captain', 'Commander', 'Lieutenant Commander', 'Lieutenant',
+  'Lieutenant JG', 'Ensign',
+];
+
+/**
+ * Ranks that are not Starfleet's, placed against the ladder above.
+ *
+ * The rosters carry a Bajoran militia Major who was a station's first officer,
+ * a chief petty officer, a civilian constable and a hologram. Only the first of
+ * those slots into the chain of command anywhere near the top, and leaving it
+ * out is not a cosmetic bug — an unranked officer sorts to the bottom, so the
+ * DS9 roster's second-in-command would have been the last person called on.
+ *
+ * The enlisted and the civilians are deliberately absent. They keep the ship
+ * running and they do not stand a bridge watch, and the sort puts them last
+ * without needing to be told.
+ */
+const RANK_EQUIVALENT = {
+  Major: 'Commander',
+  Colonel: 'Captain',
+  Subcommander: 'Commander',
+};
+
+/** Which posts stand a watch, in the order they are called on. */
+const RELIEF_ORDER = [
+  'first_officer', 'tactical', 'helm', 'science', 'engineering',
+  'comms', 'security', 'ops', 'navigation', 'medical',
+];
+
+/** Lower is more senior. Unknown ranks sort to the bottom rather than crashing. */
+function seniority(officer) {
+  const rank = officer?.rank ?? '';
+  const r = RANK_ORDER.indexOf(RANK_EQUIVALENT[rank] ?? rank);
+  const post = RELIEF_ORDER.indexOf(officer?.station ?? '');
+  return [(r === -1 ? RANK_ORDER.length : r), (post === -1 ? RELIEF_ORDER.length : post)];
+}
+
+/**
+ * The crew who could take the con, most senior first.
+ *
+ * Only officers who are actually available. Somebody in sickbay does not have
+ * the con, and neither does somebody who is dead — which sounds obvious and is
+ * exactly the sort of thing a ranking sort gets wrong when the roster is a flat
+ * list and injuries are a boolean somewhere else.
+ */
+function watchOrder(crew) {
+  // One body, one watch. A roster can list the same officer at two posts — the
+  // TOS crew has its science officer standing in as first officer, which is
+  // true to the show and would otherwise put one Vulcan on two watches at once.
+  const seen = new Set();
+  const officers = (crew?.officers ?? []).filter((o) => {
+    if (!o?.alive || o.injured) return false;
+    if (seen.has(o.name)) return false;
+    seen.add(o.name);
+    return true;
+  });
+  return officers.slice().sort((a, b) => {
+    const [ra, pa] = seniority(a);
+    const [rb, pb] = seniority(b);
+    return ra - rb || pa - pb;
+  });
+}
+
+/**
+ * Who takes the con when the captain leaves it.
+ *
+ * @param {object} crew
+ * @param {object|null} except an officer who cannot take it — normally the one
+ *        who just handed it back, so the con does not bounce.
+ */
+function nextInLine(crew, except = null) {
+  const order = watchOrder(crew);
+  return order.find((o) => o !== except) ?? null;
+}
+
+/**
+ * The three watches a day is divided into.
+ *
+ * Alpha, beta and gamma, eight hours each, which is how a ship at sea and a
+ * ship in this franchise both do it. Alpha is the day watch and starts at 0800
+ * — the captain's watch, which is why the bridge you walk onto at the start of
+ * a commission is the one with the senior staff on it.
+ */
+const WATCHES = [
+  { id: 'alpha', name: 'Alpha watch', from: 8, to: 16 },
+  { id: 'beta', name: 'Beta watch', from: 16, to: 24 },
+  { id: 'gamma', name: 'Gamma watch', from: 0, to: 8 },
+];
+
+/** Which watch is standing at this hour of the ship's day. */
+function watchAt(hour) {
+  const h = ((Math.floor(hour) % 24) + 24) % 24;
+  return WATCHES.find((w) => h >= w.from && h < w.to) ?? WATCHES[2];
+}
+
+/**
+ * Assign the crew to watches.
+ *
+ * Round-robin down the seniority list rather than by department, so no single
+ * watch gets all the senior officers and none of them is left with nobody who
+ * can make a decision. The senior staff land on alpha because they are first in
+ * the list, which is both correct and what the show does.
+ */
+function assignWatches(crew) {
+  const order = watchOrder(crew);
+  const roster = { alpha: [], beta: [], gamma: [] };
+  order.forEach((o, i) => {
+    roster[WATCHES[i % WATCHES.length].id].push(o);
+  });
+  return roster;
+}
+
+/**
+ * What the officer with the con says when they hand it back.
+ *
+ * A report rather than a summary panel. The difference matters: a panel is the
+ * game telling you what happened, and this is a person telling you what they
+ * did about it while you were not there.
+ */
+function handbackReport(officer, hours, lines = []) {
+  if (!officer) return lines;
+  const span = hours < 1 ? 'the last hour'
+    : hours < 24 ? `the last ${Math.round(hours)} hours`
+      : `the last ${(hours / 24).toFixed(1)} days`;
+  const opener = lines.length
+    ? `${officer.rank} ${officer.name}: I had the con for ${span}.`
+    : `${officer.rank} ${officer.name}: I had the con for ${span}. Nothing to report.`;
+  return [opener, ...lines, `${officer.rank} ${officer.name}: You have the con, Captain.`];
+}
+
+__exports.seniority = seniority;
+__exports.watchOrder = watchOrder;
+__exports.nextInLine = nextInLine;
+__exports.WATCHES = WATCHES;
+__exports.watchAt = watchAt;
+__exports.assignWatches = assignWatches;
+__exports.handbackReport = handbackReport;
+
+});
+
+__define("src/sim/invariants.js", function (__exports, __require) {
+// Everything that must be true, checked while it is running.
+//
+// Combat is the part of this game with the most moving state and the least
+// forgiving failure mode. A ship whose position goes NaN never recovers, for
+// the rest of the save. An engagement that satisfies no end condition is a
+// permanent soft-lock when you are not allowed to warp out. Both of those have
+// happened here, both were found by fuzzing, and both were fixed one at a time
+// by a test that knew to look for that specific thing.
+//
+// This file is the other approach: state every rule the simulation must obey,
+// once, and check all of them every tick. A rule written here is checked
+// against every fight the fuzzer runs and every fight the player has with the
+// debug flag on, including the fights nobody thought to write a test for.
+//
+// Three properties this file has to keep, or it is worse than nothing:
+//
+//   It never throws. A checker that crashes while checking for crashes turns a
+//   cosmetic bug into a black screen. Everything below is defensive.
+//
+//   It never mutates. Reading `ship.hullPct` is fine; nothing here may write.
+//
+//   It is cheap enough to leave on. The whole sweep is O(ships + projectiles)
+//   with no allocation per ship, so a 6-hull fight costs a few hundred
+//   comparisons per tick against a budget of 33 milliseconds.
+//
+// Violations are data, not exceptions. The caller decides whether to throw
+// (tests), log (the debug overlay), or count (the fuzzer).
+
+const { FACINGS } = __require("src/sim/ship.js");
+
+/**
+ * How far outside the arena a ship may be before it counts as escaped.
+ *
+ * `holdTheArena` clamps to exactly ARENA_RADIUS, and a ship moves before it is
+ * clamped, so the true bound is the radius plus one tick of travel. A metre of
+ * slack keeps floating point out of it.
+ */
+const ARENA_SLACK = 1.0;
+
+/** Nothing legitimate produces this many at once; past it, something leaks. */
+const LIMITS = {
+  projectiles: 400,
+  effects: 300,
+  logLines: 200,
+  ships: 24,
+  combatSeconds: 60 * 60,
+};
+
+const SEVERITY = { fatal: 0, error: 1, warn: 2 };
+
+/** Sort worst-first. Exported so callers report the same order the fuzzer does. */
+function bySeverity(a, b) {
+  return (SEVERITY[a.severity] ?? 9) - (SEVERITY[b.severity] ?? 9);
+}
+
+/**
+ * A finite number, treating undefined `z` as 0 the way the rest of the sim does.
+ * Explicitly NOT Number.isFinite alone: `null` is not finite but `0` is, and
+ * several fields are legitimately absent until first written.
+ */
+const num = (v) => (v === undefined || v === null ? 0 : v);
+const ok = (v) => Number.isFinite(num(v));
+
+class Report {
+  constructor() { this.violations = []; }
+
+  /**
+   * @param {boolean} condition what must be TRUE
+   * @param {string} code stable identifier, so a fuzzer can group repeats
+   * @param {string} severity fatal | error | warn
+   * @param {string} text what went wrong, in words, with the actual value in it
+   * @param {string} [subject] which ship or projectile
+   */
+  must(condition, code, severity, text, subject = null) {
+    if (condition) return;
+    this.violations.push({ code, severity, text, subject });
+  }
+}
+
+/**
+ * Check one ship.
+ *
+ * `arenaRadius` is passed rather than imported so this module does not depend
+ * on combat.js — the ship rules also hold outside a fight, where there is no
+ * arena at all.
+ */
+function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
+  if (!s || typeof s !== 'object') {
+    r.must(false, 'ship.missing', 'fatal', `${label} is not a ship: ${String(s)}`);
+    return;
+  }
+  const who = s.name ?? s.classId ?? label;
+
+  // ---- position and attitude ----
+  for (const k of ['x', 'y', 'z', 'heading', 'pitch', 'roll', 'throttle']) {
+    r.must(ok(s[k]), `ship.${k}.finite`, 'fatal',
+      `${who}: ${k} is ${s[k]}`, who);
+  }
+  for (const k of ['x', 'y', 'z']) {
+    r.must(ok(s.velocity?.[k]), 'ship.velocity.finite', 'fatal',
+      `${who}: velocity.${k} is ${s.velocity?.[k]}`, who);
+  }
+  r.must(num(s.throttle) >= 0 && num(s.throttle) <= 1, 'ship.throttle.range', 'error',
+    `${who}: throttle is ${s.throttle}, outside 0..1`, who);
+  r.must(Math.abs(num(s.pitch)) <= 90.001, 'ship.pitch.range', 'error',
+    `${who}: pitch is ${s.pitch} degrees`, who);
+
+  if (arenaRadius !== null && ok(s.x) && ok(s.y) && ok(s.z)) {
+    const d = Math.hypot(s.x, s.y, num(s.z));
+    r.must(d <= arenaRadius + ARENA_SLACK, 'ship.arena', 'fatal',
+      `${who}: ${Math.round(d)} units from centre, outside the ${arenaRadius}-unit arena`, who);
+  }
+
+  // ---- damage model ----
+  r.must(ok(s.hull), 'ship.hull.finite', 'fatal', `${who}: hull is ${s.hull}`, who);
+  r.must(num(s.hull) >= 0, 'ship.hull.negative', 'error',
+    `${who}: hull is ${s.hull}`, who);
+  r.must(num(s.hull) <= num(s.maxHull) + 1e-6, 'ship.hull.overmax', 'error',
+    `${who}: hull ${s.hull} exceeds max ${s.maxHull}`, who);
+  r.must(num(s.maxHull) > 0, 'ship.maxHull', 'error',
+    `${who}: maxHull is ${s.maxHull}`, who);
+
+  for (const f of FACINGS) {
+    const v = s.shields?.[f];
+    r.must(ok(v), 'ship.shield.finite', 'fatal', `${who}: shields.${f} is ${v}`, who);
+    r.must(num(v) >= 0, 'ship.shield.negative', 'error',
+      `${who}: shields.${f} is ${v}`, who);
+    r.must(num(v) <= num(s.maxShield) + 1e-6, 'ship.shield.overmax', 'error',
+      `${who}: shields.${f} is ${v}, above max ${s.maxShield}`, who);
+  }
+
+  for (const [k, v] of Object.entries(s.subsystems ?? {})) {
+    r.must(ok(v), 'ship.subsystem.finite', 'fatal', `${who}: subsystem ${k} is ${v}`, who);
+    r.must(num(v) >= -1e-9 && num(v) <= 1 + 1e-9, 'ship.subsystem.range', 'error',
+      `${who}: subsystem ${k} is ${v}, outside 0..1`, who);
+  }
+
+  // The grid never draws more than it has. `normalize` exists to guarantee
+  // this and had two ways to fail: a protected subsystem was exempt from the
+  // cap rather than only from being drained, and rounding four numbers up
+  // could put the total back over it.
+  if (s.power?.target) {
+    let draw = 0;
+    for (const v of Object.values(s.power.target)) {
+      r.must(ok(v) && v >= 0, 'power.level', 'error', `${who}: a power level is ${v}`, who);
+      draw += num(v);
+    }
+    r.must(draw <= num(s.power.cap) + 1e-6, 'power.overcap', 'error',
+      `${who}: drawing ${Math.round(draw)} against a cap of ${s.power.cap}`, who);
+  }
+
+  r.must(ok(s.crew) && num(s.crew) >= 0, 'ship.crew', 'error',
+    `${who}: crew is ${s.crew}`, who);
+  r.must(num(s.crew) <= num(s.maxCrew) + 1e-6, 'ship.crew.overmax', 'error',
+    `${who}: crew ${s.crew} exceeds complement ${s.maxCrew}`, who);
+  r.must(ok(s.fires) && num(s.fires) >= 0, 'ship.fires', 'error',
+    `${who}: fires is ${s.fires}`, who);
+  r.must(ok(s.torpedoes) && num(s.torpedoes) >= 0, 'ship.torpedoes', 'error',
+    `${who}: torpedoes is ${s.torpedoes}`, who);
+
+  // ---- weapons ----
+  for (const w of s.weapons ?? []) {
+    r.must(ok(w.cooldown), 'weapon.cooldown.finite', 'fatal',
+      `${who}: ${w.name ?? w.type} cooldown is ${w.cooldown}`, who);
+    r.must(num(w.cooldown) >= -1e-9, 'weapon.cooldown.negative', 'error',
+      `${who}: ${w.name ?? w.type} cooldown is ${w.cooldown}`, who);
+  }
+
+  // ---- the one rule that ties the model together ----
+  //
+  // A ship at zero hull that is not flagged destroyed keeps taking part in the
+  // fight, and a ship flagged destroyed with hull left is a wreck the AI still
+  // considers a threat. Either way the board disagrees with itself.
+  if (s.destroyed) {
+    r.must(num(s.hull) <= 1e-6, 'ship.destroyed.hull', 'error',
+      `${who} is destroyed but has ${s.hull} hull`, who);
+  } else {
+    // Zero hull is legal for as long as the core is counting down. That is a
+    // deliberate beat — the ship is finished and the explosion takes twenty
+    // seconds, which is the only window in which ejecting the core saves you.
+    // What must never happen is a hull at zero with no breach running: that
+    // ship is dead, is not going to die, and sits on the board forever.
+    r.must(num(s.hull) > 0 || s.breaching === true, 'ship.zerohull.adrift', 'error',
+      `${who} has ${s.hull} hull, is not destroyed, and no breach is running`, who);
+  }
+}
+
+/**
+ * Check a live engagement.
+ *
+ * @param {object} eng the Engagement
+ * @param {object} opts `arenaRadius` from combat.js, so this file imports nothing from it
+ * @returns {Array<{code,severity,text,subject}>} empty when everything holds
+ */
+function checkCombat(eng, { arenaRadius = 2600 } = {}) {
+  const r = new Report();
+  if (!eng) return r.violations;
+
+  try {
+    r.must(ok(eng.time) && eng.time >= 0, 'eng.time', 'fatal',
+      `engagement time is ${eng.time}`);
+    r.must(num(eng.time) < LIMITS.combatSeconds, 'eng.runaway', 'error',
+      `engagement has run ${Math.round(num(eng.time))} simulated seconds`);
+
+    const ships = eng.allShips ?? [];
+    r.must(Array.isArray(ships), 'eng.ships.array', 'fatal', 'allShips is not an array');
+    r.must(ships.length <= LIMITS.ships, 'eng.ships.count', 'warn',
+      `${ships.length} ships in one engagement`);
+
+    // The same hull appearing twice takes damage twice and is drawn twice.
+    const seen = new Set();
+    for (const s of ships) {
+      r.must(!seen.has(s), 'eng.ships.duplicate', 'error',
+        `${s?.name ?? 'a ship'} appears more than once in the engagement`, s?.name);
+      seen.add(s);
+      checkShip(r, s, { arenaRadius });
+    }
+    r.must(!!eng.player, 'eng.player', 'fatal', 'the engagement has no player ship');
+    r.must(!eng.hostiles?.includes?.(eng.player), 'eng.player.hostile', 'fatal',
+      'the player is in their own hostile list');
+
+    // ---- the target ----
+    //
+    // A target reference held after the ship leaves the board is what makes the
+    // camera chase a wreck and auto-fire shoot at nothing.
+    if (eng.target) {
+      r.must(seen.has(eng.target), 'eng.target.absent', 'error',
+        `target ${eng.target.name ?? '?'} is not in this engagement`, eng.target.name);
+      if (!eng.over) {
+        r.must(!eng.target.withdrawn, 'eng.target.withdrawn', 'error',
+          `target ${eng.target.name ?? '?'} has already left the fight`, eng.target.name);
+      }
+    }
+
+    // ---- projectiles ----
+    const shots = eng.projectiles ?? [];
+    r.must(shots.length <= LIMITS.projectiles, 'eng.projectiles.leak', 'error',
+      `${shots.length} projectiles in flight`);
+    for (const p of shots) {
+      const tag = `${p?.weapon?.name ?? 'torpedo'} from ${p?.attacker?.name ?? '?'}`;
+      r.must(ok(p.x) && ok(p.y) && ok(p.z), 'projectile.finite', 'fatal',
+        `${tag}: position is ${p.x},${p.y},${p.z}`, tag);
+      r.must(ok(p.life), 'projectile.life.finite', 'fatal',
+        `${tag}: life is ${p.life}`, tag);
+      r.must(num(p.speed) > 0, 'projectile.speed', 'error',
+        `${tag}: speed is ${p.speed}`, tag);
+      r.must(!!p.target, 'projectile.target', 'error', `${tag}: has no target`, tag);
+      r.must(!!p.attacker, 'projectile.attacker', 'error', `${tag}: has no attacker`, tag);
+    }
+
+    // ---- effects and log ----
+    const fx = eng.effects ?? [];
+    r.must(fx.length <= LIMITS.effects, 'eng.effects.leak', 'error',
+      `${fx.length} visual effects alive at once`);
+    for (const e of fx) {
+      r.must(ok(e.life), 'effect.life.finite', 'fatal', `an effect has life ${e.life}`);
+      r.must(ok(e.x) && ok(e.y) && ok(e.z), 'effect.finite', 'error',
+        `an effect is at ${e.x},${e.y},${e.z}`);
+    }
+    r.must((eng.log?.length ?? 0) <= LIMITS.logLines, 'eng.log.leak', 'warn',
+      `${eng.log?.length} combat log lines retained`);
+
+    // ---- resolution ----
+    //
+    // The soft-lock rule. If the fight is not over, at least one of the things
+    // that could end it must still be possible: somebody left to fight, or a
+    // player who is done for.
+    if (eng.over) {
+      r.must(!!eng.outcome, 'eng.outcome', 'error',
+        'the engagement is over with no outcome recorded');
+    } else {
+      const live = eng.liveHostiles ?? [];
+      r.must(live.length > 0 || eng.player?.destroyed === true || num(eng.warpOutTimer) > 0,
+        'eng.unresolved', 'fatal',
+        'no live hostiles, the player is alive, and the engagement has not ended');
+    }
+
+    for (const k of ['warpOutTimer', 'separationTimer', 'decoyTimer']) {
+      r.must(ok(eng[k]) && num(eng[k]) >= 0, `eng.${k}`, 'error',
+        `${k} is ${eng[k]}`);
+    }
+  } catch (err) {
+    // A checker that throws is worse than no checker. Report the failure as a
+    // violation and let the caller decide.
+    r.violations.push({
+      code: 'checker.threw', severity: 'error',
+      text: `the invariant checker itself failed: ${err?.message ?? err}`, subject: null,
+    });
+  }
+
+  return r.violations.sort(bySeverity);
+}
+
+/**
+ * Check the game around the fight — the state a fight leaves behind.
+ *
+ * The player's complaint was never only about the shooting. It was that "the
+ * stuff that comes after it is also messed up": a mode that does not go back,
+ * an engagement object left lying around for other code to trip over, a captain
+ * who is somehow ashore during a battle.
+ */
+function checkGame(game) {
+  const r = new Report();
+  if (!game) return r.violations;
+
+  try {
+    if (game.ship) checkShip(r, game.ship, { label: 'player' });
+
+    const eng = game.engagement;
+    const fighting = !!eng && !eng.over;
+
+    if (fighting) {
+      r.must(eng.player === game.ship, 'game.engagement.ship', 'fatal',
+        'the engagement is fighting a different ship object than the game owns');
+      r.must(game.walk?.roomId !== 'surface', 'game.combat.ashore', 'error',
+        'a battle is running while the captain is standing on a planet');
+      r.must(!game.transit, 'game.combat.transit', 'error',
+        'a battle is running while the ship is at warp');
+      r.must(!game.over, 'game.combat.after-end', 'error',
+        'a battle is running after the game itself ended');
+    }
+
+    if (eng?.over) {
+      r.must(game.mode !== 'combat' || game.over, 'game.mode.stuck', 'error',
+        `the fight is over but the game is still in ${game.mode} mode`);
+    }
+
+    // The con is a bridge thing, and a fight is the moment it matters most.
+    if (game.conStation) {
+      r.must(!!game.crew?.at?.(game.conStation), 'game.con.ghost', 'error',
+        `the con is held by ${game.conStation}, and nobody alive is at that post`);
+    }
+
+    r.must(ok(game.latinum) && game.latinum >= 0, 'game.latinum', 'error',
+      `latinum is ${game.latinum}`);
+    for (const [k, v] of Object.entries(game.stores ?? {})) {
+      r.must(ok(v) && v >= 0, 'game.stores', 'error', `stores.${k} is ${v}`);
+    }
+    for (const o of game.crew?.officers ?? []) {
+      r.must(ok(o.xp) && o.xp >= 0, 'officer.xp', 'error',
+        `${o.name}: xp is ${o.xp}`, o.name);
+      r.must(o.alive || !o.injured, 'officer.dead-and-injured', 'warn',
+        `${o.name} is dead and also flagged injured`, o.name);
+    }
+  } catch (err) {
+    r.violations.push({
+      code: 'checker.threw', severity: 'error',
+      text: `the game invariant checker itself failed: ${err?.message ?? err}`, subject: null,
+    });
+  }
+
+  return r.violations.sort(bySeverity);
+}
+
+/**
+ * Everything, in one call.
+ *
+ * @param {object} game
+ * @param {object} opts arenaRadius, so this module stays free of combat.js
+ */
+function checkAll(game, opts = {}) {
+  return [...checkGame(game), ...checkCombat(game?.engagement, opts)].sort(bySeverity);
+}
+
+/**
+ * A watchdog that remembers what it has already complained about.
+ *
+ * Running the checker every tick and logging every violation would produce
+ * thirty identical lines a second for one broken number, which buries the
+ * second bug under the first. Each distinct code is reported once per session
+ * with a count kept behind it.
+ */
+class Watchdog {
+  /**
+   * @param {object} opts
+   *   `onViolation(v, count)` — called the first time each code is seen.
+   *   `throwOn` — 'fatal' | 'error' | 'never'. Tests use 'error'.
+   *   `every` — check one tick in N. 1 is every tick.
+   */
+  constructor({ onViolation = null, throwOn = 'never', every = 1 } = {}) {
+    this.onViolation = onViolation;
+    this.throwOn = throwOn;
+    this.every = Math.max(1, Math.floor(every) || 1);
+    this.counts = new Map();
+    this.firsts = [];
+    this.ticks = 0;
+    this.checked = 0;
+  }
+
+  /** Total violations seen, counting repeats. */
+  get total() {
+    let n = 0;
+    for (const c of this.counts.values()) n += c;
+    return n;
+  }
+
+  /** The distinct problems, worst first — what a bug report should contain. */
+  get summary() {
+    return this.firsts
+      .map((v) => ({ ...v, count: this.counts.get(v.code) ?? 0 }))
+      .sort(bySeverity);
+  }
+
+  /**
+   * Run one check. Cheap to call every tick.
+   * @returns {Array} the violations found this tick
+   */
+  tick(game, opts = {}) {
+    this.ticks++;
+    if (this.ticks % this.every !== 0) return [];
+    this.checked++;
+
+    const found = checkAll(game, opts);
+    for (const v of found) {
+      const seen = this.counts.get(v.code) ?? 0;
+      this.counts.set(v.code, seen + 1);
+      if (seen === 0) {
+        this.firsts.push(v);
+        this.onViolation?.(v, 1);
+      }
+    }
+
+    if (this.throwOn !== 'never') {
+      const bar = SEVERITY[this.throwOn] ?? 0;
+      const worst = found.find((v) => (SEVERITY[v.severity] ?? 9) <= bar);
+      if (worst) {
+        const e = new Error(`invariant violated [${worst.code}]: ${worst.text}`);
+        e.violation = worst;
+        e.all = found;
+        throw e;
+      }
+    }
+    return found;
+  }
+
+  reset() {
+    this.counts.clear();
+    this.firsts.length = 0;
+    this.ticks = 0;
+    this.checked = 0;
+  }
+}
+
+__exports.LIMITS = LIMITS;
+__exports.bySeverity = bySeverity;
+__exports.checkCombat = checkCombat;
+__exports.checkGame = checkGame;
+__exports.checkAll = checkAll;
+__exports.Watchdog = Watchdog;
 
 });
 
@@ -21877,9 +22962,11 @@ const { Ship } = __require("src/sim/ship.js");
 const { Crew, Officer } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
-const { Engagement } = __require("src/sim/combat.js");
+const { Engagement, ARENA_RADIUS } = __require("src/sim/combat.js");
 const { AwayTeam } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom } = __require("src/sim/walk.js");
+const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
+const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { resolveHail, STANDING_EFFECTS } = __require("src/sim/diplomacy.js");
 
@@ -21981,6 +23068,7 @@ class Game {
     this.clock = new Clock(eraDef?.stardate ?? 4523.3);
     this.galaxy = new Galaxy(this.rng);
     this.ledger = new Ledger();
+    this.ledger.stardate = eraDef?.stardate ?? 4523.3;
     this.missions = new MissionBook(EPISODES);
     this.locationId = options.startAt ?? 'sol';
     this.galaxy.markVisited(this.locationId);
@@ -21995,6 +23083,9 @@ class Game {
     // A place, not a label — the view is drawn from it and a landing party is
     // put down from it.
     this.orbit = null;
+    // A hulk adrift where the last fight happened, until it is stripped or
+    // left behind. `{ tier, systemId, hulls, name }`.
+    this.wreck = null;
     this.alert = 'normal';
     // What "engage" means until the helm is told otherwise. The eight flip
     // switches on the console set it; six is the cruise the game has always
@@ -22010,6 +23101,36 @@ class Game {
     clearSurface();
     this.walk = new Walker();
     this.walkOrder = null;
+    // Who has the con. Null means the captain does, which is where a
+    // commission starts — in the chair, on the bridge, at the top of alpha
+    // watch. Anything else is a station id, because a station is unique in a
+    // roster and an officer object cannot survive a save.
+    //
+    // The simulation watching itself, first. A full invariant sweep of a
+    // six-ship fight costs 24 microseconds and a simulation tick costs 0.4, so
+    // checking every tick would be sixty times the cost of the thing being
+    // checked. Twice a second is not — it is under a thousandth of the frame
+    // budget, and nothing that goes wrong in this simulation goes wrong for
+    // less than half a second.
+    //
+    // What it buys is that a glitch in the field is REPORTED rather than
+    // silently wrong. Each distinct fault reaches the ship's log once, as an
+    // anomaly with its code, so a player who sees something strange has
+    // something to send back instead of a description of how it looked.
+    this.watchdog = options.watchdog === false ? null : new Watchdog({
+      every: options.debug ? 1 : 15,
+      onViolation: (v) => {
+        this.pushLog(`Computer: internal anomaly [${v.code}] — ${v.text}`, 'computer');
+        emit('anomaly', v);
+      },
+    });
+    this.conStation = null;
+    // Whether the watch officer took it because the captain walked away, or
+    // was given it. Given, they keep it until they are told otherwise; taken,
+    // they hand it straight back when the captain returns to the bridge.
+    this.conGiven = false;
+    this.conHours = 0;
+    this.conLines = [];
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
@@ -22245,6 +23366,10 @@ class Game {
     this.walkOrder.memory ??= {};
     const r = stepToward(this.walk, toId, dt, this.walkOrder.memory);
     this.walkOrder.elapsed = (this.walkOrder.elapsed ?? 0) + dt;
+    // The con changes hands the moment you step into the turbolift, not when
+    // you arrive wherever you were going. Cheap to ask every frame: it is two
+    // comparisons unless the answer has actually changed.
+    this.updateCon();
 
     if (r.arrived) {
       this.walkOrder = null;
@@ -22280,6 +23405,202 @@ class Game {
     return { ok: true, room };
   }
 
+  // -------------------------------------------------------- the diagnostic
+
+  /**
+   * Run a diagnostic on the ship.
+   *
+   * A level one diagnostic is a real thing in this franchise and it is exactly
+   * an invariant sweep: every system checked against what it is supposed to be,
+   * by hand, taking hours, because the automated pass missed something. So the
+   * order the show gives is wired to the checker this game actually has.
+   *
+   * Levels run 1 (everything, slowest) to 5 (a quick look). The level decides
+   * how much is reported and how long the crew is busy with it, not whether the
+   * invariants are checked — those are always all checked, because a checker
+   * that skips rules to save time is a checker that reports a clean ship that
+   * is not.
+   *
+   * @param {number} level 1..5
+   * @returns {{level, clean, violations, lines, hours}}
+   */
+  diagnostic(level = 5) {
+    const lvl = Math.min(5, Math.max(1, Math.round(Number(level) || 5)));
+    const violations = checkAll(this, { arenaRadius: ARENA_RADIUS });
+    const s = this.ship;
+    const lines = [];
+
+    lines.push(`Level ${['one', 'two', 'three', 'four', 'five'][lvl - 1]} diagnostic, ${s.name}.`);
+    lines.push(`Hull integrity ${Math.round(s.hullPct * 100)} percent. Shields ${Math.round(s.shieldPct * 100)} percent${s.shieldsUp ? '' : ', down'}.`);
+
+    // The deeper the level, the more of the ship is actually itemised. A level
+    // five is the glance you get on the bridge; a level one is every system.
+    const faults = Object.entries(s.subsystems)
+      .filter(([, v]) => v < 0.999)
+      .sort((a, b) => a[1] - b[1]);
+    const show = lvl <= 2 ? faults : faults.slice(0, lvl <= 3 ? 3 : 1);
+    for (const [k, v] of show) {
+      lines.push(`${k} at ${Math.round(v * 100)} percent.`);
+    }
+    if (!faults.length) lines.push('All systems nominal.');
+    if (s.fires > 0) lines.push(`${s.fires} fire${s.fires === 1 ? '' : 's'} still burning.`);
+    if (s.breaching) lines.push(`Warp core breach in ${Math.round(s.breachTimer)} seconds.`);
+    if (lvl <= 2) {
+      lines.push(`Crew ${Math.round(s.crew)} of ${s.maxCrew}. Antimatter ${Math.round(s.antimatter)} percent.`);
+      const casualties = this.crew.officers.filter((o) => !o.alive || o.injured);
+      for (const o of casualties) {
+        lines.push(`${o.rank} ${o.name} is ${o.alive ? 'in sickbay' : 'dead'}.`);
+      }
+    }
+
+    // The part that is not in the show. A violation here is a fault in the
+    // simulation rather than in the ship, and saying so plainly beats a silent
+    // wrong number — this is the readout that tells you the game is broken
+    // instead of leaving you to guess why the bars look odd.
+    for (const v of violations) {
+      lines.push(`ANOMALY [${v.code}] ${v.text}`);
+    }
+
+    const hours = [8, 4, 2, 1, 0.25][lvl - 1];
+    for (const line of lines) this.pushLog(line, 'engineering');
+    emit('diagnostic', { level: lvl, violations, lines });
+    return { level: lvl, clean: violations.length === 0, violations, lines, hours };
+  }
+
+  // --------------------------------------------------------------- the con
+
+  /** True while the captain is standing on their own bridge. */
+  get onBridge() { return this.walk.roomId === 'bridge'; }
+
+  /** The officer who has the con, or null when the captain has it. */
+  get conOfficer() {
+    return this.conStation ? (this.crew.at(this.conStation) ?? null) : null;
+  }
+
+  /**
+   * The hour of the ship's day, 0..24.
+   *
+   * One stardate unit is one day everywhere else in this game, so the fraction
+   * of a stardate is the fraction of a day, and the watch bill can be read
+   * straight off the chronometer without a second clock to keep in step.
+   */
+  get shipHour() {
+    const frac = this.clock.stardate - Math.floor(this.clock.stardate);
+    return ((frac % 1) + 1) % 1 * 24;
+  }
+
+  /** Which of the three watches is standing right now. */
+  get watch() { return watchAt(this.shipHour); }
+
+  /** The whole watch bill: who stands alpha, beta and gamma. */
+  get watchBill() { return assignWatches(this.crew); }
+
+  /** The line of succession for the con, most senior first. */
+  get watchOrder() { return watchOrder(this.crew); }
+
+  /**
+   * Hand the con over.
+   *
+   * @param {string|null} nameOrStation who to give it to; the next ranking
+   *        officer available when not said.
+   * @param {object} opts `given` marks a deliberate handover, which the officer
+   *        keeps until told otherwise rather than surrendering the moment the
+   *        captain walks back in.
+   */
+  handOverCon(nameOrStation = null, { given = true, spoken = true } = {}) {
+    if (this.conStation && !nameOrStation) {
+      // An officer already standing the watch because you walked off the
+      // bridge is confirmed in it rather than told no — saying "you have the
+      // con" to the person who already has it is how it is made official, and
+      // it means they keep it when you walk back in.
+      if (!this.conGiven && given) {
+        this.conGiven = true;
+        const holder = this.conOfficer;
+        if (spoken && holder) {
+          this.pushLog(`${holder.rank} ${holder.name}, you have the con.`, 'captain');
+          this.officerSays(holder.station, 'Aye, Captain. I have the con.', 'report');
+        }
+        return { ok: true, officer: holder };
+      }
+      return { ok: false, reason: `${this.conOfficer?.name ?? 'The watch officer'} already has the con, Captain.` };
+    }
+    let officer = null;
+    if (nameOrStation) {
+      const want = String(nameOrStation).toLowerCase();
+      officer = this.crew.officers.find((o) => o.alive && !o.injured
+        && (o.station === want || o.name.toLowerCase().includes(want)));
+      if (!officer) {
+        return { ok: false, reason: `There is no one available by that name, Captain.` };
+      }
+    } else {
+      officer = nextInLine(this.crew);
+    }
+    if (!officer) return { ok: false, reason: 'There is no one fit to relieve you, Captain.' };
+    if (officer.station === this.conStation) {
+      return { ok: false, reason: `${officer.name} already has the con, Captain.` };
+    }
+
+    this.conStation = officer.station;
+    this.conGiven = given;
+    this.conHours = 0;
+    this.conLines = [];
+    if (spoken) {
+      this.pushLog(`${officer.rank} ${officer.name}, you have the con.`, 'captain');
+      this.officerSays(officer.station, 'Aye, Captain. I have the con.', 'report');
+    }
+    emit('con', { officer, held: true });
+    return { ok: true, officer };
+  }
+
+  /**
+   * Take it back, and hear what happened.
+   *
+   * The report is the point. A watch that hands back "nothing to report" is a
+   * watch that was stood, and one that hands back three lines about a hull
+   * breach is the game telling you the ship kept going without you — which is
+   * the whole reason the con exists rather than the bridge simply pausing.
+   */
+  takeCon({ spoken = true } = {}) {
+    const officer = this.conOfficer;
+    if (!this.conStation) return { ok: false, reason: 'You have the con, Captain.', lines: [] };
+
+    const lines = officer ? handbackReport(officer, this.conHours, this.conLines) : this.conLines.slice();
+    this.conStation = null;
+    this.conGiven = false;
+    this.conHours = 0;
+    this.conLines = [];
+    if (spoken) {
+      for (const line of lines) this.pushLog(line, 'bridge');
+      this.pushLog('I have the con.', 'captain');
+    }
+    emit('con', { officer, held: false });
+    return { ok: true, officer, lines };
+  }
+
+  /**
+   * Keep the con with whoever is actually on the bridge.
+   *
+   * Called every time the captain's position changes. Walk off the bridge and
+   * the next ranking officer relieves you without being asked, because that is
+   * what happens; walk back on and they give it back — unless you handed it to
+   * them deliberately, in which case they keep it until you say otherwise.
+   */
+  updateCon() {
+    if (this.over) return null;
+    if (this.onBridge) {
+      if (this.conStation && !this.conGiven) return this.takeCon();
+      return null;
+    }
+    if (!this.conStation) {
+      const r = this.handOverCon(null, { given: false, spoken: false });
+      if (r.ok) {
+        this.officerSays(r.officer.station, 'I have the con, Captain.', 'report');
+      }
+      return r;
+    }
+    return null;
+  }
+
   /** Stand up from the chair, or take it. */
   takeChair(on = true) {
     if (on && this.walk.roomId !== 'bridge') {
@@ -22292,6 +23613,7 @@ class Game {
     this.walkOrder = null;
     const r = this.walk.sit(on);
     if (r.ok) this.pushLog(on ? 'Took the chair.' : 'Stood up from the chair.', 'captain');
+    if (r.ok && on) this.updateCon();
     return r;
   }
 
@@ -22416,6 +23738,7 @@ class Game {
     makeSurface(body, label);
     this.walkOrder = null;
     this.walk.enter('surface');
+    this.updateCon();
     this.pushLog(`Beamed down to ${label}. ${surfaceReport(body.kind)}.`, 'transporter');
     emit('beam', { down: true, label, body });
     return { ok: true, label, body };
@@ -22507,6 +23830,11 @@ class Game {
     switch (choiceId) {
       case 'engage':
         this.firstStrike = !enc.hostile;
+        // The encounter is spent the moment it becomes a battle. Left set, the
+        // next hail in the campaign was answered by whoever was in THIS one:
+        // the wrong faction, the wrong ships, and a set of choices belonging
+        // to a situation that ended some time ago.
+        this.encounter = null;
         this.startCombat(enc.ships ?? [], { name: enc.title });
         return { messages: ['Engaging.'], combat: true };
 
@@ -22774,6 +24102,43 @@ class Game {
   startCombat(hostiles, opts = {}) {
     if (!hostiles.length) return null;
 
+    // One fight at a time.
+    //
+    // A second call used to overwrite `this.engagement` outright: the fight in
+    // progress was dropped on the floor with no outcome, no experience, no
+    // salvage and no ledger entry, and the ships in it simply stopped
+    // existing. Two things can do that — an encounter rolled while another is
+    // resolving, and a mission stage that starts a battle during one.
+    if (this.engagement && !this.engagement.over) {
+      this.engagement.pushLog('More of them, closing.', 'tactical');
+      for (const s of this.scaleHostileFleet(hostiles)) this.engagement.hostiles.push(s);
+      this.engagement.placeCombatants();
+      return this.engagement;
+    }
+
+    // A battle is fought from the bridge. If the captain is standing on a
+    // planet when one starts, the ship is over their head and they are not on
+    // it — so they come back first, which is what the transporter is for and
+    // what the crew would do without being asked.
+    if (this.ashore) {
+      this.pushLog('Emergency beam-out — the ship is under attack.', 'transporter');
+      this.beamUp();
+    }
+    // And out of the turbolift. Somebody has the con while the captain walks,
+    // and that is fine, but the walk itself is abandoned: you do not stroll to
+    // the cargo bay through a firefight.
+    this.walkOrder = null;
+
+    // A fight drops the ship out of warp rather than leaving the transit
+    // running underneath it — a course that keeps advancing during a battle
+    // arrives somewhere else entirely once the battle ends.
+    if (this.transit) {
+      const near = this.transit.nearestSystem?.(this.galaxy);
+      if (near) this.locationId = near.id;
+      this.transit = null;
+      this.pushLog('Dropping out of warp — we are under attack.', 'helm');
+    }
+
     // A scripted scenario fields exactly the ships it names, unmodified. Both
     // levers otherwise apply: Fleet Admiral added a fourth Klingon to the
     // Kobayashi Maru and Story took a third off every hull in it.
@@ -22799,6 +24164,12 @@ class Game {
     const eng = this.engagement;
     if (!eng) return;
 
+    // Was this real, or was it the simulator?
+    //
+    // Captured before the flags are cleared below, because losing the ship is
+    // decided at the very end of this method and by then they are gone.
+    const simulated = this.inKobayashi === true || this.scriptedScenario === true;
+
     const killed = eng.hostiles.filter((s) => s.destroyed);
     for (const s of killed) {
       this.ledger.destroyShip(s, { system: this.locationId, stardate: this.clock.stardate });
@@ -22809,17 +24180,25 @@ class Game {
       );
     }
 
-    // A hulk is stores. Winning a fight and then leaving without stripping the
-    // wreck is a choice, and this is where the materials for the machine shop
-    // actually come from.
+    // A hulk is stores, and it is left in space until somebody goes and gets
+    // it. This used to strip itself automatically the instant the shooting
+    // stopped — which made the "strip the wreck" order pure duplication, and
+    // that order asked for no wreck, no fight and no cooldown, so it could be
+    // given on an empty bridge in an empty system as many times as you liked
+    // for as much material as you wanted. An infinite machine shop.
+    //
+    // Now the wreck is a thing that exists. Strip it, or leave the system and
+    // lose it, which is the choice the comment here always claimed it was.
     if (killed.length && (outcome === 'victory' || outcome === 'routed')) {
-      const tier = Math.max(...killed.map((s) => s.cls.tier ?? 1));
-      const haul = this.salvage({ tier });
-      const summary = Object.entries(haul)
-        .filter(([, n]) => n > 0)
-        .map(([m, n]) => `${n} ${m}`)
-        .join(', ');
-      this.officerSays('engineering', `Salvage teams recovered ${summary} from the wreckage.`, 'report');
+      this.wreck = {
+        tier: Math.max(...killed.map((s) => s.cls.tier ?? 1)),
+        systemId: this.locationId,
+        hulls: killed.length,
+        name: killed[0].name,
+      };
+      this.officerSays('engineering',
+        `${killed.length === 1 ? 'A hulk is' : `${killed.length} hulks are`} adrift off the port bow. Salvage teams are standing by, Captain.`,
+        'report');
     }
 
     if (outcome === 'victory' || outcome === 'routed') {
@@ -22832,12 +24211,51 @@ class Game {
       if (promo?.promoted) emit('captain:promoted', promo);
     }
 
-    // Casualties are permanent and recorded by name where we have one.
-    const lost = this.ship.maxCrew - this.ship.crew;
+    // Casualties from THIS fight.
+    //
+    // The count used to be `maxCrew - crew`, which is the standing deficit and
+    // not what happened here: crew losses are permanent, so every subsequent
+    // battle re-reported every death that had ever happened. A campaign that
+    // lost eleven people in its first engagement then recorded eleven more in
+    // the next one where nobody was hurt, and the ledger, the after-action
+    // report and the post-fight panel all grew without bound.
+    const lost = Math.max(0, Math.round((eng.crewAtStart ?? this.ship.maxCrew) - this.ship.crew));
     if (lost > 0) {
       this.ledger.record('lives_lost', {
         count: lost, text: `${lost} crew lost in action at ${this.location?.name}`, system: this.locationId,
       });
+    }
+
+    // The after-action record.
+    //
+    // The engagement itself is thrown away here, and it used to be the only
+    // place the result of a fight existed — so anything that wanted to know how
+    // the last battle went had to read a live engagement before it was cleared,
+    // which is a race dressed up as an API. This survives the fight, which is
+    // what an after-action report is for.
+    this.lastCombat = {
+      outcome,
+      name: eng.name,
+      killed: killed.length,
+      hostiles: eng.hostiles.length,
+      hullLeft: this.ship.hullPct,
+      crewLost: lost,
+      seconds: Math.round(eng.time),
+      systemId: this.locationId,
+      stardate: this.clock.stardate,
+    };
+
+    // If somebody else had the bridge for this, it is theirs to report.
+    if (this.conStation) {
+      const told = {
+        victory: `We were engaged by ${eng.hostiles.length} hostile${eng.hostiles.length === 1 ? '' : 's'} and destroyed ${killed.length}.`,
+        routed: `We were engaged and drove them off.`,
+        escaped: `We were engaged and broke off. We did not stay to finish it.`,
+        destroyed: `We were engaged, and we lost the ship.`,
+        parley: `We were engaged, and it ended in a negotiation.`,
+      }[outcome] ?? `We were engaged. The outcome was ${outcome}.`;
+      this.conLines.push(`${told} Hull integrity is at ${Math.round(this.ship.hullPct * 100)} percent.`);
+      if (lost > 0) this.conLines.push(`We lost ${lost} of the crew.`);
     }
 
     this.engagement = null;
@@ -22855,7 +24273,17 @@ class Game {
     this.setAlert(outcome === 'destroyed' ? 'red' : 'normal');
     emit('combat:resolved', { outcome, killed });
 
-    if (outcome === 'destroyed') this.loseTheShip();
+    // The Kobayashi Maru is a simulator, and it is unwinnable by design. Taking
+    // it therefore ended the commission — permanently, on every difficulty
+    // where losing the ship is fatal, which is most of them. A cadet who runs
+    // the no-win scenario does not lose their ship; they lose the scenario, and
+    // the record of how they behaved is the entire point.
+    if (outcome === 'destroyed' && !simulated) this.loseTheShip();
+    else if (outcome === 'destroyed') {
+      this.ship.restore();
+      this.ship.crew = this.ship.maxCrew;
+      this.pushLog('Simulation ends. The bridge lights come back up.', 'computer');
+    }
   }
 
   // ------------------------------------------------------------------ missions
@@ -22892,7 +24320,12 @@ class Game {
     if (result.complete) {
       this.earnReputation('mission_complete');
       this.missions.finishActive();
-      this.mode = MODES.BRIDGE;
+      // Not while people are shooting. Setting the mode back to BRIDGE during a
+      // battle orphaned the engagement completely: Game.update stopped stepping
+      // it, so it never reached an end condition, never paid out, and never
+      // went away — the fight simply froze mid-air and the ship was stuck in it
+      // for the rest of the campaign.
+      if (!this.engagement || this.engagement.over) this.mode = MODES.BRIDGE;
     }
     return result;
   }
@@ -22973,6 +24406,13 @@ class Game {
   }
 
   dock() {
+    // Not in the middle of a firefight. "Request docking" restores the hull,
+    // the shields, every subsystem, the magazine and the whole crew — so given
+    // during a battle it was a full repair, instantly, for nothing, and it
+    // could be given again on the next tick.
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'Nobody is opening a spacedock door for us while we are under fire, Captain.' };
+    }
     if (!this.canDock()) return { ok: false, error: 'No docking facilities here, Captain.' };
     const damaged = this.ship.hullPct < 1 || this.ship.crew < this.ship.maxCrew;
     this.ship.restore();
@@ -22992,6 +24432,16 @@ class Game {
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
     this.updateWalk(dt);
+    // Keep the ledger's clock current, so anything recorded during this tick is
+    // stamped without every caller having to remember to pass a date.
+    this.ledger.stardate = this.clock.stardate;
+    this.watchdog?.tick(this, { arenaRadius: ARENA_RADIUS });
+    // A watch is time somebody stood, not only time the app was closed.
+    //
+    // conHours was written by syncCampaign alone, so an officer who held the
+    // bridge through a battle while the captain was three decks down handed it
+    // back with "I had the con for the last hour. Nothing to report."
+    if (this.conStation) this.conHours += dt / 3600;
 
     switch (this.mode) {
       case MODES.TRANSIT: {
@@ -23016,6 +24466,22 @@ class Game {
       case MODES.COMBAT: {
         if (!this.engagement) { this.mode = MODES.BRIDGE; break; }
         this.engagement.update(dt);
+        // The game finishes its own fights.
+        //
+        // Everything that happens after a battle — the experience, the salvage,
+        // the faction standing, the casualty record, losing the ship — used to
+        // run from one `on('combat:end')` listener in main.js, which is to say
+        // it only ran when a screen was attached. Headless, a fight ended and
+        // nothing followed it: the engagement stayed non-null and over, the
+        // mode stayed COMBAT, and every test that fought a battle went on to
+        // assert against a state the real app never has.
+        //
+        // Doing it here rather than in the event also stops it being
+        // re-entrant. `end()` emits from inside `engagement.update()`, so the
+        // old listener nulled `this.engagement` while the engagement's own
+        // update was still on the stack, one frame short of touching a field
+        // on an object the game had already thrown away.
+        if (this.engagement?.over) this.finishCombat(this.engagement.outcome);
         break;
       }
 
@@ -23053,6 +24519,13 @@ class Game {
     }
 
     this.ship.restore();
+    // A crew, too. `restore` puts the hull and the systems back and says
+    // nothing about the people, so a ship recovered after being destroyed by
+    // total crew loss came back with nobody aboard — and Ship.update destroys
+    // a ship with no crew, so it was killed again on the first tick of every
+    // subsequent fight, forever. Replacements are found at the next starbase;
+    // that is what "under tow" means.
+    this.ship.crew = Math.max(this.ship.crew, Math.round(this.ship.maxCrew * 0.6));
     this.ship.hull = this.ship.maxHull * 0.3;
     for (const f of Object.keys(this.ship.shields)) this.ship.shields[f] = 0;
     this.ship.shieldsUp = false;
@@ -23115,6 +24588,20 @@ class Game {
       podJettisoned: this.podJettisoned === true,
       warpFactor: this.warpFactor,
       walk: this.walk.save(),
+      // Which surface features have already been worked.
+      //
+      // Left out, every landing site reset on reload: the same outcrop could
+      // be surveyed again for the same materials, the same experience and the
+      // same ledger entry, indefinitely, by quitting to the menu and coming
+      // back. A survey is a thing you did, and it stays done.
+      surveyed: { ...(this.surveyed ?? {}) },
+      wreck: this.wreck ?? null,
+      // The watch, and what it has to report. A station id rather than the
+      // officer, because the roster is rebuilt from its own record on load and
+      // an officer object saved here would be a second, stale copy of them.
+      con: this.conStation
+        ? { station: this.conStation, given: this.conGiven === true, hours: this.conHours, lines: this.conLines }
+        : null,
       // Two ids, not a position. The vista is regenerated from the system id on
       // load and is identical every time, so the world is still exactly where
       // it was — saving coordinates would only give them a chance to disagree.
@@ -23203,10 +24690,32 @@ class Game {
     if (ship.hullPct > before.hull + 0.02) {
       lines.push(`Hull integrity is up from ${Math.round(before.hull * 100)} to ${Math.round(ship.hullPct * 100)} percent.`);
     }
-    for (const line of lines) this.pushLog(line, 'engineering');
+    // Somebody had this ship while you were gone.
+    //
+    // If the captain walked away without handing the con over — closed the app
+    // in the chair, which is how it usually happens — the watch officer took it,
+    // because that is what a watch is for. Everything that happened is theirs
+    // to report, and they report it the moment the captain is back on the
+    // bridge to hear it. Off the bridge, they hold on to it and say so.
+    if (!this.conStation) this.handOverCon(null, { given: false, spoken: false });
+    const relief = this.conOfficer;
 
-    emit('campaign:resumed', { hours: pending, lines });
-    return { hours: pending, lines };
+    let report = lines;
+    if (relief) {
+      this.conHours += pending;
+      this.conLines.push(...lines);
+      if (this.onBridge) {
+        report = this.takeCon().lines;
+      } else {
+        report = [`${relief.rank} ${relief.name} has the con and is standing by to report.`];
+        this.pushLog(report[0], 'bridge');
+      }
+    } else {
+      for (const line of lines) this.pushLog(line, 'engineering');
+    }
+
+    emit('campaign:resumed', { hours: pending, lines: report });
+    return { hours: pending, lines: report };
   }
 
   // ------------------------------------------------- the Kobayashi Maru
@@ -23272,6 +24781,12 @@ class Game {
 
   /** Start a job in the machine shop. */
   fabricate(recipeId) {
+    // The machine shop is not a combat action. Left unguarded, a hull patch
+    // could be started and finished under fire — hours of work compressed into
+    // a battle, repeatedly, which is a free repair with extra steps.
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'The shop is sealed at red alert, Captain.' };
+    }
     return beginFabrication(this, recipeId);
   }
 
@@ -23280,6 +24795,9 @@ class Game {
    * than hours that merely passed. Costs the same time on the stardate.
    */
   workTheShop(hours = 1) {
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'Not while we are under fire, Captain.' };
+    }
     if (!this.fabrication) return { ok: false, reason: 'Nothing on the bench, Captain.' };
     const done = advanceFabrication(this, hours);
     this.clock.advanceStardate(hours / 24);
@@ -23289,6 +24807,38 @@ class Game {
   /** Strip a wreck for stores. */
   salvage(opts = {}) {
     return salvageWreck(this, this.rng, opts);
+  }
+
+  /** Is there anything out there worth sending a team to? */
+  get wreckHere() {
+    return this.wreck && this.wreck.systemId === this.locationId ? this.wreck : null;
+  }
+
+  /**
+   * Send the salvage teams across.
+   *
+   * Once per wreck, and only where the wreck actually is. Refusals rather than
+   * a silent no-op, because "strip the wreck" with nothing to strip used to
+   * hand over materials anyway.
+   */
+  stripWreck() {
+    const wreck = this.wreckHere;
+    if (!wreck) {
+      return { ok: false, reason: 'There is nothing out there to strip, Captain.' };
+    }
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, reason: 'Not while we are still under fire, Captain.' };
+    }
+    const haul = this.salvage({ tier: wreck.tier });
+    this.wreck = null;
+    const summary = Object.entries(haul)
+      .filter(([, n]) => n > 0)
+      .map(([m, n]) => `${n} ${m}`)
+      .join(', ');
+    this.officerSays('engineering',
+      summary ? `Salvage teams recovered ${summary} from the wreckage.`
+        : 'There was nothing left worth bringing aboard, Captain.', 'report');
+    return { ok: true, haul, summary };
   }
 
   /** What the shop is building, in a form the UI can render. */
@@ -23359,6 +24909,14 @@ class Game {
     // which is where every commission starts anyway.
     g.walk = Walker.load(data.walk ?? {});
     g.walkOrder = null;
+    // Records written before there was a watch put the captain back in the
+    // chair with the con, which is what they had.
+    g.surveyed = { ...(data.surveyed ?? {}) };
+    g.wreck = data.wreck ?? null;
+    g.conStation = data.con?.station ?? null;
+    g.conGiven = data.con?.given === true;
+    g.conHours = Number(data.con?.hours) || 0;
+    g.conLines = Array.isArray(data.con?.lines) ? data.con.lines.slice() : [];
     // An orbit only survives if it belongs to where the ship actually is. A
     // record saved mid-transit, or one carrying a body that no longer exists,
     // restores to station-keeping rather than to an orbit of nothing.
@@ -23433,6 +24991,39 @@ function tap(fn, cue = 'ui_tap', feel = 'tap') {
   };
 }
 
+/**
+ * The con, as a button and as the phrase that does the same thing.
+ *
+ * Two states and never both: either you have it and can give it away, or a
+ * watch officer has it and is holding it until you take it back. The label
+ * names whoever has it, because "take the con back" from nobody in particular
+ * is the kind of line that makes a crew feel like furniture.
+ */
+function conButtons(g, app) {
+  const holder = g.conOfficer;
+  const out = [];
+  if (holder) {
+    out.push(button(`${holder.name} has the con`, tap(() => {
+      const r = g.takeCon();
+      if (!r.ok) g.pushLog(r.reason, 'computer');
+      app.render();
+    }), { color: 'orange', sub: 'Take it back and hear the report', say: 'i have the con' }));
+  } else {
+    const relief = g.watchOrder[0];
+    out.push(button('Hand over the con', tap(() => {
+      const r = g.handOverCon();
+      if (!r.ok) g.pushLog(r.reason, 'computer');
+      app.render();
+    }), {
+      color: 'ghost',
+      sub: relief ? `${relief.rank} ${relief.name} stands the watch` : 'Nobody is fit to relieve you',
+      disabled: !relief,
+      say: 'you have the con',
+    }));
+  }
+  return out;
+}
+
 // ================================================================ BRIDGE
 
 /**
@@ -23492,6 +25083,7 @@ function bridgeScreen(app) {
     hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
     hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }),
       { color: 'blue', say: 'stand up' }));
+    hand.push(...conButtons(g, app));
   } else if (w.room.surface) {
     hand.push(el('p', { class: 'muted', text: `On the surface of ${w.room.name}. ${surfaceReport(w.room.kind)}.` }));
     hand.push(button('Energise — beam up', tap(() => {
@@ -23504,6 +25096,14 @@ function bridgeScreen(app) {
     if (w.roomId === 'bridge') {
       hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }),
         { color: 'orange', say: 'take the chair' }));
+      hand.push(...conButtons(g, app));
+    } else if (g.conOfficer) {
+      // Off the bridge, the con is not yours to take from down here — but you
+      // should be able to see who is standing it without walking back up.
+      hand.push(el('p', {
+        class: 'muted',
+        text: `${g.conOfficer.rank} ${g.conOfficer.name} has the con. ${g.watch.name} is standing.`,
+      }));
     }
   }
 
@@ -24024,12 +25624,14 @@ function tacticalScreen(app) {
     // face you are not presenting. Until this row existed the player's only
     // elevation control was "Come about", which merely points at the target.
     el('div', { class: 'grid-3' }, [
+      // Twenty degrees a press, and "climb" is now twenty degrees a word. The
+      // button and the phrase printed on it have to be the same order.
       button('Climb', tap(() => {
-        eng.setPitch(g.ship.desiredPitch + 20); app.render();
+        eng.setPitch((g.ship.desiredPitch ?? 0) + 20); app.render();
       }), { say: 'climb', color: 'blue' }),
       button('Level', tap(() => { eng.setPitch(0); app.render(); }), { say: 'level off', color: 'blue' }),
       button('Dive', tap(() => {
-        eng.setPitch(g.ship.desiredPitch - 20); app.render();
+        eng.setPitch((g.ship.desiredPitch ?? 0) - 20); app.render();
       }), { say: 'dive', color: 'blue' }),
     ]),
     readout('Elevation', (g.ship.pitch + 70) / 140,
@@ -24105,23 +25707,43 @@ function signaturePanel(app) {
 function powerPanel(app) {
   const g = app.game;
   return panel('Power Distribution', [
+    // Every preset carries the phrase that sets it. `PRESETS[id].order` is
+    // already the words an officer would use — "power to weapons" — so the
+    // button and the order line say the same thing by construction rather than
+    // by two lists being kept in step by hand.
     el('div', { class: 'grid-3' }, PRESET_LIST.slice(0, 3).map((p) =>
       button(p.label, tap(() => {
         g.ship.power.applyPreset(p.id);
         audio.play('power_reroute');
         app.render();
-      }), { color: g.ship.power.preset === p.id ? 'green' : 'blue' }))),
+      }), {
+        color: g.ship.power.preset === p.id ? 'green' : 'blue',
+        say: `${p.id} posture`,
+      }))),
     el('div', { class: 'grid-2' }, PRESET_LIST.slice(3).map((p) =>
       button(p.label, tap(() => {
         g.ship.power.applyPreset(p.id);
         audio.play('power_reroute');
         app.render();
-      }), { color: g.ship.power.preset === p.id ? 'green' : 'blue' }))),
+      }), {
+        color: g.ship.power.preset === p.id ? 'green' : 'blue',
+        say: `${p.id} posture`,
+      }))),
     ...SUBSYSTEMS.map((s) => powerSlider(SUBSYSTEM_LABEL[s], g.ship.power.target[s], (v) => {
       g.ship.power.set(s, v);
       audio.play('ui_tap', { throttle: 80 });
     })),
     el('p', { class: 'hint', text: `Total ${Math.round(g.ship.power.total)} of ${g.ship.power.cap}. Levels settle over a few seconds — the EPS grid is not instant.` }),
+    // The engineering console is where a diagnostic is actually run from.
+    button('Run a diagnostic', tap(() => {
+      const r = g.diagnostic(1);
+      audio.play(r.clean ? 'computer_ack' : 'ui_deny');
+      app.render();
+    }), {
+      color: 'ghost',
+      sub: 'Level one — every system, by hand',
+      say: 'run a level one diagnostic',
+    }),
   ]);
 }
 
@@ -25684,6 +27306,7 @@ const { hashSeed } = __require("src/core/rng.js");
 const { saveGame, loadSave, hasSave, loadSettings, saveSettings: persistSettings, exportSave, downloadSave, importSave } = __require("src/core/save.js");
 
 const { ABILITIES } = __require("src/sim/officers.js");
+const { WATCHES } = __require("src/sim/watch.js");
 const { Ship, FACINGS } = __require("src/sim/ship.js");
 const { parseOrder } = __require("src/ui/orders.js");
 const { SKILLS } = __require("src/sim/skills.js");
@@ -25894,10 +27517,11 @@ class App {
     });
 
     on('combat:begin', () => { this.go('tactical'); });
-    on('combat:end', ({ outcome }) => {
-      this.game.finishCombat(outcome);
-      this.showCombatResult(outcome);
-    });
+    // Presentation only. The game settles the fight itself on its own tick —
+    // see the COMBAT case in Game.update — and says so with `combat:resolved`.
+    // This listener used to be the thing that awarded the experience and took
+    // the salvage, which meant the rules of the game lived in the UI.
+    on('combat:resolved', ({ outcome }) => { this.showCombatResult(outcome); });
 
     on('combat:fire', ({ attacker, weapon, type }) => {
       if (type === 'torpedo') audio.play('torpedo_launch', { throttle: 120 });
@@ -26294,21 +27918,29 @@ class App {
     // Remembered so the console can be rebuilt when the state it shows changes.
     // Without this, throwing a warp switch set the factor and left the switch
     // drawn in its old position — the order worked and the console lied.
-    this.consoleOpen = { key, station };
+    //
+    // Only for the consoles that actually open one. Half the keys below are
+    // navigation: they change screen and return without a modal, and marking
+    // those as an open console left `consoleOpen` set with nothing to rebuild
+    // — so the next time anything marked the console dirty, the refresh in
+    // `render` called back in here and navigated the player to that screen
+    // again. Every order given after using Weapons Control teleported you to
+    // the tactical plot.
     const body = [];
     switch (key) {
-      case 'galaxy': this.go('galaxy'); return;
-      case 'tactical': this.go('tactical'); return;
-      case 'log': this.go('log'); return;
-      case 'captain': this.go('captain'); return;
-      case 'crew': this.go('crew'); return;
-      case 'ship': this.go('ship'); return;
-      case 'chair': this.go('chair'); return;
+      case 'galaxy': this.consoleOpen = null; this.go('galaxy'); return;
+      case 'tactical': this.consoleOpen = null; this.go('tactical'); return;
+      case 'log': this.consoleOpen = null; this.go('log'); return;
+      case 'captain': this.consoleOpen = null; this.go('captain'); return;
+      case 'crew': this.consoleOpen = null; this.go('crew'); return;
+      case 'ship': this.consoleOpen = null; this.go('ship'); return;
+      case 'chair': this.consoleOpen = null; this.go('chair'); return;
       case 'power': body.push(screens.powerPanel(this)); break;
       case 'shop': body.push(screens.machineShopPanel(this)); break;
       case 'comms':
         // Hailing is an ORDER, not a console read-out: it goes through the same
         // dispatch a typed "open a channel" does, so there is one path.
+        this.consoleOpen = null;
         this.executeOrder({ action: 'hail' }, 'hailing frequencies open');
         return;
       case 'science': {
@@ -26381,6 +28013,9 @@ class App {
         body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
         break;
     }
+    // Set here rather than at the top: everything above that navigates has
+    // already returned, so what is left is a console that is genuinely open.
+    this.consoleOpen = { key, station };
     this.showConsole(station?.label ?? 'Console', body);
   }
 
@@ -26616,6 +28251,8 @@ class App {
 
     const career = c.career;
     let line = '';
+    // A power that ends in a screen of its own rather than a confirmation.
+    let openAfter = null;
 
     switch (c.careerId) {
       case 'command': {
@@ -26669,10 +28306,14 @@ class App {
       }
       case 'diplomatic': {
         // Parley — they will hear you out whatever their doctrine says.
-        if (!eng) { audio.play('ui_deny'); return false; }
+        if (!eng || eng.over) { audio.play('ui_deny'); return false; }
         g.parleyForced = true;
         line = 'Channel forced open. They are listening whether they meant to or not.';
-        this.openHail(eng.hostiles[0]?.faction);
+        // Opened AFTER the announcement, not before it. `showMessage` replaces
+        // whatever modal is up, so opening the channel here meant the power's
+        // own confirmation dialog immediately closed the channel it had just
+        // forced open — the one thing the ability exists to do.
+        openAfter = () => this.openHail(eng.hostiles[0]?.faction);
         break;
       }
       case 'intelligence': {
@@ -26701,7 +28342,11 @@ class App {
     audio.play('ui_confirm');
     audio.play('computer_ack');
     haptic('confirm');
-    this.showMessage(career.signature, [line]);
+    // A power whose whole result is a screen of its own shows that instead of
+    // a dialog it would only have to close again. The line is in the log
+    // either way.
+    if (openAfter) openAfter();
+    else this.showMessage(career.signature, [line]);
     this.render();
     return true;
   }
@@ -26867,13 +28512,17 @@ class App {
       case 'course': {
         const r = g.setCourse(order.system, order.warp);
         if (r.ok) { audio.play('warp_engage'); haptic('warp'); audio.setAlertLevel('warp'); }
-        else audio.play('ui_deny');
+        // A refusal that is only a beep is a bug report waiting to happen: the
+        // order had a reason and the helm never said it. "We are under fire,
+        // Captain" is the difference between a game that ignored you and a
+        // crew that answered.
+        else { audio.play('ui_deny'); ack('helm', r.error ?? 'We cannot, Captain.'); }
         break;
       }
       case 'orbit': {
         const r = g.enterOrbit();
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
-        else audio.play('ui_deny');
+        else { audio.play('ui_deny'); ack('helm', r.error ?? 'We cannot, Captain.'); }
         break;
       }
       case 'break_orbit': {
@@ -26945,8 +28594,9 @@ class App {
         break;
       }
       case 'pitch': {
-        if (!eng) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
-        eng.setPitch(order.value);
+        if (!eng || eng.over) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        const from = order.relative ? (g.ship.desiredPitch ?? 0) : 0;
+        eng.setPitch(from + order.value);
         const said = order.value === 0 ? 'Levelling off.'
           : order.value > 0 ? `Coming up ${Math.round(order.value)} degrees.`
             : `Taking her down ${Math.round(-order.value)} degrees.`;
@@ -26976,6 +28626,9 @@ class App {
         break;
       case 'shields':
         g.ship.shieldsUp = order.up;
+        // Lowering them on purpose is a standing decision; being shot out is
+        // not. Only the first survives the emitter being repaired.
+        g.ship.shieldsDown = !order.up;
         ack('tactical', order.up ? 'Shields up.' : 'Shields down.');
         break;
       case 'reinforce':
@@ -27009,8 +28662,11 @@ class App {
         break;
       }
       case 'fire': {
-        if (!eng) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
-        const n = eng.fireAll();
+        if (!eng || eng.over) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
+        // What was actually asked for. The parser has always read the weapon
+        // out of the order and this threw it away, so "fire phasers" launched
+        // torpedoes.
+        const n = eng.fireAll(order.weaponType ?? 'all');
         if (!n) audio.play('ui_deny');
         break;
       }
@@ -27087,6 +28743,41 @@ class App {
         else { audio.play('ui_deny'); ack('computer', r.reason); }
         break;
       }
+      case 'hand_over_con': {
+        // Who was named, if anyone. The roster is the only place that knows,
+        // so the match happens here rather than in the parser.
+        const said = String(order.said ?? '').toLowerCase();
+        const named = g.crew.officers.find((o) => o.alive && !o.injured
+          && said.includes(o.name.split(' ').pop().toLowerCase()));
+        const r = g.handOverCon(named ? named.station : null);
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'take_con': {
+        const r = g.takeCon();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'diagnostic': {
+        const r = g.diagnostic(order.level);
+        audio.play(r.clean ? 'computer_ack' : 'ui_deny');
+        if (!r.clean) haptic('alert');
+        break;
+      }
+      case 'watch_bill': {
+        const holder = g.conOfficer;
+        g.pushLog(holder
+          ? `${holder.rank} ${holder.name} has the con. ${g.watch.name} is standing.`
+          : `You have the con, Captain. ${g.watch.name} is standing.`, 'computer');
+        for (const w of WATCHES) {
+          const names = g.watchBill[w.id].map((o) => o.name).join(', ');
+          g.pushLog(`${w.name}: ${names || 'unmanned'}.`, 'computer');
+        }
+        audio.play('computer_ack');
+        break;
+      }
       case 'help':
         audio.play('computer_ack');
         this.go('reference');
@@ -27153,10 +28844,9 @@ class App {
         break;
       }
       case 'salvage': {
-        const haul = g.salvage({ tier: 3 });
-        const summary = Object.entries(haul).filter(([, n]) => n > 0)
-          .map(([m, n]) => `${n} ${m}`).join(', ');
-        ack('engineering', `Recovered ${summary}.`);
+        const r = g.stripWreck();
+        if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('engineering', r.reason); }
         break;
       }
 
@@ -27183,6 +28873,16 @@ class App {
       case 'ability': {
         const ability = ABILITIES[order.ability];
         const officer = ability ? g.crew.officerFor(ability.id) : null;
+        // An officer who is not ready is the same as no officer, for the
+        // purpose of choosing between the ability and the plain order behind
+        // it. `useAbility` refuses on cooldown with a deny beep and returns, so
+        // "evasive manoeuvres" — which is BOTH a trained ability and an
+        // ordinary helm order — silently did nothing at all for thirty seconds
+        // after its first use.
+        if (officer && ability && !officer.ready(ability.id) && order.fallback) {
+          this.executeOrder(order.fallback, raw);
+          return;
+        }
         if (officer && ability) {
           this.useAbility(officer, ability);
         } else if (order.fallback) {
@@ -27528,7 +29228,18 @@ class App {
   updateOverlay() {
     const g = this.game;
     const overlay = this.tacticalOverlay;
-    if (!overlay || !g?.engagement) return;
+    if (!overlay) return;
+    // No fight, no chips.
+    //
+    // This returned early when the engagement went away and left whatever was
+    // painted on the last frame of the battle sitting there — the hull bars,
+    // the target reticle and the dead fleet's labels, over the first-person
+    // bridge, for the rest of the session. The overlay is a view of a fight;
+    // with no fight it has to be empty.
+    if (!g?.engagement || g.engagement.over) {
+      if (overlay.childNodes.length) clear(overlay);
+      return;
+    }
     const eng = g.engagement;
     const p = g.ship;
     clear(overlay);

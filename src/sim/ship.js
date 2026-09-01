@@ -120,6 +120,9 @@ export class Ship {
     this.shields = Object.fromEntries(FACINGS.map((f) => [f, this.maxShield]));
     this.shieldRegen = cls.shieldRegen / FACINGS.length;
     this.shieldsUp = true;
+    // Lowered deliberately, as opposed to shot out. Only the first stays down
+    // once the emitter is repaired.
+    this.shieldsDown = false;
 
     // ---- crew ----
     this.maxCrew = cls.crew;
@@ -190,8 +193,12 @@ export class Ship {
     const prevMaxShield = this.maxShield;
     const prevMaxHull = this.maxHull;
 
-    this.maxHull = this.cls.hull * this.mods.hullMax;
-    this.maxShield = (this.cls.shields / FACINGS.length) * this.mods.shieldMax;
+    // `mod()` rather than `mods`, so a BUFF counts. Reading the raw table meant
+    // every temporary shieldMax or hullMax an officer ability granted was
+    // computed, reported in the UI, and then silently ignored by the only two
+    // numbers it was supposed to change.
+    this.maxHull = this.cls.hull * this.mod('hullMax');
+    this.maxShield = (this.cls.shields / FACINGS.length) * this.mod('shieldMax');
 
     if (prevMaxShield > 0) {
       const ratio = this.maxShield / prevMaxShield;
@@ -219,6 +226,10 @@ export class Ship {
   addBuff(buff) {
     this.buffs = this.buffs.filter((b) => b.id !== buff.id);
     this.buffs.push(buff);
+    // A buff can raise a maximum, and the maxima are cached. Without this the
+    // ability took effect only the next time something else happened to
+    // recompute them, which for most of a fight is never.
+    this.recomputeDerived();
   }
 
   hasBuff(id) {
@@ -346,11 +357,14 @@ export class Ship {
 
     this.power.update(dt);
 
-    // Buffs expire.
+    // Buffs expire. A buff that raised a maximum has to give it back, so the
+    // maxima are recomputed on the tick anything actually left.
     if (this.buffs.length) {
+      const before = this.buffs.length;
       this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
       for (const b of this.buffs) if (b.until !== undefined) b.until -= dt;
       this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
+      if (this.buffs.length !== before) this.recomputeDerived();
     }
 
     // Movement — yaw, then pitch, then integrate along the nose.
@@ -386,12 +400,33 @@ export class Ship {
     this.y += this.velocity.y * dt;
     this.z = (this.z ?? 0) + this.velocity.z * dt;
 
+    // The emitter is back, so the shields are back — unless they were lowered
+    // on purpose, which is a different thing and stays that way.
+    if (!this.shieldsUp && !this.shieldsDown && !this.cloaked && this.subsystems.shields > 0.25) {
+      this.shieldsUp = true;
+      emit('ship:shields', { ship: this, up: true, reason: 'emitter restored' });
+    }
+
     // Shield regeneration — suppressed while cloaked or shields down.
     if (this.shieldsUp && !this.cloaked && this.subsystems.shields > 0.05) {
       const rate = this.shieldRegen * this.power.factor('shields')
         * this.subsystems.shields * this.mod('shieldRegen') * dt;
       for (const f of FACINGS) {
+        // Regeneration RAISES a shield. It must never lower one, and it did:
+        // the clamp was a flat Math.min against maxShield, so the twenty per
+        // cent overcharge that `reinforceShield` had just moved onto the bow
+        // was deleted on the very next tick. The order took charge off five
+        // facings and destroyed it — strictly worse than not giving it.
+        if (this.shields[f] >= this.maxShield) continue;
         this.shields[f] = Math.min(this.maxShield, this.shields[f] + rate);
+      }
+    }
+
+    // An overcharged facing bleeds back toward its normal ceiling rather than
+    // holding forever. Slow enough to survive the pass it was called for.
+    for (const f of FACINGS) {
+      if (this.shields[f] > this.maxShield) {
+        this.shields[f] = Math.max(this.maxShield, this.shields[f] - this.maxShield * 0.012 * dt);
       }
     }
 
@@ -404,7 +439,12 @@ export class Ship {
 
     // Fires burn crew and hull until damage control gets to them.
     if (this.fires > 0) {
-      this.hull -= this.fires * 6 * dt;
+      // Floored, like every other write to the hull. This one was not, and it
+      // is the only place damage is applied outside takeDamage: a ship burning
+      // at zero hull kept subtracting, so hullPct went negative and every
+      // percentage read off it — the bars, the AI's break-off threshold, the
+      // condition line — read nonsense until the breach timer finally ran out.
+      this.hull = Math.max(0, this.hull - this.fires * 6 * dt);
       if (rng && rng.chance(0.4 * dt)) this.crew = Math.max(0, this.crew - 1);
       // Auxiliary power runs damage control.
       const control = 0.06 * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
@@ -530,6 +570,11 @@ export class Ship {
     if (key === 'warpcore' && this.subsystems.warpcore <= 0.15 && !this.breaching) {
       this.beginBreach(this.subsystems.warpcore <= 0 ? 12 : 28);
     }
+    // Losing the emitter drops the shields. Getting it back has to raise them
+    // again, and nothing did — passive repair walked `subsystems.shields` from
+    // zero to a clean 1.0 over ten minutes and left `shieldsUp` false forever,
+    // so one hit on the shield generator cost you shields for the rest of the
+    // commission. `shieldsDown` remembers whether it was the captain's doing.
     if (key === 'shields' && this.subsystems.shields <= 0.05) this.shieldsUp = false;
   }
 
@@ -656,6 +701,12 @@ export class Ship {
       crew: this.crew, injured: this.injured,
       subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
       fires: this.fires, coreEjected: this.coreEjected, mods: this.mods,
+      // A breach in progress is state, not decoration. Left out, a save taken
+      // during the twenty seconds you have to eject the core came back as a
+      // ship sitting at zero hull with no countdown running and no way to die
+      // — undamaged by anything that followed, and never destroyed.
+      breaching: this.breaching, breachTimer: this.breachTimer,
+      destroyed: this.destroyed, destroyCause: this.destroyCause ?? null,
       power: this.power.save(),
     };
   }
@@ -675,7 +726,15 @@ export class Ship {
       crew: data.crew, injured: data.injured ?? 0,
       torpedoes: data.torpedoes ?? s.torpedoes, antimatter: data.antimatter ?? 100,
       fires: data.fires ?? 0, coreEjected: data.coreEjected ?? false,
+      breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
+      destroyed: data.destroyed === true,
+      destroyCause: data.destroyCause ?? null,
     });
+    // A record written before a breach was saved, restored onto a hull that is
+    // already gone, would load as the very thing the invariant checker calls
+    // `ship.zerohull.adrift` — dead, not dying, and on the board forever. Give
+    // it the countdown it should have had.
+    if (s.hull <= 0 && !s.destroyed && !s.breaching) s.beginBreach();
     // Shield migration, from four facings to six.
     //
     // A save written before the third axis existed has no dorsal or ventral

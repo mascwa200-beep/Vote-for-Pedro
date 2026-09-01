@@ -232,6 +232,18 @@ export function scoreAppeal(text, record) {
  * this is what finally earns it as a general technique.
  */
 export function forceChannel(game) {
+  // There has to be somebody on the other end.
+  //
+  // The technique reroutes the order line: while the channel is open, whatever
+  // the captain types is what they SAY to the commander rather than an order to
+  // their own crew. With no gate on this at all it could be used on an empty
+  // bridge in an empty system — which forced a channel to nobody and left every
+  // order for the rest of the session being read as an appeal to a Klingon who
+  // was never there.
+  const eng = game.engagement;
+  if (!eng || eng.over || !eng.liveHostiles?.length) {
+    return { ok: false, reasons: ['There is nobody out there to hail, Captain.'] };
+  }
   const status = gambitStatus(game);
   if (!status.unlocked) {
     return { ok: false, reasons: status.reasons };

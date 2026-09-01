@@ -48,6 +48,13 @@ export class PowerGrid {
     // Rebalancing is not instant — the EPS grid takes a moment to settle.
     this.target = { ...this.levels };
     this.transferRate = 55; // power units per second
+    // Balanced is 50 to each of four subsystems, which is 200 — and plenty of
+    // hulls have a smaller grid than that. A Bird-of-Prey has a cap of 190, so
+    // it was built drawing 200 and was over its own budget from the first tick
+    // of its existence, with every `factor()` reading computed off a
+    // distribution the ship could not actually supply.
+    this.normalize();
+    this.levels = { ...this.target };
   }
 
   get total() {
@@ -103,6 +110,29 @@ export class PowerGrid {
       excess = this.total - budget;
     }
     for (const s of SUBSYSTEMS) this.target[s] = Math.max(0, Math.round(this.target[s]));
+
+    // The protected subsystem is protected from being DRAINED, not exempt from
+    // the cap. With the donors emptied and the total still over budget it was
+    // simply left there — so after ejecting the warp core, which cuts the cap
+    // to 45 per cent, asking for 100 to weapons kept 100 to weapons and the
+    // whole point of the ejection penalty went away.
+    if (protectedSub && this.total > budget) {
+      const others = SUBSYSTEMS.reduce((n, s) => (s === protectedSub ? n : n + this.target[s]), 0);
+      this.target[protectedSub] = Math.max(0, Math.round(budget - others));
+    }
+
+    // Rounding four numbers up can put the total back over the cap by a couple
+    // of points, which is how a grid at 92 of 90 survived a function whose
+    // entire job is "keep the sum at or under cap". Shave the largest until it
+    // does not.
+    let over = this.total - budget;
+    while (over > 0) {
+      const biggest = SUBSYSTEMS.reduce((a, b) => (this.target[a] >= this.target[b] ? a : b));
+      if (this.target[biggest] <= 0) break;
+      const take = Math.min(over, this.target[biggest]);
+      this.target[biggest] -= take;
+      over -= take;
+    }
   }
 
   /** Ease actual levels toward target. Called every sim step. */

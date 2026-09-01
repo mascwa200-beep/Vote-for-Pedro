@@ -385,9 +385,15 @@ export function findElevation(text, tokens = text.split(/\s+/).filter(Boolean)) 
 
   if (up === down) return null;   // neither, or a contradictory both
 
-  // "climb 30 degrees" is exact; a bare "climb" is a decisive but sane angle.
+  // "climb 30 degrees" names an attitude and is exact. A bare "climb" is a
+  // step, and the step is twenty degrees because that is what the Climb button
+  // on the helm console does — a button and the phrase printed on it have to
+  // be the same order, and they were not: the button moved the nose twenty
+  // degrees from where it was pointed and the word set it to thirty-five
+  // absolute, so pressing twice gave forty and saying it twice gave
+  // thirty-five.
   const m = text.match(/\b(-?\d{1,2})\s*(?:deg|degrees?)?\b/);
-  const magnitude = m ? Math.min(70, Math.abs(parseInt(m[1], 10))) : 35;
+  const magnitude = m ? Math.min(70, Math.abs(parseInt(m[1], 10))) : 20;
   return (up ? 1 : -1) * magnitude;
 }
 

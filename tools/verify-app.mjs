@@ -10,7 +10,7 @@
 //   NODE_PATH=/tmp/pw/node_modules node tools/verify-app.mjs
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync, openSync, statSync } from 'node:fs';
+import { mkdirSync, existsSync, openSync, statSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -664,6 +664,9 @@ try {
     const app = globalThis.__app;
     app.game.walk.enter('bridge');
     app.game.walk.sit(true);
+    // Walking back onto your own bridge is what takes the con back, and
+    // teleporting there in a harness has to say so.
+    app.game.updateCon();
     app.render();
   });
   await dismissModals(page);
@@ -677,6 +680,118 @@ try {
   }));
   check('and "break orbit" gets the ship out of it again',
     broken.orbit === false && broken.drawing === true, JSON.stringify(broken));
+  await dismissModals(page);
+
+  // ---- The ship checks itself ----
+  //
+  // A level one diagnostic is the invariant sweep given as an order. The point
+  // of driving it here rather than only in unit tests is that the checker has
+  // to be running inside the real app, on the real game object, with a renderer
+  // attached — which is exactly where a defect would otherwise go unnoticed.
+  await page.fill('.orderbar input', 'run a level one diagnostic');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(400);
+  const diag = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    const said = g.log.slice(-12).map((e) => e.text);
+    return {
+      said,
+      anomalies: said.filter((t) => /ANOMALY/.test(t)),
+      hasHull: said.some((t) => /Hull integrity/.test(t)),
+      watchdog: !!g.watchdog,
+      seen: g.watchdog?.total ?? -1,
+    };
+  });
+  check('a typed order runs a level one diagnostic',
+    diag.hasHull === true, diag.said.join(' | '));
+  check('the diagnostic reports no anomaly in a healthy ship',
+    diag.anomalies.length === 0, diag.anomalies.join(' | '));
+  check('the simulation is watching itself in the running app',
+    diag.watchdog === true && diag.seen === 0, JSON.stringify({ w: diag.watchdog, seen: diag.seen }));
+
+  // And it must actually notice. Poison one number and confirm the running
+  // game reports it rather than carrying on with a broken ship.
+  const caught = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const before = g.ship.x;
+    g.ship.x = NaN;
+    const r = g.diagnostic(1);
+    g.ship.x = before;
+    g.watchdog?.reset();
+    return { clean: r.clean, codes: r.violations.map((v) => v.code) };
+  });
+  check('and it catches a poisoned number in the live game',
+    caught.clean === false && caught.codes.includes('ship.x.finite'), JSON.stringify(caught));
+  await dismissModals(page);
+
+  // ---- The watch, and who has the con ----
+  //
+  // The bridge is never empty. Driven through the order bar and through a real
+  // walk rather than by calling the methods, because the whole point is that
+  // the con follows the captain around the ship without being asked to.
+  await page.fill('.orderbar input', 'number one, you have the con');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(400);
+  const handed = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return {
+      who: g.conOfficer?.name ?? null,
+      given: g.conGiven,
+      said: g.log.slice(-4).map((e) => e.text).join(' | '),
+    };
+  });
+  check('a typed order hands the con to the next ranking officer',
+    !!handed.who && handed.given === true, JSON.stringify(handed));
+  check('and the officer acknowledges it by name',
+    handed.said.includes(handed.who ?? ' '), handed.said);
+
+  const conButton = await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button')]
+      .find((x) => /has the con/i.test(x.firstChild?.textContent ?? ''));
+    return b?.firstChild?.textContent ?? null;
+  });
+  check('the button says who has it', !!conButton, String(conButton));
+
+  await page.fill('.orderbar input', 'i have the con');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(400);
+  const retaken = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return { held: g.conStation, said: g.log.slice(-3).map((e) => e.text).join(' | ') };
+  });
+  check('and "I have the con" is the opposite order, not the same one',
+    retaken.held === null, JSON.stringify(retaken));
+  check('taking it back gets a report from the watch',
+    /had the con for/i.test(retaken.said), retaken.said);
+
+  // Now walk away without saying anything. Somebody should relieve you.
+  await page.fill('.orderbar input', 'take me to engineering');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(1600);
+  const walkedOff = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return { room: g.walk.roomId, who: g.conOfficer?.name ?? null, given: g.conGiven };
+  });
+  check('walking off the bridge passes the con without being asked',
+    !!walkedOff.who && walkedOff.given === false, JSON.stringify(walkedOff));
+
+  // And back to the chair, which is where every check after this assumes the
+  // captain is. Coming back onto the bridge is what hands the con back.
+  await page.evaluate(() => {
+    const app = globalThis.__app;
+    app.game.walkOrder = null;
+    app.game.walk.enter('bridge');
+    app.game.walk.sit(true);
+    app.game.updateCon();
+    app.render();
+  });
+  const restored = await page.evaluate(() => ({
+    held: globalThis.__app.game.conStation,
+    seated: globalThis.__app.game.walk.seated,
+  }));
+  check('and returning to the bridge takes it back',
+    restored.held === null && restored.seated === true, JSON.stringify(restored));
   await dismissModals(page);
 
   // ---- A hit is seen as well as heard ----
@@ -1430,6 +1545,61 @@ try {
   check('destroying a ship costs standing with its faction',
     killRecorded.standing < 0, String(killRecorded.standing));
 
+  // ---- what a finished fight leaves on the screen ----
+  //
+  // The combat chips are a view of a battle. With no battle they have to be
+  // empty: `updateOverlay` returned early when the engagement went away, so
+  // the hull bars, the target reticle and the dead fleet's labels stayed
+  // painted over the first-person bridge for the rest of the session.
+  await page.waitForTimeout(400);
+  const leftBehind = await page.evaluate(() => {
+    const app = globalThis.__app;
+    app.updateOverlay();
+    return {
+      fighting: !!app.game.engagement,
+      chips: app.tacticalOverlay?.childNodes.length ?? -1,
+      mode: app.game.mode,
+      wreck: !!app.game.wreckHere,
+    };
+  });
+  check('the fight is settled and the game came out of combat mode',
+    leftBehind.fighting === false && leftBehind.mode !== 'combat', JSON.stringify(leftBehind));
+  check('and no combat chips are left painted over the bridge',
+    leftBehind.chips === 0, JSON.stringify(leftBehind));
+  check('a destroyed ship leaves a hulk worth stripping',
+    leftBehind.wreck === true, JSON.stringify(leftBehind));
+
+  // ---- the order fires the weapon it names ----
+  const namedWeapon = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    const foe = new Ship('d7', { faction: 'klingon', name: 'Arc Test' });
+    g.startCombat([foe], { name: 'Weapon selection' });
+    const eng = g.engagement;
+    foe.x = 300; foe.y = 0; foe.z = 0;
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    g.ship.heading = 0; g.ship.desiredHeading = 0;
+    eng.setTarget(foe);
+
+    for (const w of g.ship.weapons) w.cooldown = 0;
+    const start = g.ship.torpedoes;
+    eng.fireAll('beam');
+    const afterBeams = g.ship.torpedoes;
+    for (const w of g.ship.weapons) w.cooldown = 0;
+    eng.fireAll('torpedo');
+    const afterTorps = g.ship.torpedoes;
+
+    eng.end('routed');
+    g.update(1 / 30);
+    return { start, afterBeams, afterTorps };
+  });
+  check('"fire phasers" does not launch torpedoes',
+    namedWeapon.afterBeams === namedWeapon.start, JSON.stringify(namedWeapon));
+  check('and "fire torpedoes" does',
+    namedWeapon.afterTorps < namedWeapon.afterBeams, JSON.stringify(namedWeapon));
+  await dismissModals(page);
+
   // ------------------------------------------------ the rest of the screens
   for (const [navLabel, shot] of [['Ship', '06-ship'], ['Crew', '07-crew'], ['Record', '08-record']]) {
     await nav(page, navLabel);
@@ -1487,6 +1657,9 @@ try {
   const km = await page.evaluate(async () => {
     const g = globalThis.__app.game;
     const locked = g.gambit;
+    // In the scenario, because forcing a channel reroutes the order line into
+    // an appeal and there has to be somebody on the other end of it.
+    g.runKobayashiMaru();
     // A green captain must be refused, and told both reasons.
     const refused = g.forceChannel();
 
@@ -1501,7 +1674,7 @@ try {
       'This is Captain Okafor. You know my record. I spared three of your '
       + 'crews. There are civilians aboard. Withdraw and we take them off together.');
 
-    return {
+    const result = {
       startsLocked: locked.unlocked === false,
       reasonsGiven: locked.reasons.length,
       refused: refused.ok === false,
@@ -1509,6 +1682,14 @@ try {
       won: outcome.success,
       recorded: (g.ledger.counters.kobayashi_maru_solved ?? 0) === 1,
     };
+
+    // Put the simulator away. `runKobayashiMaru` starts a real engagement and
+    // combat:begin navigates the app to the tactical screen, so leaving it
+    // running takes every check after this one with it.
+    if (g.engagement && !g.engagement.over) g.engagement.end('parley');
+    for (let i = 0; i < 5; i++) g.update(1 / 30);
+    globalThis.__app.go('bridge');
+    return result;
   });
   check('the Kobayashi Maru technique starts locked', km.startsLocked);
   check('and says both of the reasons why', km.reasonsGiven === 2, String(km.reasonsGiven));
@@ -1837,7 +2018,20 @@ try {
       });
     } catch { /* handled by the existsSync below */ }
 
+    // The package has to carry the game that is in the tree.
+    //
+    // The harness has always BOOTED the APK's payload and never asked whether
+    // it was the current one, so a run of commits that rebuilt the single-file
+    // build and not the package around it passed everything here and failed in
+    // CI, which does make the comparison. Catching it locally is the whole
+    // point of having a local harness.
     if (existsSync(extracted) && statSync(extracted).size > 1000) {
+      const inApk = readFileSync(extracted, 'utf8');
+      const current = readFileSync(join(ROOT, 'dist', 'starfleet-command.html'), 'utf8');
+      check('the committed APK carries the current build',
+        inApk === current,
+        inApk === current ? '' : 'rebuild it: ANDROID_HOME=... ./tools/build-apk.sh');
+
       const apkCtx = await browser.newContext({
         viewport: VIEWPORT, deviceScaleFactor: DPR, isMobile: true, hasTouch: true,
       });

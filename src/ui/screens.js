@@ -40,6 +40,39 @@ function tap(fn, cue = 'ui_tap', feel = 'tap') {
   };
 }
 
+/**
+ * The con, as a button and as the phrase that does the same thing.
+ *
+ * Two states and never both: either you have it and can give it away, or a
+ * watch officer has it and is holding it until you take it back. The label
+ * names whoever has it, because "take the con back" from nobody in particular
+ * is the kind of line that makes a crew feel like furniture.
+ */
+function conButtons(g, app) {
+  const holder = g.conOfficer;
+  const out = [];
+  if (holder) {
+    out.push(button(`${holder.name} has the con`, tap(() => {
+      const r = g.takeCon();
+      if (!r.ok) g.pushLog(r.reason, 'computer');
+      app.render();
+    }), { color: 'orange', sub: 'Take it back and hear the report', say: 'i have the con' }));
+  } else {
+    const relief = g.watchOrder[0];
+    out.push(button('Hand over the con', tap(() => {
+      const r = g.handOverCon();
+      if (!r.ok) g.pushLog(r.reason, 'computer');
+      app.render();
+    }), {
+      color: 'ghost',
+      sub: relief ? `${relief.rank} ${relief.name} stands the watch` : 'Nobody is fit to relieve you',
+      disabled: !relief,
+      say: 'you have the con',
+    }));
+  }
+  return out;
+}
+
 // ================================================================ BRIDGE
 
 /**
@@ -99,6 +132,7 @@ export function bridgeScreen(app) {
     hand.push(el('p', { class: 'muted', text: 'You have the chair. Say what you want done, or stand up and walk to a station.' }));
     hand.push(button('Stand up', tap(() => { g.takeChair(false); app.render(); }),
       { color: 'blue', say: 'stand up' }));
+    hand.push(...conButtons(g, app));
   } else if (w.room.surface) {
     hand.push(el('p', { class: 'muted', text: `On the surface of ${w.room.name}. ${surfaceReport(w.room.kind)}.` }));
     hand.push(button('Energise — beam up', tap(() => {
@@ -111,6 +145,14 @@ export function bridgeScreen(app) {
     if (w.roomId === 'bridge') {
       hand.push(button('Take the chair', tap(() => { g.takeChair(true); app.render(); }),
         { color: 'orange', say: 'take the chair' }));
+      hand.push(...conButtons(g, app));
+    } else if (g.conOfficer) {
+      // Off the bridge, the con is not yours to take from down here — but you
+      // should be able to see who is standing it without walking back up.
+      hand.push(el('p', {
+        class: 'muted',
+        text: `${g.conOfficer.rank} ${g.conOfficer.name} has the con. ${g.watch.name} is standing.`,
+      }));
     }
   }
 
@@ -633,12 +675,14 @@ export function tacticalScreen(app) {
     // face you are not presenting. Until this row existed the player's only
     // elevation control was "Come about", which merely points at the target.
     el('div', { class: 'grid-3' }, [
+      // Twenty degrees a press, and "climb" is now twenty degrees a word. The
+      // button and the phrase printed on it have to be the same order.
       button('Climb', tap(() => {
-        eng.setPitch(g.ship.desiredPitch + 20); app.render();
+        eng.setPitch((g.ship.desiredPitch ?? 0) + 20); app.render();
       }), { say: 'climb', color: 'blue' }),
       button('Level', tap(() => { eng.setPitch(0); app.render(); }), { say: 'level off', color: 'blue' }),
       button('Dive', tap(() => {
-        eng.setPitch(g.ship.desiredPitch - 20); app.render();
+        eng.setPitch((g.ship.desiredPitch ?? 0) - 20); app.render();
       }), { say: 'dive', color: 'blue' }),
     ]),
     readout('Elevation', (g.ship.pitch + 70) / 140,
@@ -715,23 +759,43 @@ function signaturePanel(app) {
 export function powerPanel(app) {
   const g = app.game;
   return panel('Power Distribution', [
+    // Every preset carries the phrase that sets it. `PRESETS[id].order` is
+    // already the words an officer would use — "power to weapons" — so the
+    // button and the order line say the same thing by construction rather than
+    // by two lists being kept in step by hand.
     el('div', { class: 'grid-3' }, PRESET_LIST.slice(0, 3).map((p) =>
       button(p.label, tap(() => {
         g.ship.power.applyPreset(p.id);
         audio.play('power_reroute');
         app.render();
-      }), { color: g.ship.power.preset === p.id ? 'green' : 'blue' }))),
+      }), {
+        color: g.ship.power.preset === p.id ? 'green' : 'blue',
+        say: `${p.id} posture`,
+      }))),
     el('div', { class: 'grid-2' }, PRESET_LIST.slice(3).map((p) =>
       button(p.label, tap(() => {
         g.ship.power.applyPreset(p.id);
         audio.play('power_reroute');
         app.render();
-      }), { color: g.ship.power.preset === p.id ? 'green' : 'blue' }))),
+      }), {
+        color: g.ship.power.preset === p.id ? 'green' : 'blue',
+        say: `${p.id} posture`,
+      }))),
     ...SUBSYSTEMS.map((s) => powerSlider(SUBSYSTEM_LABEL[s], g.ship.power.target[s], (v) => {
       g.ship.power.set(s, v);
       audio.play('ui_tap', { throttle: 80 });
     })),
     el('p', { class: 'hint', text: `Total ${Math.round(g.ship.power.total)} of ${g.ship.power.cap}. Levels settle over a few seconds — the EPS grid is not instant.` }),
+    // The engineering console is where a diagnostic is actually run from.
+    button('Run a diagnostic', tap(() => {
+      const r = g.diagnostic(1);
+      audio.play(r.clean ? 'computer_ack' : 'ui_deny');
+      app.render();
+    }), {
+      color: 'ghost',
+      sub: 'Level one — every system, by hand',
+      say: 'run a level one diagnostic',
+    }),
   ]);
 }
 

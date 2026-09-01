@@ -23,6 +23,12 @@ import {
 
 const gameWith = (opts = {}) => new Game({ seed: 3n, crewMode: 'original', ...opts });
 
+/** Put the ship in a fight, so there is somebody to hail. */
+function inAFight(g) {
+  g.runKobayashiMaru();
+  return g;
+}
+
 /** A captain the Empire has actually met, several times. */
 function decorated(g) {
   g.reputation.tracks.klingon.tier = GAMBIT_TIER;
@@ -155,14 +161,25 @@ describe('earning the technique', () => {
   });
 
   test('the channel refuses to open until it is earned', () => {
-    const green = gameWith();
+    // In a fight, because that is what the technique is for. Forcing a channel
+    // reroutes the order line into an appeal, so doing it with nobody out
+    // there left every later order being read as a speech to a Klingon
+    // commander who was never present.
+    const green = inAFight(gameWith());
     assert.equal(forceChannel(green).ok, false);
     assert.equal(green.parleyForced, undefined);
 
-    const veteran = decorated(gameWith());
+    const veteran = inAFight(decorated(gameWith()));
     assert.equal(forceChannel(veteran).ok, true);
     assert.equal(veteran.parleyForced, true, 'the forced-hail path was not actually engaged');
     assert.equal(veteran.gambitOpen, true);
+  });
+
+  test('and refuses when there is nobody on the other end', () => {
+    const veteran = decorated(gameWith());
+    const r = forceChannel(veteran);
+    assert.equal(r.ok, false, 'a channel was forced open to an empty system');
+    assert.equal(veteran.gambitOpen, undefined);
   });
 });
 

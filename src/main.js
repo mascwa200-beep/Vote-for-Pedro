@@ -25,6 +25,7 @@ import {
 } from './core/save.js';
 
 import { ABILITIES } from './sim/officers.js';
+import { WATCHES } from './sim/watch.js';
 import { Ship, FACINGS } from './sim/ship.js';
 import { parseOrder } from './ui/orders.js';
 import { SKILLS } from './sim/skills.js';
@@ -235,10 +236,11 @@ class App {
     });
 
     on('combat:begin', () => { this.go('tactical'); });
-    on('combat:end', ({ outcome }) => {
-      this.game.finishCombat(outcome);
-      this.showCombatResult(outcome);
-    });
+    // Presentation only. The game settles the fight itself on its own tick —
+    // see the COMBAT case in Game.update — and says so with `combat:resolved`.
+    // This listener used to be the thing that awarded the experience and took
+    // the salvage, which meant the rules of the game lived in the UI.
+    on('combat:resolved', ({ outcome }) => { this.showCombatResult(outcome); });
 
     on('combat:fire', ({ attacker, weapon, type }) => {
       if (type === 'torpedo') audio.play('torpedo_launch', { throttle: 120 });
@@ -635,21 +637,29 @@ class App {
     // Remembered so the console can be rebuilt when the state it shows changes.
     // Without this, throwing a warp switch set the factor and left the switch
     // drawn in its old position — the order worked and the console lied.
-    this.consoleOpen = { key, station };
+    //
+    // Only for the consoles that actually open one. Half the keys below are
+    // navigation: they change screen and return without a modal, and marking
+    // those as an open console left `consoleOpen` set with nothing to rebuild
+    // — so the next time anything marked the console dirty, the refresh in
+    // `render` called back in here and navigated the player to that screen
+    // again. Every order given after using Weapons Control teleported you to
+    // the tactical plot.
     const body = [];
     switch (key) {
-      case 'galaxy': this.go('galaxy'); return;
-      case 'tactical': this.go('tactical'); return;
-      case 'log': this.go('log'); return;
-      case 'captain': this.go('captain'); return;
-      case 'crew': this.go('crew'); return;
-      case 'ship': this.go('ship'); return;
-      case 'chair': this.go('chair'); return;
+      case 'galaxy': this.consoleOpen = null; this.go('galaxy'); return;
+      case 'tactical': this.consoleOpen = null; this.go('tactical'); return;
+      case 'log': this.consoleOpen = null; this.go('log'); return;
+      case 'captain': this.consoleOpen = null; this.go('captain'); return;
+      case 'crew': this.consoleOpen = null; this.go('crew'); return;
+      case 'ship': this.consoleOpen = null; this.go('ship'); return;
+      case 'chair': this.consoleOpen = null; this.go('chair'); return;
       case 'power': body.push(screens.powerPanel(this)); break;
       case 'shop': body.push(screens.machineShopPanel(this)); break;
       case 'comms':
         // Hailing is an ORDER, not a console read-out: it goes through the same
         // dispatch a typed "open a channel" does, so there is one path.
+        this.consoleOpen = null;
         this.executeOrder({ action: 'hail' }, 'hailing frequencies open');
         return;
       case 'science': {
@@ -722,6 +732,9 @@ class App {
         body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
         break;
     }
+    // Set here rather than at the top: everything above that navigates has
+    // already returned, so what is left is a console that is genuinely open.
+    this.consoleOpen = { key, station };
     this.showConsole(station?.label ?? 'Console', body);
   }
 
@@ -957,6 +970,8 @@ class App {
 
     const career = c.career;
     let line = '';
+    // A power that ends in a screen of its own rather than a confirmation.
+    let openAfter = null;
 
     switch (c.careerId) {
       case 'command': {
@@ -1010,10 +1025,14 @@ class App {
       }
       case 'diplomatic': {
         // Parley — they will hear you out whatever their doctrine says.
-        if (!eng) { audio.play('ui_deny'); return false; }
+        if (!eng || eng.over) { audio.play('ui_deny'); return false; }
         g.parleyForced = true;
         line = 'Channel forced open. They are listening whether they meant to or not.';
-        this.openHail(eng.hostiles[0]?.faction);
+        // Opened AFTER the announcement, not before it. `showMessage` replaces
+        // whatever modal is up, so opening the channel here meant the power's
+        // own confirmation dialog immediately closed the channel it had just
+        // forced open — the one thing the ability exists to do.
+        openAfter = () => this.openHail(eng.hostiles[0]?.faction);
         break;
       }
       case 'intelligence': {
@@ -1042,7 +1061,11 @@ class App {
     audio.play('ui_confirm');
     audio.play('computer_ack');
     haptic('confirm');
-    this.showMessage(career.signature, [line]);
+    // A power whose whole result is a screen of its own shows that instead of
+    // a dialog it would only have to close again. The line is in the log
+    // either way.
+    if (openAfter) openAfter();
+    else this.showMessage(career.signature, [line]);
     this.render();
     return true;
   }
@@ -1208,13 +1231,17 @@ class App {
       case 'course': {
         const r = g.setCourse(order.system, order.warp);
         if (r.ok) { audio.play('warp_engage'); haptic('warp'); audio.setAlertLevel('warp'); }
-        else audio.play('ui_deny');
+        // A refusal that is only a beep is a bug report waiting to happen: the
+        // order had a reason and the helm never said it. "We are under fire,
+        // Captain" is the difference between a game that ignored you and a
+        // crew that answered.
+        else { audio.play('ui_deny'); ack('helm', r.error ?? 'We cannot, Captain.'); }
         break;
       }
       case 'orbit': {
         const r = g.enterOrbit();
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
-        else audio.play('ui_deny');
+        else { audio.play('ui_deny'); ack('helm', r.error ?? 'We cannot, Captain.'); }
         break;
       }
       case 'break_orbit': {
@@ -1286,8 +1313,9 @@ class App {
         break;
       }
       case 'pitch': {
-        if (!eng) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
-        eng.setPitch(order.value);
+        if (!eng || eng.over) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        const from = order.relative ? (g.ship.desiredPitch ?? 0) : 0;
+        eng.setPitch(from + order.value);
         const said = order.value === 0 ? 'Levelling off.'
           : order.value > 0 ? `Coming up ${Math.round(order.value)} degrees.`
             : `Taking her down ${Math.round(-order.value)} degrees.`;
@@ -1317,6 +1345,9 @@ class App {
         break;
       case 'shields':
         g.ship.shieldsUp = order.up;
+        // Lowering them on purpose is a standing decision; being shot out is
+        // not. Only the first survives the emitter being repaired.
+        g.ship.shieldsDown = !order.up;
         ack('tactical', order.up ? 'Shields up.' : 'Shields down.');
         break;
       case 'reinforce':
@@ -1350,8 +1381,11 @@ class App {
         break;
       }
       case 'fire': {
-        if (!eng) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
-        const n = eng.fireAll();
+        if (!eng || eng.over) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
+        // What was actually asked for. The parser has always read the weapon
+        // out of the order and this threw it away, so "fire phasers" launched
+        // torpedoes.
+        const n = eng.fireAll(order.weaponType ?? 'all');
         if (!n) audio.play('ui_deny');
         break;
       }
@@ -1428,6 +1462,41 @@ class App {
         else { audio.play('ui_deny'); ack('computer', r.reason); }
         break;
       }
+      case 'hand_over_con': {
+        // Who was named, if anyone. The roster is the only place that knows,
+        // so the match happens here rather than in the parser.
+        const said = String(order.said ?? '').toLowerCase();
+        const named = g.crew.officers.find((o) => o.alive && !o.injured
+          && said.includes(o.name.split(' ').pop().toLowerCase()));
+        const r = g.handOverCon(named ? named.station : null);
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'take_con': {
+        const r = g.takeCon();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'diagnostic': {
+        const r = g.diagnostic(order.level);
+        audio.play(r.clean ? 'computer_ack' : 'ui_deny');
+        if (!r.clean) haptic('alert');
+        break;
+      }
+      case 'watch_bill': {
+        const holder = g.conOfficer;
+        g.pushLog(holder
+          ? `${holder.rank} ${holder.name} has the con. ${g.watch.name} is standing.`
+          : `You have the con, Captain. ${g.watch.name} is standing.`, 'computer');
+        for (const w of WATCHES) {
+          const names = g.watchBill[w.id].map((o) => o.name).join(', ');
+          g.pushLog(`${w.name}: ${names || 'unmanned'}.`, 'computer');
+        }
+        audio.play('computer_ack');
+        break;
+      }
       case 'help':
         audio.play('computer_ack');
         this.go('reference');
@@ -1494,10 +1563,9 @@ class App {
         break;
       }
       case 'salvage': {
-        const haul = g.salvage({ tier: 3 });
-        const summary = Object.entries(haul).filter(([, n]) => n > 0)
-          .map(([m, n]) => `${n} ${m}`).join(', ');
-        ack('engineering', `Recovered ${summary}.`);
+        const r = g.stripWreck();
+        if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('engineering', r.reason); }
         break;
       }
 
@@ -1524,6 +1592,16 @@ class App {
       case 'ability': {
         const ability = ABILITIES[order.ability];
         const officer = ability ? g.crew.officerFor(ability.id) : null;
+        // An officer who is not ready is the same as no officer, for the
+        // purpose of choosing between the ability and the plain order behind
+        // it. `useAbility` refuses on cooldown with a deny beep and returns, so
+        // "evasive manoeuvres" — which is BOTH a trained ability and an
+        // ordinary helm order — silently did nothing at all for thirty seconds
+        // after its first use.
+        if (officer && ability && !officer.ready(ability.id) && order.fallback) {
+          this.executeOrder(order.fallback, raw);
+          return;
+        }
         if (officer && ability) {
           this.useAbility(officer, ability);
         } else if (order.fallback) {
@@ -1869,7 +1947,18 @@ class App {
   updateOverlay() {
     const g = this.game;
     const overlay = this.tacticalOverlay;
-    if (!overlay || !g?.engagement) return;
+    if (!overlay) return;
+    // No fight, no chips.
+    //
+    // This returned early when the engagement went away and left whatever was
+    // painted on the last frame of the battle sitting there — the hull bars,
+    // the target reticle and the dead fleet's labels, over the first-person
+    // bridge, for the rest of the session. The overlay is a view of a fight;
+    // with no fight it has to be empty.
+    if (!g?.engagement || g.engagement.over) {
+      if (overlay.childNodes.length) clear(overlay);
+      return;
+    }
     const eng = g.engagement;
     const p = g.ship;
     clear(overlay);
