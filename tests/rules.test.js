@@ -802,3 +802,56 @@ test('every project in every track can be bought and pays out', () => {
     }
   }
 });
+
+// ---------------------------------------- what a captain brings to a command
+
+// A career track grants a matching skill rank, a Starfleet family starts a pip
+// higher, and a reprimand already on file stays on file. All three were
+// applied in `App.startGame` — the character creator, which is in the browser
+// — so a `new Game` built anywhere else got none of them. Every test in this
+// repository, the combat soak, the balance suite and the API fuzzer were
+// measuring a captain the player never plays.
+
+const commissioned = (character) =>
+  new Game({ seed: 808n, crewMode: 'original', character: { speciesId: 'human', ...character } });
+
+test('a career track brings its own skill to the chair', () => {
+  for (const [careerId, skillId] of [
+    ['command', 'leadership'],
+    ['tactical', 'beam_weapons'],
+    ['engineering', 'damage_control'],
+    ['science', 'sensors'],
+    ['diplomatic', 'diplomacy'],
+  ]) {
+    const g = commissioned({ careerId });
+    assert.equal(g.progress.spent[skillId], 1,
+      `a ${careerId} captain arrived without ${skillId}`);
+  }
+  // And the points spent on it are not also still in hand.
+  const a = commissioned({ careerId: 'tactical' });
+  const b = commissioned({ careerId: 'medical' });   // no background skill
+  assert.equal(a.progress.unspent, b.progress.unspent,
+    'the career skill was given away for free');
+});
+
+test('a Starfleet family starts a pip higher', () => {
+  const plain = commissioned({ careerId: 'command' });
+  const legacy = commissioned({ careerId: 'command', originId: 'academy_legacy' });
+  assert.equal(legacy.progress.rankIndex, plain.progress.rankIndex + 1);
+});
+
+test('a reprimand already on file is on file from the first stardate', () => {
+  const clean = commissioned({ careerId: 'command' });
+  const marked = commissioned({ careerId: 'command', traits: ['insubordinate'] });
+  assert.equal(clean.ledger.entries.length, 0);
+  assert.equal(marked.ledger.count('order_disobeyed'), 1);
+  assert.ok(marked.ledger.entries[0].text.includes('reprimand'));
+});
+
+test('and a loaded save does not collect any of it twice', () => {
+  const g = commissioned({ careerId: 'tactical', originId: 'academy_legacy', traits: ['insubordinate'] });
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.equal(back.progress.rankIndex, g.progress.rankIndex);
+  assert.equal(back.progress.spent.beam_weapons, g.progress.spent.beam_weapons);
+  assert.equal(back.ledger.count('order_disobeyed'), 1);
+});

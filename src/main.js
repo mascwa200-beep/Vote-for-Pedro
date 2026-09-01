@@ -65,11 +65,6 @@ const STATION_PANEL = {
   galaxy: 'galaxy',
 };
 
-const BACKGROUND_SKILL = {
-  command: 'leadership', tactical: 'beam_weapons',
-  engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
-};
-
 
 /**
  * Render an outcome as an auditable card: the verdict, the arithmetic that
@@ -1830,25 +1825,10 @@ class App {
       registry: draft.registry || 'NCC-1701',
     });
 
-    // The career track grants a matching starting skill rank.
-    const skillId = BACKGROUND_SKILL[draft.careerId];
-    if (skillId && SKILLS[skillId]) {
-      this.game.progress.unspent++;
-      this.game.progress.spend(skillId);
-    }
-    // Starfleet families start with an extra pip and the scrutiny to match.
-    if (this.game.character.mechanic('startingRankBonus')) {
-      this.game.progress.rankIndex = Math.min(
-        this.game.progress.rankIndex + 1,
-        10,
-      );
-    }
-    if (this.game.character.mechanic('startingReprimand')) {
-      this.game.ledger.record('order_disobeyed', {
-        text: 'Prior reprimand on file at time of commission',
-      });
-    }
-    this.game.applyAllMods();
+    // The career skill, the Starfleet family's extra pip and any reprimand
+    // already on file are applied by `Game.commission`, in the constructor —
+    // they used to be applied here, which meant only a captain created through
+    // this screen ever got them.
     this.recentRolls = [];
 
     this.orderBar.style.display = '';

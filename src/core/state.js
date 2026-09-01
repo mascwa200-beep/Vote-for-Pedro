@@ -7,7 +7,7 @@ import { emit } from './events.js';
 
 import { Ship } from '../sim/ship.js';
 import { Crew, Officer } from '../sim/officers.js';
-import { CaptainProgress, combatXP } from '../sim/skills.js';
+import { CaptainProgress, combatXP, SKILLS } from '../sim/skills.js';
 import { Loadout, startingLoadout, CONSOLES } from '../sim/loadout.js';
 import { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } from '../sim/combat.js';
 import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } from '../sim/away.js';
@@ -65,6 +65,16 @@ export const MODES = {
   COMBAT: 'combat',       // tactical engagement
   MISSION: 'mission',     // in an episode stage
   ENCOUNTER: 'encounter', // resolving a non-combat encounter
+};
+
+/**
+ * The skill a career track brings with it. One rank, on the thing that track
+ * is for, so a tactical captain starts able to shoot and a science captain
+ * starts able to read a sensor return.
+ */
+const BACKGROUND_SKILL = {
+  command: 'leadership', tactical: 'beam_weapons',
+  engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
 };
 
 export class Game {
@@ -208,10 +218,42 @@ export class Game {
       compression: options.compression ?? 1,
     });
 
+    this.commission();
     this.pushLog(`Assumed command of the ${this.ship.name}, ${this.ship.registry}.`, 'captain');
   }
 
   // ------------------------------------------------------------------ setup
+
+  /**
+   * What a captain brings to their first command.
+   *
+   * A career track grants a matching skill rank; a Starfleet family starts a
+   * pip higher and with the scrutiny to match; a reprimand already on file
+   * stays on file. All three of these were applied in `App.startGame`, which
+   * is the character creator, which is in the browser — so a `new Game` built
+   * anywhere else got none of them. Every test, the soak, the fuzzer and the
+   * balance suite were measuring a captain the player never plays: no starting
+   * skill, no rank bonus, no reprimand.
+   *
+   * `Game.load` replaces `progress` and `ledger` wholesale after construction,
+   * so a loaded save keeps the record it saved and does not collect this twice.
+   */
+  commission() {
+    const skillId = BACKGROUND_SKILL[this.character?.careerId];
+    if (skillId && SKILLS[skillId]) {
+      this.progress.unspent++;
+      this.progress.spend(skillId);
+    }
+    if (this.character?.mechanic('startingRankBonus')) {
+      this.progress.rankIndex = Math.min(this.progress.rankIndex + 1, 10);
+    }
+    if (this.character?.mechanic('startingReprimand')) {
+      this.ledger.record('order_disobeyed', {
+        text: 'Prior reprimand on file at time of commission',
+      });
+    }
+    this.applyAllMods();
+  }
 
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
   applyAllMods() {
