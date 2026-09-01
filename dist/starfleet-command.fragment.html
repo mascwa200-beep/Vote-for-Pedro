@@ -7766,6 +7766,179 @@ __exports.joltTint = joltTint;
 
 });
 
+__define("src/gfx/effects.js", function (__exports, __require) {
+// What a fight looks like: beams, torpedoes, explosions, and the flare where
+// a shot lands.
+//
+// This used to live inside `src/ui/tactical3d.js`, which is the plot — the
+// console you walk to when you want to READ a fight. The place a fight is
+// actually meant to happen is the bridge, with the enemy on the main viewer,
+// and that view drew the hulls and nothing they were doing: a Bird-of-Prey
+// crossed the screen, hit you, and all you saw was a shape drifting and the
+// picture flashing. Two renderers need the same drawing, so it is in one place
+// rather than two — the ship-name table went wrong twice before it was made
+// one table, and this is the same shape of thing.
+//
+// The one piece that is new here is the impact flare. Every hit has always
+// pushed `{kind: 'impact', facing, penetrated, crit}` onto the engagement's
+// effects, and the only file that ever read it was the 2D fallback for devices
+// with no WebGL. On every device that has WebGL it was recorded on every shot
+// and drawn by nothing.
+
+const { vec3, quat, compose, normalize, cross, sub, length: vlength, normalMatrix } = __require("src/gfx/math.js");
+const { beamMesh, torpedoMesh, explosionMesh, shieldMesh } = __require("src/gfx/scene.js");
+const { paletteFor, hullScale } = __require("src/gfx/blueprint.js");
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// One set of scratch matrices for the module. Only one view draws at a time —
+// the bridge aperture and the tactical plot are different screens — so this
+// costs nothing and keeps the per-frame allocation at zero, which is the same
+// reason every other renderer in this project holds its own.
+const _model = new Float32Array(16);
+const _normal = new Float32Array(9);
+const _pos = vec3();
+const _dir = vec3();
+
+/**
+ * Simulation space is (x, y) with an optional z; render space is (x, z, y)
+ * with +y up. Every renderer in this project does this conversion and every
+ * one of them used to do it inline.
+ */
+function toRender(p, out = vec3()) {
+  out[0] = p.x;
+  out[1] = p.z ?? 0;
+  out[2] = p.y;
+  return out;
+}
+
+/** Lay a unit +x mesh along `dir`, `thickness` wide, starting at `from`. */
+function orientAlong(dir, from, len, thickness, m = _model) {
+  const x = normalize(dir);
+  let up = vec3(0, 1, 0);
+  if (Math.abs(x[1]) > 0.98) up = vec3(1, 0, 0);
+  const z = normalize(cross(x, up));
+  const y = cross(z, x);
+
+  m[0] = x[0] * len; m[1] = x[1] * len; m[2] = x[2] * len; m[3] = 0;
+  m[4] = y[0] * thickness; m[5] = y[1] * thickness; m[6] = y[2] * thickness; m[7] = 0;
+  m[8] = z[0] * thickness; m[9] = z[1] * thickness; m[10] = z[2] * thickness; m[11] = 0;
+  m[12] = from[0]; m[13] = from[1]; m[14] = from[2]; m[15] = 1;
+  return m;
+}
+
+/** Every `kind` on `engagement.effects` that this module knows how to draw. */
+const DRAWN_EFFECTS = ['beam', 'cannon', 'explosion', 'impact'];
+
+/**
+ * Draw everything happening in an engagement that is not a hull.
+ *
+ * @param {object} renderer  the shared GL renderer
+ * @param {object} engagement
+ * @param {object} opts  {fogFar, cap} — `cap` bounds the work in a large
+ *   fight and REPORTS what it dropped rather than dropping it quietly.
+ * @returns {{drawn: number, dropped: number}}
+ */
+function drawCombatEffects(renderer, engagement, opts = {}) {
+  const out = { drawn: 0, dropped: 0 };
+  if (!renderer || !engagement) return out;
+
+  const fogFar = opts.fogFar ?? 1e9;
+  // A six-ship engagement all firing at once is the worst case, and the bridge
+  // pass already carries a room, seven officers and a starfield inside a
+  // sixty-draw budget. The cap is generous; what matters is that going over it
+  // is reported.
+  const cap = opts.cap ?? 40;
+
+  const draw = (key, mesh, params) => {
+    if (out.drawn >= cap) { out.dropped++; return; }
+    renderer.draw(key, mesh, { ...params, fogFar });
+    out.drawn++;
+  };
+
+  // Beams: a unit tube along +x, rotated onto the shot and stretched to it.
+  for (const e of engagement.effects ?? []) {
+    if (e.kind !== 'beam' && e.kind !== 'cannon') continue;
+    const from = toRender(e.from, _pos);
+    const to = toRender(e.to, _dir);
+    const dir = sub(to, from);
+    const len = vlength(dir);
+    if (len < 1) continue;
+
+    orientAlong(dir, from, len, e.kind === 'cannon' ? 5 : 3);
+    draw('beam', beamMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      alpha: clamp(e.life * 2.4, 0, 0.9),
+      tint: paletteFor(e.faction).glow,
+    });
+  }
+
+  for (const p of engagement.projectiles ?? []) {
+    compose(toRender(p, _pos), quat(), 9, _model);
+    draw('torpedo', torpedoMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      tint: [1, 1, 1],
+    });
+  }
+
+  // The flare where a shot lands.
+  //
+  // Placed on the struck facing rather than at the middle of the ship, which
+  // is what makes it readable: a hit on the bow and a hit on the stern are
+  // different pieces of information, and so is whether it stopped. A shot the
+  // shields held flares in the shield's colour, off the hull; one that got
+  // through burns white on the plating itself.
+  for (const e of engagement.effects ?? []) {
+    if (e.kind !== 'impact') continue;
+    const age = clamp(1 - e.life / 0.4, 0, 1);
+    const r = hullScale(e.classId) * 0.5;
+    const at = toRender(e, _pos);
+    // `from` is the unit vector toward whoever fired, recorded at the moment
+    // of the hit — the effect outlives the tick and may outlive the ship, so
+    // it carries what it needs rather than holding a reference to one.
+    const off = e.from ? toRender(e.from, _dir) : vec3(0, 0, 0);
+    const stand = e.penetrated ? r * 0.55 : r * 1.15;
+    _pos[0] = at[0] + off[0] * stand;
+    _pos[1] = at[1] + off[1] * stand;
+    _pos[2] = at[2] + off[2] * stand;
+
+    const size = r * (e.penetrated ? 0.45 : 0.7) * (e.crit ? 1.5 : 1) * (1 - age * 0.4);
+    compose(_pos, quat(), Math.max(1, size), _model);
+    draw('impact', shieldMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      alpha: (1 - age) * (e.penetrated ? 0.95 : 0.6),
+      // White-hot through the hull; the shield's own colour when it holds.
+      tint: e.penetrated ? [1, 0.92, 0.7] : [0.55, 0.8, 1],
+    });
+  }
+
+  for (const e of engagement.effects ?? []) {
+    if (e.kind !== 'explosion') continue;
+    const age = clamp(1 - e.life / 1.6, 0, 1);
+    compose(toRender(e, _pos), quat(), 30 + age * 130, _model);
+    draw('explosion', explosionMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      alpha: 1 - age,
+      tint: [1, 1, 1],
+    });
+  }
+
+  return out;
+}
+
+__exports.DRAWN_EFFECTS = DRAWN_EFFECTS;
+__exports.drawCombatEffects = drawCombatEffects;
+
+});
+
 __define("src/ui/tactical3d.js", function (__exports, __require) {
 // The tactical display, in three dimensions.
 //
@@ -7792,6 +7965,7 @@ const { Renderer } = __require("src/gfx/gl.js");
 const { hullMesh, hullScale, paletteFor } = __require("src/gfx/blueprint.js");
 const { starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh, dropLineMesh, bodyMesh, VOLUME } = __require("src/gfx/scene.js");
 const { vista, bearingOf, fovFor, noseOf } = __require("src/gfx/vista.js");
+const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -8460,49 +8634,15 @@ class TacticalView3D {
     }
   }
 
+  /**
+   * Beams, torpedoes, impacts and explosions.
+   *
+   * The drawing itself is `src/gfx/effects.js`, because the main viewer needs
+   * exactly the same picture against a different camera and two copies of it
+   * would mean fixing a beam in one of two places.
+   */
   drawEffects(engagement) {
-    // Beams: a unit tube along +x, rotated onto the shot and stretched to it.
-    for (const e of engagement.effects) {
-      if (e.kind !== 'beam' && e.kind !== 'cannon') continue;
-      const from = vec3(e.from.x, e.from.z ?? 0, e.from.y);
-      const to = vec3(e.to.x, e.to.z ?? 0, e.to.y);
-      const dir = sub(to, from);
-      const len = vlength(dir);
-      if (len < 1) continue;
-
-      this.orientAlong(dir, from, len, e.kind === 'cannon' ? 5 : 3);
-      const p = paletteFor(e.faction);
-      this.renderer.draw('beam', beamMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        alpha: clamp(e.life * 2.4, 0, 0.9),
-        tint: p.glow,
-      });
-    }
-
-    for (const p of engagement.projectiles) {
-      compose(vec3(p.x, p.z ?? 0, p.y), quat(), 9, this._model);
-      this.renderer.draw('torpedo', torpedoMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        tint: [1, 1, 1],
-      });
-    }
-
-    for (const e of engagement.effects) {
-      if (e.kind !== 'explosion') continue;
-      const age = clamp(1 - e.life / 1.6, 0, 1);
-      compose(vec3(e.x, e.z ?? 0, e.y), quat(), 30 + age * 130, this._model);
-      this.renderer.draw('explosion', explosionMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        alpha: 1 - age,
-        tint: [1, 1, 1],
-      });
-    }
+    return drawCombatEffects(this.renderer, engagement);
   }
 
   /** Build a model matrix that lays a unit +x mesh along `dir`, `thickness` wide. */
@@ -10714,6 +10854,7 @@ const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
 const { hullMesh, hullScale } = __require("src/gfx/blueprint.js");
 const { vista, fovFor, noseOf, joltShake, joltTint } = __require("src/gfx/vista.js");
+const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
@@ -11308,6 +11449,13 @@ class FirstPersonView {
           fogFar: VOLUME * 6,
         });
       }
+
+      // And what they are doing. The viewer drew the ships and none of their
+      // weapons: a hull crossed the screen, hit you, and the only thing that
+      // said so was the picture flashing. Not jolt-tinted — a beam is the
+      // CAUSE of the flash, and washing it through the same colour is the one
+      // way to make a hit unreadable.
+      this.stats.effects = drawCombatEffects(r, eng, { fogFar: 1e9 });
     }
   }
 
@@ -20132,9 +20280,22 @@ class Engagement {
       direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
     });
 
+    // Where on the hull it landed, and how big the hull is.
+    //
+    // An effect outlives the tick that made it and may outlive the ship it
+    // landed on, so it carries what a renderer needs rather than a reference
+    // to something that might be a wreck by the time the flare fades. `from`
+    // is the unit vector toward whoever fired, which is also the direction the
+    // struck facing points.
+    const ax = attacker.x - target.x;
+    const ay = attacker.y - target.y;
+    const az = (attacker.z ?? 0) - (target.z ?? 0);
+    const ad = Math.hypot(ax, ay, az) || 1;
     this.effects.push({
       kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4,
       facing: result.facing, penetrated: result.penetrated, crit,
+      from: { x: ax / ad, y: ay / ad, z: az / ad },
+      classId: target.classId,
     });
 
     emit('combat:hit', {
@@ -30615,7 +30776,20 @@ class App {
       this.needsRender = true;
     });
 
-    on('combat:begin', () => { this.go('tactical'); });
+    // A fight does NOT take the screen. You stay where you are — on the
+    // bridge, in the chair, with the enemy on the main viewer — and the
+    // tactical plot stays a console you walk to when you want to read the
+    // fight rather than watch it.
+    //
+    // This listener said `this.go('tactical')`, which is the exact behaviour
+    // the comment in `render()` thirty lines below says the whole restructure
+    // exists to stop: "being teleported to a plot view the moment somebody
+    // decloaks". The render-time override was removed and the listener that
+    // did the same thing was left behind, so every fight still yanked the
+    // player off the bridge — which is also why nobody noticed the main viewer
+    // had been black since the day it was written. You were never looking at
+    // it while anything was happening.
+    on('combat:begin', () => { this.needsRender = true; });
     // Presentation only. The game settles the fight itself on its own tick —
     // see the COMBAT case in Game.update — and says so with `combat:resolved`.
     // This listener used to be the thing that awarded the experience and took

@@ -373,9 +373,22 @@ export class Engagement {
       direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
     });
 
+    // Where on the hull it landed, and how big the hull is.
+    //
+    // An effect outlives the tick that made it and may outlive the ship it
+    // landed on, so it carries what a renderer needs rather than a reference
+    // to something that might be a wreck by the time the flare fades. `from`
+    // is the unit vector toward whoever fired, which is also the direction the
+    // struck facing points.
+    const ax = attacker.x - target.x;
+    const ay = attacker.y - target.y;
+    const az = (attacker.z ?? 0) - (target.z ?? 0);
+    const ad = Math.hypot(ax, ay, az) || 1;
     this.effects.push({
       kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4,
       facing: result.facing, penetrated: result.penetrated, crit,
+      from: { x: ax / ad, y: ay / ad, z: az / ad },
+      classId: target.classId,
     });
 
     emit('combat:hit', {

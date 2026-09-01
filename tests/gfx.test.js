@@ -24,6 +24,8 @@ import {
   proportionError,
 } from '../src/gfx/blueprint.js';
 import { SHIP_LIST } from '../src/world/ships.data.js';
+import { drawCombatEffects, DRAWN_EFFECTS } from '../src/gfx/effects.js';
+import { readFileSync } from 'node:fs';
 import {
   sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, worldMesh, limbMesh,
   WARP_LENGTH, VOLUME,
@@ -2130,5 +2132,132 @@ describe('a landing party can see what it walked to', () => {
     const { WALKER_RADIUS, REACH } = await import('../src/sim/walk.js');
     assert.ok(WALKER_RADIUS < REACH,
       `a walker of ${WALKER_RADIUS} cannot reach anything at ${REACH}`);
+  });
+});
+
+describe('a fight is drawn, not just simulated', () => {
+  // The main viewer is where a fight is meant to happen — `src/main.js` says
+  // so and `src/ui/firstperson.js` says so — and it drew the hulls and none of
+  // their weapons. The drawing lives in one module now, because two renderers
+  // need the same picture and two copies means fixing a beam in one of them.
+
+  /** A renderer that records what it was asked to draw. */
+  function recorder() {
+    const calls = [];
+    return {
+      calls,
+      draw(key, mesh, opts) {
+        calls.push({ key, mesh, model: Array.from(opts.model), opts });
+      },
+    };
+  }
+
+  test('every effect the simulation makes is one the renderer knows', () => {
+    // The test that would have failed for the life of this file. `impact` has
+    // been pushed onto `effects` by every hit since combat was written, and
+    // the only thing that ever read it was the 2D fallback for devices with no
+    // WebGL. On anything with a GPU it was recorded and drawn by nothing.
+    const src = readFileSync(new URL('../src/sim/combat.js', import.meta.url), 'utf8');
+    const kinds = new Set();
+    // Only what goes onto `effects`. Projectiles are a separate list with a
+    // `kind` of its own, and conflating the two is how this test first came
+    // out wrong.
+    for (const m of src.matchAll(/this\.effects\.push\(\{([\s\S]{0,400}?)\}\)/g)) {
+      const named = m[1].match(/kind:\s*'([a-z_]+)'/);
+      if (named) { kinds.add(named[1]); continue; }
+      // A weapon's own type is the kind, for beams and cannons.
+      if (/kind:\s*weapon\.type/.test(m[1])) { kinds.add('beam'); kinds.add('cannon'); }
+    }
+    assert.ok(kinds.size >= 3, `only found ${[...kinds]}`);
+    const missing = [...kinds].filter((k) => !DRAWN_EFFECTS.includes(k));
+    assert.deepEqual(missing, [], 'effect kinds the renderer ignores');
+
+    // And the projectiles in flight, which are their own list.
+    const r = recorder();
+    drawCombatEffects(r, {
+      effects: [],
+      projectiles: [{ kind: 'torpedo', x: 10, y: 20, z: 0 }],
+    });
+    assert.ok(r.calls.some((c) => c.key === 'torpedo'), 'a torpedo in flight is invisible');
+  });
+
+  test('a beam is laid on its own shot', () => {
+    const r = recorder();
+    drawCombatEffects(r, {
+      effects: [{
+        kind: 'beam', life: 0.3, faction: 'federation',
+        from: { x: 0, y: 0, z: 0 }, to: { x: 300, y: 400, z: 0 },
+      }],
+      projectiles: [],
+    });
+    const beam = r.calls.find((c) => c.key === 'beam');
+    assert.ok(beam, 'no beam was drawn');
+    // Column one of the model matrix is the +x axis scaled to the shot's
+    // length, which is the whole trick: a unit tube stretched onto the line.
+    const len = Math.hypot(beam.model[0], beam.model[1], beam.model[2]);
+    assert.ok(Math.abs(len - 500) < 1e-3, `beam is ${len} long, shot is 500`);
+    // And it starts where the shot started.
+    assert.deepEqual([beam.model[12], beam.model[13], beam.model[14]], [0, 0, 0]);
+  });
+
+  test('a shot that got through looks different from one that did not', () => {
+    const impact = (penetrated) => {
+      const r = recorder();
+      drawCombatEffects(r, {
+        effects: [{
+          kind: 'impact', x: 100, y: 0, z: 0, life: 0.4, facing: 'fore',
+          penetrated, crit: false, classId: 'constitution',
+          from: { x: 1, y: 0, z: 0 },
+        }],
+        projectiles: [],
+      });
+      return r.calls.find((c) => c.key === 'impact');
+    };
+    const held = impact(false);
+    const through = impact(true);
+    assert.ok(held && through, 'the impact was not drawn at all');
+    assert.notDeepEqual(held.opts.tint, through.opts.tint,
+      'a shield holding and a hull breach are the same colour');
+    assert.ok(through.opts.alpha > held.opts.alpha,
+      'the hit that got through is the fainter one');
+  });
+
+  test('the flare lands on the side that was hit', () => {
+    // Struck from dead ahead and struck from astern must not draw in the same
+    // place, or the flare says nothing a hull bar does not.
+    const at = (dir) => {
+      const r = recorder();
+      drawCombatEffects(r, {
+        effects: [{
+          kind: 'impact', x: 0, y: 0, z: 0, life: 0.4, facing: 'fore',
+          penetrated: false, crit: false, classId: 'constitution', from: dir,
+        }],
+        projectiles: [],
+      });
+      const c = r.calls.find((x) => x.key === 'impact');
+      return [c.model[12], c.model[13], c.model[14]];
+    };
+    const fore = at({ x: 1, y: 0, z: 0 });
+    const aft = at({ x: -1, y: 0, z: 0 });
+    assert.ok(fore[0] > 0 && aft[0] < 0, `${fore} vs ${aft}`);
+    assert.notDeepEqual(fore, aft);
+  });
+
+  test('a large fight says what it dropped rather than dropping it quietly', () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      kind: 'beam', life: 0.3, faction: 'klingon',
+      from: { x: 0, y: 0, z: 0 }, to: { x: 100 + i, y: 0, z: 0 },
+    }));
+    const r = recorder();
+    const out = drawCombatEffects(r, { effects: many, projectiles: [] }, { cap: 10 });
+    assert.equal(out.drawn, 10);
+    assert.equal(out.dropped, 50);
+    assert.equal(r.calls.length, 10);
+  });
+
+  test('nothing at all is a fight the renderer survives', () => {
+    for (const eng of [null, undefined, {}, { effects: null, projectiles: null }]) {
+      assert.doesNotThrow(() => drawCombatEffects(recorder(), eng));
+    }
   });
 });

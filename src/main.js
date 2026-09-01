@@ -231,7 +231,20 @@ class App {
       this.needsRender = true;
     });
 
-    on('combat:begin', () => { this.go('tactical'); });
+    // A fight does NOT take the screen. You stay where you are — on the
+    // bridge, in the chair, with the enemy on the main viewer — and the
+    // tactical plot stays a console you walk to when you want to read the
+    // fight rather than watch it.
+    //
+    // This listener said `this.go('tactical')`, which is the exact behaviour
+    // the comment in `render()` thirty lines below says the whole restructure
+    // exists to stop: "being teleported to a plot view the moment somebody
+    // decloaks". The render-time override was removed and the listener that
+    // did the same thing was left behind, so every fight still yanked the
+    // player off the bridge — which is also why nobody noticed the main viewer
+    // had been black since the day it was written. You were never looking at
+    // it while anything was happening.
+    on('combat:begin', () => { this.needsRender = true; });
     // Presentation only. The game settles the fight itself on its own tick —
     // see the COMBAT case in Game.update — and says so with `combat:resolved`.
     // This listener used to be the thing that awarded the experience and took

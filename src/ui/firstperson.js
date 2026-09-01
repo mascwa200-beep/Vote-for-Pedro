@@ -39,6 +39,7 @@ import {
 } from '../world/orbit.js';
 import { hullMesh, hullScale } from '../gfx/blueprint.js';
 import { vista, fovFor, noseOf, joltShake, joltTint } from '../gfx/vista.js';
+import { drawCombatEffects } from '../gfx/effects.js';
 import { ROOMS } from '../world/interiors.data.js';
 import { fitCanvas } from './touch.js';
 
@@ -634,6 +635,13 @@ export class FirstPersonView {
           fogFar: VOLUME * 6,
         });
       }
+
+      // And what they are doing. The viewer drew the ships and none of their
+      // weapons: a hull crossed the screen, hit you, and the only thing that
+      // said so was the picture flashing. Not jolt-tinted — a beam is the
+      // CAUSE of the flash, and washing it through the same colour is the one
+      // way to make a hit unreadable.
+      this.stats.effects = drawCombatEffects(r, eng, { fogFar: 1e9 });
     }
   }
 

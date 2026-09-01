@@ -29,6 +29,7 @@ import {
   dropLineMesh, bodyMesh, VOLUME,
 } from '../gfx/scene.js';
 import { vista, bearingOf, fovFor, noseOf } from '../gfx/vista.js';
+import { drawCombatEffects } from '../gfx/effects.js';
 import { fitCanvas } from './touch.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -698,49 +699,15 @@ export class TacticalView3D {
     }
   }
 
+  /**
+   * Beams, torpedoes, impacts and explosions.
+   *
+   * The drawing itself is `src/gfx/effects.js`, because the main viewer needs
+   * exactly the same picture against a different camera and two copies of it
+   * would mean fixing a beam in one of two places.
+   */
   drawEffects(engagement) {
-    // Beams: a unit tube along +x, rotated onto the shot and stretched to it.
-    for (const e of engagement.effects) {
-      if (e.kind !== 'beam' && e.kind !== 'cannon') continue;
-      const from = vec3(e.from.x, e.from.z ?? 0, e.from.y);
-      const to = vec3(e.to.x, e.to.z ?? 0, e.to.y);
-      const dir = sub(to, from);
-      const len = vlength(dir);
-      if (len < 1) continue;
-
-      this.orientAlong(dir, from, len, e.kind === 'cannon' ? 5 : 3);
-      const p = paletteFor(e.faction);
-      this.renderer.draw('beam', beamMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        alpha: clamp(e.life * 2.4, 0, 0.9),
-        tint: p.glow,
-      });
-    }
-
-    for (const p of engagement.projectiles) {
-      compose(vec3(p.x, p.z ?? 0, p.y), quat(), 9, this._model);
-      this.renderer.draw('torpedo', torpedoMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        tint: [1, 1, 1],
-      });
-    }
-
-    for (const e of engagement.effects) {
-      if (e.kind !== 'explosion') continue;
-      const age = clamp(1 - e.life / 1.6, 0, 1);
-      compose(vec3(e.x, e.z ?? 0, e.y), quat(), 30 + age * 130, this._model);
-      this.renderer.draw('explosion', explosionMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        alpha: 1 - age,
-        tint: [1, 1, 1],
-      });
-    }
+    return drawCombatEffects(this.renderer, engagement);
   }
 
   /** Build a model matrix that lays a unit +x mesh along `dir`, `thickness` wide. */

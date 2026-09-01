@@ -83,6 +83,7 @@ const PRECACHE = [
   './src/gfx/gl.js',
   './src/gfx/blueprint.js',
   './src/gfx/forms.federation.js',
+  './src/gfx/effects.js',
   './src/gfx/scene.js',
   './src/gfx/vista.js',
   './src/gfx/room.js',

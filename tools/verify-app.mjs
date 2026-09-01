@@ -1697,8 +1697,16 @@ try {
     });
   });
   await page.waitForTimeout(1500);
-  check('combat enters the tactical screen',
+  check('a fight puts the game in combat',
     await page.evaluate(() => globalThis.__app.game.mode === 'combat'));
+  // And leaves the captain where they were. A fight used to yank the screen to
+  // the tactical plot, which is the exact thing `render()` says the combat
+  // restructure exists to stop — so everything below has to WALK to the plot,
+  // the way a captain does.
+  check('a fight does not take the screen',
+    await page.evaluate(() => globalThis.__app.screen !== 'tactical'),
+    await page.evaluate(() => globalThis.__app.screen));
+  await goTo(page, 'tactical');
   check('tactical canvas is present', await page.locator('#tactical').isVisible());
 
   // The tactical canvas is WebGL when the device can manage it and 2D when it
@@ -1966,6 +1974,7 @@ try {
   check('and a combat re-render does not throw the captain back to the top',
     held.top > 0, JSON.stringify({ scrolled, held }));
   await page.screenshot({ path: join(SHOTS, '20-bridge-officers.png') });
+
 
   // ---- The helm's eight warp switches ----
   //
@@ -2381,6 +2390,152 @@ try {
     namedWeapon.afterTorps < namedWeapon.afterBeams, JSON.stringify(namedWeapon));
   await dismissModals(page);
 
+  // ---- A fight, from the chair ----
+  //
+  // This is the presentation the whole restructure is built on: you stay on
+  // the bridge and the enemy is on the main viewer. Nothing had ever
+  // photographed it. The viewer was black for the life of that design, and
+  // once it was not, it turned out to draw the hulls and none of their
+  // weapons — no beams, no torpedoes, and an impact effect that the
+  // simulation has recorded on every shot since combat was written and that
+  // only the 2D fallback had ever drawn.
+  await goTo(page, 'bridge');
+  await page.evaluate(async () => {
+    const { hullScale } = await import('./src/gfx/blueprint.js');
+    globalThis.__hullScale = hullScale;
+  });
+  const fight = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.startCombat([
+      new Ship('d7', { faction: 'klingon', name: 'IKS Probe' }),
+      new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Nearby' }),
+    ], { name: 'Bridge view', relentless: true });
+
+    // Put them where a fight actually happens and point the guns, then run it
+    // long enough that beams are in flight and shots have landed.
+    const eng = g.engagement;
+    eng.hostiles.forEach((h, i) => {
+      h.x = 340 + i * 90; h.y = (i - 0.5) * 120; h.z = 0;
+      h.throttle = 0; h.heading = 180;
+    });
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    g.ship.heading = 0; g.ship.desiredHeading = 0; g.ship.throttle = 0;
+    for (let t = 0; t < 90; t++) {
+      eng.fireAll();
+      for (const h of eng.liveHostiles) h.heading = 180;
+      g.update(1 / 30);
+    }
+    return {
+      mode: g.mode,
+      screen: app.screen,
+      live: eng.liveHostiles.length,
+      effects: (eng.effects ?? []).map((e) => e.kind),
+      projectiles: (eng.projectiles ?? []).length,
+      range: Math.round(g.ship.distanceTo(eng.liveHostiles[0] ?? g.ship)),
+    };
+  });
+  check('a fight leaves the captain on the bridge, not on a plot screen',
+    fight.screen === 'bridge', JSON.stringify(fight));
+  check('and the shooting is actually happening',
+    fight.effects.length > 0 && fight.live > 0, JSON.stringify(fight));
+
+  // Let a frame or two land with shots on the screen, then photograph the
+  // aperture and measure what is in it.
+  await page.waitForTimeout(120);
+  const combatViewer = await page.evaluate(() => {
+    const app = globalThis.__app;
+    // Fire once more and draw the frame here, because a beam lives 0.35
+    // seconds and the screenshot above spent most of that. Reading the stats
+    // after they had all expired said "no weapons fire" about a fight that was
+    // full of it.
+    const live = app.game.engagement;
+    if (live) {
+      for (const w of app.game.ship.weapons) w.cooldown = 0;
+      live.fireAll();
+      for (const h of live.liveHostiles) { for (const w of h.weapons) w.cooldown = 0; }
+      app.game.update(1 / 30);
+      app.fpv?.render(app.game, 1 / 60);
+    }
+    const fpv = app.fpv;
+    const r = fpv?.stats?.screenRect;
+    const canvas = fpv?.canvas;
+    if (!r || !canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    const dpr = canvas.width / box.width;
+
+    // How wide is a hostile on the screen? True range, no lens tricks — so
+    // this is the number that says whether you can see them, and it is
+    // asserted rather than hoped for.
+    const eng = app.game.engagement;
+    const h = eng?.liveHostiles?.[0];
+    let px = 0;
+    let far = 0;
+    let span = 0;
+    let range = 0;
+    if (h) {
+      // The hull's TRUE length in world units — the same number the renderer
+      // scales the mesh by — against the true distance from the camera, which
+      // sits a fixed lead ahead of the bow. No stand-ins: the point of the
+      // true-range decision is that this number is real.
+      span = globalThis.__hullScale(h.classId);
+      range = Math.max(1, app.game.ship.distanceTo(h) - 140);
+      const fov = 74 * Math.PI / 180;
+      const across = (d) => r.w * (2 * Math.atan(span / (2 * d))) / fov;
+      px = across(range);
+      // And at the far end of the envelope, which is the number that decides
+      // whether true range is workable at all: a hull you cannot see is a hull
+      // you cannot fight without walking to the plot.
+      far = across(900);
+    }
+    return {
+      clip: {
+        x: box.x + (r.x + r.w * 0.15) / dpr, y: box.y + (r.y + r.h * 0.15) / dpr,
+        width: Math.max(8, (r.w * 0.7) / dpr), height: Math.max(8, (r.h * 0.7) / dpr),
+      },
+      hostilePx: Math.round(px),
+      farPx: Math.round(far),
+      hullSpan: Math.round(span),
+      range: Math.round(range),
+      effects: fpv.stats.effects ?? null,
+      draws: fpv.stats.drawCalls,
+      tris: fpv.stats.triangles,
+    };
+  });
+  if (combatViewer) {
+    const png = await page.screenshot({ clip: combatViewer.clip });
+    await page.screenshot({ path: join(SHOTS, '21-fight-from-the-chair.png') });
+    await page.screenshot({ path: join(SHOTS, '21b-viewscreen-fight.png'), clip: combatViewer.clip });
+    // Busier than a starfield, which is the point — and much busier than the
+    // black rectangle this was for the whole life of the feature.
+    check('a fight is visible on the main viewer', png.length > 6000,
+      `${png.length}B ${JSON.stringify({ ...combatViewer, clip: undefined })}`);
+    check('and the weapons fire reaches it, not just the hulls',
+      (combatViewer.effects?.drawn ?? 0) > 0 && (combatViewer.effects?.dropped ?? 0) === 0,
+      JSON.stringify(combatViewer.effects));
+    check('a hostile is big enough on the screen to see at true range',
+      combatViewer.hostilePx >= 12 && combatViewer.farPx >= 6,
+      `${combatViewer.hostilePx}px at ${combatViewer.range} units and ${combatViewer.farPx}px at 900 — a ${combatViewer.hullSpan}-unit hull on a ${Math.round(combatViewer.clip.width)}px-wide crop`);
+    check('and the bridge with a fight on the viewer stays inside the budget',
+      combatViewer.draws <= 60 && combatViewer.tris <= 8000,
+      `${combatViewer.tris} triangles in ${combatViewer.draws} draws`);
+  }
+
+  // Leave it as it was found; everything after this assumes a quiet ship.
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    for (let i = 0; i < 5; i++) g.update(1 / 30);
+    g.ship.restore();
+    g.ship.crew = g.ship.maxCrew;
+    g.wreck = null;
+    globalThis.__app.go('bridge');
+  });
+  await dismissModals(page);
+
   // ------------------------------------------------ the rest of the screens
   for (const [navLabel, shot] of [['Ship', '06-ship'], ['Crew', '07-crew'], ['Record', '08-record']]) {
     await nav(page, navLabel);
@@ -2518,6 +2673,9 @@ try {
     const app = globalThis.__app;
     const { Ship } = await import('./src/sim/ship.js');
     app.game.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Sig' })]);
+    // The plot is where the signature button lives, and a fight no longer
+    // takes you there — you walk to the console, which is the point.
+    app.go('tactical');
     app.render();
     const before = {
       used: app.game.character.signatureUsed,
