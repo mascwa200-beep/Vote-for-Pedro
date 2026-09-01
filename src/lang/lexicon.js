@@ -26,7 +26,7 @@ export const STATION_AFFINITY = {
     'target_subsystem', 'shields', 'reinforce', 'alert', 'cloak'],
   engineering: ['power', 'preset', 'eject_core', 'reinforce'],
   science: ['scan'],
-  comms: ['hail', 'demand_surrender'],
+  comms: ['hail', 'demand_surrender', 'call_for_help'],
   medical: [],
   transporter: ['transport', 'away_team'],
   security: [],
@@ -573,6 +573,35 @@ export const INTENTS = [
     build: () => ({ action: 'hail' }),
   },
   {
+    // The other side of the comms panel: not talking to them, talking to
+    // Starfleet. `Engagement` has supported allies since it was written and
+    // nothing in the game ever made one, so this is the order that does.
+    id: 'call_for_help',
+    help: 'Send a distress call / call for backup',
+    phrases: [
+      'send a distress call', 'send a distress signal', 'call for help',
+      'call for backup', 'call for assistance', 'request assistance',
+      'request backup', 'request support', 'we need help',
+      'signal starfleet', 'call starfleet', 'contact starfleet',
+      'broadcast a distress call', 'send out a distress call',
+      'mayday', 'send a mayday', 'get us some help', 'is anyone out there',
+      'ask for reinforcements', 'call in reinforcements', 'request reinforcements',
+      'tell starfleet we are under attack', 'priority one distress call',
+      'send a general distress call', 'all ships this is the enterprise',
+    ],
+    // `help` is deliberately NOT a keyword here. The bare word opens the
+    // manual, which is the discovery path for the whole order layer, and a
+    // distress call must not take it. The multi-word phrasings above still
+    // match as phrases.
+    keywords: {
+      distress: 3.5, backup: 3, reinforcements: 3.2, mayday: 4,
+      starfleet: 2.4, assistance: 2.6,
+    },
+    // "Hail them" is talking to the ship shooting at you; this is not.
+    veto: ['them', 'they', 'their', 'him', 'her', 'surrender'],
+    build: () => ({ action: 'call_for_help' }),
+  },
+  {
     id: 'demand_surrender',
     help: 'Demand their surrender',
     phrases: [
@@ -1029,6 +1058,93 @@ export const INTENTS = [
     keywords: { salvage: 3, scavenge: 3, wreck: 2, hulk: 2 },
     build: () => ({ action: 'salvage' }),
   },
+  {
+    // Breaking off a course under way. "All stop" also means this while the
+    // ship is at warp, and that is decided where the order is carried out
+    // rather than here, because the same words mean the throttle at impulse.
+    id: 'drop_warp',
+    help: 'Drop out of warp / break off the course',
+    phrases: [
+      'drop out of warp', 'drop us out of warp', 'come out of warp',
+      'drop to impulse', 'take us out of warp', 'break off the course',
+      'abort the course', 'cancel the course', 'belay that course',
+      'we are not going', 'stop the ship here',
+    ],
+    keywords: { warp: 1.4, abort: 2.4, impulse: 1.4 },
+    // The order that SETS a course shares almost every word with the order
+    // that abandons one, and a destination is the thing that tells them apart.
+    veto: ['set course', 'lay in', 'plot', 'engage'],
+    vetoSlots: ['place'],
+    build: () => ({ action: 'drop_warp' }),
+  },
+  // ------------------------------------------------------------------
+  // What the captain spends: the career signature and the locker.
+  //
+  // Both were buttons and only buttons. Every ability a bridge officer has
+  // could already be spoken — all eighteen of them — and the two things that
+  // belong to the captain personally could not be said at all.
+  // ------------------------------------------------------------------
+  {
+    id: 'signature',
+    // One power per career, so the phrasing covers all seven and the order
+    // fires whichever one is actually yours. A tactical captain who says
+    // "work a miracle" gets Called Shot, and the log says so — which is a
+    // better answer than "say again, Captain?".
+    help: 'Use your career signature — once per engagement',
+    phrases: [
+      'use my signature', 'signature power', 'captains prerogative',
+      'this is what i do', 'my move', 'now or never', 'time to earn it',
+      // Command — Take the Conn. Not by that name: "take the conn" is the
+      // order that hands the bridge to somebody else, and it has been that
+      // for far longer than this power has existed.
+      'all stations report ready', 'reset every station', 'look alive',
+      // Tactical — Called Shot.
+      'called shot', 'called shot on them', 'one shot one kill',
+      // Engineering — Miracle Worker.
+      'work a miracle', 'i need a miracle', 'miracle worker',
+      // Science — Insight.
+      'full spectrum analysis', 'show me everything', 'i see it now',
+      // Medical — Triage.
+      'triage', 'triage the wounded', 'get them back on their feet',
+      // Diplomatic — Parley.
+      'i want a parley', 'they will hear me out', 'parley with them',
+      // Intelligence — Prior Knowledge.
+      'prior knowledge', 'i know what they will do', 'we saw this coming',
+    ],
+    keywords: {
+      signature: 3, prerogative: 3, miracle: 2.6, triage: 3, parley: 2.6,
+      insight: 2.6, called: 1.6,
+    },
+    // The bridge-officer powers and the con handover share a lot of language
+    // with this, and both of them are more specific than it is.
+    veto: ['con', 'conn', 'pattern', 'evasive', 'brace', 'harmonics', 'tachyon'],
+    build: () => ({ action: 'signature' }),
+  },
+  {
+    id: 'device',
+    help: 'Break out a battery or a hull patch',
+    phrases: [
+      'shield battery', 'use the shield battery', 'discharge the shield battery',
+      'weapons battery', 'use the weapons battery',
+      'engine battery', 'use the engine battery',
+      'break out a hull patch', 'use a hull patch', 'emergency hull patch',
+      'crack open a battery', 'break out a battery', 'use a battery',
+      'get the batteries out', 'we have a patch for that',
+    ],
+    keywords: { battery: 3, batteries: 3 },
+    // Building a patch in the machine shop is a different order that shares
+    // the word, and rerouting power is a different order that shares the rest.
+    veto: ['fabricate', 'build', 'make me', 'reroute', 'divert'],
+    build: (c) => {
+      const t = c.text;
+      const device = /\bshield/.test(t) ? 'shield_battery'
+        : /\bweapon/.test(t) ? 'weapons_battery'
+          : /\bengine|\bimpulse/.test(t) ? 'engine_battery'
+            : /\bhull|\bpatch/.test(t) ? 'hull_patch'
+              : null;
+      return { action: 'device', device };
+    },
+  },
   // ------------------------------------------------------------------
   // The gambit. Making someone answer who has no intention of answering.
   // ------------------------------------------------------------------
@@ -1059,17 +1175,27 @@ export const INTENTS = [
   },
   {
     id: 'away_team',
-    help: 'Assemble an away team',
+    help: 'Send an away team / board them',
     phrases: [
       'away team', 'landing party', 'beam down', 'send a team down',
       'assemble an away team', 'put together a team', 'go down there',
       'send someone down', 'i am going down', 'i will lead the team',
       'transport down', 'take a team', 'shore party', 'boarding party',
+      // Boarding is the same order with a different destination, and it was
+      // the one AWAY_TEMPLATES entry with no way to reach it at all.
+      'send an away team', 'send a landing party', 'send a team over',
+      'send a team across', 'board them', 'board her', 'board that ship',
+      'board the derelict', 'board the wreck', 'take her bridge',
+      'send a boarding party', 'send security across', 'beam a team over',
+      'beam a team across', 'put a team on that ship',
     ],
-    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5 },
+    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5, board: 2.4, boarding: 3 },
     build: (c) => ({
       action: 'away_team',
       captainLeads: /\b(?:i will lead|i am going|with me|i will go|myself|personally)\b/.test(c.text),
+      // Which mission the captain meant, when the situation offers more than
+      // one. Saying "board them" in a firefight is not ambiguous.
+      prefer: /\bboard/.test(c.text) ? 'board' : null,
     }),
   },
   {

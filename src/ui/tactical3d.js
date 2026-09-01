@@ -798,7 +798,12 @@ export class TacticalView3D {
 
       const isTarget = ship === engagement.target;
       const isPlayer = ship.isPlayer;
-      const accent = isPlayer ? '#9cf' : isTarget ? '#ff9a3c' : '#e5533d';
+      // A ship on your side is not drawn in the colour of a ship shooting at
+      // you. Nothing in the game made an ally until the distress call did, so
+      // the only two cases this ever had were "me" and "them", and the relief
+      // arrived labelled as a hostile.
+      const isFriend = isPlayer || engagement.allies?.includes(ship);
+      const accent = isFriend ? '#9cf' : isTarget ? '#ff9a3c' : '#e5533d';
 
       if (isTarget) {
         ctx.strokeStyle = accent;

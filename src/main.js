@@ -27,6 +27,7 @@ import {
 import { ABILITIES } from './sim/officers.js';
 import { WATCHES } from './sim/watch.js';
 import { Ship, FACINGS } from './sim/ship.js';
+import { answeringFor } from './sim/address.js';
 import { parseOrder } from './ui/orders.js';
 import { SKILLS } from './sim/skills.js';
 import { RNG } from './core/rng.js';
@@ -62,11 +63,6 @@ const STATION_PANEL = {
   survey: 'survey',
   log: 'log', record: 'captain', turbolift: 'turbolift', crew: 'crew',
   galaxy: 'galaxy',
-};
-
-const BACKGROUND_SKILL = {
-  command: 'leadership', tactical: 'beam_weapons',
-  engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
 };
 
 
@@ -296,15 +292,14 @@ class App {
     });
 
     on('captain:promoted', (promo) => {
+      // The level, the feat and the recomputed modifiers are `Game.awardXP`'s
+      // job now. They used to be this listener's, which meant a promotion
+      // earned with no screen attached moved the rank index and did nothing
+      // else at all.
       audio.play('promotion');
       audio.play('boatswain');
       haptic('confirm');
       const g = this.game;
-      if (g) {
-        g.character.levelUp();
-        g.pendingFeats = (g.pendingFeats ?? 0) + 1;
-        g.applyAllMods();
-      }
       this.showMessage('Promotion', [
         `You are promoted to ${promo.rank.name}.`,
         `${promo.points} skill points awarded, and a feat to choose on the Captain screen.`,
@@ -771,7 +766,7 @@ class App {
     this.consoleTitle = title;
     const body = (nodes.length ? nodes : [el('p', { text: 'Working, Captain.' })])
       .map((n) => (n instanceof globalThis.Node ? n : el('p', { text: String(n) })));
-    this.modalHandle = modal(title, body, [
+    this.modalHandle = this.raiseModal(title, body, [
       button('Step away', () => this.closeModal(), { color: 'ghost' }),
     ]);
   }
@@ -791,7 +786,7 @@ class App {
     const body = [].concat(lines).map((l) => (
       typeof l === 'object' && l?.natural !== undefined ? rollCard(l) : el('p', { text: String(l) })
     ));
-    this.modalHandle = modal(title, body,
+    this.modalHandle = this.raiseModal(title, body,
       actions ?? [button('Acknowledged', () => { audio.play('computer_ack'); this.closeModal(); }, { color: 'blue' })]);
     audio.play('computer_query');
     return this.modalHandle;
@@ -804,6 +799,23 @@ class App {
    *        which closes modals on the way through, and that closed the very
    *        console the switch was on.
    */
+  /**
+   * Put a modal up, and take down whatever was already there.
+   *
+   * `modal()` appends to the document, so two calls leave two stacked
+   * backdrops — and `closeModal` only ever knew about the last handle, so
+   * dismissing the top one left the other one on screen with nothing able to
+   * remove it. Two things can raise a modal in the same breath: a boarding
+   * party's report and the end of the battle that party just decided.
+   *
+   * One at a time, newest wins. The one raised last is the one that answers
+   * the order the captain actually gave.
+   */
+  raiseModal(title, body, actions = []) {
+    this.modalHandle?.close();
+    return modal(title, body, actions);
+  }
+
   closeModal(keepConsole = false) {
     if (!keepConsole && !this._refreshingConsole) this.consoleOpen = null;
     this.modalHandle?.close();
@@ -827,7 +839,7 @@ class App {
       this.executeOrder(forced.confirm ? forced.order : forced, raw);
     }, { color: 'ghost' }));
 
-    this.modalHandle = modal('Confirm order', [
+    this.modalHandle = this.raiseModal('Confirm order', [
       el('p', { class: 'muted', text: `You said: “${raw}”` }),
       el('p', { text: `I read that as: ${result.reading}` }),
       alts.length ? el('p', { class: 'muted', text: 'Or did you mean:' }) : null,
@@ -848,14 +860,14 @@ class App {
 
   showOfficer(officer) {
     this.closeModal();
-    this.modalHandle = modal(officer.name,
+    this.modalHandle = this.raiseModal(officer.name,
       screens.officerDetail(this, officer),
       [button('Close', () => this.closeModal(), { color: 'ghost' })]);
   }
 
   openHail(factionId) {
     this.closeModal();
-    this.modalHandle = modal('Open Channel',
+    this.modalHandle = this.raiseModal('Open Channel',
       screens.hailOptions(this, factionId, (optionId) => {
         const result = this.game.hail(optionId);
         this.closeModal();
@@ -889,7 +901,7 @@ class App {
     const start = () => { this.closeModal(); this.showNewGame(); };
     if (skipConfirm) return start();
     this.closeModal();
-    this.modalHandle = modal('Abandon Command', [
+    this.modalHandle = this.raiseModal('Abandon Command', [
       el('p', { text: 'This ends the current commission. The record cannot be recovered unless you exported it.' }),
     ], [
       button('Abandon command', () => start(), { color: 'red' }),
@@ -915,65 +927,15 @@ class App {
   }
 
   useAbility(officer, ability) {
-    const g = this.game;
-    if (!officer.ready(ability.id)) { audio.play('ui_deny'); return; }
-
-    // The officer gets a say.
-    const reaction = officer.reactTo({ risk: ability.id === 'eject_core' ? 0.9 : 0.2 });
-    officer.startCooldown(ability.id);
-
-    if (ability.mods) {
-      g.ship.addBuff({ id: ability.id, label: ability.name, until: ability.duration || 12, mods: ability.mods });
-    }
-    switch (ability.special) {
-      case 'evasive': g.engagement?.evasive(true); break;
-      case 'extinguish': g.ship.fires = 0; break;
-      case 'eject': g.ship.ejectCore(); audio.play('explosion'); break;
-      case 'reset_adaptation': {
-        for (const s of g.engagement?.hostiles ?? []) s.adaptation = {};
-        break;
-      }
-      case 'detect_cloak': {
-        for (const s of g.engagement?.liveHostiles ?? []) if (s.cloaked) s.decloak();
-        audio.play('scan');
-        break;
-      }
-      case 'jam': {
-        for (const s of g.engagement?.liveHostiles ?? []) {
-          s.addBuff({ id: 'jammed', label: 'Sensors jammed', until: ability.duration, mods: { accuracy: 0.55 } });
-        }
-        break;
-      }
-      case 'subsystem': g.engagement?.targetSubsystem('weapons'); break;
-      case 'scan': {
-        const t = g.engagement?.target;
-        if (t) {
-          this.showMessage(`Scan — ${t.name}`, [
-            `${t.cls.name}. ${t.cls.description}`,
-            `Hull ${Math.round(t.hullPct * 100)}%, shields ${Math.round(t.shieldPct * 100)}%.`,
-            `Weakest facing: ${FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore')}.`,
-          ]);
-        }
-        break;
-      }
-      case 'spread': {
-        // Fire every torpedo tube at once, ignoring arcs for this volley.
-        const target = g.engagement?.target;
-        if (target) {
-          for (const w of g.ship.weapons.filter((x) => x.type === 'torpedo')) {
-            w.cooldown = 0;
-            g.engagement.fireWeapon(g.ship, w, target);
-          }
-          audio.play('torpedo_launch');
-        }
-        break;
-      }
-      default: break;
-    }
-
-    const line = officer.acknowledge(reaction === 'comply' ? 'order' : reaction);
-    g.pushLog(`${officer.name}: ${ability.say ?? line}`, officer.station);
-    if (this.settings.voice) audio.speak(ability.say ?? line);
+    // What the power DOES is in src/sim/powers.js, so it can be fired without
+    // a screen. What is left here is what it sounds like.
+    const r = this.game.useAbility(officer, ability);
+    if (!r.ok) { audio.play('ui_deny'); return; }
+    if (this.settings.voice) audio.speak(r.line);
+    if (r.report) this.showMessage(r.report.title, r.report.lines);
+    if (r.ability?.special === 'eject') audio.play('explosion');
+    if (r.ability?.special === 'detect_cloak') audio.play('scan');
+    if (r.ability?.special === 'spread') audio.play('torpedo_launch');
     haptic('confirm');
   }
 
@@ -981,139 +943,30 @@ class App {
    * Career signature powers: one big effect, once per engagement.
    *
    * Each reuses machinery that already exists — buffs, repair, cooldowns —
-   * rather than inventing a parallel system.
+   * rather than inventing a parallel system. All seven are in
+   * src/sim/powers.js; this is the announcement.
    */
   useSignature() {
-    const g = this.game;
-    const c = g?.character;
-    const eng = g?.engagement;
-    if (!c || c.signatureUsed) { audio.play('ui_deny'); return false; }
+    const r = this.game.useSignature();
+    if (!r.ok) { audio.play('ui_deny'); return false; }
 
-    const career = c.career;
-    let line = '';
-    // A power that ends in a screen of its own rather than a confirmation.
-    let openAfter = null;
-
-    switch (c.careerId) {
-      case 'command': {
-        // Take the Conn — every bridge officer is ready again.
-        for (const o of g.crew.officers) o.cooldowns = {};
-        line = 'Every station reports ready.';
-        break;
-      }
-      case 'tactical': {
-        // Called Shot — the next hit that lands is a guaranteed critical.
-        if (!eng) { audio.play('ui_deny'); return false; }
-        eng.guaranteedCrits += 1;
-        if (!eng.targetedSubsystem) eng.targetSubsystem('weapons');
-        line = `Called shot on their ${eng.targetedSubsystem}. Standing by.`;
-        break;
-      }
-      case 'engineering': {
-        const before = g.ship.hullPct;
-        g.ship.repair(g.ship.maxHull * 0.3);
-        g.ship.fires = 0;
-        line = `Hull integrity ${Math.round(before * 100)}% to ${Math.round(g.ship.hullPct * 100)}%. Fires are out.`;
-        break;
-      }
-      case 'science': {
-        // Insight — see everything, and roll better for twenty seconds.
-        g.ship.addBuff({
-          id: 'insight', label: 'Insight', until: 20,
-          mods: { accuracy: 1.25, critChance: 0.15 },
-        });
-        c.insightUntil = 20;
-        if (eng?.target) {
-          const t = eng.target;
-          const weakest = FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore');
-          line = `${t.name}: weakest facing is ${weakest}, hull at ${Math.round(t.hullPct * 100)}%.`;
-        } else {
-          line = 'Full spectrum analysis running.';
-        }
-        break;
-      }
-      case 'medical': {
-        // Triage — one officer back on their feet, and fewer losses after.
-        const wounded = g.crew.officers.find((o) => o.alive && o.injured);
-        if (wounded) { wounded.injured = false; wounded.injurySeverity = 0; }
-        g.ship.addBuff({
-          id: 'triage', label: 'Triage', until: 30, mods: { crewProtect: 0.5 },
-        });
-        line = wounded
-          ? `${wounded.name} is back on duty. Sickbay is holding.`
-          : 'Sickbay is prepped. Casualties will be lighter.';
-        break;
-      }
-      case 'diplomatic': {
-        // Parley — they will hear you out whatever their doctrine says.
-        if (!eng || eng.over) { audio.play('ui_deny'); return false; }
-        g.parleyForced = true;
-        line = 'Channel forced open. They are listening whether they meant to or not.';
-        // Opened AFTER the announcement, not before it. `showMessage` replaces
-        // whatever modal is up, so opening the channel here meant the power's
-        // own confirmation dialog immediately closed the channel it had just
-        // forced open — the one thing the ability exists to do.
-        openAfter = () => this.openHail(eng.hostiles[0]?.faction);
-        break;
-      }
-      case 'intelligence': {
-        // Prior Knowledge — you move first, and they lose a beat.
-        if (eng) {
-          for (const s of eng.liveHostiles) {
-            for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, 6);
-            if (s.cloaked) s.decloak();
-          }
-        }
-        g.ship.addBuff({
-          id: 'prior_knowledge', label: 'Prior Knowledge', until: 15,
-          mods: { accuracy: 1.2, defense: 1.4 },
-        });
-        line = 'We know what they are about to do. Six seconds of it.';
-        break;
-      }
-      default:
-        audio.play('ui_deny');
-        return false;
-    }
-
-    c.signatureUsed = true;
-    g.pushLog(`${career.signature}: ${line}`, 'captain');
-    if (this.settings.voice) audio.speak(line);
+    if (this.settings.voice) audio.speak(r.line);
     audio.play('ui_confirm');
     audio.play('computer_ack');
     haptic('confirm');
     // A power whose whole result is a screen of its own shows that instead of
     // a dialog it would only have to close again. The line is in the log
-    // either way.
-    if (openAfter) openAfter();
-    else this.showMessage(career.signature, [line]);
+    // either way — and the channel is opened AFTER the announcement, because
+    // `showMessage` replaces whatever modal is up, so opening it first meant
+    // the confirmation closed the channel the power had just forced open.
+    if (r.openHail !== null && r.openHail !== undefined) this.openHail(r.openHail);
+    else this.showMessage(r.career.signature, [r.line]);
     this.render();
     return true;
   }
 
   useDevice(id) {
-    const g = this.game;
-    if (!g.loadout.useDevice(id)) { audio.play('ui_deny'); return; }
-    switch (id) {
-      case 'shield_battery':
-        for (const f of FACINGS) {
-          g.ship.shields[f] = Math.min(g.ship.maxShield, g.ship.shields[f] + g.ship.maxShield * 0.4);
-        }
-        g.pushLog('Shield battery discharged. Facings reinforced.', 'engineering');
-        break;
-      case 'weapons_battery':
-        g.ship.addBuff({ id: 'weapons_battery', label: 'Weapons battery', until: 20, mods: { damage: 1.4 } });
-        break;
-      case 'engine_battery':
-        g.ship.addBuff({ id: 'engine_battery', label: 'Engine battery', until: 20, mods: { impulse: 1.5, turn: 1.3 } });
-        break;
-      case 'hull_patch':
-        g.ship.repair(g.ship.maxHull * 0.2);
-        g.ship.fires = 0;
-        g.pushLog('Emergency hull patch applied. Fires out.', 'engineering');
-        break;
-      default: break;
-    }
+    if (!this.game.useDevice(id).ok) { audio.play('ui_deny'); return; }
     audio.play('power_reroute');
     haptic('confirm');
   }
@@ -1176,7 +1029,7 @@ class App {
       return;
     }
 
-    const order = parseOrder(text);
+    const order = parseOrder(text, this.game?.crew ?? null);
     this.executeOrder(order, text);
   }
 
@@ -1203,11 +1056,50 @@ class App {
 
     audio.play(outcome.success ? 'computer_ack' : 'ui_deny');
     haptic(outcome.success ? 'confirm' : 'deny');
-    this.modalHandle = modal(
+    this.modalHandle = this.raiseModal(
       outcome.success ? 'They Are Standing Down' : 'The Channel Closes',
       body,
       [button('Acknowledged', () => this.closeModal(), { color: outcome.success ? 'green' : 'red' })],
     );
+    this.needsRender = true;
+  }
+
+  /** More than one place to send them: let the captain say which. */
+  chooseAwayMission(options) {
+    audio.play('ui_select');
+    this.modalHandle = this.raiseModal('Where To, Captain?', [
+      el('p', { class: 'muted', text: 'A landing party can be sent to more than one place from here.' }),
+      ...options.map((t) => button(t.title, () => {
+        this.closeModal();
+        this.runAwayMission(t.id);
+      }, { say: t.id === 'boarding_action' ? 'board them' : 'send an away team', color: 'ice' })),
+    ], [button('Belay that', () => this.closeModal(), { color: 'ghost' })]);
+    this.needsRender = true;
+  }
+
+  /** Run one, and show what came back. */
+  runAwayMission(id) {
+    const r = this.game.awayMission(id);
+    if (!r.ok) {
+      audio.play('ui_deny');
+      this.game.pushLog(r.reason, 'transporter');
+      this.render();
+      return;
+    }
+    audio.play(r.outcome === 'failure' ? 'ui_deny' : 'computer_ack');
+    haptic(r.outcome === 'failure' ? 'deny' : 'confirm');
+    this.modalHandle = this.raiseModal(r.title, [
+      ...r.steps.map((st) => el('p', {
+        class: st.success ? '' : 'muted',
+        text: `${st.success ? '\u2713' : '\u2717'} ${st.text}${st.officer ? ` — ${st.officer}` : ''}`,
+      })),
+      el('p', {}, [el('b', {
+        text: `${r.passed} of ${r.of} objectives.`
+          + (r.lost ? ` We lost ${r.lost}.` : ''),
+      })]),
+    ], [button('Acknowledged', () => this.closeModal(), {
+      color: r.outcome === 'failure' ? 'red' : 'green',
+    })]);
     this.needsRender = true;
   }
 
@@ -1241,8 +1133,34 @@ class App {
       return;
     }
 
+    // Who answers.
+    //
+    // An order given to somebody by name is answered BY THAT PERSON. "Mr.
+    // Sulu, warp six" used to be acknowledged by whichever station the order
+    // belonged to, which is usually the same officer and sometimes flatly
+    // wrong — and always wrong when the captain deliberately went round the
+    // duty roster to ask a particular person.
+    //
+    // Naming somebody who cannot answer does not swallow the order. The post
+    // still has somebody standing it, they still carry it out, and the log
+    // says why it was not the person who was asked.
+    const spokenTo = order.addressee?.station ?? null;
+    if (spokenTo) {
+      const named = g.crew.officers.find((o) => o.name === order.addressee.name);
+      const answering = answeringFor(
+        { station: spokenTo, officer: named ?? null }, g.crew,
+      );
+      if (named && answering && answering !== named) {
+        g.pushLog(
+          `${named.name} is off duty — ${answering.name} has the station, Captain.`,
+          'computer',
+        );
+      }
+    }
+
     const ack = (station, text) => {
-      const officer = g.officerSays(station, text);
+      // The station the order belongs to, unless the captain named somebody.
+      const officer = g.officerSays(spokenTo ?? station, text);
       if (this.settings.voice && officer) audio.speak(text);
       audio.play('computer_ack');
       haptic('confirm');
@@ -1284,11 +1202,22 @@ class App {
         break;
       }
       case 'throttle': {
+        // "All stop" while the ship is at warp is not the impulse throttle: it
+        // is the order to come out of warp, and it is what a captain says.
+        if (order.value === 0 && g.transit) { this.executeOrder({ action: 'drop_warp' }, raw); return; }
         // Engines answering an order is a sound the game had and never made.
         const opening = order.value > g.ship.throttle + 0.15;
         g.ship.throttle = order.value;
         if (opening) audio.play('impulse_burn', { throttle: 400 });
         ack('helm', order.value === 0 ? 'All stop.' : `Ahead ${Math.round(order.value * 100)} percent.`);
+        break;
+      }
+
+      case 'drop_warp': {
+        const r = g.dropOutOfWarp();
+        if (!r.ok) { audio.play('ui_deny'); ack('helm', r.error); break; }
+        audio.play('warp_drop');
+        ack('helm', `Dropping to impulse at ${r.system.name}, Captain.`);
         break;
       }
       case 'heading':
@@ -1489,14 +1418,20 @@ class App {
         break;
       }
       case 'hand_over_con': {
-        // Who was named, if anyone. The roster is the only place that knows,
-        // so the match happens here rather than in the parser.
-        const said = String(order.said ?? '').toLowerCase();
-        const named = g.crew.officers.find((o) => o.alive && !o.injured
-          && said.includes(o.name.split(' ').pop().toLowerCase()));
-        const r = g.handOverCon(named ? named.station : null);
+        // Who was named, if anyone. `parseOrder` resolves the address against
+        // the real roster now, so this no longer has to do its own surname
+        // matching — and it gets "Number One", "Bones" and "the chief
+        // engineer" for free, which the old substring test never did.
+        const r = g.handOverCon(order.addressee?.station ?? null);
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
         else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'call_for_help': {
+        const r = g.callForHelp();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play(r.answered ? 'computer_ack' : 'ui_deny');
+        haptic(r.answered ? 'confirm' : 'deny');
         break;
       }
       case 'take_con': {
@@ -1657,9 +1592,54 @@ class App {
         }
         break;
       }
+
+      case 'signature': {
+        // The captain's own power, spoken. `useSignature` announces it, opens
+        // the channel for a diplomat, and refuses with a reason for a tactical
+        // captain on an empty bridge — this only has to say what the refusal
+        // was, because a deny beep on its own is not an answer.
+        if (!this.useSignature()) {
+          const why = g.character?.signatureUsed
+            ? 'We have already played that card this engagement, Captain.'
+            : 'There is nothing to use it on, Captain.';
+          ack('computer', why);
+        }
+        break;
+      }
+
+      case 'device': {
+        if (!order.device) {
+          audio.play('ui_deny');
+          ack('engineering', 'Which one, Captain? A battery, or a hull patch?');
+          break;
+        }
+        const before = g.loadout.equipped.device.length;
+        this.useDevice(order.device);
+        if (g.loadout.equipped.device.length === before) {
+          ack('engineering', 'We are out of those, Captain.');
+        }
+        break;
+      }
+
       case 'away_team': {
-        g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
-        ack('comms', 'Away team assembled and standing by in the transporter room.');
+        // This used to assemble a team and say it was standing by, and that was
+        // the whole order — a landing party that never went anywhere. The five
+        // templates in AWAY_TEMPLATES have been sitting unread since the away
+        // system was written; what runs is decided by where the ship is and
+        // what is in front of it.
+        const options = g.availableAwayMissions();
+        if (!options.length) {
+          g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
+          ack('transporter',
+            'Away team assembled and standing by. There is nowhere to send them, Captain.');
+          break;
+        }
+        const wanted = order.prefer === 'board'
+          ? options.find((t) => t.id === 'boarding_action' || t.id === 'derelict_search')
+          : null;
+        const pick = wanted ?? (options.length === 1 ? options[0] : null);
+        if (!pick) { this.chooseAwayMission(options); break; }
+        this.runAwayMission(pick.id);
         break;
       }
       case 'mission_choice': {
@@ -1733,10 +1713,9 @@ class App {
       this.pickAbilityIncrease(2, []);
       return;
     }
-    if (g.character.takeFeat(featId)) {
-      g.pendingFeats--;
-      g.applyAllMods();
-      g.pushLog(`Qualified: ${feat.name}.`, 'captain');
+    // Spending the bank and recomputing what the feat changes is
+    // `Game.takeFeat`; this is the announcement.
+    if (g.takeFeat(featId).ok) {
       audio.play('ui_confirm');
       this.showMessage(feat.name, [feat.text]);
       this.render();
@@ -1746,7 +1725,7 @@ class App {
   pickAbilityIncrease(remaining, picked) {
     const g = this.game;
     this.closeModal();
-    this.modalHandle = modal(`Field Commission — ${remaining} to assign`, [
+    this.modalHandle = this.raiseModal(`Field Commission — ${remaining} to assign`, [
       el('p', { class: 'hint', text: 'Raise an ability score by one. Scores are capped at 20.' }),
       ...ABILITY_LIST.map((a) => {
         const score = g.character.score(a.id);
@@ -1755,10 +1734,7 @@ class App {
           if (remaining > 1) {
             this.pickAbilityIncrease(remaining - 1, next);
           } else {
-            g.character.takeFeat('ability_score', next);
-            g.pendingFeats--;
-            g.applyAllMods();
-            g.pushLog('Field commission: ability scores raised.', 'captain');
+            g.takeFeat('ability_score', next);
             this.closeModal();
             audio.play('ui_confirm');
             this.render();
@@ -1768,30 +1744,18 @@ class App {
     ], [button('Cancel', () => this.closeModal(), { color: 'ghost' })]);
   }
 
-  /** Apply what a completed reputation project actually gives you. */
-  applyReputationGrant(trackId, project) {
-    const g = this.game;
-    const grant = project.grant ?? {};
-
-    if (grant.console) {
-      g.loadout.acquire(grant.console);
-      g.pushLog(`${CONSOLES[grant.console]?.name ?? grant.console} received from ${trackId}.`, 'engineering');
-    }
-    if (grant.torpedoes) {
-      g.ship.torpedoes = Math.min(g.ship.maxTorpedoes, g.ship.torpedoes + grant.torpedoes);
-    }
-    if (grant.antimatter) {
-      g.ship.antimatter = Math.min(100, g.ship.antimatter + grant.antimatter);
-    }
-    if (grant.perk === 'cloak') {
-      g.ship.cloakCapable = true;
-      g.pushLog('A cloaking device has been installed. Nobody has signed for it.', 'engineering');
-    }
-    if (grant.title) {
-      g.pushLog(`You are now styled "${grant.title}".`, 'captain');
-    }
-    g.applyAllMods();
-    this.showMessage(project.name, [project.text]);
+  /**
+   * Buy a reputation project and say what arrived.
+   *
+   * What the project GIVES is in `Game.buyProject`, so it happens whether or
+   * not anybody is looking at it. This is the announcement.
+   */
+  buyProject(trackId, projectId) {
+    const r = this.game.buyProject(trackId, projectId);
+    if (!r.ok) { audio.play('ui_deny'); return false; }
+    audio.play('ui_confirm');
+    this.showMessage(r.project.name, [r.project.text, ...r.lines]);
+    return true;
   }
 
   // ------------------------------------------------------------ persistence
@@ -1867,25 +1831,10 @@ class App {
       registry: draft.registry || 'NCC-1701',
     });
 
-    // The career track grants a matching starting skill rank.
-    const skillId = BACKGROUND_SKILL[draft.careerId];
-    if (skillId && SKILLS[skillId]) {
-      this.game.progress.unspent++;
-      this.game.progress.spend(skillId);
-    }
-    // Starfleet families start with an extra pip and the scrutiny to match.
-    if (this.game.character.mechanic('startingRankBonus')) {
-      this.game.progress.rankIndex = Math.min(
-        this.game.progress.rankIndex + 1,
-        10,
-      );
-    }
-    if (this.game.character.mechanic('startingReprimand')) {
-      this.game.ledger.record('order_disobeyed', {
-        text: 'Prior reprimand on file at time of commission',
-      });
-    }
-    this.game.applyAllMods();
+    // The career skill, the Starfleet family's extra pip and any reprimand
+    // already on file are applied by `Game.commission`, in the constructor —
+    // they used to be applied here, which meant only a captain created through
+    // this screen ever got them.
     this.recentRolls = [];
 
     this.orderBar.style.display = '';
@@ -1922,7 +1871,7 @@ class App {
   resumeOrStart() {
     if (hasSave('auto')) {
       const data = loadSave('auto');
-      this.modalHandle = modal('Resume Command', [
+      this.modalHandle = this.raiseModal('Resume Command', [
         el('p', { text: data.label ?? 'A command record was found.' }),
       ], [
         button('Resume', () => {

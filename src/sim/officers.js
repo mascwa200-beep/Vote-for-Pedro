@@ -137,6 +137,10 @@ export class Officer {
       station: 'tactical', name: 'Officer', species: 'Human', rank: 'Lieutenant',
       discipline: 80, daring: 70, candor: 70, expertise: 80,
       canon: false,
+      // What the captain calls them when there is no time for a surname.
+      // Read by src/sim/address.js; saved, because a name somebody answers to
+      // that stops working after a reload is worse than never having it.
+      aliases: [],
     }, data);
 
     this.alive = true;
@@ -262,15 +266,31 @@ export class Officer {
   kill(cause = 'killed in action') {
     if (!this.alive) return;
     this.alive = false;
+    // Being dead is not a kind of being hurt.
+    //
+    // `injured` survived death, so an officer wounded on one away mission and
+    // killed on the next was dead AND on the sick list — which is what
+    // `officer.dead-and-injured` in the invariant file says must never happen,
+    // and what every roster panel then reported. Found by the order monkey.
+    this.injured = false;
+    this.injurySeverity = 0;
     this.cause = cause;
     emit('officer:killed', { officer: this, cause });
+  }
+
+  /** Back on duty. Nothing brings the dead back. */
+  heal() {
+    if (!this.alive) return false;
+    this.injured = false;
+    this.injurySeverity = 0;
+    return true;
   }
 
   save() {
     return {
       station: this.station, name: this.name, species: this.species, rank: this.rank,
       discipline: this.discipline, daring: this.daring, candor: this.candor,
-      expertise: this.expertise, canon: this.canon,
+      expertise: this.expertise, canon: this.canon, aliases: this.aliases,
       alive: this.alive, injured: this.injured, injurySeverity: this.injurySeverity,
       xp: this.xp, level: this.level, abilities: this.abilities, relationship: this.relationship,
     };

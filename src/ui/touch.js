@@ -60,7 +60,7 @@ document.addEventListener('visibilitychange', () => {
  * { x, y, scale } that the renderer reads each frame.
  */
 export function attachPanZoom(canvas, view, opts = {}) {
-  const { minScale = 0.4, maxScale = 6, onTap = null } = opts;
+  const { minScale = 0.4, maxScale = 6, onTap = null, onUserView = null } = opts;
   const pointers = new Map();
   let lastDistance = 0;
   let moved = false;
@@ -101,7 +101,7 @@ export function attachPanZoom(canvas, view, opts = {}) {
     if (pointers.size === 1) {
       const dx = next.x - prev.x;
       const dy = next.y - prev.y;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) { moved = true; onUserView?.(); }
       view.x += dx / view.scale;
       view.y += dy / view.scale;
     }
@@ -109,6 +109,7 @@ export function attachPanZoom(canvas, view, opts = {}) {
 
     if (pointers.size === 2) {
       moved = true;
+      onUserView?.();
       const [a, b] = [...pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       if (lastDistance > 0) {
@@ -135,6 +136,7 @@ export function attachPanZoom(canvas, view, opts = {}) {
   // Desktop convenience; harmless on touch.
   listen('wheel', (e) => {
     e.preventDefault();
+    onUserView?.();
     view.scale = Math.max(minScale, Math.min(maxScale, view.scale * (e.deltaY < 0 ? 1.1 : 0.9)));
   }, { passive: false });
 

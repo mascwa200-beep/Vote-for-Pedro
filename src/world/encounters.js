@@ -7,6 +7,7 @@
 import { SYSTEM_BY_ID } from './systems.data.js';
 import { FACTIONS, isHostile } from './factions.data.js';
 import { Ship } from '../sim/ship.js';
+import { buildHostiles } from '../sim/combat.js';
 
 /** Which hostile hulls each faction fields. */
 const FLEETS = {
@@ -285,23 +286,10 @@ function buildAnomaly(rng, system) {
 
 function makeShips(rng, factionId, count) {
   const pool = FLEETS[factionId] ?? ['orion_raider'];
-  const names = {
-    klingon: ['IKS Vor’cha', 'IKS Ch’Tang', 'IKS Bortas', 'IKS Rotarran'],
-    romulan: ['IRW Terix', 'IRW Belak', 'IRW Valdore'],
-    cardassian: ['CDS Prakesh', 'CDS Aldara', 'CDS Vetar'],
-    ferengi: ['Kreechta', 'Krayton'],
-    orion: ['Green Wind', 'Profit Margin', 'Syndicate Raider'],
-    tholian: ['Assembly Spinner', 'Lattice Warden'],
-    dominion: ['Jem’Hadar 4-7', 'Jem’Hadar 9-1'],
-    borg: ['Borg Cube'],
-    independent: ['SS Odin', 'SS Norkova'],
-  }[factionId] ?? ['Unknown Vessel'];
-
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    out.push(new Ship(rng.pick(pool), { name: names[i % names.length], faction: factionId }));
-  }
-  return out;
+  // One table, in src/sim/combat.js. This file used to carry its own copy,
+  // which is how a Klingon cruiser could be an IKS Rotarran in an encounter
+  // and "klingon vessel 1" when a mission stage started the same fight.
+  return buildHostiles(rng, factionId, count, pool);
 }
 
 /** Hazard tick for systems that are actively dangerous to sit in. */

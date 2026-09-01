@@ -1374,7 +1374,7 @@ document.addEventListener('visibilitychange', () => {
  * { x, y, scale } that the renderer reads each frame.
  */
 function attachPanZoom(canvas, view, opts = {}) {
-  const { minScale = 0.4, maxScale = 6, onTap = null } = opts;
+  const { minScale = 0.4, maxScale = 6, onTap = null, onUserView = null } = opts;
   const pointers = new Map();
   let lastDistance = 0;
   let moved = false;
@@ -1415,7 +1415,7 @@ function attachPanZoom(canvas, view, opts = {}) {
     if (pointers.size === 1) {
       const dx = next.x - prev.x;
       const dy = next.y - prev.y;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) { moved = true; onUserView?.(); }
       view.x += dx / view.scale;
       view.y += dy / view.scale;
     }
@@ -1423,6 +1423,7 @@ function attachPanZoom(canvas, view, opts = {}) {
 
     if (pointers.size === 2) {
       moved = true;
+      onUserView?.();
       const [a, b] = [...pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       if (lastDistance > 0) {
@@ -1449,6 +1450,7 @@ function attachPanZoom(canvas, view, opts = {}) {
   // Desktop convenience; harmless on touch.
   listen('wheel', (e) => {
     e.preventDefault();
+    onUserView?.();
     view.scale = Math.max(minScale, Math.min(maxScale, view.scale * (e.deltaY < 0 ? 1.1 : 0.9)));
   }, { passive: false });
 
@@ -3369,6 +3371,21 @@ const { emit } = __require("src/core/events.js");
 // ventral facings are the real cost of going 3D: they touch damage resolution,
 // the AI, the display, saves, and balance. They are worth paying for once.
 const FACINGS = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'];
+
+/**
+ * How far past its normal ceiling one facing may be charged.
+ *
+ * `reinforceShield` moves charge from five facings onto one, and the point of
+ * the order is that the receiving facing ends up STRONGER than it can normally
+ * be — otherwise the manoeuvre buys nothing but a redistribution. The excess
+ * bleeds off over about twenty seconds.
+ *
+ * Exported because the invariant checker has to know it. It did not, and
+ * forbade any facing above `maxShield` outright, so reinforcing shields — an
+ * ordinary tactical order — reported an anomaly in the ship's log to any
+ * captain running with the checker on.
+ */
+const SHIELD_OVERCHARGE = 1.2;
 const FACING_LABEL = {
   fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
   dorsal: 'Dorsal', ventral: 'Ventral',
@@ -3916,7 +3933,16 @@ class Ship {
 
   damageSubsystem(key, amount) {
     if (!(key in this.subsystems)) return;
-    this.subsystems[key] = Math.max(0, this.subsystems[key] - amount);
+    // Guarded the same way `repair` and `takeDamage` are, and for the same
+    // reason: a subsystem is a number between zero and one that the whole
+    // damage model, the power grid and the AI read every tick, and one
+    // non-finite write to it is permanent. `takeDamage` clamps through
+    // `clamp`, which is NaN-safe; this did raw arithmetic and did not.
+    //
+    // Found by the API fuzzer in tests/invariants.test.js, which calls every
+    // public method with rubbish precisely because a save file is a thing a
+    // person can edit and a computed damage figure is a thing that can go NaN.
+    this.subsystems[key] = clamp(this.subsystems[key] - clamp(amount, 0, 1), 0, 1);
     if (key === 'warpcore' && this.subsystems.warpcore <= 0.15 && !this.breaching) {
       this.beginBreach(this.subsystems.warpcore <= 0 ? 12 : 28);
     }
@@ -3951,6 +3977,16 @@ class Ship {
     this.subsystems.warpcore = 0;
     this.power.cap = Math.round(this.cls.powerCap * 0.45);
     this.power.normalize();
+
+    // Ejecting the core stops the antimatter going up. It does not put a hull
+    // back together.
+    //
+    // Clearing `breaching` unconditionally was a soft-lock: a ship already at
+    // zero hull came out of it not destroyed, not breaching and not repairable
+    // — the one state `ship.zerohull.adrift` exists to forbid — so the fight
+    // could never end on 'destroyed' and the campaign carried on with a wreck
+    // that the game did not know was a wreck. Found by the API fuzzer.
+    if (this.hull <= 0) this.destroy('hull failure with the core clear');
     return true;
   }
 
@@ -3983,7 +4019,7 @@ class Ship {
   /**
    * Emergency shield reinforcement to one facing, taken from the others.
    *
-   * The receiving facing is capped at 1.2x max, so it can only ever absorb a
+   * The receiving facing is capped at SHIELD_OVERCHARGE, so it can only ever absorb a
    * limited amount. Charge is conserved: we work out the headroom first and
    * draw exactly that much, proportionally, rather than stripping a fixed
    * fraction off five facings and letting the overflow evaporate.
@@ -3993,7 +4029,7 @@ class Ship {
     const others = FACINGS.filter((f) => f !== facing);
     const draw = clamp(fraction, 0, 1);
     const available = others.reduce((n, f) => n + this.shields[f] * draw, 0);
-    const headroom = Math.max(0, this.maxShield * 1.2 - this.shields[facing]);
+    const headroom = Math.max(0, this.maxShield * SHIELD_OVERCHARGE - this.shields[facing]);
     const wanted = Math.min(available, headroom);
     if (wanted <= 0) return true;
 
@@ -4006,7 +4042,7 @@ class Ship {
       this.shields[f] -= take;
       pooled += take;
     }
-    this.shields[facing] = Math.min(this.maxShield * 1.2, this.shields[facing] + pooled);
+    this.shields[facing] = Math.min(this.maxShield * SHIELD_OVERCHARGE, this.shields[facing] + pooled);
     return true;
   }
 
@@ -4105,6 +4141,7 @@ class Ship {
 }
 
 __exports.FACINGS = FACINGS;
+__exports.SHIELD_OVERCHARGE = SHIELD_OVERCHARGE;
 __exports.FACING_LABEL = FACING_LABEL;
 __exports.FACING_AXIS = FACING_AXIS;
 __exports.bearingToDirection = bearingToDirection;
@@ -5495,16 +5532,25 @@ function tube(mb, {
  * the near one.
  */
 function box(mb, {
-  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0,
+  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0, flare = 0,
   color = [0.6, 0.64, 0.7],
 } = {}) {
   const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
   const [cx, cy, cz] = center;
-  // Eight corners; the +z corners carry the sweep and the +y corners the rake.
+  // Eight corners. The +z corners carry the sweep and the +y corners the rake,
+  // both of which shear the box fore-and-aft.
+  //
+  // `flare` is the third one, and its absence is why every warp pylon in the
+  // game was a brick. A pylon runs from a hull on the centreline to a nacelle
+  // that is both above it and outboard of it — a leaning blade. With only
+  // fore-aft shears the only box that touches both ends is one that spans the
+  // whole gap in y AND the whole gap in z: a solid block filling the corner,
+  // which is what a Galaxy was carrying, a quarter of the ship's length across.
+  // Shearing z by height makes the same box a strut.
   const p = (sx, sy, sz) => vec3(
     cx + sx * hx - (sz > 0 ? sweep : 0) - (sy > 0 ? rake : 0),
     cy + sy * hy,
-    cz + sz * hz,
+    cz + sz * hz + (sy > 0 ? flare : 0),
   );
 
   const v000 = p(-1, -1, -1); const v100 = p(1, -1, -1);
@@ -5786,13 +5832,19 @@ const FEDERATION_FORMS = {
     const nz = b.nacelleZ ?? wide * 0.46;
     const high2 = b.nacelleY ?? high * 0.32;
     const stack = b.nacelleStack ?? high * 0.62;
+    // Four nacelles means four pylons, and two of them run downward from the
+    // hull rather than up. The blade leans outboard on the way to the nacelle
+    // whichever way that is, so the lean is measured from the hull end.
+    const zRoot = nz * 0.15;
     for (const ny of [high2, high2 - stack]) {
+      const up = ny >= hy;
       mirrored(mb, (m) => {
         box(m, {
-          center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
-          size: vec3(high * 0.2, Math.abs(ny - hy) + high * 0.14, nz * 0.85),
+          center: vec3(nx + nl * 0.3, (ny + hy) / 2, up ? zRoot : nz),
+          size: vec3(high * 0.5, Math.abs(ny - hy) + high * 0.14, high * 0.09),
           sweep: b.pylonSweep ?? 0.04,
           rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.5,
+          flare: up ? nz - zRoot : zRoot - nz,
           color: p.trim,
         });
         nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? high * 0.11 });
@@ -5862,7 +5914,10 @@ const FEDERATION_FORMS = {
   compact(mb, p, b) {
     const wide = b.ratioBeam ?? 0.7;
     const high = b.ratioHeight ?? 0.19;
-    const bl = b.bodyLength ?? 0.94;
+    // The sweep adds its own displacement to the length, so the box is built
+    // shorter than the ship: 0.78 plus a 0.23 rake is the one unit every
+    // other hull here spans.
+    const bl = b.bodyLength ?? 0.78;
     const bh = b.bodyHeight ?? high * 0.86;
     const bw = b.bodyWidth ?? wide;
 
@@ -6006,7 +6061,7 @@ const FORMS = {
       rimColor: p.trim,
     });
 
-    const hy = b.hullY ?? -high * 0.24;
+    const hy = b.hullY ?? -high * 0.42;
     if (b.neck !== false) {
       box(mb, {
         center: vec3(sx - sr * 0.5, hy / 2, 0),
@@ -6015,12 +6070,15 @@ const FORMS = {
       });
     }
 
-    // The secondary hull, tapering aft.
+    // The secondary hull, tapering aft. `hullThick` is how heavy it is for the
+    // ship's height — an Intrepid's is famously slight, a Galaxy's is most of
+    // the vessel — and `hullReach` how far forward it runs under the saucer.
+    const thick = b.hullThick ?? 1;
     tube(mb, {
       origin: vec3(-0.5, hy, 0),
-      length: b.hullLength ?? 0.5 + sx * 0.85,
-      r0: b.hullR0 ?? high * 0.17,
-      r1: b.hullR1 ?? high * 0.23,
+      length: b.hullLength ?? 0.5 + sx * (b.hullReach ?? 0.85),
+      r0: b.hullR0 ?? high * 0.17 * thick,
+      r1: b.hullR1 ?? high * 0.23 * thick,
       segments: 12,
       color: p.hull,
     });
@@ -6037,15 +6095,31 @@ const FORMS = {
     // shape no Starfleet cruiser has.
     const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
     const nr = b.nacelleRadius ?? high * 0.12;
+    // Where the blade leaves the hull, and how thick and how deep it is.
+    // A pylon is a wing: a chord you can see from the side and a thickness you
+    // can barely see from the front.
+    const zRoot = nz * (b.pylonRoot ?? 0.16);
     mirrored(mb, (m) => {
       // The pylon reaches from the hull to the nacelle, measured rather than
       // guessed at a fixed 0.34 — which was right for a Constitution and left
       // every ship with higher nacelles connected to nothing.
+      //
+      // It is a leaning blade, not a block. Spanning the gap in z as a box
+      // size — which is what this did — fills the entire corner between hull
+      // and nacelle with solid geometry: on a Galaxy that was a slab 0.25 of
+      // the ship's length across and nearly as tall, and it is the first thing
+      // you saw when you looked at one. `flare` carries the top of a thin
+      // blade outboard to meet the nacelle instead.
       box(m, {
-        center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
-        size: vec3(high * 0.24, Math.abs(ny - hy) + high * 0.16, nz * 0.9),
+        center: vec3(nx + nl * 0.3, (ny + hy) / 2, zRoot),
+        size: vec3(
+          b.pylonChord ?? high * 0.62,
+          Math.abs(ny - hy) + high * 0.16,
+          b.pylonThick ?? high * 0.1,
+        ),
         sweep: b.pylonSweep ?? 0.06,
         rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.7,
+        flare: nz - zRoot,
         color: p.trim,
       });
       tube(m, {
@@ -6096,7 +6170,7 @@ const FORMS = {
     const high = b.ratioHeight ?? 0.25;
     const sr = b.saucerRadius ?? wide / 2;
     const sx = b.saucerX ?? 0.5 - sr;
-    const hullY = b.hullY ?? -high * 0.24;
+    const hullY = b.hullY ?? -high * 0.44;
 
     saucer(mb, {
       origin: vec3(sx, b.saucerY ?? 0, 0),
@@ -6168,13 +6242,24 @@ const FORMS = {
     const nx = b.nacelleX ?? -0.46;
     const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
     const nr = b.nacelleRadius ?? high * 0.115;
+    const zRoot = nz * (b.pylonRoot ?? 0.14);
     mirrored(mb, (m) => {
       // Thin, swept harder than the generic slab, and leaning aft as it rises.
+      //
+      // "Thin" was a comment rather than a shape: the box was slim fore-and-aft
+      // and then a full nacelle-span wide, so the 1966 struts — which are the
+      // slenderest thing on the ship, and the reason there is daylight under
+      // the nacelles at all — were drawn as two filled corners.
       box(m, {
-        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, nz * 0.55),
-        size: vec3(high * 0.2, Math.abs(ny - hullY) + high * 0.12, nz * 0.92),
+        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, zRoot),
+        size: vec3(
+          b.pylonChord ?? high * 0.56,
+          Math.abs(ny - hullY) + high * 0.12,
+          b.pylonThick ?? high * 0.08,
+        ),
         sweep: b.pylonSweep ?? 0.05,
         rake: b.pylonRake ?? Math.max(0, ny - hullY) * 0.8,
+        flare: nz - zRoot,
         color: p.trim,
       });
       tube(m, {
@@ -6449,14 +6534,14 @@ const BLUEPRINTS = {
   constitution_refit: { form: 'starfleet', length: 305, domeRatio: 0.52, domeFlat: 0.22, nacelleHigh: 0.3, pylonSweep: 0.08 },
   miranda: { form: 'rollbar', length: 278, neck: false },
   oberth: { form: 'twinhull', length: 120, lowerY: -0.06 },
-  excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, nacelleHigh: 0.34, pylonSweep: 0.02 },
+  excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, hullReach: 1.15, nacelleHigh: 0.46, nacelleWide: 0.68, pylonSweep: 0.02 },
   constellation: { form: 'quadnacelle', length: 260 },
   ambassador: { form: 'starfleet', length: 526, nacelleHigh: 0.3, pylonSweep: 0.08 },
   galaxy: { form: 'starfleet', length: 641, saucerStretch: 0.95, nacelleHigh: 0.4, nacelleWide: 0.86, pylonSweep: 0.14 },
   nebula: { form: 'podded', length: 442, saucerStretch: 0.95 },
-  intrepid: { form: 'starfleet', length: 345, saucerStretch: 1.12, nacelleHigh: 0.4, pylonSweep: 0.12 },
+  intrepid: { form: 'starfleet', length: 345, saucerStretch: 1.12, hullThick: 0.62, hullReach: 0.5, nacelleHigh: 0.52, nacelleWide: 0.66, nacelleLength: 0.44, pylonSweep: 0.12 },
   defiant: { form: 'compact', length: 171 },
-  sovereign: { form: 'starfleet', length: 685, saucerStretch: 1.2, domeRatio: 0.26, nacelleHigh: 0.34, pylonSweep: 0.22 },
+  sovereign: { form: 'starfleet', length: 685, saucerStretch: 1.34, domeRatio: 0.26, domeFlat: 0.08, neck: false, hullThick: 1.25, hullReach: 1.1, nacelleHigh: 0.4, nacelleWide: 0.92, nacelleLength: 0.62, pylonSweep: 0.3 },
   runabout: { form: 'compact', length: 23, segments: 12 },
 
   // ---- Klingon ----
@@ -8456,7 +8541,12 @@ class TacticalView3D {
 
       const isTarget = ship === engagement.target;
       const isPlayer = ship.isPlayer;
-      const accent = isPlayer ? '#9cf' : isTarget ? '#ff9a3c' : '#e5533d';
+      // A ship on your side is not drawn in the colour of a ship shooting at
+      // you. Nothing in the game made an ally until the distress call did, so
+      // the only two cases this ever had were "me" and "them", and the relief
+      // arrived labelled as a hostile.
+      const isFriend = isPlayer || engagement.allies?.includes(ship);
+      const accent = isFriend ? '#9cf' : isTarget ? '#ff9a3c' : '#e5533d';
 
       if (isTarget) {
         ctx.strokeStyle = accent;
@@ -9552,6 +9642,16 @@ function ringShell(solid, glow, room) {
   }
 
   // The ceiling light ring.
+  //
+  // Wound to be seen from BELOW, which is the only place anybody will ever be
+  // standing. It was wound the other way, so its normal pointed up into the
+  // hull and back-face culling removed all forty triangles of it — the light
+  // ring existed, cost its draw call, and had never once been on screen. The
+  // bridge's ceiling was forty per cent of the first thing a player sees and
+  // it was a flat grey plate.
+  //
+  // The floor and ceiling fans a few lines up reverse their corner order for
+  // exactly this reason; this loop did not.
   for (let i = 0; i < bays * 2; i++) {
     const a0 = (i / (bays * 2)) * Math.PI * 2;
     const a1 = ((i + 1) / (bays * 2)) * Math.PI * 2;
@@ -9559,9 +9659,9 @@ function ringShell(solid, glow, room) {
     const r1 = R * 0.68;
     glow.quad(
       vec3(Math.sin(a0) * r0, h - 0.04, Math.cos(a0) * r0),
-      vec3(Math.sin(a0) * r1, h - 0.04, Math.cos(a0) * r1),
-      vec3(Math.sin(a1) * r1, h - 0.04, Math.cos(a1) * r1),
       vec3(Math.sin(a1) * r0, h - 0.04, Math.cos(a1) * r0),
+      vec3(Math.sin(a1) * r1, h - 0.04, Math.cos(a1) * r1),
+      vec3(Math.sin(a0) * r1, h - 0.04, Math.cos(a0) * r1),
       PALETTE.strip,
     );
   }
@@ -9796,7 +9896,9 @@ function console3d(solid, glow, station, index) {
 /** Furniture, by kind. Deliberately blocky: the sets were, too. */
 function prop3d(solid, glow, prop) {
   const [x, z] = prop.at;
-  const r = prop.radius || 0.3;
+  // How big the thing IS. `radius` is how close you may get to it, which for
+  // a surface feature is deliberately much larger — see src/world/surface.js.
+  const r = prop.drawRadius ?? prop.radius ?? 0.3;
 
   switch (prop.kind) {
     case 'chair': {
@@ -12826,10 +12928,53 @@ class GalaxyMap {
     this.onSelect = null;
     this.selectedId = null;
     this.game = null;
+    // Until the player drives the chart themselves, it frames itself on what
+    // is actually in it. The fixed opening view was chosen against one canvas
+    // and wasted more than half of a tall phone's: the stars sat in a band
+    // across the middle with black above and below.
+    this.userView = false;
+    this.fitKey = '';
     attachPanZoom(canvas, this.view, {
       minScale: 1.6, maxScale: 26,
       onTap: (px, py) => this.handleTap(px, py),
+      onUserView: () => { this.userView = true; },
     });
+  }
+
+  /**
+   * Frame the whole chart in the canvas it has.
+   *
+   * Laying the chart over or spinning it changes the extent of what is drawn,
+   * so this reruns when the projection or the canvas does. `fitKey` is what
+   * says whether anything moved, because refitting on every frame would fight
+   * the pan handler for control of the view.
+   */
+  fitChart(width, height) {
+    const systems = this.game?.galaxy?.systems;
+    if (!systems?.length || !width || !height) return;
+
+    const key = `${width}x${height}:${this.tilt.toFixed(3)}:${this.spin.toFixed(3)}:${systems.length}`;
+    if (key === this.fitKey) return;
+    this.fitKey = key;
+
+    let lo = { u: Infinity, v: Infinity };
+    let hi = { u: -Infinity, v: -Infinity };
+    const p = { u: 0, v: 0, depth: 0 };
+    for (const s of systems) {
+      this.at(s, p);
+      lo = { u: Math.min(lo.u, p.u), v: Math.min(lo.v, p.v) };
+      hi = { u: Math.max(hi.u, p.u), v: Math.max(hi.v, p.v) };
+    }
+    const spanU = Math.max(1e-3, hi.u - lo.u);
+    const spanV = Math.max(1e-3, hi.v - lo.v);
+
+    // Margin for the things that hang off a system: the territory bubbles are
+    // wider than the stars in them, and a name is drawn under its dot.
+    const MARGIN = 1.3;
+    const scale = Math.min(width / (spanU * MARGIN), height / (spanV * MARGIN));
+    this.view.scale = Math.max(1.6, Math.min(26, scale));
+    this.view.x = -(lo.u + hi.u) / 2;
+    this.view.y = -(lo.v + hi.v) / 2;
   }
 
   /**
@@ -12944,6 +13089,7 @@ class GalaxyMap {
     this.game = game;
     const { ctx, width, height } = fitCanvas(this.canvas);
     ctx.clearRect(0, 0, width, height);
+    if (!this.userView) this.fitChart(width, height);
 
     ctx.save();
     ctx.translate(width / 2, height / 2);
@@ -12959,6 +13105,9 @@ class GalaxyMap {
     const chart = new Map();
     for (const s of g.systems) chart.set(s.id, this.at(s));
     const P = (id) => chart.get(id);
+
+    // Boxes of names already on the chart, so the next one can stand aside.
+    const labelled = [];
 
     // Charted lanes.
     ctx.strokeStyle = 'rgba(110,130,190,0.28)';
@@ -13134,8 +13283,32 @@ class GalaxyMap {
         const fs = 11 / this.view.scale;
         ctx.font = `${fs}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillStyle = visited ? 'rgba(255,220,180,0.9)' : 'rgba(180,180,200,0.55)';
-        ctx.fillText(visited || s.type !== 'anomaly' ? s.name : 'Unsurveyed', u, v + r * 2 + fs);
+        const text = visited || s.type !== 'anomaly' ? s.name : 'Unsurveyed';
+        const ly = v + r * 2 + fs;
+        // A name that would land on one already drawn is not drawn. Twenty
+        // systems in the Federation core all wanted the same forty pixels, and
+        // the result was "Vega Colony" written through "Starbase 11" written
+        // through "Rigel" — three names, none of them readable. The ones that
+        // matter are claimed first, below.
+        const half = ctx.measureText(text).width / 2;
+        // Padded, because two names that merely touch are as unreadable as
+        // two that overlap.
+        const pad = fs * 0.25;
+        const boxed = {
+          x0: u - half - pad, x1: u + half + pad,
+          y0: ly - fs - pad, y1: ly + fs * 0.3 + pad,
+        };
+        // Where you are, what you have selected and anywhere with something to
+        // do are drawn whatever else is there — those three are the reason a
+        // captain opened the chart.
+        const mustShow = here || s.id === this.selectedId || hasMission;
+        const clash = !mustShow && labelled.some((b) =>
+          boxed.x0 < b.x1 && boxed.x1 > b.x0 && boxed.y0 < b.y1 && boxed.y1 > b.y0);
+        if (!clash) {
+          labelled.push(boxed);
+          ctx.fillStyle = visited ? 'rgba(255,220,180,0.9)' : 'rgba(180,180,200,0.55)';
+          ctx.fillText(text, u, ly);
+        }
       }
     }
 
@@ -13391,9 +13564,9 @@ const ERAS = {
       { station: 'first_officer', name: 'Spock', species: 'Vulcan/Human', rank: 'Commander',
         discipline: 96, daring: 55, candor: 88, expertise: 94, secondary: 'science' },
       { station: 'medical', name: 'Leonard McCoy', species: 'Human', rank: 'Lieutenant Commander',
-        discipline: 62, daring: 48, candor: 99, expertise: 92 },
+        discipline: 62, daring: 48, candor: 99, expertise: 92, aliases: ['bones'] },
       { station: 'engineering', name: 'Montgomery Scott', species: 'Human', rank: 'Lieutenant Commander',
-        discipline: 84, daring: 72, candor: 76, expertise: 97 },
+        discipline: 84, daring: 72, candor: 76, expertise: 97, aliases: ['scotty'] },
       { station: 'helm', name: 'Hikaru Sulu', species: 'Human', rank: 'Lieutenant',
         discipline: 90, daring: 82, candor: 55, expertise: 88 },
       { station: 'comms', name: 'Nyota Uhura', species: 'Human', rank: 'Lieutenant',
@@ -13724,6 +13897,10 @@ class Officer {
       station: 'tactical', name: 'Officer', species: 'Human', rank: 'Lieutenant',
       discipline: 80, daring: 70, candor: 70, expertise: 80,
       canon: false,
+      // What the captain calls them when there is no time for a surname.
+      // Read by src/sim/address.js; saved, because a name somebody answers to
+      // that stops working after a reload is worse than never having it.
+      aliases: [],
     }, data);
 
     this.alive = true;
@@ -13849,15 +14026,31 @@ class Officer {
   kill(cause = 'killed in action') {
     if (!this.alive) return;
     this.alive = false;
+    // Being dead is not a kind of being hurt.
+    //
+    // `injured` survived death, so an officer wounded on one away mission and
+    // killed on the next was dead AND on the sick list — which is what
+    // `officer.dead-and-injured` in the invariant file says must never happen,
+    // and what every roster panel then reported. Found by the order monkey.
+    this.injured = false;
+    this.injurySeverity = 0;
     this.cause = cause;
     emit('officer:killed', { officer: this, cause });
+  }
+
+  /** Back on duty. Nothing brings the dead back. */
+  heal() {
+    if (!this.alive) return false;
+    this.injured = false;
+    this.injurySeverity = 0;
+    return true;
   }
 
   save() {
     return {
       station: this.station, name: this.name, species: this.species, rank: this.rank,
       discipline: this.discipline, daring: this.daring, candor: this.candor,
-      expertise: this.expertise, canon: this.canon,
+      expertise: this.expertise, canon: this.canon, aliases: this.aliases,
       alive: this.alive, injured: this.injured, injurySeverity: this.injurySeverity,
       xp: this.xp, level: this.level, abilities: this.abilities, relationship: this.relationship,
     };
@@ -14044,6 +14237,12 @@ const EQUIVALENCES = [
   [/\badm\b/g, 'admiral'],
   [/\bens\b/g, 'ensign'],
   [/\bcpo\b/g, 'chief'],
+  // "The conn" is the watch, not the station. Rewriting it to "helm" — which
+  // is right for "Conn, ahead warp five" — turned "take the conn" into "take
+  // the helm", whereupon the station stripper removed the helm and left "take
+  // the": the whole bridge-shift feature was unreachable by the spelling most
+  // people use for it, while "take the con" worked perfectly.
+  [/\bthe conn\b/g, 'the con'],
   [/\bconn\b/g, 'helm'],
   [/\bnav\b/g, 'navigation'],
   [/\btac\b/g, 'tactical'],
@@ -14798,7 +14997,7 @@ const STATION_AFFINITY = {
     'target_subsystem', 'shields', 'reinforce', 'alert', 'cloak'],
   engineering: ['power', 'preset', 'eject_core', 'reinforce'],
   science: ['scan'],
-  comms: ['hail', 'demand_surrender'],
+  comms: ['hail', 'demand_surrender', 'call_for_help'],
   medical: [],
   transporter: ['transport', 'away_team'],
   security: [],
@@ -15345,6 +15544,35 @@ const INTENTS = [
     build: () => ({ action: 'hail' }),
   },
   {
+    // The other side of the comms panel: not talking to them, talking to
+    // Starfleet. `Engagement` has supported allies since it was written and
+    // nothing in the game ever made one, so this is the order that does.
+    id: 'call_for_help',
+    help: 'Send a distress call / call for backup',
+    phrases: [
+      'send a distress call', 'send a distress signal', 'call for help',
+      'call for backup', 'call for assistance', 'request assistance',
+      'request backup', 'request support', 'we need help',
+      'signal starfleet', 'call starfleet', 'contact starfleet',
+      'broadcast a distress call', 'send out a distress call',
+      'mayday', 'send a mayday', 'get us some help', 'is anyone out there',
+      'ask for reinforcements', 'call in reinforcements', 'request reinforcements',
+      'tell starfleet we are under attack', 'priority one distress call',
+      'send a general distress call', 'all ships this is the enterprise',
+    ],
+    // `help` is deliberately NOT a keyword here. The bare word opens the
+    // manual, which is the discovery path for the whole order layer, and a
+    // distress call must not take it. The multi-word phrasings above still
+    // match as phrases.
+    keywords: {
+      distress: 3.5, backup: 3, reinforcements: 3.2, mayday: 4,
+      starfleet: 2.4, assistance: 2.6,
+    },
+    // "Hail them" is talking to the ship shooting at you; this is not.
+    veto: ['them', 'they', 'their', 'him', 'her', 'surrender'],
+    build: () => ({ action: 'call_for_help' }),
+  },
+  {
     id: 'demand_surrender',
     help: 'Demand their surrender',
     phrases: [
@@ -15801,6 +16029,93 @@ const INTENTS = [
     keywords: { salvage: 3, scavenge: 3, wreck: 2, hulk: 2 },
     build: () => ({ action: 'salvage' }),
   },
+  {
+    // Breaking off a course under way. "All stop" also means this while the
+    // ship is at warp, and that is decided where the order is carried out
+    // rather than here, because the same words mean the throttle at impulse.
+    id: 'drop_warp',
+    help: 'Drop out of warp / break off the course',
+    phrases: [
+      'drop out of warp', 'drop us out of warp', 'come out of warp',
+      'drop to impulse', 'take us out of warp', 'break off the course',
+      'abort the course', 'cancel the course', 'belay that course',
+      'we are not going', 'stop the ship here',
+    ],
+    keywords: { warp: 1.4, abort: 2.4, impulse: 1.4 },
+    // The order that SETS a course shares almost every word with the order
+    // that abandons one, and a destination is the thing that tells them apart.
+    veto: ['set course', 'lay in', 'plot', 'engage'],
+    vetoSlots: ['place'],
+    build: () => ({ action: 'drop_warp' }),
+  },
+  // ------------------------------------------------------------------
+  // What the captain spends: the career signature and the locker.
+  //
+  // Both were buttons and only buttons. Every ability a bridge officer has
+  // could already be spoken — all eighteen of them — and the two things that
+  // belong to the captain personally could not be said at all.
+  // ------------------------------------------------------------------
+  {
+    id: 'signature',
+    // One power per career, so the phrasing covers all seven and the order
+    // fires whichever one is actually yours. A tactical captain who says
+    // "work a miracle" gets Called Shot, and the log says so — which is a
+    // better answer than "say again, Captain?".
+    help: 'Use your career signature — once per engagement',
+    phrases: [
+      'use my signature', 'signature power', 'captains prerogative',
+      'this is what i do', 'my move', 'now or never', 'time to earn it',
+      // Command — Take the Conn. Not by that name: "take the conn" is the
+      // order that hands the bridge to somebody else, and it has been that
+      // for far longer than this power has existed.
+      'all stations report ready', 'reset every station', 'look alive',
+      // Tactical — Called Shot.
+      'called shot', 'called shot on them', 'one shot one kill',
+      // Engineering — Miracle Worker.
+      'work a miracle', 'i need a miracle', 'miracle worker',
+      // Science — Insight.
+      'full spectrum analysis', 'show me everything', 'i see it now',
+      // Medical — Triage.
+      'triage', 'triage the wounded', 'get them back on their feet',
+      // Diplomatic — Parley.
+      'i want a parley', 'they will hear me out', 'parley with them',
+      // Intelligence — Prior Knowledge.
+      'prior knowledge', 'i know what they will do', 'we saw this coming',
+    ],
+    keywords: {
+      signature: 3, prerogative: 3, miracle: 2.6, triage: 3, parley: 2.6,
+      insight: 2.6, called: 1.6,
+    },
+    // The bridge-officer powers and the con handover share a lot of language
+    // with this, and both of them are more specific than it is.
+    veto: ['con', 'conn', 'pattern', 'evasive', 'brace', 'harmonics', 'tachyon'],
+    build: () => ({ action: 'signature' }),
+  },
+  {
+    id: 'device',
+    help: 'Break out a battery or a hull patch',
+    phrases: [
+      'shield battery', 'use the shield battery', 'discharge the shield battery',
+      'weapons battery', 'use the weapons battery',
+      'engine battery', 'use the engine battery',
+      'break out a hull patch', 'use a hull patch', 'emergency hull patch',
+      'crack open a battery', 'break out a battery', 'use a battery',
+      'get the batteries out', 'we have a patch for that',
+    ],
+    keywords: { battery: 3, batteries: 3 },
+    // Building a patch in the machine shop is a different order that shares
+    // the word, and rerouting power is a different order that shares the rest.
+    veto: ['fabricate', 'build', 'make me', 'reroute', 'divert'],
+    build: (c) => {
+      const t = c.text;
+      const device = /\bshield/.test(t) ? 'shield_battery'
+        : /\bweapon/.test(t) ? 'weapons_battery'
+          : /\bengine|\bimpulse/.test(t) ? 'engine_battery'
+            : /\bhull|\bpatch/.test(t) ? 'hull_patch'
+              : null;
+      return { action: 'device', device };
+    },
+  },
   // ------------------------------------------------------------------
   // The gambit. Making someone answer who has no intention of answering.
   // ------------------------------------------------------------------
@@ -15831,17 +16146,27 @@ const INTENTS = [
   },
   {
     id: 'away_team',
-    help: 'Assemble an away team',
+    help: 'Send an away team / board them',
     phrases: [
       'away team', 'landing party', 'beam down', 'send a team down',
       'assemble an away team', 'put together a team', 'go down there',
       'send someone down', 'i am going down', 'i will lead the team',
       'transport down', 'take a team', 'shore party', 'boarding party',
+      // Boarding is the same order with a different destination, and it was
+      // the one AWAY_TEMPLATES entry with no way to reach it at all.
+      'send an away team', 'send a landing party', 'send a team over',
+      'send a team across', 'board them', 'board her', 'board that ship',
+      'board the derelict', 'board the wreck', 'take her bridge',
+      'send a boarding party', 'send security across', 'beam a team over',
+      'beam a team across', 'put a team on that ship',
     ],
-    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5 },
+    keywords: { away: 2, landing: 2.5, party: 1.5, team: 1.5, board: 2.4, boarding: 3 },
     build: (c) => ({
       action: 'away_team',
       captainLeads: /\b(?:i will lead|i am going|with me|i will go|myself|personally)\b/.test(c.text),
+      // Which mission the captain meant, when the situation offers more than
+      // one. Saying "board them" in a firefight is not ambiguous.
+      prefer: /\bboard/.test(c.text) ? 'board' : null,
     }),
   },
   {
@@ -16719,6 +17044,239 @@ __exports.parseText = parseText;
 
 });
 
+__define("src/sim/address.js", function (__exports, __require) {
+// Who the captain is talking to.
+//
+// Almost every order on this bridge is said to somebody. "Mr. Sulu, warp six",
+// "Bones, get down here", "Spock, what do you make of it" — the name is not
+// decoration, it is half the line, and the game heard none of it. One regex in
+// main.js matched a surname for the single order that hands over the con, and
+// every other order in the game was addressed to nobody in particular.
+//
+// This resolves an address against the ACTUAL ROSTER, which is the only place
+// that knows who is aboard: the lexicon cannot, because a captain can serve
+// with the 1966 crew, the 1987 crew, or seven people it generated this morning.
+//
+// Four ways to name somebody, and the crew answers to all of them:
+//
+//   By surname, with or without an honorific — "Spock", "Mr. Spock",
+//     "Commander Spock", "Doctor McCoy", "Lieutenant Uhura".
+//   By the post — "helm", "science", "the chief engineer", "tactical".
+//   By the standing form of address — "Number One" is the first officer on
+//     any ship in Starfleet, whoever holds the job.
+//   By what their friends call them, where the roster records it.
+//
+// The address may lead ("Spock, scan it") or trail ("Take us out, Mr. Sulu"),
+// because both are how people talk, and what comes back is the officer AND the
+// order with the address removed — so the parser sees "scan it" either way.
+
+/**
+ * Forms of address that belong to a POST rather than a person.
+ *
+ * "Number One" is the first officer of any ship, and a captain who says it is
+ * addressing whoever currently holds the job — which changes when somebody is
+ * hurt, which is exactly why this maps to the station and not to a name.
+ */
+const BY_POST = {
+  'number one': 'first_officer',
+  'number 1': 'first_officer',
+  exec: 'first_officer',
+  'executive officer': 'first_officer',
+  xo: 'first_officer',
+  'first officer': 'first_officer',
+  helm: 'helm',
+  helmsman: 'helm',
+  navigator: 'helm',
+  conn: 'helm',
+  tactical: 'tactical',
+  'tactical officer': 'tactical',
+  security: 'tactical',
+  weapons: 'tactical',
+  science: 'science',
+  'science officer': 'science',
+  sciences: 'science',
+  engineering: 'engineering',
+  engineer: 'engineering',
+  'chief engineer': 'engineering',
+  doctor: 'medical',
+  doc: 'medical',
+  medical: 'medical',
+  'chief medical officer': 'medical',
+  communications: 'comms',
+  comms: 'comms',
+  'communications officer': 'comms',
+};
+
+/**
+ * Honorifics that precede a name and are not part of it.
+ *
+ * `mr` covers "Mister" and "Mr." both, because normalisation has already taken
+ * the full stop off by the time anything here runs — and if it has not, the
+ * trim below takes it.
+ */
+const HONORIFICS = [
+  'mister', 'mr', 'mrs', 'ms', 'miss', 'doctor', 'dr', 'nurse',
+  'captain', 'commander', 'lieutenant', 'lt', 'ensign', 'chief', 'admiral',
+  'commodore', 'crewman', 'specialist', 'subcommander', 'major', 'colonel',
+];
+
+/** Lower-cased, punctuation gone — but NOT the comma, which is structure. */
+const strip = (s) => String(s ?? '')
+  .toLowerCase()
+  .replace(/[.!?;:]+/g, ' ')
+  .replace(/\s*,\s*/g, ', ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+/** The same, with the commas taken out too. Names do not contain them. */
+const bare = (s) => strip(s).replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** The part of a name people actually call somebody by. */
+function surnameOf(officer) {
+  const parts = String(officer?.name ?? '').trim().split(/\s+/).filter(Boolean);
+  return (parts[parts.length - 1] ?? '').toLowerCase();
+}
+
+/**
+ * Every string this officer answers to, longest first.
+ *
+ * Longest first matters: "chief engineer" has to be tried before "chief", or
+ * an order to the chief engineer is addressed to a chief petty officer and the
+ * word "engineer" is left in the order for the parser to trip over.
+ */
+function namesFor(officer, station = officer?.station) {
+  const out = new Set();
+  const full = bare(officer?.name);
+  const last = surnameOf(officer);
+  if (full) out.add(full);
+  if (last) out.add(last);
+  for (const nick of officer?.aliases ?? []) {
+    const n = bare(nick);
+    if (n) out.add(n);
+  }
+  for (const [form, post] of Object.entries(BY_POST)) {
+    if (post === station) out.add(form);
+  }
+  return [...out].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Who was spoken to, and what was said to them.
+ *
+ * @param {string} line   the order as the captain typed it
+ * @param {object} crew   the ship's company; only `officers` is read
+ * @returns {{officer: object|null, station: string|null, order: string,
+ *            form: string|null, leading: boolean}}
+ *   `order` is the line with the address removed, and is the whole line
+ *   unchanged when nobody was named — so this is safe to run over every order.
+ */
+function addressedTo(line, crewOrGame) {
+  // Callers hold a game far more often than they hold a crew, and handing one
+  // over used to mean `officers` came back undefined and every address matched
+  // the post table instead of the roster.
+  const crew = crewOrGame?.officers ? crewOrGame : crewOrGame?.crew ?? null;
+  const raw = String(line ?? '');
+  const said = strip(raw);
+  const blank = { officer: null, station: null, order: raw, form: null, leading: false };
+  if (!said) return blank;
+
+  // Only officers who can answer. Addressing a name is how a captain finds out
+  // somebody is in sickbay, so the order still resolves — it just resolves to
+  // whoever is standing that post now, which is what `watchOrder` decides.
+  const officers = (crew?.officers ?? []).filter((o) => o?.alive);
+
+  /** Every (phrase, officer) pair anybody aboard answers to, longest first. */
+  const forms = [];
+  for (const o of officers) {
+    for (const name of namesFor(o)) forms.push([name, o]);
+  }
+  // A post nobody is standing is still a post — "helm, warp six" should reach
+  // the helm even if the helm officer is in sickbay and somebody is covering.
+  for (const [form, station] of Object.entries(BY_POST)) {
+    if (!officers.some((o) => o.station === station)) forms.push([form, { station }]);
+  }
+  forms.sort((a, b) => b[0].length - a[0].length);
+
+  for (const [form, who] of forms) {
+    // An honorific is optional and may be doubled in practice ("Mr. Chief
+    // Engineer" nobody says, but "Lieutenant Commander Data" they do), so the
+    // pattern allows a run of them.
+    const hon = `(?:(?:${HONORIFICS.join('|')})\\s+)*`;
+    const esc = form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Leading: "Mr. Spock, scan it".
+    const lead = new RegExp(`^${hon}${esc}\\b([\\s,]*)`, 'i');
+    const m = said.match(lead);
+    if (m) {
+      const rest = said.slice(m[0].length).trim();
+      // A post is also an ordinary English word, and at the front of a line it
+      // is more often half a compound noun than an address: "weapons battery"
+      // is a thing in the locker, not an order to the tactical officer to
+      // battery something. So an uncomma'd post has to leave a real order
+      // behind it — more than one word — before it counts as an address.
+      // A comma settles it either way, and a person's NAME at the front is
+      // never anything but an address, so neither of those is restricted.
+      const punctuated = m[1].includes(',');
+      const isPost = Object.hasOwn(BY_POST, form);
+      const enough = punctuated || !isPost || rest.split(/\s+/).length > 1;
+      // "Spock" on its own is addressing somebody, not ordering them about,
+      // and an empty order is not something the parser can do anything with.
+      if (rest && enough) {
+        return {
+          officer: who.name ? who : null, station: who.station ?? null,
+          order: bare(rest), form, leading: true,
+        };
+      }
+    }
+
+    // Trailing: "Take us out, Mr. Sulu."
+    //
+    // The comma is REQUIRED here and optional at the front, and that asymmetry
+    // is load-bearing. A post is also an ordinary English word: "take me down
+    // to engineering" ends with the name of a station and is not addressed to
+    // anybody, it is a request to walk there. A line that BEGINS with a post
+    // is always an address, because nothing else starts that way.
+    const tail = new RegExp(`,\\s*${hon}${esc}\\s*$`, 'i');
+    if (tail.test(said)) {
+      const rest = said.replace(tail, '').trim();
+      if (rest) {
+        return {
+          officer: who.name ? who : null, station: who.station ?? null,
+          order: bare(rest), form, leading: false,
+        };
+      }
+    }
+  }
+
+  return blank;
+}
+
+/**
+ * The officer who should answer an order, given who was named.
+ *
+ * Naming somebody who cannot answer is not an error and must not swallow the
+ * order: a captain who says "Spock, scan it" while Spock is unconscious in
+ * sickbay has still given a perfectly good order to the science station, and
+ * the person standing it answers. Saying so out loud is the game's job, not
+ * this function's.
+ */
+function answeringFor(address, crewOrGame) {
+  const crew = crewOrGame?.officers ? crewOrGame : crewOrGame?.crew ?? null;
+  if (!address?.station) return address?.officer ?? null;
+  const named = address.officer;
+  if (named?.alive && !named.injured) return named;
+  const onStation = crew?.at?.(address.station);
+  if (onStation?.alive && !onStation.injured) return onStation;
+  return named ?? onStation ?? null;
+}
+
+__exports.surnameOf = surnameOf;
+__exports.namesFor = namesFor;
+__exports.addressedTo = addressedTo;
+__exports.answeringFor = answeringFor;
+
+});
+
 __define("src/ui/orders.js", function (__exports, __require) {
 // Natural-language order parsing.
 //
@@ -16733,13 +17291,20 @@ const { ABILITIES } = __require("src/sim/officers.js");
 const { parseText, CONFIDENT } = __require("src/lang/parse.js");
 const { intentHelp, phraseCount, INTENTS, STATION_AFFINITY } = __require("src/lang/lexicon.js");
 const { findRoom } = __require("src/world/interiors.data.js");
+const { addressedTo } = __require("src/sim/address.js");
 
 const NUMBER_WORDS = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
   nine: 9, ten: 10, half: 0.5, full: 1, maximum: 1, max: 1, all: 1, none: 0, zero: 0,
 };
 
-/** Strip the officer being addressed — "helm," "mister sulu," "tactical," etc. */
+// Strip the officer being addressed, when there is no roster to consult.
+//
+// This is the fallback. It knows honorifics and posts and cannot know a NAME,
+// because a captain may serve with the 1966 crew, the 1987 crew, or seven
+// people the game generated this morning. When a crew is passed to
+// `parseOrder`, src/sim/address.js does this properly and says who was spoken
+// to; this list is what is left for the callers that have no crew to hand.
 const ADDRESS = /^\s*(?:mister|mr\.?|miss|ms\.?|commander|lieutenant|ensign|doctor|chief|number one|helm|tactical|engineering|science|comms?|communications|bridge|computer)\s*,?\s*/i;
 
 function normalize(text) {
@@ -17073,26 +17638,41 @@ function matchAbility(t) {
  *   { error }                           understood, missing something
  *   { unknown: true, suggestions }      not understood
  */
-function parseOrder(raw) {
+function parseOrder(raw, crew = null) {
   if (!raw || !raw.trim()) return { unknown: true };
-  const full = normalize(raw);
-  const t = stripAddress(full);
 
-  const plain = matchPlainOrder(t, raw);
-  const natural = parseText(raw);
+  // Who was spoken to, if the caller knows who is aboard.
+  //
+  // "Mr. Sulu, warp six" and "warp six" are the same order; the difference is
+  // that the first one is said to somebody, and that somebody should be the
+  // one who answers. Resolving it here rather than inside each intent means
+  // every order in the game gets it, including the ones added tomorrow.
+  const address = crew ? addressedTo(raw, crew) : null;
+  const said = address?.order ?? raw;
+
+  const full = normalize(said);
+  const t = crew ? full : stripAddress(full);
+
+  const plain = matchPlainOrder(t, said);
+  const natural = parseText(said);
+
+  // Whatever the order turns out to be, it remembers who it was given to.
+  const to = (order) => (address?.station || address?.officer
+    ? { ...order, raw, addressee: { station: address.station, name: address.officer?.name ?? null, form: address.form } }
+    : { ...order, raw });
 
   const ability = matchAbility(t);
   if (ability) {
     const fallback = plain && !plain.unknown && !plain.error ? plain
       : (natural && !natural.unknown && !natural.confirm ? natural : null);
-    return { action: 'ability', ability, raw, fallback };
+    return to({ action: 'ability', ability, fallback });
   }
 
-  if (natural?.action && natural.confidence >= CONFIDENT) return natural;
-  if (plain && !plain.unknown && !plain.error) return plain;
-  if (natural && !natural.unknown) return natural;
+  if (natural?.action && natural.confidence >= CONFIDENT) return to(natural);
+  if (plain && !plain.unknown && !plain.error) return to(plain);
+  if (natural && !natural.unknown) return to(natural);
 
-  return plain?.error ? plain : natural;
+  return to(plain?.error ? plain : natural);
 }
 
 function matchPlainOrder(t, raw) {
@@ -19074,6 +19654,9 @@ const WITHDRAW_SECONDS = 8;
  */
 const ARENA_RADIUS = 2600;
 
+/** Every way a fight can finish. `end` accepts nothing else. */
+const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
 
@@ -19577,13 +20160,7 @@ class Engagement {
         if (this.warpOutTimer <= 0) return this.end('escaped');
       }
     }
-    if (!this.liveHostiles.length) {
-      // An empty board is a win only if you emptied it. Anyone who withdrew
-      // under their own power was routed, not destroyed, and the ledger cares
-      // about the difference.
-      return this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
-    }
-    if (this.liveHostiles.every((s) => s.fleeing)) return this.end('routed');
+    if (this.settle()) return;
 
     // A fight in which nobody can touch anybody is over, whatever the AI
     // thinks it is doing. Held for a few seconds so a fast pass through the
@@ -19593,6 +20170,35 @@ class Engagement {
     );
     this.separationTimer = unreachable ? this.separationTimer + dt : 0;
     if (this.separationTimer > 6) return this.end('routed');
+  }
+
+  /**
+   * The end conditions that need no clock, checked wherever the board changes.
+   *
+   * The tick is not the only thing that empties a board. A boarding party
+   * taking a bridge withdraws the last hostile from OUTSIDE the tick, and the
+   * fight then sat with nobody left to shoot, the player alive and `over`
+   * still false — which is `eng.unresolved`, the soft-lock shape, and the most
+   * important rule in the invariant file. It lasted one frame, and one frame
+   * is what the renderer draws.
+   *
+   * The warp-out countdown and the separation timer stay in `step`, because
+   * both of them are clocks and this is deliberately not.
+   *
+   * @returns {boolean} whether the fight is over
+   */
+  settle() {
+    if (this.over) return true;
+    if (this.player.destroyed) { this.end('destroyed'); return true; }
+    if (!this.liveHostiles.length) {
+      // An empty board is a win only if you emptied it. Anyone who withdrew
+      // under their own power was routed, not destroyed, and the ledger cares
+      // about the difference.
+      this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
+      return true;
+    }
+    if (this.liveHostiles.every((s) => s.fleeing)) { this.end('routed'); return true; }
+    return false;
   }
 
   updateProjectiles(dt) {
@@ -19650,7 +20256,12 @@ class Engagement {
   end(outcome) {
     if (this.over) return;
     this.over = true;
-    this.outcome = outcome;
+    // A fight that is over has an outcome, always. `eng.outcome` in the
+    // invariant file says so, everything downstream reads it, and nothing in
+    // the game supplies a blank one — but this is a public method and a
+    // missing argument used to produce a finished engagement with no result.
+    // "Routed" is the neutral reading: it stopped, and nobody says why.
+    this.outcome = OUTCOMES.includes(outcome) ? outcome : 'routed';
     emit('combat:end', { outcome, engagement: this });
     if (this.stepping) this.settleWhenSafe = true;
     else this.onEnd?.(this);
@@ -19766,25 +20377,54 @@ class Engagement {
 }
 
 /** Build a hostile group appropriate to a faction and difficulty. */
+/**
+ * What an enemy ship is called.
+ *
+ * This table existed twice — here and in world/encounters.js — and a third
+ * code path, the one a mission stage uses to start a fight, had neither and
+ * named its ships "klingon vessel 1". Two copies of a list is one copy too
+ * many; three ways of naming the same thing is a game that reads as unfinished
+ * in the one place the player is looking hardest.
+ */
+const HOSTILE_NAMES = {
+  klingon: ['IKS Vor’cha', 'IKS Ch’Tang', 'IKS Bortas', 'IKS Rotarran', 'IKS Ning’tao'],
+  romulan: ['IRW Terix', 'IRW Belak', 'IRW Valdore', 'IRW Khazara', 'IRW Devoras'],
+  cardassian: ['CDS Prakesh', 'CDS Aldara', 'CDS Vetar', 'CDS Groumall'],
+  ferengi: ['Kreechta', 'Krayton', 'Quark’s Fortune'],
+  orion: ['Syndicate Raider', 'Green Wind', 'Profit Margin'],
+  tholian: ['Assembly Spinner', 'Lattice Warden'],
+  dominion: ['Jem’Hadar 4-7', 'Jem’Hadar 9-1', 'Jem’Hadar 2-2'],
+  borg: ['Borg Cube'],
+  // Starfleet is in here because ships of the line turn up on your side as
+  // well as in front of you — a relief answering a distress call is named from
+  // the same table as a hostile, because a ship is a ship.
+  federation: [
+    'USS Farragut', 'USS Potemkin', 'USS Lexington', 'USS Exeter', 'USS Yorktown',
+    'USS Hood', 'USS Republic', 'USS Defiance', 'USS Endeavour', 'USS Kongo',
+  ],
+  independent: ['SS Vico', 'SS Odin', 'SS Norkova'],
+};
+
+/** The nth ship of a faction in one engagement. */
+function hostileName(factionId, index = 0) {
+  const list = HOSTILE_NAMES[factionId] ?? ['Unknown Vessel'];
+  return list[index % list.length];
+}
+
+/**
+ * A hostile force of a given strength, drawn from a pool of classes.
+ *
+ * Written when combat was, and called from nowhere for the whole life of the
+ * project: `world/encounters.js` grew its own copy rather than importing this
+ * one. It is the single builder now.
+ */
 function buildHostiles(rng, factionId, strength = 1, classPool = []) {
-  const names = {
-    klingon: ['IKS Vor’cha', 'IKS Ch’Tang', 'IKS Bortas', 'IKS Rotarran', 'IKS Ning’tao'],
-    romulan: ['IRW Terix', 'IRW Belak', 'IRW Valdore', 'IRW Khazara', 'IRW Devoras'],
-    cardassian: ['CDS Prakesh', 'CDS Aldara', 'CDS Vetar', 'CDS Groumall'],
-    ferengi: ['Kreechta', 'Krayton', 'Quark’s Fortune'],
-    orion: ['Syndicate Raider', 'Green Wind', 'Profit Margin'],
-    tholian: ['Assembly Spinner', 'Lattice Warden'],
-    dominion: ['Jem’Hadar 4-7', 'Jem’Hadar 9-1', 'Jem’Hadar 2-2'],
-    borg: ['Borg Cube'],
-    independent: ['SS Vico', 'SS Odin', 'SS Norkova'],
-  };
   const count = Math.max(1, Math.round(strength));
-  const nameList = names[factionId] ?? ['Unknown Vessel'];
   const out = [];
   for (let i = 0; i < count; i++) {
     const cls = rng.pick(classPool);
     if (!cls) break;
-    out.push(new Ship(cls, { name: nameList[i % nameList.length], faction: factionId }));
+    out.push(new Ship(cls, { name: hostileName(factionId, i), faction: factionId }));
   }
   return out;
 }
@@ -19796,9 +20436,12 @@ __exports.WEAPON_RANGE = WEAPON_RANGE;
 __exports.MAX_WEAPON_RANGE = MAX_WEAPON_RANGE;
 __exports.WITHDRAW_SECONDS = WITHDRAW_SECONDS;
 __exports.ARENA_RADIUS = ARENA_RADIUS;
+__exports.OUTCOMES = OUTCOMES;
 __exports.DISENGAGE_RANGE = DISENGAGE_RANGE;
 __exports.rangeFactor = rangeFactor;
 __exports.Engagement = Engagement;
+__exports.HOSTILE_NAMES = HOSTILE_NAMES;
+__exports.hostileName = hostileName;
 __exports.buildHostiles = buildHostiles;
 
 });
@@ -20495,6 +21138,11 @@ class Walker {
   /** The station within reach, if any. Nearest wins. */
   nearestStation() {
     const room = this.room;
+    // Nowhere is not a room. The walker can be pointed at a room id that no
+    // longer resolves — the surface, after the ship has left it — and reaching
+    // for a console in a place that isn't there should come back empty, not
+    // throw halfway through a frame.
+    if (!room) return null;
     let best = null;
     let bestD = REACH;
     for (const s of room.stations ?? []) {
@@ -20961,7 +21609,7 @@ __define("src/sim/invariants.js", function (__exports, __require) {
 // Violations are data, not exceptions. The caller decides whether to throw
 // (tests), log (the debug overlay), or count (the fuzzer).
 
-const { FACINGS } = __require("src/sim/ship.js");
+const { FACINGS, SHIELD_OVERCHARGE } = __require("src/sim/ship.js");
 
 /**
  * How far outside the arena a ship may be before it counts as escaped.
@@ -21060,8 +21708,15 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
     r.must(ok(v), 'ship.shield.finite', 'fatal', `${who}: shields.${f} is ${v}`, who);
     r.must(num(v) >= 0, 'ship.shield.negative', 'error',
       `${who}: shields.${f} is ${v}`, who);
-    r.must(num(v) <= num(s.maxShield) + 1e-6, 'ship.shield.overmax', 'error',
-      `${who}: shields.${f} is ${v}, above max ${s.maxShield}`, who);
+    // The ceiling is the OVERCHARGE ceiling, not the normal one.
+    // `reinforceShield` deliberately pushes one facing past `maxShield` — that
+    // is the entire point of the order — and the excess bleeds off over about
+    // twenty seconds. This rule read the normal maximum, so an ordinary
+    // tactical order put an anomaly in the ship's log every time it was given.
+    // Found by the order monkey in tools/verify-app.mjs on its first run.
+    const ceiling = num(s.maxShield) * SHIELD_OVERCHARGE;
+    r.must(num(v) <= ceiling + 1e-6, 'ship.shield.overmax', 'error',
+      `${who}: shields.${f} is ${v}, above the ${ceiling} ceiling`, who);
   }
 
   for (const [k, v] of Object.entries(s.subsystems ?? {})) {
@@ -21258,6 +21913,18 @@ function checkGame(game) {
     if (eng?.over) {
       r.must(game.mode !== 'combat' || game.over, 'game.mode.stuck', 'error',
         `the fight is over but the game is still in ${game.mode} mode`);
+    }
+
+    // Help that is on its way to a fight that is over.
+    //
+    // `helpInbound` is a countdown with a ship at the end of it. Left set past
+    // the battle it was called for, the next engagement gets a free ally
+    // dropping out of warp for a call the captain never made.
+    if (game.helpInbound) {
+      r.must(fighting, 'game.help.orphan', 'error',
+        'a ship is inbound to a battle that is not running');
+      r.must(num(game.helpInbound.eta) < 1e4, 'game.help.eta', 'error',
+        `the relief is ${game.helpInbound.eta} seconds out`);
     }
 
     // The con is a bridge thing, and a fight is the moment it matters most.
@@ -21595,6 +22262,272 @@ __exports.HAIL_OPTIONS = HAIL_OPTIONS;
 __exports.availableHails = availableHails;
 __exports.resolveHail = resolveHail;
 __exports.STANDING_EFFECTS = STANDING_EFFECTS;
+
+});
+
+__define("src/sim/powers.js", function (__exports, __require) {
+// The things a captain spends rather than orders: bridge officer abilities,
+// the career signature, and the devices in the loadout.
+//
+// All three of these lived in src/main.js, which is the screen. That meant
+// seventeen bridge officer powers, seven career signatures and four devices
+// only existed when a browser was attached: headless they could not be used,
+// the soak could not fire them, the invariant checker never saw a buffed ship,
+// and the API fuzzer's `g.character?.useSignature?.(g)` was an optional-chain
+// into nothing that had quietly passed for as long as it had been written.
+//
+// This is the same shape of bug as `finishCombat` being called from one event
+// listener in main.js — the most complicated part of combat, reachable only
+// through a UI. What is here is everything a power DOES. What stays in main.js
+// is what a power SOUNDS like: the beeps, the haptics, the spoken line and the
+// dialog. The result object carries what the screen needs to draw.
+
+const { FACINGS } = __require("src/sim/ship.js");
+const { ABILITIES } = __require("src/sim/officers.js");
+
+/** The weakest facing on a ship, for a scan report. */
+function weakestFacing(ship) {
+  return FACINGS.reduce((w, f) => (ship.shieldPctOf(f) < ship.shieldPctOf(w) ? f : w), 'fore');
+}
+
+/**
+ * Fire one bridge officer ability.
+ *
+ * @returns {{ok: boolean, reason?: string, ability?: object, officer?: object,
+ *            reaction?: string, line?: string, report?: object}}
+ */
+function applyAbility(game, officer, ability) {
+  const a = typeof ability === 'string' ? ABILITIES[ability] : ability;
+  if (!game || !officer || !a) return { ok: false, reason: 'no such ability' };
+  if (!officer.ready(a.id)) return { ok: false, reason: 'on cooldown', ability: a, officer };
+
+  const eng = game.engagement && !game.engagement.over ? game.engagement : null;
+
+  // The officer gets a say, and it is taken BEFORE the cooldown starts so the
+  // reaction is to the order rather than to its aftermath.
+  const reaction = officer.reactTo({ risk: a.id === 'eject_core' ? 0.9 : 0.2 });
+  officer.startCooldown(a.id);
+
+  if (a.mods) {
+    game.ship.addBuff({
+      id: a.id, label: a.name, until: a.duration || 12, mods: a.mods,
+    });
+  }
+
+  let report = null;
+  switch (a.special) {
+    case 'evasive':
+      eng?.evasive(true);
+      break;
+    case 'extinguish':
+      game.ship.fires = 0;
+      break;
+    case 'eject':
+      game.ship.ejectCore();
+      break;
+    case 'reset_adaptation':
+      for (const s of eng?.hostiles ?? []) s.adaptation = {};
+      break;
+    case 'detect_cloak':
+      for (const s of eng?.liveHostiles ?? []) if (s.cloaked) s.decloak();
+      break;
+    case 'jam':
+      for (const s of eng?.liveHostiles ?? []) {
+        s.addBuff({
+          id: 'jammed', label: 'Sensors jammed', until: a.duration, mods: { accuracy: 0.55 },
+        });
+      }
+      break;
+    case 'subsystem':
+      eng?.targetSubsystem('weapons');
+      break;
+    case 'scan': {
+      const t = eng?.target;
+      if (t) {
+        report = {
+          kind: 'scan',
+          title: `Scan — ${t.name}`,
+          lines: [
+            `${t.cls.name}. ${t.cls.description}`,
+            `Hull ${Math.round(t.hullPct * 100)}%, shields ${Math.round(t.shieldPct * 100)}%.`,
+            `Weakest facing: ${weakestFacing(t)}.`,
+          ],
+        };
+      }
+      break;
+    }
+    case 'spread': {
+      // Every torpedo tube at once, arcs ignored for this volley.
+      const target = eng?.target;
+      if (target) {
+        for (const w of game.ship.weapons.filter((x) => x.type === 'torpedo')) {
+          w.cooldown = 0;
+          eng.fireWeapon(game.ship, w, target);
+        }
+      }
+      break;
+    }
+    default:
+      break;
+  }
+
+  const spoken = a.say ?? officer.acknowledge(reaction === 'comply' ? 'order' : reaction);
+  game.pushLog(`${officer.name}: ${spoken}`, officer.station);
+  return { ok: true, ability: a, officer, reaction, line: spoken, report };
+}
+
+/**
+ * The career signature: one large effect, once per engagement.
+ *
+ * Each reuses machinery that already exists — buffs, repair, cooldowns —
+ * rather than inventing a parallel system.
+ *
+ * @returns {{ok: boolean, reason?: string, career?: object, line?: string,
+ *            openHail?: string|null}}
+ */
+function applySignature(game) {
+  const c = game?.character;
+  if (!c) return { ok: false, reason: 'no captain' };
+  if (c.signatureUsed) return { ok: false, reason: 'already used this engagement' };
+  const career = c.career;
+  if (!career) return { ok: false, reason: 'no career' };
+
+  const eng = game.engagement && !game.engagement.over ? game.engagement : null;
+  let line = '';
+  let openHail = null;
+
+  switch (c.careerId) {
+    case 'command':
+      // Take the Conn — every bridge officer is ready again.
+      for (const o of game.crew.officers) o.cooldowns = {};
+      line = 'Every station reports ready.';
+      break;
+
+    case 'tactical': {
+      // Called Shot — the next hit that lands is a guaranteed critical.
+      if (!eng) return { ok: false, reason: 'nothing to shoot at' };
+      eng.guaranteedCrits += 1;
+      if (!eng.targetedSubsystem) eng.targetSubsystem('weapons');
+      line = `Called shot on their ${eng.targetedSubsystem}. Standing by.`;
+      break;
+    }
+
+    case 'engineering': {
+      const before = game.ship.hullPct;
+      game.ship.repair(game.ship.maxHull * 0.3);
+      game.ship.fires = 0;
+      line = `Hull integrity ${Math.round(before * 100)}% to ${Math.round(game.ship.hullPct * 100)}%. Fires are out.`;
+      break;
+    }
+
+    case 'science': {
+      // Insight — see everything, and roll better for twenty seconds.
+      game.ship.addBuff({
+        id: 'insight', label: 'Insight', until: 20,
+        mods: { accuracy: 1.25, critChance: 0.15 },
+      });
+      c.insightUntil = 20;
+      const t = eng?.target;
+      line = t
+        ? `${t.name}: weakest facing is ${weakestFacing(t)}, hull at ${Math.round(t.hullPct * 100)}%.`
+        : 'Full spectrum analysis running.';
+      break;
+    }
+
+    case 'medical': {
+      // Triage — one officer back on their feet, and fewer losses after.
+      const wounded = game.crew.officers.find((o) => o.alive && o.injured);
+      if (wounded) wounded.heal();
+      game.ship.addBuff({
+        id: 'triage', label: 'Triage', until: 30, mods: { crewProtect: 0.5 },
+      });
+      line = wounded
+        ? `${wounded.name} is back on duty. Sickbay is holding.`
+        : 'Sickbay is prepped. Casualties will be lighter.';
+      break;
+    }
+
+    case 'diplomatic':
+      // Parley — they will hear you out whatever their doctrine says.
+      if (!eng) return { ok: false, reason: 'nobody to talk to' };
+      game.parleyForced = true;
+      line = 'Channel forced open. They are listening whether they meant to or not.';
+      openHail = eng.hostiles[0]?.faction ?? null;
+      break;
+
+    case 'intelligence':
+      // Prior Knowledge — you move first, and they lose a beat.
+      for (const s of eng?.liveHostiles ?? []) {
+        for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, 6);
+        if (s.cloaked) s.decloak();
+      }
+      game.ship.addBuff({
+        id: 'prior_knowledge', label: 'Prior Knowledge', until: 15,
+        mods: { accuracy: 1.2, defense: 1.4 },
+      });
+      line = 'We know what they are about to do. Six seconds of it.';
+      break;
+
+    default:
+      return { ok: false, reason: `no signature for ${c.careerId}` };
+  }
+
+  c.signatureUsed = true;
+  game.pushLog(`${career.signature}: ${line}`, 'captain');
+  return { ok: true, career, line, openHail };
+}
+
+/**
+ * Spend one device out of the loadout.
+ *
+ * @returns {{ok: boolean, reason?: string, id?: string, line?: string}}
+ */
+function applyDevice(game, id) {
+  if (!game?.loadout?.useDevice(id)) return { ok: false, reason: 'none left', id };
+
+  let line = '';
+  switch (id) {
+    case 'shield_battery':
+      for (const f of FACINGS) {
+        game.ship.shields[f] = Math.min(
+          game.ship.maxShield, game.ship.shields[f] + game.ship.maxShield * 0.4,
+        );
+      }
+      line = 'Shield battery discharged. Facings reinforced.';
+      break;
+    case 'weapons_battery':
+      game.ship.addBuff({
+        id: 'weapons_battery', label: 'Weapons battery', until: 20, mods: { damage: 1.4 },
+      });
+      line = 'Weapons battery online.';
+      break;
+    case 'engine_battery':
+      game.ship.addBuff({
+        id: 'engine_battery', label: 'Engine battery', until: 20,
+        mods: { impulse: 1.5, turn: 1.3 },
+      });
+      line = 'Engine battery online.';
+      break;
+    case 'hull_patch':
+      game.ship.repair(game.ship.maxHull * 0.2);
+      game.ship.fires = 0;
+      line = 'Emergency hull patch applied. Fires out.';
+      break;
+    default:
+      // The device was spent above, so an unknown id is a data bug rather than
+      // a free action. Say so in the log rather than silently doing nothing.
+      line = `${id} discharged.`;
+      break;
+  }
+
+  game.pushLog(line, 'engineering');
+  return { ok: true, id, line };
+}
+
+__exports.weakestFacing = weakestFacing;
+__exports.applyAbility = applyAbility;
+__exports.applySignature = applySignature;
+__exports.applyDevice = applyDevice;
 
 });
 
@@ -22063,7 +22996,20 @@ function makeSurface(body, label) {
       id: `feature${i}`,
       at: [Math.sin(a) * d, Math.cos(a) * d],
       facing: rnd() * Math.PI * 2,
-      radius: 0.9 + rnd() * 0.5,
+      // Two radii, because a thing you walk up to has two sizes.
+      //
+      // `drawRadius` is how big it is. `radius` is how close collision lets you
+      // get, and it is deliberately much larger: a console is a flat panel and
+      // you stand at it, but a two-metre plant with a crown wider than your
+      // shoulders is something you stand BACK from, and being held at its own
+      // size put the away team's face in the leaves. On screen that was a flat
+      // green wall filling a third of the frame with no top and no bottom, on a
+      // world the captain had just beamed down to.
+      //
+      // Reach is measured to the surface, not the centre, so standing further
+      // out does not put anything out of arm's reach.
+      drawRadius: 0.9 + rnd() * 0.5,
+      radius: 2.2 + rnd() * 0.7,
       // Free-standing: you walk around it to get at it, which is what makes it
       // a place rather than a button that happens to have a mesh.
       solid: true,
@@ -22121,6 +23067,7 @@ __define("src/world/encounters.js", function (__exports, __require) {
 const { SYSTEM_BY_ID } = __require("src/world/systems.data.js");
 const { FACTIONS, isHostile } = __require("src/world/factions.data.js");
 const { Ship } = __require("src/sim/ship.js");
+const { buildHostiles } = __require("src/sim/combat.js");
 
 /** Which hostile hulls each faction fields. */
 const FLEETS = {
@@ -22398,23 +23345,10 @@ function buildAnomaly(rng, system) {
 
 function makeShips(rng, factionId, count) {
   const pool = FLEETS[factionId] ?? ['orion_raider'];
-  const names = {
-    klingon: ['IKS Vor’cha', 'IKS Ch’Tang', 'IKS Bortas', 'IKS Rotarran'],
-    romulan: ['IRW Terix', 'IRW Belak', 'IRW Valdore'],
-    cardassian: ['CDS Prakesh', 'CDS Aldara', 'CDS Vetar'],
-    ferengi: ['Kreechta', 'Krayton'],
-    orion: ['Green Wind', 'Profit Margin', 'Syndicate Raider'],
-    tholian: ['Assembly Spinner', 'Lattice Warden'],
-    dominion: ['Jem’Hadar 4-7', 'Jem’Hadar 9-1'],
-    borg: ['Borg Cube'],
-    independent: ['SS Odin', 'SS Norkova'],
-  }[factionId] ?? ['Unknown Vessel'];
-
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    out.push(new Ship(rng.pick(pool), { name: names[i % names.length], faction: factionId }));
-  }
-  return out;
+  // One table, in src/sim/combat.js. This file used to carry its own copy,
+  // which is how a Klingon cruiser could be an IKS Rotarran in an encounter
+  // and "klingon vessel 1" when a mission stage started the same fight.
+  return buildHostiles(rng, factionId, count, pool);
 }
 
 /** Hazard tick for systems that are actively dangerous to sit in. */
@@ -22626,8 +23560,11 @@ class Mission {
     }
 
     if (effects.xp) {
-      const promo = g.progress.addXP(effects.xp, { ledger: g.ledger });
-      if (promo?.promoted) emit('captain:promoted', promo);
+      // `awardXP` carries out the promotion as well as recording it: the level,
+      // the proficiency bonus and the banked feat used to happen in a listener
+      // in main.js, so a captain promoted by a mission got the pip and nothing
+      // else unless somebody was looking at the screen.
+      g.awardXP(effects.xp);
       out.messages.push(`Service record updated: +${effects.xp} experience.`);
     }
 
@@ -24060,15 +24997,16 @@ const { emit } = __require("src/core/events.js");
 
 const { Ship } = __require("src/sim/ship.js");
 const { Crew, Officer } = __require("src/sim/officers.js");
-const { CaptainProgress, combatXP } = __require("src/sim/skills.js");
-const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
-const { Engagement, ARENA_RADIUS } = __require("src/sim/combat.js");
-const { AwayTeam } = __require("src/sim/away.js");
+const { CaptainProgress, combatXP, SKILLS } = __require("src/sim/skills.js");
+const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
+const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
+const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { resolveHail, STANDING_EFFECTS } = __require("src/sim/diplomacy.js");
+const { applyAbility, applySignature, applyDevice } = __require("src/sim/powers.js");
 
 const { Galaxy, plotTransit } = __require("src/world/galaxy.js");
 // Placement only, and deterministic from the system id — see gfx/vista.js. The
@@ -24086,7 +25024,7 @@ const { MissionBook } = __require("src/missions/engine.js");
 const { SCENARIO: KOBAYASHI, gambitStatus, forceChannel, resolveGambit, recordOf, closeChannel } = __require("src/missions/kobayashi.js");
 const { EPISODES } = __require("src/missions/episodes/index.js");
 
-const { Character } = __require("src/rules/character.js");
+const { Character, FEAT_BY_ID } = __require("src/rules/character.js");
 const { Reputation, REP_TRACKS } = __require("src/rules/reputation.js");
 const { DifficultySettings, DEFAULT_DIFFICULTY } = __require("src/rules/difficulty.js");
 const { CampaignClock, absenceReport, COMMISSION_DAYS } = __require("src/campaign/clock.js");
@@ -24114,6 +25052,16 @@ const MODES = {
   COMBAT: 'combat',       // tactical engagement
   MISSION: 'mission',     // in an episode stage
   ENCOUNTER: 'encounter', // resolving a non-combat encounter
+};
+
+/**
+ * The skill a career track brings with it. One rank, on the thing that track
+ * is for, so a tactical captain starts able to shoot and a science captain
+ * starts able to read a sensor return.
+ */
+const BACKGROUND_SKILL = {
+  command: 'leadership', tactical: 'beam_weapons',
+  engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
 };
 class Game {
   constructor(options = {}) {
@@ -24234,6 +25182,9 @@ class Game {
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
+    // Whether this fight's call for help has been made, and what is on its way.
+    this.helpCalled = false;
+    this.helpInbound = null;
     // Explicitly false rather than undefined: `over` is read as a boolean all
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
@@ -24253,10 +25204,42 @@ class Game {
       compression: options.compression ?? 1,
     });
 
+    this.commission();
     this.pushLog(`Assumed command of the ${this.ship.name}, ${this.ship.registry}.`, 'captain');
   }
 
   // ------------------------------------------------------------------ setup
+
+  /**
+   * What a captain brings to their first command.
+   *
+   * A career track grants a matching skill rank; a Starfleet family starts a
+   * pip higher and with the scrutiny to match; a reprimand already on file
+   * stays on file. All three of these were applied in `App.startGame`, which
+   * is the character creator, which is in the browser — so a `new Game` built
+   * anywhere else got none of them. Every test, the soak, the fuzzer and the
+   * balance suite were measuring a captain the player never plays: no starting
+   * skill, no rank bonus, no reprimand.
+   *
+   * `Game.load` replaces `progress` and `ledger` wholesale after construction,
+   * so a loaded save keeps the record it saved and does not collect this twice.
+   */
+  commission() {
+    const skillId = BACKGROUND_SKILL[this.character?.careerId];
+    if (skillId && SKILLS[skillId]) {
+      this.progress.unspent++;
+      this.progress.spend(skillId);
+    }
+    if (this.character?.mechanic('startingRankBonus')) {
+      this.progress.rankIndex = Math.min(this.progress.rankIndex + 1, 10);
+    }
+    if (this.character?.mechanic('startingReprimand')) {
+      this.ledger.record('order_disobeyed', {
+        text: 'Prior reprimand on file at time of commission',
+      });
+    }
+    this.applyAllMods();
+  }
 
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
   applyAllMods() {
@@ -24306,6 +25289,118 @@ class Game {
       );
       emit('reputation:tier', up);
     }
+  }
+
+  /**
+   * Award experience, and carry out the promotion if it earns one.
+   *
+   * Twelve places in this codebase awarded experience. Two of them checked
+   * whether it promoted the captain; the other ten threw the answer away, so
+   * a promotion earned by an away mission, an anomaly, a first survey, a
+   * mission reward or a diplomatic success happened silently: the rank index
+   * moved and nothing else did, not even the announcement.
+   *
+   * And what a promotion MEANS — the character levels up, proficiency goes up
+   * with it, and a feat is banked to choose — lived in an event listener in
+   * src/main.js. Headless, a captain could make Fleet Captain over five years
+   * and still be level one with no feats, which is the entire character half
+   * of the game not happening.
+   */
+  awardXP(amount, { silent = false } = {}) {
+    const promo = this.progress.addXP(amount, { ledger: this.ledger });
+    if (!promo?.promoted) return promo ?? null;
+
+    this.character?.levelUp();
+    this.pendingFeats = (this.pendingFeats ?? 0) + 1;
+    this.applyAllMods();
+    if (!silent) {
+      this.pushLog(
+        `Promoted to ${promo.rank.name}. ${promo.points} skill points and a feat to choose.`,
+        'captain',
+      );
+    }
+    emit('captain:promoted', promo);
+    return promo;
+  }
+
+  /**
+   * Take one of the feats a promotion banked.
+   *
+   * `character.takeFeat` records the feat. Spending the bank, recomputing the
+   * ship modifiers the feat changes and saying so were done in the sheet
+   * screen, so a feat taken any other way was free and had no effect on the
+   * ship — the two things that make it worth taking.
+   *
+   * `payload` is the ability list for the repeatable Field Commission; the
+   * screen asks which scores one at a time, and passes them here together.
+   */
+  takeFeat(featId, payload = null) {
+    if (!(this.pendingFeats > 0)) return { ok: false, reason: 'Nothing to choose, Captain.' };
+    if (!this.character?.takeFeat(featId, payload)) {
+      return { ok: false, reason: 'Not available, Captain.' };
+    }
+    this.pendingFeats--;
+    this.applyAllMods();
+    const name = FEAT_BY_ID[featId]?.name ?? featId;
+    this.pushLog(featId === 'ability_score'
+      ? 'Field commission: ability scores raised.'
+      : `Qualified: ${name}.`, 'captain');
+    return { ok: true, featId, name, remaining: this.pendingFeats };
+  }
+
+  /**
+   * Spend a skill point.
+   *
+   * One rank, and the ship modifiers that depend on it recomputed. Spending
+   * without recomputing left the point spent and the ship unchanged until
+   * something else happened to call `applyAllMods`, which is a rank that does
+   * nothing for an unpredictable length of time.
+   */
+  spendSkill(skillId) {
+    if (!this.progress.spend(skillId)) return { ok: false, reason: 'No points, Captain.' };
+    this.applyAllMods();
+    return { ok: true, skillId, ranks: this.progress.ranksIn(skillId), left: this.progress.unspent };
+  }
+
+  /**
+   * Spend marks on a reputation project, and receive what it grants.
+   *
+   * `reputation.buy` deducts the cost and records the perk. What the project
+   * actually GIVES you — the torpedoes, the antimatter, the console, the
+   * cloaking device nobody signed for — was applied in src/main.js, so a
+   * project bought without a screen attached took the marks and delivered
+   * nothing. Same shape as the power tray, and the same fix.
+   */
+  buyProject(trackId, projectId) {
+    const project = this.reputation?.buy(trackId, projectId);
+    if (!project) return { ok: false, reason: 'Not available, Captain.' };
+
+    const grant = project.grant ?? {};
+    const lines = [];
+    if (grant.console) {
+      this.loadout.acquire(grant.console);
+      const name = CONSOLES[grant.console]?.name ?? grant.console;
+      lines.push(`${name} received from ${trackId}.`);
+    }
+    if (grant.torpedoes) {
+      const before = this.ship.torpedoes;
+      this.ship.torpedoes = Math.min(this.ship.maxTorpedoes, before + grant.torpedoes);
+      lines.push(`Magazine restocked: ${this.ship.torpedoes - before} torpedoes aboard.`);
+    }
+    if (grant.antimatter) {
+      this.ship.antimatter = Math.min(100, this.ship.antimatter + grant.antimatter);
+      lines.push(`Antimatter topped up to ${Math.round(this.ship.antimatter)}%.`);
+    }
+    if (grant.perk === 'cloak') {
+      this.ship.cloakCapable = true;
+      lines.push('A cloaking device has been installed. Nobody has signed for it.');
+    }
+    if (grant.title) lines.push(`You are now styled "${grant.title}".`);
+
+    for (const line of lines) this.pushLog(line, 'engineering');
+    this.applyAllMods();
+    emit('reputation:project', { trackId, project });
+    return { ok: true, project, lines };
   }
 
   get location() { return this.galaxy.get(this.locationId); }
@@ -24791,6 +25886,16 @@ class Game {
   /** Out of orbit and back to station-keeping. */
   breakOrbit() {
     if (!this.orbit) return { ok: false, error: 'We are not in orbit, Captain.' };
+    // Not with the captain on the ground.
+    //
+    // Breaking orbit while ashore left the landing party on a world the ship
+    // had left, `ashore` still true, and the transporter with nothing under
+    // it — and the next order to set a course took the ship out of the system
+    // entirely. You could maroon yourself, and the only thing that ever
+    // noticed was the API fuzzer walking into a room that was no longer there.
+    if (this.ashore) {
+      return { ok: false, error: 'You are on the surface, Captain. We are not leaving without you.' };
+    }
     const label = this.orbitLabel;
     this.orbit = null;
     if (label) this.officerSays('helm', `Breaking orbit of ${label}.`);
@@ -24862,6 +25967,12 @@ class Game {
 
   setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
+    // The same refusal `breakOrbit` gives, for the same reason: a course order
+    // clears the orbit on its way out, so without this the ship would leave the
+    // system with the captain still standing on the planet.
+    if (this.ashore) {
+      return { ok: false, error: 'You are on the surface, Captain. We are not leaving without you.' };
+    }
     const plan = plotTransit(
       this.galaxy, this.locationId, destinationId, warpFactor,
       this.ship, this.progress.warpEfficiency,
@@ -24886,6 +25997,39 @@ class Game {
     return { ok: true, transit: this.transit, hours: plan.hours, fuel: plan.fuel };
   }
 
+  /**
+   * Break off a course under way, and coast in to whatever is nearest.
+   *
+   * This was implemented inside the Under Way panel in src/ui/screens.js: a
+   * button that moved the ship to a system, advanced the calendar, cleared the
+   * transit and set the mode, with none of it reachable from anywhere else.
+   * So there was no way to abort a course without a screen, the system you
+   * stopped at was never marked visited, nothing was ever waiting there when
+   * you got there — and the phrase printed on the button did something else
+   * entirely, which is the one thing this project does not allow a button
+   * to do.
+   */
+  dropOutOfWarp() {
+    const t = this.transit;
+    if (!t) return { ok: false, error: 'We are not under way, Captain.' };
+
+    const near = t.nearestSystem(this.galaxy);
+    this.locationId = near.id;
+    this.clock.advanceStardate(t.totalHours * t.progress / 24);
+    this.transit = null;
+    this.orbit = null;
+    this.mode = MODES.BRIDGE;
+
+    const isNew = this.galaxy.markVisited(this.locationId);
+    this.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
+    emit('arrived', { system: near, isNew, aborted: true });
+
+    // Stopping in the middle of nowhere is exactly when something finds you.
+    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger });
+    if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
+    return { ok: true, system: near, isNew };
+  }
+
   /** Arrive: advance the calendar, roll for what is waiting. */
   arrive() {
     const t = this.transit;
@@ -24902,7 +26046,7 @@ class Game {
     this.pushLog(`Arrived at ${t.to.name}.`, 'helm');
     if (isNew && t.to.unexplored) {
       this.ledger.record('anomaly_catalogued', { text: `First survey of ${t.to.name}`, system: t.to.id });
-      this.progress.addXP(250, { ledger: this.ledger });
+      this.awardXP(250);
     }
     emit('arrived', { system: t.to, isNew });
 
@@ -24991,7 +26135,7 @@ class Game {
         const lives = enc.lives ?? 200;
         this.ledger.record('distress_answered', { text: `Assisted at ${enc.system.name}`, system: enc.system.id });
         this.ledger.record('lives_saved', { count: lives, system: enc.system.id });
-        this.progress.addXP(300 + lives / 6, { ledger: this.ledger });
+        this.awardXP(300 + lives / 6);
         this.ledger.adjustStanding('federation', STANDING_EFFECTS.answered_distress, 'Answered a distress call');
         this.earnReputation('distress_answered');
         this.clock.advanceStardate(0.6);
@@ -25019,7 +26163,7 @@ class Game {
           this.ledger.record('anomaly_catalogued', {
             text: `Catalogued ${enc.anomaly?.name ?? 'phenomenon'} at ${enc.system.name}`, system: enc.system.id,
           });
-          this.progress.addXP(120 * (enc.anomaly?.value ?? 1), { ledger: this.ledger });
+          this.awardXP(120 * (enc.anomaly?.value ?? 1));
           this.galaxy.markSurveyed(enc.system.id, enc.anomaly?.name);
           out.messages.push(`Full sensor profile obtained. ${enc.anomaly?.name ?? 'Phenomenon'} catalogued.`);
         } else {
@@ -25039,7 +26183,7 @@ class Game {
           count: enc.anomaly?.value ?? 2,
           text: `Close survey of ${enc.anomaly?.name ?? 'phenomenon'}`, system: enc.system.id,
         });
-        this.progress.addXP(260 * (enc.anomaly?.value ?? 1), { ledger: this.ledger });
+        this.awardXP(260 * (enc.anomaly?.value ?? 1));
         this.galaxy.markSurveyed(enc.system.id, enc.anomaly?.name);
         this.earnReputation('anomaly_catalogued');
         out.messages.push('Close survey complete. Science has what they need.');
@@ -25057,7 +26201,7 @@ class Game {
         if (r1.success && enc.salvage) {
           this.loadout.acquire(enc.salvage);
           out.messages.push('Salvage recovered and stowed.');
-          this.progress.addXP(350, { ledger: this.ledger });
+          this.awardXP(350);
         }
         break;
       }
@@ -25066,7 +26210,7 @@ class Game {
         this.ledger.adjustStanding(enc.factionId ?? 'independent', STANDING_EFFECTS.completed_escort, 'Escort completed');
         this.latinum += Math.round((enc.escortReward ?? 300) * (this.reputation.has('better_prices') ? 1.25 : 1));
         this.earnReputation('escort_completed');
-        this.progress.addXP(280, { ledger: this.ledger });
+        this.awardXP(280);
         this.clock.advanceStardate(0.8);
         out.messages.push(`Escort complete. ${enc.escortReward ?? 300} credits transferred.`);
         break;
@@ -25078,13 +26222,13 @@ class Game {
           this.ledger.record('first_contact', {
             text: `First contact with the ${enc.speciesName}`, system: enc.system.id,
           });
-          this.progress.addXP(900, { ledger: this.ledger });
+          this.awardXP(900);
           this.ledger.adjustStanding('federation', 12, 'First contact');
           this.earnReputation('first_contact');
           out.messages.push(`Contact established with the ${enc.speciesName}. They are... cautious, but talking.`);
         } else {
           out.messages.push('They break off without answering. The database gets a new entry and nothing else.');
-          this.progress.addXP(200, { ledger: this.ledger });
+          this.awardXP(200);
         }
         break;
       }
@@ -25138,7 +26282,7 @@ class Game {
     if (result.standingDelta) {
       this.ledger.adjustStanding(factionId, result.standingDelta, 'Hail');
     }
-    if (result.xp) this.progress.addXP(result.xp, { ledger: this.ledger });
+    if (result.xp) this.awardXP(result.xp);
 
     if (result.surrender) {
       this.ledger.record('surrender_accepted', { text: 'Accepted a surrender', faction: factionId });
@@ -25262,6 +26406,10 @@ class Game {
       ...opts, onEnd: () => this.resolveCombat(),
     });
     this.mode = MODES.COMBAT;
+    // A new fight is a new call. Left set, the answer to "we need help" is
+    // "we already asked" for the rest of the commission.
+    this.helpCalled = false;
+    this.helpInbound = null;
     this.engagement.pushLog(`${fleet.length} hostile contact${fleet.length > 1 ? 's' : ''}.`, 'tactical');
     emit('combat:begin', this.engagement);
     return this.engagement;
@@ -25288,8 +26436,13 @@ class Game {
    * `Engagement.update`, which is why `combat:end` no longer resolves it.
    */
   resolveCombat() {
+    // Whether the game happens to be in combat MODE is not the question. A
+    // finished engagement has to be settled wherever the game has got to,
+    // because everything that follows a battle hangs off it — and requiring
+    // the mode meant anything that moved the mode out from under a running
+    // fight left one over-but-unsettled forever.
     const eng = this.engagement;
-    if (!eng?.over || this.mode !== MODES.COMBAT) return false;
+    if (!eng?.over) return false;
     this.finishCombat(eng.outcome);
     return true;
   }
@@ -25341,9 +26494,11 @@ class Game {
       // The Empire respects a captain who kept fighting while losing.
       if (this.ship.hullPct < 0.35) this.earnReputation('fought_while_losing');
       this.earnReputation('combat_victory');
-      const promo = this.progress.addXP(xp, { ledger: this.ledger });
+      const promo = this.awardXP(xp, { silent: true });
       this.pushLog(`Engagement concluded. +${Math.round(xp)} experience.`, 'captain');
-      if (promo?.promoted) emit('captain:promoted', promo);
+      if (promo?.promoted) {
+        this.pushLog(`Promoted to ${promo.rank.name}. ${promo.points} skill points and a feat to choose.`, 'captain');
+      }
     }
 
     // Casualties from THIS fight.
@@ -25395,6 +26550,8 @@ class Game {
 
     this.engagement = null;
     this.firstStrike = false;
+    this.helpCalled = false;
+    this.helpInbound = null;
     // The scenario and any channel forced open inside it end with the fight.
     // Left set, `gambitOpen` turns every later typed order into an appeal to a
     // Klingon commander who is no longer there.
@@ -25404,7 +26561,10 @@ class Game {
       this.scriptedScenario = false;
       this.applyAllMods();   // hand the difficulty bonuses back
     }
-    this.mode = MODES.BRIDGE;
+    // Back to the bridge — unless the captain is somewhere else entirely. A
+    // fight that finishes while a mission is on screen should not throw the
+    // player off it.
+    if (this.mode === MODES.COMBAT) this.mode = MODES.BRIDGE;
     this.setAlert(outcome === 'destroyed' ? 'red' : 'normal');
     emit('combat:resolved', { outcome, killed });
 
@@ -25430,7 +26590,16 @@ class Game {
   startMission(id) {
     const m = this.missions.start(id, this);
     if (m) {
-      this.mode = MODES.MISSION;
+      // Not while people are shooting.
+      //
+      // `chooseMission` has always been careful about this — setting the mode
+      // during a battle orphans the engagement, because Game.update stops
+      // stepping it. Starting one was not: the fight kept its object, stopped
+      // being ticked, and when something finally ended it the settle was
+      // skipped because the mode was no longer COMBAT. That left an engagement
+      // over-but-unsettled and a relief ship inbound to a battle that was not
+      // running. Found by the API fuzzer.
+      if (!this.engagement || this.engagement.over) this.mode = MODES.MISSION;
       this.pushLog(`Mission: ${m.title}`, 'captain');
     }
     return m;
@@ -25447,8 +26616,11 @@ class Game {
     // A stage can start a fight.
     if (result.effects?.combat) {
       const spec = result.effects.combat;
+      // Named, like every other hostile in the game. A mission stage used to
+      // field "klingon vessel 1" while an ordinary encounter with the same
+      // ship called it the IKS Rotarran.
       const ships = (spec.ships ?? []).map((cls, i) =>
-        new Ship(cls, { name: `${spec.faction} vessel ${i + 1}`, faction: spec.faction }));
+        new Ship(cls, { name: hostileName(spec.faction, i), faction: spec.faction }));
       this.pendingCombat = { ships, returnToMission: true };
     }
 
@@ -25475,6 +26647,197 @@ class Game {
       difficulty: this.difficulty,
     });
     return this.awayTeam;
+  }
+
+  /**
+   * The away missions this situation actually supports.
+   *
+   * `AWAY_TEMPLATES` has held five multi-step landing parties since the away
+   * system was written — board a derelict, evacuate a colony, open a
+   * negotiation, run a covert survey, take a hostile bridge — with hazard
+   * levels, per-step checks and difficulty classes on every one of them. No
+   * code has ever read the table. The whole of the casualty model, the
+   * officer-selection model and the consequence scaling was reachable through
+   * exactly one mission-stage button.
+   *
+   * What decides availability is where you are and what is in front of you,
+   * which is the same rule the rest of this game runs on.
+   */
+  availableAwayMissions() {
+    const out = [];
+    const eng = this.engagement;
+
+    // Taking a bridge. The ship has to be beaten first — a boarding party does
+    // not go through raised shields — and this is what makes crippling a
+    // hostile a real alternative to killing it.
+    const boardable = eng && !eng.over
+      ? eng.liveHostiles.find((s) => !s.cloaked
+        && s.shieldPct <= 0.05
+        && (s.hullPct <= 0.35 || s.subsystems.engines <= 0.15)
+        && this.ship.distanceTo(s) < 900)
+      : null;
+    if (boardable) out.push({ ...AWAY_TEMPLATES.boarding_action, target: boardable });
+
+    // A hulk with its logs still in it. Stripping a wreck is the machine shop's
+    // job; boarding one is the science officer's, and they are different orders
+    // with different risks.
+    if (!eng && this.wreckHere && !this.wreckHere.boarded) {
+      out.push({ ...AWAY_TEMPLATES.derelict_search });
+    }
+
+    if (!eng) {
+      const body = this.orbitBody;
+      const sys = this.location;
+      if (body && sys) {
+        if (this.encounter?.kind === 'distress' || sys.type === 'colony') {
+          out.push({ ...AWAY_TEMPLATES.colony_rescue });
+        }
+        if (sys.type === 'homeworld' || sys.type === 'core' || sys.faction !== 'none') {
+          out.push({ ...AWAY_TEMPLATES.diplomatic_landing });
+        }
+        // A world that has not invented warp is one you do not announce
+        // yourself to. The Prime Directive is the reason this template exists.
+        if (sys.preWarp || sys.type === 'frontier' || sys.type === 'unexplored') {
+          out.push({ ...AWAY_TEMPLATES.covert_landing });
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * Send the landing party, and live with what comes back.
+   *
+   * Every step is a real check against the officer best suited to it, with the
+   * hazard level deciding how badly a failure hurts — the machinery in
+   * src/sim/away.js, which already models injuries, deaths, security losses,
+   * difficulty scaling and permadeath, and which nothing has been able to reach
+   * with more than one step at a time.
+   *
+   * A step that fails does not end the mission. The team presses on with the
+   * next one and the outcome is how many of them worked, because "three of the
+   * four went right and we lost a man doing it" is the kind of result this
+   * game is about and a pass/fail is not.
+   */
+  awayMission(templateId) {
+    if (this.ashore) {
+      return { ok: false, reason: 'You are already on the surface, Captain.' };
+    }
+    const available = this.availableAwayMissions();
+    const template = available.find((t) => t.id === templateId);
+    if (!template) {
+      return { ok: false, reason: 'There is nowhere to send a team, Captain.' };
+    }
+    if (this.ship.subsystems.transporter !== undefined
+      && this.ship.subsystems.transporter < 0.3) {
+      return { ok: false, reason: 'The transporters are down, Captain.' };
+    }
+
+    // Who goes. A boarding action is security's job; everything else takes the
+    // department the first step needs.
+    const stations = template.id === 'boarding_action'
+      ? ['tactical', 'medical', 'engineering']
+      : ['science', 'medical', 'tactical'];
+    const team = this.buildAwayTeam(stations, false);
+    if (!team.members.length) {
+      return { ok: false, reason: 'There is nobody fit to send, Captain.' };
+    }
+
+    this.pushLog(`${template.title}. Landing party is away.`, 'transporter');
+    const steps = [];
+    for (const step of template.steps) {
+      const r = team.check(this.rng, step.check, {
+        dc: step.dc, hazard: template.hazard, label: step.text,
+      });
+      this.pushLog(`${step.text} — ${r.formatted}`, 'science');
+      if (r.killed) this.pushLog(`We lost ${r.killed.name}.`, 'medical');
+      else if (r.injured) this.pushLog(`${r.injured.name} is hurt.`, 'medical');
+      steps.push({ text: step.text, success: r.success, officer: r.officer?.name ?? null });
+      // A team that has nobody left standing does not carry on.
+      if (!team.members.length) break;
+    }
+
+    const won = steps.filter((s) => s.success).length;
+    const outcome = won === steps.length ? 'success'
+      : won === 0 ? 'failure' : 'partial';
+    const lost = team.casualties.filter((c) => c.killed).length;
+
+    this.applyAwayOutcome(template, outcome, won, steps.length);
+
+    const report = {
+      ok: true, id: template.id, title: template.title, outcome,
+      steps, passed: won, of: steps.length,
+      casualties: team.casualties.slice(), lost,
+    };
+    this.lastAway = report;
+    this.ledger.record('away_mission', {
+      text: `${template.title}: ${won} of ${steps.length} objectives`
+        + (lost ? `, ${lost} lost` : ''),
+      system: this.locationId,
+    });
+    this.pushLog(
+      `Landing party is back aboard. ${won} of ${steps.length} objectives.`
+      + (lost ? ` We lost ${lost}.` : ''),
+      'transporter',
+    );
+    emit('away:mission', report);
+    return report;
+  }
+
+  /** What a landing party's result changes about the world it happened in. */
+  applyAwayOutcome(template, outcome, won, total) {
+    const share = total ? won / total : 0;
+    this.awardXP(Math.round(120 * share * (HAZARD_LEVEL[template.hazard]?.death ?? 0.05) * 20));
+
+    if (template.id === 'boarding_action' && template.target) {
+      const foe = template.target;
+      if (outcome === 'success') {
+        // A bridge taken is a ship that stops fighting. It is not a kill, and
+        // the record is careful about the difference.
+        foe.fleeing = true;
+        foe.withdrawn = true;
+        // A withdrawn ship is off the board, and a lock on one is the exact
+        // state `eng.target.withdrawn` exists to report. Clear it here rather
+        // than waiting for the next tick to re-acquire, because the renderer
+        // draws between ticks and would put a reticle on a ship that has gone.
+        if (this.engagement?.target === foe) {
+          this.engagement.target = this.engagement.liveHostiles[0] ?? null;
+        }
+        this.engagement?.pushLog(
+          `${foe.name} is ours, Captain. Her crew have stood down.`, 'tactical');
+        // Taking the last bridge on the board ends the battle THERE. Left to
+        // the next tick, the fight spends a frame with nobody left to shoot
+        // and `over` still false, which is the soft-lock shape exactly.
+        this.engagement?.settle();
+        this.ledger.record('ship_captured', {
+          text: `${foe.name} boarded and taken`, faction: foe.faction, system: this.locationId,
+        });
+        this.earnReputation('accepted_surrender');
+      } else if (outcome === 'failure') {
+        this.engagement?.pushLog(
+          'They have repelled the boarding party, Captain.', 'tactical');
+      }
+      return;
+    }
+
+    if (template.id === 'derelict_search' && this.wreck) {
+      this.wreck.boarded = true;
+      if (share >= 0.5) this.earnReputation('anomaly_catalogued');
+    }
+    if (template.id === 'colony_rescue' && outcome !== 'failure') {
+      this.earnReputation(outcome === 'success' ? 'colony_saved' : 'distress_answered');
+    }
+    if (template.id === 'diplomatic_landing' && outcome === 'success') {
+      this.earnReputation('first_contact');
+    }
+    if (template.id === 'covert_landing' && outcome === 'failure') {
+      // Being seen is the failure that matters here, and it is not free.
+      this.ledger.adjustStanding('federation', -6, 'Observed by a pre-warp culture');
+      this.pushLog(
+        'We were seen, Captain. That will be in the report to the Prime Directive board.',
+        'science');
+    }
   }
 
   /**
@@ -25518,13 +26881,120 @@ class Game {
         text: `Surveyed ${feature.label.toLowerCase()} on ${room.name}`,
         system: this.locationId,
       });
-      this.progress.addXP(60, { ledger: this.ledger });
+      this.awardXP(60);
     } else {
       this.pushLog(`${feature.label}: ${feature.failed}`, 'science');
     }
 
     emit('survey', { feature, result });
     return { ok: true, feature, result };
+  }
+
+  // ------------------------------------------------------------- calling for help
+
+  /**
+   * Ask for a hand, and find out whether Starfleet is close enough to give one.
+   *
+   * `Engagement` has supported allies since it was written: they are placed on
+   * the board, flown by the AI, drawn by all three renderers, targeted by
+   * hostiles and counted by every rule in the invariant checker. Nothing in the
+   * game ever created one. A whole side of the battle existed and was
+   * unreachable, which on this project is the shape of about half the bugs.
+   *
+   * What decides it is the thing a captain would expect to decide it: where
+   * you are and what your record says. Inside Federation space with a service
+   * record Starfleet respects, somebody diverts. Deep in the Neutral Zone with
+   * a record of shooting first, nobody does, and the reply says which.
+   *
+   * The help does not arrive instantly. A ship at warp takes time, and the
+   * gap between the call and the arrival is the point — it is a decision about
+   * whether you can hold on that long, not a button that wins the fight.
+   */
+  callForHelp() {
+    const eng = this.engagement;
+    if (!eng || eng.over) {
+      return { ok: false, reason: 'There is no one shooting at us, Captain.' };
+    }
+    if (this.helpCalled) {
+      return { ok: false, reason: 'We have already made the call, Captain. They are coming.' };
+    }
+    if (this.inKobayashi) {
+      // The whole point of the scenario is that nobody is coming.
+      return { ok: false, reason: 'No response on any Starfleet frequency. We are alone out here.' };
+    }
+    if (this.ship.subsystems.comms < 0.25) {
+      return { ok: false, reason: 'Long-range communications are out, Captain. Nobody can hear us.' };
+    }
+
+    const here = this.location;
+    const friendly = here?.faction === 'federation';
+    const standing = this.ledger.standingOf('federation');
+    const tier = this.reputation?.track('federation')?.tier ?? 0;
+
+    // Somebody has to be near enough to come. Federation space always has a
+    // patrol in it; outside it, only a record good enough to make a captain
+    // break off what they are doing will bring one.
+    if (!friendly && tier < 2) {
+      this.helpCalled = true;
+      this.pushLog('No Starfleet units within range, Captain. We are on our own.', 'comms');
+      return { ok: true, answered: false, reason: 'No Starfleet units within range.' };
+    }
+    if (standing < -20) {
+      this.helpCalled = true;
+      this.pushLog(
+        'Starfleet acknowledges the call and does not respond further, Captain.',
+        'comms',
+      );
+      return { ok: true, answered: false, reason: 'Starfleet acknowledged and did not respond.' };
+    }
+
+    // What answers scales with the record. A commendable captain gets a
+    // cruiser; a new one gets whatever was closest.
+    const classId = tier >= 3 ? 'excelsior' : (tier >= 1 ? 'constitution' : 'miranda');
+    // From the one ship-name table in src/sim/combat.js. A fourth private list
+    // of Starfleet names is how the same vessel ends up called two things.
+    const name = hostileName(
+      'federation',
+      Math.floor(this.rng.float() * HOSTILE_NAMES.federation.length),
+    );
+    // Between eighteen and forty seconds of holding on.
+    const eta = 18 + this.rng.float() * 22;
+    this.helpCalled = true;
+    this.helpInbound = { classId, name, eta };
+    this.pushLog(
+      `${this.helpInbound.name} answers, Captain — she is coming about now. `
+      + `Estimated ${Math.round(eta)} seconds.`,
+      'comms',
+    );
+    emit('help:called', this.helpInbound);
+    return { ok: true, answered: true, eta, ship: this.helpInbound.name };
+  }
+
+  /**
+   * Bring the help in when its clock runs out.
+   *
+   * Called from the tick, so a fight that ends before the ETA simply never
+   * sees it — which is right: they turn round and go home, and the log has
+   * already said they were coming.
+   */
+  updateHelp(dt) {
+    const inbound = this.helpInbound;
+    if (!inbound) return;
+    const eng = this.engagement;
+    if (!eng || eng.over) { this.helpInbound = null; return; }
+
+    inbound.eta -= dt;
+    if (inbound.eta > 0) return;
+    this.helpInbound = null;
+
+    const ally = new Ship(inbound.classId, { name: inbound.name, faction: 'federation' });
+    eng.allies.push(ally);
+    eng.placeCombatants();
+    eng.pushLog(`${ally.name} dropping out of warp, Captain. She is engaging.`, 'comms');
+    // No reputation for being rescued. Whatever the fleet thinks of a captain
+    // who needed help, it is not a commendation, and the ledger already
+    // records the engagement itself.
+    emit('help:arrived', ally);
   }
 
   // ------------------------------------------------------------------ docking
@@ -25600,6 +27070,7 @@ class Game {
 
       case MODES.COMBAT: {
         if (!this.engagement) { this.mode = MODES.BRIDGE; break; }
+        this.updateHelp(dt);
         this.engagement.update(dt);
         // The game finishes its own fights.
         //
@@ -25926,6 +27397,50 @@ class Game {
   }
 
   /** Start a job in the machine shop. */
+  // ------------------------------------------------------- powers and devices
+
+  /**
+   * Fire a bridge officer ability.
+   *
+   * `who` is an officer, a station name, or nothing at all — in which case the
+   * ability finds the officer who has it. `what` is an ability id or record.
+   *
+   * All of this used to live in the screen, which meant the entire STO-style
+   * power tray existed only when a browser was attached: no test could fire
+   * one, the soak never saw a buffed ship, and a fuzzer line reading
+   * `g.character?.useSignature?.(g)` had been optional-chaining into nothing
+   * for as long as it had been written.
+   */
+  useAbility(who, what) {
+    const abilityId = typeof what === 'string' ? what : what?.id;
+    let officer = null;
+    if (typeof who === 'object' && typeof who?.ready === 'function') officer = who;
+    // No station named: whoever holds the ability answers, which is what
+    // "fire at will" means when it is typed rather than tapped. A station that
+    // IS named and is not manned is refused — falling through to whoever else
+    // could do it would mean an order to a dead officer being carried out by
+    // somebody the captain did not address.
+    else if (who == null) officer = abilityId ? this.crew.officerFor(abilityId) : null;
+    else officer = this.crew.at(who) ?? null;
+    if (!officer) return { ok: false, reason: 'nobody at that station, Captain.' };
+    return applyAbility(this, officer, what ?? abilityId);
+  }
+
+  /** Every ability that could be fired right now, with its officer. */
+  readyAbilities() {
+    return this.crew.readyAbilities();
+  }
+
+  /** The career signature: one large effect, once per engagement. */
+  useSignature() {
+    return applySignature(this);
+  }
+
+  /** Spend one device out of the loadout. */
+  useDevice(id) {
+    return applyDevice(this, id);
+  }
+
   fabricate(recipeId) {
     // The machine shop is not a combat action. Left unguarded, a hull patch
     // could be started and finished under fire — hours of work compressed into
@@ -26128,6 +27643,7 @@ const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
 const { commandReference } = __require("src/ui/orders.js");
+const { namesFor } = __require("src/sim/address.js");
 const { ROOMS, DECKS } = __require("src/world/interiors.data.js");
 const { listBackups, downloadSave } = __require("src/core/save.js");
 const { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } = __require("src/sim/fabrication.js");
@@ -26536,15 +28052,11 @@ function transitPanel(app) {
 
   wrap.append(panel('Helm', [
     button('Drop out of warp', tap(() => {
-      const near = t.nearestSystem(g.galaxy);
-      g.locationId = near.id;
-      g.clock.advanceStardate(t.totalHours * t.progress / 24);
-      g.transit = null;
-      g.mode = MODES.BRIDGE;
-      audio.play('warp_drop');
-      g.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
+      // What this DOES is `Game.dropOutOfWarp`, so the typed order and the
+      // button are the same action rather than two that look alike.
+      if (g.dropOutOfWarp().ok) audio.play('warp_drop');
       app.render();
-    }, 'ui_back'), { say: 'all stop', color: 'ghost' }),
+    }, 'ui_back'), { say: 'drop out of warp', color: 'ghost' }),
   ]));
 
   return wrap;
@@ -26645,8 +28157,13 @@ function viewscreenScreen(app) {
       g.ship.shieldsUp ? pill('shields up', 'green') : pill('shields down', 'red'),
     ].filter(Boolean)));
     if (t && !t.destroyed) {
-      status.push(readout(`${t.name} hull`, t.hullPct));
-      status.push(readout(`${t.name} shields`, t.shieldPct));
+      // The name once, then the two bars. `readout` puts its label in a fixed
+      // narrow column, so "IKS Ch'Tang hull" wrapped onto three lines and then
+      // said it again for the shields — six lines of label for two numbers, on
+      // a phone, with a Klingon shooting at you.
+      status.push(el('p', {}, [el('b', { text: t.name }), ' — ', t.cls.name]));
+      status.push(readout('Hull', t.hullPct));
+      status.push(readout('Shields', t.shieldPct));
     }
   }
   side.append(panel('On Screen', status, eng && !eng.over ? 'danger' : 'accent'));
@@ -26839,11 +28356,50 @@ function tacticalScreen(app) {
   if (dc.length) side.append(panel('Damage Control', dc, 'danger'));
 
   // --- Comms ---
+  //
+  // Two directions: the ship shooting at you, and Starfleet. The distress call
+  // is here rather than on the chair because it is a comms order, and the sub
+  // line says what it will cost you — which is time, and the fight does not
+  // stop while you wait.
   const factionId = eng.hostiles[0]?.faction;
+  const inbound = g.helpInbound;
+  const comms = [];
   if (FACTIONS[factionId]?.hailable) {
-    side.append(panel('Communications', [
-      button('Hail them', tap(() => app.openHail(factionId)), { say: 'open a channel', color: 'lilac' }),
-    ]));
+    comms.push(button('Hail them', tap(() => app.openHail(factionId)),
+      { say: 'open a channel', color: 'lilac' }));
+  }
+  if (inbound) {
+    comms.push(el('p', { class: 'hint', text: `${inbound.name} inbound — ${Math.max(0, Math.round(inbound.eta))} seconds out.` }));
+  } else if (!g.helpCalled) {
+    comms.push(button('Send a distress call', tap(() => {
+      const r = g.callForHelp();
+      if (!r.ok) audio.play('ui_deny');
+      app.render();
+    }), {
+      say: 'send a distress call',
+      color: 'ice',
+      sub: 'Whoever is nearest, if anyone is. They will not arrive quickly.',
+    }));
+  } else {
+    comms.push(el('p', { class: 'hint', text: 'The call has been made.' }));
+  }
+  if (comms.length) side.append(panel('Communications', comms));
+
+  // --- Boarding ---
+  //
+  // Only offered when it is actually possible: shields down, the ship beaten
+  // or crippled, and close enough to beam across. That is what makes crippling
+  // a hostile a real alternative to killing it.
+  const boardable = g.availableAwayMissions().find((t) => t.id === 'boarding_action');
+  if (boardable) {
+    side.append(panel('Boarding Party', [
+      button(boardable.title, tap(() => app.runAwayMission('boarding_action')), {
+        say: 'board them',
+        color: 'amber',
+        sub: `${boardable.target.name} — shields down. Security can cross.`,
+      }),
+      el('p', { class: 'hint', text: 'A bridge taken is a ship out of the fight and not a kill. It is also the most dangerous thing you can ask of a landing party.' }),
+    ], 'warn'));
   }
 
   // The chair is where you are sitting, so it is on this screen too — with a
@@ -27149,8 +28705,7 @@ function captainScreen(app) {
           el('button', {
             disabled: !p.canSpend(skill.id),
             onclick: p.canSpend(skill.id) ? tap(() => {
-              p.spend(skill.id);
-              g.applyAllMods();
+              g.spendSkill(skill.id);
               app.render();
             }, 'ui_confirm') : null,
             text: '+',
@@ -27318,6 +28873,30 @@ function referenceScreen(app) {
     ]),
     el('p', { class: 'muted', text: 'You can address an officer — "Mister Sulu, come about" — and the order goes to that station. If something is ambiguous the bridge asks rather than guessing.' }),
   ], 'accent'));
+
+  // Who is aboard, and what they answer to.
+  //
+  // Telling a captain they may address an officer and not telling them the
+  // names is half a manual. The roster is per-game — canon crews, a generated
+  // one, whoever has survived — so this is read from the crew that is actually
+  // standing the watch rather than written down anywhere.
+  const crew = app?.game?.crew;
+  if (crew?.officers?.length) {
+    root.append(panel('Who You Can Talk To', [
+      el('p', { class: 'muted', text: 'Put the name at either end of the order. A name at the end needs its comma — "take us out, Mr. Sulu" — because a station is also a place you can walk to.' }),
+      ...crew.officers
+        .filter((o, i, all) => all.findIndex((x) => x.name === o.name) === i)
+        .map((o) => el('div', { class: 'ref-entry' }, [
+          el('div', { class: 'ref-help', text: `${o.rank} ${o.name}${o.alive ? '' : ' — lost'}` }),
+          // `namesFor` sorts longest-first because the MATCHER needs that.
+          // A reader wants the short one first — the surname is what a captain
+          // reaches for, and it is what the list should open with.
+          el('div', { class: 'ref-examples' },
+            namesFor(o).slice().reverse().slice(0, 5)
+              .map((n) => el('span', { class: 'ref-phrase', text: `“${n}”` }))),
+        ])),
+    ]));
+  }
 
   for (const group of ref.groups) {
     root.append(panel(group.label, group.entries.map((e) => el('div', { class: 'ref-entry' }, [
@@ -28421,11 +30000,7 @@ function reputationScreen(app) {
     for (const p of available) {
       const afford = t.canAfford(p);
       nodes.push(button(p.name, afford ? tap(() => {
-        const bought = g.reputation.buy(track.id, p.id);
-        if (bought) {
-          app.applyReputationGrant(track.id, bought);
-          audio.play('ui_confirm');
-        }
+        app.buyProject(track.id, p.id);
         app.render();
       }, 'ui_confirm') : null, {
         color: afford ? 'amber' : 'ghost',
@@ -28493,6 +30068,7 @@ const { saveGame, loadSave, hasSave, loadSettings, saveSettings: persistSettings
 const { ABILITIES } = __require("src/sim/officers.js");
 const { WATCHES } = __require("src/sim/watch.js");
 const { Ship, FACINGS } = __require("src/sim/ship.js");
+const { answeringFor } = __require("src/sim/address.js");
 const { parseOrder } = __require("src/ui/orders.js");
 const { SKILLS } = __require("src/sim/skills.js");
 const { RNG } = __require("src/core/rng.js");
@@ -28528,11 +30104,6 @@ const STATION_PANEL = {
   survey: 'survey',
   log: 'log', record: 'captain', turbolift: 'turbolift', crew: 'crew',
   galaxy: 'galaxy',
-};
-
-const BACKGROUND_SKILL = {
-  command: 'leadership', tactical: 'beam_weapons',
-  engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
 };
 
 
@@ -28762,15 +30333,14 @@ class App {
     });
 
     on('captain:promoted', (promo) => {
+      // The level, the feat and the recomputed modifiers are `Game.awardXP`'s
+      // job now. They used to be this listener's, which meant a promotion
+      // earned with no screen attached moved the rank index and did nothing
+      // else at all.
       audio.play('promotion');
       audio.play('boatswain');
       haptic('confirm');
       const g = this.game;
-      if (g) {
-        g.character.levelUp();
-        g.pendingFeats = (g.pendingFeats ?? 0) + 1;
-        g.applyAllMods();
-      }
       this.showMessage('Promotion', [
         `You are promoted to ${promo.rank.name}.`,
         `${promo.points} skill points awarded, and a feat to choose on the Captain screen.`,
@@ -29237,7 +30807,7 @@ class App {
     this.consoleTitle = title;
     const body = (nodes.length ? nodes : [el('p', { text: 'Working, Captain.' })])
       .map((n) => (n instanceof globalThis.Node ? n : el('p', { text: String(n) })));
-    this.modalHandle = modal(title, body, [
+    this.modalHandle = this.raiseModal(title, body, [
       button('Step away', () => this.closeModal(), { color: 'ghost' }),
     ]);
   }
@@ -29257,7 +30827,7 @@ class App {
     const body = [].concat(lines).map((l) => (
       typeof l === 'object' && l?.natural !== undefined ? rollCard(l) : el('p', { text: String(l) })
     ));
-    this.modalHandle = modal(title, body,
+    this.modalHandle = this.raiseModal(title, body,
       actions ?? [button('Acknowledged', () => { audio.play('computer_ack'); this.closeModal(); }, { color: 'blue' })]);
     audio.play('computer_query');
     return this.modalHandle;
@@ -29270,6 +30840,23 @@ class App {
    *        which closes modals on the way through, and that closed the very
    *        console the switch was on.
    */
+  /**
+   * Put a modal up, and take down whatever was already there.
+   *
+   * `modal()` appends to the document, so two calls leave two stacked
+   * backdrops — and `closeModal` only ever knew about the last handle, so
+   * dismissing the top one left the other one on screen with nothing able to
+   * remove it. Two things can raise a modal in the same breath: a boarding
+   * party's report and the end of the battle that party just decided.
+   *
+   * One at a time, newest wins. The one raised last is the one that answers
+   * the order the captain actually gave.
+   */
+  raiseModal(title, body, actions = []) {
+    this.modalHandle?.close();
+    return modal(title, body, actions);
+  }
+
   closeModal(keepConsole = false) {
     if (!keepConsole && !this._refreshingConsole) this.consoleOpen = null;
     this.modalHandle?.close();
@@ -29293,7 +30880,7 @@ class App {
       this.executeOrder(forced.confirm ? forced.order : forced, raw);
     }, { color: 'ghost' }));
 
-    this.modalHandle = modal('Confirm order', [
+    this.modalHandle = this.raiseModal('Confirm order', [
       el('p', { class: 'muted', text: `You said: “${raw}”` }),
       el('p', { text: `I read that as: ${result.reading}` }),
       alts.length ? el('p', { class: 'muted', text: 'Or did you mean:' }) : null,
@@ -29314,14 +30901,14 @@ class App {
 
   showOfficer(officer) {
     this.closeModal();
-    this.modalHandle = modal(officer.name,
+    this.modalHandle = this.raiseModal(officer.name,
       screens.officerDetail(this, officer),
       [button('Close', () => this.closeModal(), { color: 'ghost' })]);
   }
 
   openHail(factionId) {
     this.closeModal();
-    this.modalHandle = modal('Open Channel',
+    this.modalHandle = this.raiseModal('Open Channel',
       screens.hailOptions(this, factionId, (optionId) => {
         const result = this.game.hail(optionId);
         this.closeModal();
@@ -29355,7 +30942,7 @@ class App {
     const start = () => { this.closeModal(); this.showNewGame(); };
     if (skipConfirm) return start();
     this.closeModal();
-    this.modalHandle = modal('Abandon Command', [
+    this.modalHandle = this.raiseModal('Abandon Command', [
       el('p', { text: 'This ends the current commission. The record cannot be recovered unless you exported it.' }),
     ], [
       button('Abandon command', () => start(), { color: 'red' }),
@@ -29381,65 +30968,15 @@ class App {
   }
 
   useAbility(officer, ability) {
-    const g = this.game;
-    if (!officer.ready(ability.id)) { audio.play('ui_deny'); return; }
-
-    // The officer gets a say.
-    const reaction = officer.reactTo({ risk: ability.id === 'eject_core' ? 0.9 : 0.2 });
-    officer.startCooldown(ability.id);
-
-    if (ability.mods) {
-      g.ship.addBuff({ id: ability.id, label: ability.name, until: ability.duration || 12, mods: ability.mods });
-    }
-    switch (ability.special) {
-      case 'evasive': g.engagement?.evasive(true); break;
-      case 'extinguish': g.ship.fires = 0; break;
-      case 'eject': g.ship.ejectCore(); audio.play('explosion'); break;
-      case 'reset_adaptation': {
-        for (const s of g.engagement?.hostiles ?? []) s.adaptation = {};
-        break;
-      }
-      case 'detect_cloak': {
-        for (const s of g.engagement?.liveHostiles ?? []) if (s.cloaked) s.decloak();
-        audio.play('scan');
-        break;
-      }
-      case 'jam': {
-        for (const s of g.engagement?.liveHostiles ?? []) {
-          s.addBuff({ id: 'jammed', label: 'Sensors jammed', until: ability.duration, mods: { accuracy: 0.55 } });
-        }
-        break;
-      }
-      case 'subsystem': g.engagement?.targetSubsystem('weapons'); break;
-      case 'scan': {
-        const t = g.engagement?.target;
-        if (t) {
-          this.showMessage(`Scan — ${t.name}`, [
-            `${t.cls.name}. ${t.cls.description}`,
-            `Hull ${Math.round(t.hullPct * 100)}%, shields ${Math.round(t.shieldPct * 100)}%.`,
-            `Weakest facing: ${FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore')}.`,
-          ]);
-        }
-        break;
-      }
-      case 'spread': {
-        // Fire every torpedo tube at once, ignoring arcs for this volley.
-        const target = g.engagement?.target;
-        if (target) {
-          for (const w of g.ship.weapons.filter((x) => x.type === 'torpedo')) {
-            w.cooldown = 0;
-            g.engagement.fireWeapon(g.ship, w, target);
-          }
-          audio.play('torpedo_launch');
-        }
-        break;
-      }
-      default: break;
-    }
-
-    const line = officer.acknowledge(reaction === 'comply' ? 'order' : reaction);
-    g.pushLog(`${officer.name}: ${ability.say ?? line}`, officer.station);
-    if (this.settings.voice) audio.speak(ability.say ?? line);
+    // What the power DOES is in src/sim/powers.js, so it can be fired without
+    // a screen. What is left here is what it sounds like.
+    const r = this.game.useAbility(officer, ability);
+    if (!r.ok) { audio.play('ui_deny'); return; }
+    if (this.settings.voice) audio.speak(r.line);
+    if (r.report) this.showMessage(r.report.title, r.report.lines);
+    if (r.ability?.special === 'eject') audio.play('explosion');
+    if (r.ability?.special === 'detect_cloak') audio.play('scan');
+    if (r.ability?.special === 'spread') audio.play('torpedo_launch');
     haptic('confirm');
   }
 
@@ -29447,139 +30984,30 @@ class App {
    * Career signature powers: one big effect, once per engagement.
    *
    * Each reuses machinery that already exists — buffs, repair, cooldowns —
-   * rather than inventing a parallel system.
+   * rather than inventing a parallel system. All seven are in
+   * src/sim/powers.js; this is the announcement.
    */
   useSignature() {
-    const g = this.game;
-    const c = g?.character;
-    const eng = g?.engagement;
-    if (!c || c.signatureUsed) { audio.play('ui_deny'); return false; }
+    const r = this.game.useSignature();
+    if (!r.ok) { audio.play('ui_deny'); return false; }
 
-    const career = c.career;
-    let line = '';
-    // A power that ends in a screen of its own rather than a confirmation.
-    let openAfter = null;
-
-    switch (c.careerId) {
-      case 'command': {
-        // Take the Conn — every bridge officer is ready again.
-        for (const o of g.crew.officers) o.cooldowns = {};
-        line = 'Every station reports ready.';
-        break;
-      }
-      case 'tactical': {
-        // Called Shot — the next hit that lands is a guaranteed critical.
-        if (!eng) { audio.play('ui_deny'); return false; }
-        eng.guaranteedCrits += 1;
-        if (!eng.targetedSubsystem) eng.targetSubsystem('weapons');
-        line = `Called shot on their ${eng.targetedSubsystem}. Standing by.`;
-        break;
-      }
-      case 'engineering': {
-        const before = g.ship.hullPct;
-        g.ship.repair(g.ship.maxHull * 0.3);
-        g.ship.fires = 0;
-        line = `Hull integrity ${Math.round(before * 100)}% to ${Math.round(g.ship.hullPct * 100)}%. Fires are out.`;
-        break;
-      }
-      case 'science': {
-        // Insight — see everything, and roll better for twenty seconds.
-        g.ship.addBuff({
-          id: 'insight', label: 'Insight', until: 20,
-          mods: { accuracy: 1.25, critChance: 0.15 },
-        });
-        c.insightUntil = 20;
-        if (eng?.target) {
-          const t = eng.target;
-          const weakest = FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore');
-          line = `${t.name}: weakest facing is ${weakest}, hull at ${Math.round(t.hullPct * 100)}%.`;
-        } else {
-          line = 'Full spectrum analysis running.';
-        }
-        break;
-      }
-      case 'medical': {
-        // Triage — one officer back on their feet, and fewer losses after.
-        const wounded = g.crew.officers.find((o) => o.alive && o.injured);
-        if (wounded) { wounded.injured = false; wounded.injurySeverity = 0; }
-        g.ship.addBuff({
-          id: 'triage', label: 'Triage', until: 30, mods: { crewProtect: 0.5 },
-        });
-        line = wounded
-          ? `${wounded.name} is back on duty. Sickbay is holding.`
-          : 'Sickbay is prepped. Casualties will be lighter.';
-        break;
-      }
-      case 'diplomatic': {
-        // Parley — they will hear you out whatever their doctrine says.
-        if (!eng || eng.over) { audio.play('ui_deny'); return false; }
-        g.parleyForced = true;
-        line = 'Channel forced open. They are listening whether they meant to or not.';
-        // Opened AFTER the announcement, not before it. `showMessage` replaces
-        // whatever modal is up, so opening the channel here meant the power's
-        // own confirmation dialog immediately closed the channel it had just
-        // forced open — the one thing the ability exists to do.
-        openAfter = () => this.openHail(eng.hostiles[0]?.faction);
-        break;
-      }
-      case 'intelligence': {
-        // Prior Knowledge — you move first, and they lose a beat.
-        if (eng) {
-          for (const s of eng.liveHostiles) {
-            for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, 6);
-            if (s.cloaked) s.decloak();
-          }
-        }
-        g.ship.addBuff({
-          id: 'prior_knowledge', label: 'Prior Knowledge', until: 15,
-          mods: { accuracy: 1.2, defense: 1.4 },
-        });
-        line = 'We know what they are about to do. Six seconds of it.';
-        break;
-      }
-      default:
-        audio.play('ui_deny');
-        return false;
-    }
-
-    c.signatureUsed = true;
-    g.pushLog(`${career.signature}: ${line}`, 'captain');
-    if (this.settings.voice) audio.speak(line);
+    if (this.settings.voice) audio.speak(r.line);
     audio.play('ui_confirm');
     audio.play('computer_ack');
     haptic('confirm');
     // A power whose whole result is a screen of its own shows that instead of
     // a dialog it would only have to close again. The line is in the log
-    // either way.
-    if (openAfter) openAfter();
-    else this.showMessage(career.signature, [line]);
+    // either way — and the channel is opened AFTER the announcement, because
+    // `showMessage` replaces whatever modal is up, so opening it first meant
+    // the confirmation closed the channel the power had just forced open.
+    if (r.openHail !== null && r.openHail !== undefined) this.openHail(r.openHail);
+    else this.showMessage(r.career.signature, [r.line]);
     this.render();
     return true;
   }
 
   useDevice(id) {
-    const g = this.game;
-    if (!g.loadout.useDevice(id)) { audio.play('ui_deny'); return; }
-    switch (id) {
-      case 'shield_battery':
-        for (const f of FACINGS) {
-          g.ship.shields[f] = Math.min(g.ship.maxShield, g.ship.shields[f] + g.ship.maxShield * 0.4);
-        }
-        g.pushLog('Shield battery discharged. Facings reinforced.', 'engineering');
-        break;
-      case 'weapons_battery':
-        g.ship.addBuff({ id: 'weapons_battery', label: 'Weapons battery', until: 20, mods: { damage: 1.4 } });
-        break;
-      case 'engine_battery':
-        g.ship.addBuff({ id: 'engine_battery', label: 'Engine battery', until: 20, mods: { impulse: 1.5, turn: 1.3 } });
-        break;
-      case 'hull_patch':
-        g.ship.repair(g.ship.maxHull * 0.2);
-        g.ship.fires = 0;
-        g.pushLog('Emergency hull patch applied. Fires out.', 'engineering');
-        break;
-      default: break;
-    }
+    if (!this.game.useDevice(id).ok) { audio.play('ui_deny'); return; }
     audio.play('power_reroute');
     haptic('confirm');
   }
@@ -29642,7 +31070,7 @@ class App {
       return;
     }
 
-    const order = parseOrder(text);
+    const order = parseOrder(text, this.game?.crew ?? null);
     this.executeOrder(order, text);
   }
 
@@ -29669,11 +31097,50 @@ class App {
 
     audio.play(outcome.success ? 'computer_ack' : 'ui_deny');
     haptic(outcome.success ? 'confirm' : 'deny');
-    this.modalHandle = modal(
+    this.modalHandle = this.raiseModal(
       outcome.success ? 'They Are Standing Down' : 'The Channel Closes',
       body,
       [button('Acknowledged', () => this.closeModal(), { color: outcome.success ? 'green' : 'red' })],
     );
+    this.needsRender = true;
+  }
+
+  /** More than one place to send them: let the captain say which. */
+  chooseAwayMission(options) {
+    audio.play('ui_select');
+    this.modalHandle = this.raiseModal('Where To, Captain?', [
+      el('p', { class: 'muted', text: 'A landing party can be sent to more than one place from here.' }),
+      ...options.map((t) => button(t.title, () => {
+        this.closeModal();
+        this.runAwayMission(t.id);
+      }, { say: t.id === 'boarding_action' ? 'board them' : 'send an away team', color: 'ice' })),
+    ], [button('Belay that', () => this.closeModal(), { color: 'ghost' })]);
+    this.needsRender = true;
+  }
+
+  /** Run one, and show what came back. */
+  runAwayMission(id) {
+    const r = this.game.awayMission(id);
+    if (!r.ok) {
+      audio.play('ui_deny');
+      this.game.pushLog(r.reason, 'transporter');
+      this.render();
+      return;
+    }
+    audio.play(r.outcome === 'failure' ? 'ui_deny' : 'computer_ack');
+    haptic(r.outcome === 'failure' ? 'deny' : 'confirm');
+    this.modalHandle = this.raiseModal(r.title, [
+      ...r.steps.map((st) => el('p', {
+        class: st.success ? '' : 'muted',
+        text: `${st.success ? '\u2713' : '\u2717'} ${st.text}${st.officer ? ` — ${st.officer}` : ''}`,
+      })),
+      el('p', {}, [el('b', {
+        text: `${r.passed} of ${r.of} objectives.`
+          + (r.lost ? ` We lost ${r.lost}.` : ''),
+      })]),
+    ], [button('Acknowledged', () => this.closeModal(), {
+      color: r.outcome === 'failure' ? 'red' : 'green',
+    })]);
     this.needsRender = true;
   }
 
@@ -29707,8 +31174,34 @@ class App {
       return;
     }
 
+    // Who answers.
+    //
+    // An order given to somebody by name is answered BY THAT PERSON. "Mr.
+    // Sulu, warp six" used to be acknowledged by whichever station the order
+    // belonged to, which is usually the same officer and sometimes flatly
+    // wrong — and always wrong when the captain deliberately went round the
+    // duty roster to ask a particular person.
+    //
+    // Naming somebody who cannot answer does not swallow the order. The post
+    // still has somebody standing it, they still carry it out, and the log
+    // says why it was not the person who was asked.
+    const spokenTo = order.addressee?.station ?? null;
+    if (spokenTo) {
+      const named = g.crew.officers.find((o) => o.name === order.addressee.name);
+      const answering = answeringFor(
+        { station: spokenTo, officer: named ?? null }, g.crew,
+      );
+      if (named && answering && answering !== named) {
+        g.pushLog(
+          `${named.name} is off duty — ${answering.name} has the station, Captain.`,
+          'computer',
+        );
+      }
+    }
+
     const ack = (station, text) => {
-      const officer = g.officerSays(station, text);
+      // The station the order belongs to, unless the captain named somebody.
+      const officer = g.officerSays(spokenTo ?? station, text);
       if (this.settings.voice && officer) audio.speak(text);
       audio.play('computer_ack');
       haptic('confirm');
@@ -29750,11 +31243,22 @@ class App {
         break;
       }
       case 'throttle': {
+        // "All stop" while the ship is at warp is not the impulse throttle: it
+        // is the order to come out of warp, and it is what a captain says.
+        if (order.value === 0 && g.transit) { this.executeOrder({ action: 'drop_warp' }, raw); return; }
         // Engines answering an order is a sound the game had and never made.
         const opening = order.value > g.ship.throttle + 0.15;
         g.ship.throttle = order.value;
         if (opening) audio.play('impulse_burn', { throttle: 400 });
         ack('helm', order.value === 0 ? 'All stop.' : `Ahead ${Math.round(order.value * 100)} percent.`);
+        break;
+      }
+
+      case 'drop_warp': {
+        const r = g.dropOutOfWarp();
+        if (!r.ok) { audio.play('ui_deny'); ack('helm', r.error); break; }
+        audio.play('warp_drop');
+        ack('helm', `Dropping to impulse at ${r.system.name}, Captain.`);
         break;
       }
       case 'heading':
@@ -29955,14 +31459,20 @@ class App {
         break;
       }
       case 'hand_over_con': {
-        // Who was named, if anyone. The roster is the only place that knows,
-        // so the match happens here rather than in the parser.
-        const said = String(order.said ?? '').toLowerCase();
-        const named = g.crew.officers.find((o) => o.alive && !o.injured
-          && said.includes(o.name.split(' ').pop().toLowerCase()));
-        const r = g.handOverCon(named ? named.station : null);
+        // Who was named, if anyone. `parseOrder` resolves the address against
+        // the real roster now, so this no longer has to do its own surname
+        // matching — and it gets "Number One", "Bones" and "the chief
+        // engineer" for free, which the old substring test never did.
+        const r = g.handOverCon(order.addressee?.station ?? null);
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
         else { audio.play('ui_deny'); ack('computer', r.reason); }
+        break;
+      }
+      case 'call_for_help': {
+        const r = g.callForHelp();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play(r.answered ? 'computer_ack' : 'ui_deny');
+        haptic(r.answered ? 'confirm' : 'deny');
         break;
       }
       case 'take_con': {
@@ -30123,9 +31633,54 @@ class App {
         }
         break;
       }
+
+      case 'signature': {
+        // The captain's own power, spoken. `useSignature` announces it, opens
+        // the channel for a diplomat, and refuses with a reason for a tactical
+        // captain on an empty bridge — this only has to say what the refusal
+        // was, because a deny beep on its own is not an answer.
+        if (!this.useSignature()) {
+          const why = g.character?.signatureUsed
+            ? 'We have already played that card this engagement, Captain.'
+            : 'There is nothing to use it on, Captain.';
+          ack('computer', why);
+        }
+        break;
+      }
+
+      case 'device': {
+        if (!order.device) {
+          audio.play('ui_deny');
+          ack('engineering', 'Which one, Captain? A battery, or a hull patch?');
+          break;
+        }
+        const before = g.loadout.equipped.device.length;
+        this.useDevice(order.device);
+        if (g.loadout.equipped.device.length === before) {
+          ack('engineering', 'We are out of those, Captain.');
+        }
+        break;
+      }
+
       case 'away_team': {
-        g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
-        ack('comms', 'Away team assembled and standing by in the transporter room.');
+        // This used to assemble a team and say it was standing by, and that was
+        // the whole order — a landing party that never went anywhere. The five
+        // templates in AWAY_TEMPLATES have been sitting unread since the away
+        // system was written; what runs is decided by where the ship is and
+        // what is in front of it.
+        const options = g.availableAwayMissions();
+        if (!options.length) {
+          g.buildAwayTeam(['science', 'medical', 'tactical'], order.captainLeads);
+          ack('transporter',
+            'Away team assembled and standing by. There is nowhere to send them, Captain.');
+          break;
+        }
+        const wanted = order.prefer === 'board'
+          ? options.find((t) => t.id === 'boarding_action' || t.id === 'derelict_search')
+          : null;
+        const pick = wanted ?? (options.length === 1 ? options[0] : null);
+        if (!pick) { this.chooseAwayMission(options); break; }
+        this.runAwayMission(pick.id);
         break;
       }
       case 'mission_choice': {
@@ -30199,10 +31754,9 @@ class App {
       this.pickAbilityIncrease(2, []);
       return;
     }
-    if (g.character.takeFeat(featId)) {
-      g.pendingFeats--;
-      g.applyAllMods();
-      g.pushLog(`Qualified: ${feat.name}.`, 'captain');
+    // Spending the bank and recomputing what the feat changes is
+    // `Game.takeFeat`; this is the announcement.
+    if (g.takeFeat(featId).ok) {
       audio.play('ui_confirm');
       this.showMessage(feat.name, [feat.text]);
       this.render();
@@ -30212,7 +31766,7 @@ class App {
   pickAbilityIncrease(remaining, picked) {
     const g = this.game;
     this.closeModal();
-    this.modalHandle = modal(`Field Commission — ${remaining} to assign`, [
+    this.modalHandle = this.raiseModal(`Field Commission — ${remaining} to assign`, [
       el('p', { class: 'hint', text: 'Raise an ability score by one. Scores are capped at 20.' }),
       ...ABILITY_LIST.map((a) => {
         const score = g.character.score(a.id);
@@ -30221,10 +31775,7 @@ class App {
           if (remaining > 1) {
             this.pickAbilityIncrease(remaining - 1, next);
           } else {
-            g.character.takeFeat('ability_score', next);
-            g.pendingFeats--;
-            g.applyAllMods();
-            g.pushLog('Field commission: ability scores raised.', 'captain');
+            g.takeFeat('ability_score', next);
             this.closeModal();
             audio.play('ui_confirm');
             this.render();
@@ -30234,30 +31785,18 @@ class App {
     ], [button('Cancel', () => this.closeModal(), { color: 'ghost' })]);
   }
 
-  /** Apply what a completed reputation project actually gives you. */
-  applyReputationGrant(trackId, project) {
-    const g = this.game;
-    const grant = project.grant ?? {};
-
-    if (grant.console) {
-      g.loadout.acquire(grant.console);
-      g.pushLog(`${CONSOLES[grant.console]?.name ?? grant.console} received from ${trackId}.`, 'engineering');
-    }
-    if (grant.torpedoes) {
-      g.ship.torpedoes = Math.min(g.ship.maxTorpedoes, g.ship.torpedoes + grant.torpedoes);
-    }
-    if (grant.antimatter) {
-      g.ship.antimatter = Math.min(100, g.ship.antimatter + grant.antimatter);
-    }
-    if (grant.perk === 'cloak') {
-      g.ship.cloakCapable = true;
-      g.pushLog('A cloaking device has been installed. Nobody has signed for it.', 'engineering');
-    }
-    if (grant.title) {
-      g.pushLog(`You are now styled "${grant.title}".`, 'captain');
-    }
-    g.applyAllMods();
-    this.showMessage(project.name, [project.text]);
+  /**
+   * Buy a reputation project and say what arrived.
+   *
+   * What the project GIVES is in `Game.buyProject`, so it happens whether or
+   * not anybody is looking at it. This is the announcement.
+   */
+  buyProject(trackId, projectId) {
+    const r = this.game.buyProject(trackId, projectId);
+    if (!r.ok) { audio.play('ui_deny'); return false; }
+    audio.play('ui_confirm');
+    this.showMessage(r.project.name, [r.project.text, ...r.lines]);
+    return true;
   }
 
   // ------------------------------------------------------------ persistence
@@ -30333,25 +31872,10 @@ class App {
       registry: draft.registry || 'NCC-1701',
     });
 
-    // The career track grants a matching starting skill rank.
-    const skillId = BACKGROUND_SKILL[draft.careerId];
-    if (skillId && SKILLS[skillId]) {
-      this.game.progress.unspent++;
-      this.game.progress.spend(skillId);
-    }
-    // Starfleet families start with an extra pip and the scrutiny to match.
-    if (this.game.character.mechanic('startingRankBonus')) {
-      this.game.progress.rankIndex = Math.min(
-        this.game.progress.rankIndex + 1,
-        10,
-      );
-    }
-    if (this.game.character.mechanic('startingReprimand')) {
-      this.game.ledger.record('order_disobeyed', {
-        text: 'Prior reprimand on file at time of commission',
-      });
-    }
-    this.game.applyAllMods();
+    // The career skill, the Starfleet family's extra pip and any reprimand
+    // already on file are applied by `Game.commission`, in the constructor —
+    // they used to be applied here, which meant only a captain created through
+    // this screen ever got them.
     this.recentRolls = [];
 
     this.orderBar.style.display = '';
@@ -30388,7 +31912,7 @@ class App {
   resumeOrStart() {
     if (hasSave('auto')) {
       const data = loadSave('auto');
-      this.modalHandle = modal('Resume Command', [
+      this.modalHandle = this.raiseModal('Resume Command', [
         el('p', { text: data.label ?? 'A command record was found.' }),
       ], [
         button('Resume', () => {

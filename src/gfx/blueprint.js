@@ -93,7 +93,7 @@ const FORMS = {
       rimColor: p.trim,
     });
 
-    const hy = b.hullY ?? -high * 0.24;
+    const hy = b.hullY ?? -high * 0.42;
     if (b.neck !== false) {
       box(mb, {
         center: vec3(sx - sr * 0.5, hy / 2, 0),
@@ -102,12 +102,15 @@ const FORMS = {
       });
     }
 
-    // The secondary hull, tapering aft.
+    // The secondary hull, tapering aft. `hullThick` is how heavy it is for the
+    // ship's height — an Intrepid's is famously slight, a Galaxy's is most of
+    // the vessel — and `hullReach` how far forward it runs under the saucer.
+    const thick = b.hullThick ?? 1;
     tube(mb, {
       origin: vec3(-0.5, hy, 0),
-      length: b.hullLength ?? 0.5 + sx * 0.85,
-      r0: b.hullR0 ?? high * 0.17,
-      r1: b.hullR1 ?? high * 0.23,
+      length: b.hullLength ?? 0.5 + sx * (b.hullReach ?? 0.85),
+      r0: b.hullR0 ?? high * 0.17 * thick,
+      r1: b.hullR1 ?? high * 0.23 * thick,
       segments: 12,
       color: p.hull,
     });
@@ -124,15 +127,31 @@ const FORMS = {
     // shape no Starfleet cruiser has.
     const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
     const nr = b.nacelleRadius ?? high * 0.12;
+    // Where the blade leaves the hull, and how thick and how deep it is.
+    // A pylon is a wing: a chord you can see from the side and a thickness you
+    // can barely see from the front.
+    const zRoot = nz * (b.pylonRoot ?? 0.16);
     mirrored(mb, (m) => {
       // The pylon reaches from the hull to the nacelle, measured rather than
       // guessed at a fixed 0.34 — which was right for a Constitution and left
       // every ship with higher nacelles connected to nothing.
+      //
+      // It is a leaning blade, not a block. Spanning the gap in z as a box
+      // size — which is what this did — fills the entire corner between hull
+      // and nacelle with solid geometry: on a Galaxy that was a slab 0.25 of
+      // the ship's length across and nearly as tall, and it is the first thing
+      // you saw when you looked at one. `flare` carries the top of a thin
+      // blade outboard to meet the nacelle instead.
       box(m, {
-        center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
-        size: vec3(high * 0.24, Math.abs(ny - hy) + high * 0.16, nz * 0.9),
+        center: vec3(nx + nl * 0.3, (ny + hy) / 2, zRoot),
+        size: vec3(
+          b.pylonChord ?? high * 0.62,
+          Math.abs(ny - hy) + high * 0.16,
+          b.pylonThick ?? high * 0.1,
+        ),
         sweep: b.pylonSweep ?? 0.06,
         rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.7,
+        flare: nz - zRoot,
         color: p.trim,
       });
       tube(m, {
@@ -183,7 +202,7 @@ const FORMS = {
     const high = b.ratioHeight ?? 0.25;
     const sr = b.saucerRadius ?? wide / 2;
     const sx = b.saucerX ?? 0.5 - sr;
-    const hullY = b.hullY ?? -high * 0.24;
+    const hullY = b.hullY ?? -high * 0.44;
 
     saucer(mb, {
       origin: vec3(sx, b.saucerY ?? 0, 0),
@@ -255,13 +274,24 @@ const FORMS = {
     const nx = b.nacelleX ?? -0.46;
     const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
     const nr = b.nacelleRadius ?? high * 0.115;
+    const zRoot = nz * (b.pylonRoot ?? 0.14);
     mirrored(mb, (m) => {
       // Thin, swept harder than the generic slab, and leaning aft as it rises.
+      //
+      // "Thin" was a comment rather than a shape: the box was slim fore-and-aft
+      // and then a full nacelle-span wide, so the 1966 struts — which are the
+      // slenderest thing on the ship, and the reason there is daylight under
+      // the nacelles at all — were drawn as two filled corners.
       box(m, {
-        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, nz * 0.55),
-        size: vec3(high * 0.2, Math.abs(ny - hullY) + high * 0.12, nz * 0.92),
+        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, zRoot),
+        size: vec3(
+          b.pylonChord ?? high * 0.56,
+          Math.abs(ny - hullY) + high * 0.12,
+          b.pylonThick ?? high * 0.08,
+        ),
         sweep: b.pylonSweep ?? 0.05,
         rake: b.pylonRake ?? Math.max(0, ny - hullY) * 0.8,
+        flare: nz - zRoot,
         color: p.trim,
       });
       tube(m, {
@@ -536,14 +566,14 @@ export const BLUEPRINTS = {
   constitution_refit: { form: 'starfleet', length: 305, domeRatio: 0.52, domeFlat: 0.22, nacelleHigh: 0.3, pylonSweep: 0.08 },
   miranda: { form: 'rollbar', length: 278, neck: false },
   oberth: { form: 'twinhull', length: 120, lowerY: -0.06 },
-  excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, nacelleHigh: 0.34, pylonSweep: 0.02 },
+  excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, hullReach: 1.15, nacelleHigh: 0.46, nacelleWide: 0.68, pylonSweep: 0.02 },
   constellation: { form: 'quadnacelle', length: 260 },
   ambassador: { form: 'starfleet', length: 526, nacelleHigh: 0.3, pylonSweep: 0.08 },
   galaxy: { form: 'starfleet', length: 641, saucerStretch: 0.95, nacelleHigh: 0.4, nacelleWide: 0.86, pylonSweep: 0.14 },
   nebula: { form: 'podded', length: 442, saucerStretch: 0.95 },
-  intrepid: { form: 'starfleet', length: 345, saucerStretch: 1.12, nacelleHigh: 0.4, pylonSweep: 0.12 },
+  intrepid: { form: 'starfleet', length: 345, saucerStretch: 1.12, hullThick: 0.62, hullReach: 0.5, nacelleHigh: 0.52, nacelleWide: 0.66, nacelleLength: 0.44, pylonSweep: 0.12 },
   defiant: { form: 'compact', length: 171 },
-  sovereign: { form: 'starfleet', length: 685, saucerStretch: 1.2, domeRatio: 0.26, nacelleHigh: 0.34, pylonSweep: 0.22 },
+  sovereign: { form: 'starfleet', length: 685, saucerStretch: 1.34, domeRatio: 0.26, domeFlat: 0.08, neck: false, hullThick: 1.25, hullReach: 1.1, nacelleHigh: 0.4, nacelleWide: 0.92, nacelleLength: 0.62, pylonSweep: 0.3 },
   runabout: { form: 'compact', length: 23, segments: 12 },
 
   // ---- Klingon ----

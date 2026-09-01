@@ -29,7 +29,10 @@ import {
 } from '../src/sim/invariants.js';
 import { Game } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
-import { ARENA_RADIUS } from '../src/sim/combat.js';
+import {
+  ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES, OUTCOMES,
+} from '../src/sim/combat.js';
+import { parseOrder } from '../src/ui/orders.js';
 
 const STEP = 1 / 30;
 const OPTS = { arenaRadius: ARENA_RADIUS };
@@ -207,6 +210,170 @@ test('no rule is ever broken, in any fight, at any difficulty', () => {
   assert.ok(ticks > 100000, `only ${ticks} ticks simulated; the soak is not soaking`);
   assert.deepEqual(dog.summary.map((v) => `${v.severity} ${v.code}: ${v.text}`), [],
     `${dog.total} invariant violations across ${ticks} ticks`);
+});
+
+// A tour of duty, rather than a fight.
+//
+// The soak above runs sixty-eight engagements and every one of them is the
+// FIRST engagement of a brand new commission. That is not how the game is
+// played, and it is not where the bugs are: "combat's done and the stuff that
+// comes after it is also messed up" is about the second fight, and the third,
+// on a ship that is already damaged, already short of crew, already carrying a
+// wreck it never salvaged and a distress call it never cancelled.
+//
+// So this runs one captain through eight consecutive engagements with the
+// ordinary business of a starship in between — repairs, orbits, salvage,
+// handing over the con, a log entry — and checks every rule on every tick of
+// all of it. The fights themselves are flown much harder than `pilot` flies
+// them: subsystem targeting, evasive, decoys, alert levels, a distress call,
+// the career signature, and occasionally an order to break off entirely.
+test('a tour of duty: fight after fight, on one commission', () => {
+  // Rosters by era, and a player ship to match, because the balance the game
+  // is built to has always been tier-appropriate: two ships of your own tier
+  // is a fight you break off, and two ships a tier above ends the commission
+  // in one engagement. A tour that puts a 2260s Constitution against a pair of
+  // Vor'chas is not testing the aftermath, it is testing how fast a ship dies.
+  const TOS = ['bird_of_prey', 'd7', 'orion_raider', 'scoutship', 'freighter'];
+  const TNG = ['ktinga', 'galor', 'marauder', 'keldon', 'bird_of_prey'];
+  const LATE = ['vorcha', 'galor', 'keldon', 'jem_hadar_attack', 'marauder'];
+
+  const dog = new Watchdog();
+  let ticks = 0;
+  let fought = 0;
+  let lost = 0;
+  const outcomes = new Set();
+
+  for (const [seed, difficulty, crewMode, shipClass, HOSTILES] of [
+    [91001, 'story', 'canon', 'constitution', TOS],
+    [91002, 'lieutenant', 'original', 'constitution_refit', TOS],
+    [91003, 'commander', 'original', 'excelsior', TNG],
+    [91004, 'captain', 'canon', 'galaxy', TNG],
+    [91005, 'fleet_admiral', 'original', 'sovereign', LATE],
+  ]) {
+    const g = new Game({ seed: BigInt(seed), crewMode, difficulty, shipClass });
+    const rand = (() => {
+      let s = seed >>> 0;
+      return () => { s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0; return s / 0x100000000; };
+    })();
+    const pick = (list) => list[Math.floor(rand() * list.length)];
+
+    for (let f = 0; f < 8 && !g.over; f++) {
+      const id = HOSTILES[(seed + f) % HOSTILES.length];
+      const count = 1 + ((seed + f) % 2);
+      g.startCombat(Array.from({ length: count }, (_, k) =>
+        new Ship(id, { name: `${id} ${k + 1}` })));
+      assert.ok(g.engagement, `${difficulty}: fight ${f + 1} never started`);
+      fought++;
+      for (let t = 0; t < 20000 && g.engagement && !g.engagement.over; t++) {
+        const eng = g.engagement;
+        if (!eng.target || eng.target.destroyed) eng.cycleTarget();
+        const mark = eng.target ?? eng.liveHostiles[0];
+        if (mark) eng.comeAboutTo(mark);
+        eng.setThrottle(0.35 + rand() * 0.65);
+        // A captain who is losing breaks off, which is what the ladder is
+        // designed around and what makes a tour last more than one fight.
+        //
+        // One fight in every tour is also broken off on purpose, because a
+        // captain who is winning never triggers the clause above — and once
+        // the tour started awarding experience between engagements the
+        // captains stopped losing, so the "escaped" path and everything
+        // downstream of it went unwalked. As a per-tick roll this drowned the
+        // tour instead: a fight is thousands of ticks long, so even a
+        // one-in-a-thousand chance decided almost every engagement.
+        if ((g.ship.hullPct < 0.35 && eng.warpOutTimer <= 0) || (f === 5 && t === 900)) {
+          eng.beginWarpOut();
+          eng.evasive(true);
+        }
+
+        const roll = rand();
+        if (roll < 0.004) eng.targetSubsystem(pick(['weapons', 'shields', 'engines', 'warp_core', null]));
+        else if (roll < 0.008) eng.evasive(rand() < 0.5);
+        else if (roll < 0.010) eng.deployDecoy(2 + rand() * 4);
+        else if (roll < 0.012) g.setAlert(pick(['red', 'yellow', 'normal']));
+        else if (roll < 0.013) g.callForHelp();
+        else if (roll < 0.014) g.useSignature();
+        else if (roll < 0.030) {
+          // The power tray. Whatever is off cooldown, fired at random — this
+          // is the most stateful part of combat (buffs stacking, durations
+          // expiring, specials reaching into the hostiles) and until it moved
+          // out of the screen no soak could reach it at all.
+          const ready = g.readyAbilities();
+          if (ready.length) {
+            const p = ready[Math.floor(rand() * ready.length)];
+            g.useAbility(p.officer, p.ability.id);
+          }
+        } else if (roll < 0.034) {
+          g.useDevice(pick(['shield_battery', 'weapons_battery', 'engine_battery', 'hull_patch']));
+        }
+        eng.fireAll(rand() < 0.15 ? 'torpedo' : 'all');
+
+        g.update(STEP);
+        dog.tick(g, OPTS);
+        ticks++;
+      }
+
+      // The fight is over. Everything that hangs off that has to have
+      // happened, on the spot, with nothing left half-finished.
+      assert.equal(g.engagement, null,
+        `${difficulty} fight ${f + 1}: the engagement was never cleared away`);
+      assert.ok(g.lastCombat, `${difficulty} fight ${f + 1}: no after-action record`);
+      assert.ok(OUTCOMES.includes(g.lastCombat.outcome),
+        `${difficulty} fight ${f + 1}: outcome was ${JSON.stringify(g.lastCombat.outcome)}`);
+      assert.equal(g.helpInbound, null, 'a relief ship outlived the fight it was sent to');
+      outcomes.add(g.lastCombat.outcome);
+      if (g.over) { lost++; break; }
+      assert.equal(g.mode, 'bridge', `${difficulty} fight ${f + 1}: left the game in ${g.mode}`);
+
+      // Damage control between engagements, which is what a captain who
+      // intends to fight another one does. Without it a tour is four fights
+      // long on the harder rungs and the test measures nothing after that.
+      for (let i = 0; i < 4; i++) g.effectRepairs();
+      if (g.canDock()) g.dock();
+
+      // And the ordinary business of a starship. Each of these is a real
+      // order, and each is checked as thoroughly as a tick of combat is.
+      const between = [
+        () => g.effectRepairs(),
+        () => g.dock(),
+        () => g.diagnostic(5),
+        () => g.stripWreck(),
+        () => g.salvage(),
+        () => g.enterOrbit(),
+        () => g.breakOrbit(),
+        () => g.logEntry(`After action, engagement ${f + 1}.`),
+        () => g.intercom(pick(['engineering', 'sickbay', 'security'])),
+        () => g.handOverCon(),
+        () => g.takeCon(),
+        () => g.workTheShop(1),
+        () => g.availableMissions(),
+        () => g.setAlert('normal'),
+        () => g.awardXP(2500),
+        () => {
+          if (g.pendingFeats > 0) g.takeFeat('unshakeable');
+        },
+        () => {
+          if (g.progress.unspent > 0) g.spendSkill('beam_weapons');
+        },
+      ];
+      for (let i = 0; i < 8; i++) {
+        pick(between)();
+        for (let t = 0; t < 80; t++) { g.update(STEP); dog.tick(g, OPTS); ticks++; }
+      }
+      // A save round trip between fights, because the player closes the app.
+      const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+      assert.deepEqual(checkAll(back, OPTS), [],
+        `${difficulty}: the save between fights ${f + 1} and ${f + 2} loaded broken`);
+    }
+  }
+
+  assert.ok(fought >= 30, `only ${fought} engagements in the tour`);
+  assert.ok(ticks > 60000, `only ${ticks} ticks; the tour is not touring`);
+  assert.ok(outcomes.has('escaped'), 'no fight was ever broken off');
+  assert.ok(outcomes.has('victory') || outcomes.has('routed'),
+    `nothing was ever won: ${[...outcomes]}`);
+  assert.ok(lost < 5, 'every commission ended with the ship lost');
+  assert.deepEqual(dog.summary.map((v) => `${v.severity} ${v.code}: ${v.text}`), [],
+    `${dog.total} invariant violations across ${ticks} ticks of a tour`);
 });
 
 test('a fight survives being saved and loaded on any tick', () => {
@@ -981,4 +1148,652 @@ describe('a fight that ends on a sentence ends immediately', () => {
         `seed ${seed}: ${dog.summary.map((v) => v.text).join(' | ')}`);
     }
   });
+});
+
+// ====================================== every ending, in every situation
+
+describe('the aftermath of a fight is coherent whatever the fight was', () => {
+  // "Okay, engage in combat. Okay, combat's done. And the stuff that comes
+  // after it is also messed up."
+  //
+  // Individual endings have their own tests. What none of them covered is the
+  // CROSS PRODUCT: five outcomes against the half-dozen situations a captain
+  // can be in when the shooting starts. A fight that ends cleanly on an empty
+  // bridge is not evidence that one ending in orbit, mid-mission, with the con
+  // handed to the first officer, leaves anything behind in one piece.
+  //
+  // Every combination below has to satisfy the same list, so a rule added to
+  // src/sim/invariants.js defends all of them at once.
+
+  const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+
+  /** The situations a captain can be in when the shooting starts. */
+  const SITUATIONS = {
+    'on a quiet bridge': () => {},
+    'in standard orbit': (g) => {
+      const body = g.galaxy.systems.find((s) => s.id === g.locationId)?.bodies
+        ?.find?.((b) => b.kind !== 'gas' && b.kind !== 'star');
+      if (body) g.enterOrbit(body.id);
+    },
+    'with the con handed over': (g) => { g.handOverCon?.(); },
+    'on a mission': (g) => {
+      const m = g.availableMissions?.()[0];
+      if (m) g.startMission(m.id);
+    },
+    'at red alert with shields already down': (g) => {
+      g.setAlert('red');
+      for (const f of Object.keys(g.ship.shields)) g.ship.shields[f] = 0;
+      g.ship.shieldsUp = false;
+    },
+    'already carrying a wreck': (g) => {
+      g.wreck = { tier: 2, systemId: g.locationId, hulls: 1, name: 'Earlier kill' };
+    },
+  };
+
+  /**
+   * Force a fight to a given ending without waiting for the dice.
+   *
+   * Through `Ship.destroy`, not by setting the flag: destroying a ship zeroes
+   * its hull and its shields, and a test that sets `destroyed = true` on its
+   * own builds a state the simulation cannot reach and then complains the
+   * checker noticed.
+   */
+  function endWith(g, outcome) {
+    const eng = g.engagement;
+    if (outcome === 'victory') for (const s of eng.hostiles) s.destroy('test');
+    if (outcome === 'routed') for (const s of eng.hostiles) s.fleeing = true;
+    if (outcome === 'destroyed') g.ship.destroy('test');
+    eng.end(outcome);
+  }
+
+  for (const outcome of OUTCOMES) {
+    for (const [where, setUp] of Object.entries(SITUATIONS)) {
+      test(`${outcome}, ${where}`, () => {
+        const g = new Game({ seed: 5n, crewMode: 'original', difficulty: 'commander' });
+        setUp(g);
+        const wasAshore = g.walk?.roomId === 'surface';
+        const orbitBefore = g.orbitBody ?? g.orbit ?? null;
+
+        g.startCombat([new Ship('d7', { name: 'Hostile' })]);
+        assert.equal(g.mode, 'combat', 'the fight did not start');
+
+        for (let i = 0; i < 30 * 4; i++) { pilot(g); g.update(STEP); }
+        if (!g.lastCombat) endWith(g, outcome);
+
+        // Whatever happened, the simulation must be self-consistent.
+        assert.deepEqual(checkAll(g, OPTS), [], 'the checker objects to the result');
+
+        // And the fight must be finished, not merely stopped.
+        assert.equal(g.engagement, null, 'an engagement was left hanging');
+        assert.ok(g.mode === 'bridge' || g.over,
+          `left in ${g.mode} mode with the fight over`);
+        assert.ok(g.lastCombat, 'no after-action record was written');
+        assert.ok(Number.isFinite(g.lastCombat.crewLost) && g.lastCombat.crewLost >= 0,
+          `crewLost is ${g.lastCombat.crewLost}`);
+        assert.ok(g.lastCombat.crewLost <= g.ship.maxCrew,
+          `${g.lastCombat.crewLost} lost from a crew of ${g.ship.maxCrew}`);
+
+        // The bridge stands down unless the ship was lost.
+        if (!g.over && g.lastCombat.outcome !== 'destroyed') {
+          assert.equal(g.alert, 'normal', 'still at battle stations');
+        }
+
+        // Where the ship WAS is not changed by a fight it survived.
+        if (!g.over) {
+          assert.equal(g.walk?.roomId === 'surface', wasAshore,
+            'the captain was moved between the ship and the ground by a battle');
+          const orbitAfter = g.orbitBody ?? g.orbit ?? null;
+          assert.equal(!!orbitAfter, !!orbitBefore, 'orbit was gained or lost in a fight');
+        }
+      });
+    }
+  }
+
+  test('the orders a fight forbids come back when it ends', () => {
+    // dock, fabricate and the machine shop all refuse mid-combat. Refusing
+    // FOREVER because a flag was left set is the same bug as accepting them
+    // during a battle, and much harder to notice.
+    const g = fight('d7');
+    assert.equal(g.dock().ok, false, 'docked in the middle of a firefight');
+
+    g.engagement.end('routed');
+    assert.equal(g.mode, 'bridge');
+    const after = g.dock();
+    assert.ok(typeof after === 'object' && after !== null, 'dock returned nothing');
+    assert.notEqual(after.reason, 'in combat',
+      'the ship is still refusing to dock because of a battle that is over');
+  });
+
+  test('the same fight cannot pay out twice', () => {
+    // `end` is idempotent and so is the settling behind it. Calling it again
+    // must not hand out the experience, the salvage or the standing a second
+    // time — and nothing stops a UI, a mission stage and the tick all having a
+    // go at it in the same frame.
+    const g = fight('d7');
+    for (const s of g.engagement.hostiles) s.destroy('test');
+    g.engagement.end('victory');
+
+    const record = { ...g.lastCombat };
+    const xp = g.progress.xp;
+    const kills = g.ledger.destroyedShips.length;
+    const wreck = g.wreckHere;
+
+    g.finishCombat('victory');
+    g.finishCombat('victory');
+    g.update(STEP);
+
+    assert.deepEqual({ ...g.lastCombat }, record, 'the after-action record was rewritten');
+    assert.equal(g.progress.xp, xp, 'the experience was paid twice');
+    assert.equal(g.ledger.destroyedShips.length, kills, 'the kill was counted twice');
+    assert.deepEqual(g.wreckHere, wreck, 'a second hulk appeared out of nothing');
+  });
+});
+
+// ============================================= a side of the fight that existed
+
+describe('somebody answers the distress call', () => {
+  // `Engagement` has supported allies since it was written: placed on the
+  // board, flown by the AI, drawn by all three renderers, targeted by hostiles
+  // and counted by every rule in this file. Nothing in the game ever created
+  // one. A whole side of the battle existed and was unreachable.
+
+  test('there is nobody to call when nobody is shooting', () => {
+    const g = new Game({ seed: 4n, crewMode: 'original' });
+    assert.equal(g.callForHelp().ok, false);
+  });
+
+  test('the call is made once per fight, and again in the next one', () => {
+    const g = fight('d7');
+    assert.equal(g.callForHelp().ok, true);
+    assert.equal(g.callForHelp().ok, false, 'the call went out twice');
+
+    g.engagement.end('routed');
+    g.startCombat([new Ship('d7', { name: 'More of them' })]);
+    assert.equal(g.callForHelp().ok, true, 'a new fight inherited the old call');
+  });
+
+  test('help arrives, fights, and is on your side', () => {
+    const g = fight('d7');
+    const call = g.callForHelp();
+    assert.equal(call.answered, true, call.reason);
+
+    for (let i = 0; i < 30 * 90 && !g.engagement?.allies.length; i++) {
+      pilot(g); g.update(STEP);
+      if (!g.engagement || g.engagement.over) break;
+    }
+    const ally = g.engagement?.allies?.[0];
+    assert.ok(ally, 'nobody came');
+    assert.equal(ally.faction, 'federation');
+    assert.ok(g.engagement.allShips.includes(ally), 'the ally is not on the board');
+
+    // And every rule that applies to a combatant applies to this one.
+    assert.deepEqual(checkAll(g, OPTS), []);
+  });
+
+  test('nobody comes for the no-win scenario', () => {
+    const g = new Game({ seed: 8n, crewMode: 'original' });
+    if (typeof g.runKobayashiMaru !== 'function') return;
+    g.runKobayashiMaru();
+    assert.equal(g.callForHelp().ok, false, 'the Kobayashi Maru was made winnable');
+  });
+
+  test('a wrecked subspace radio cannot call anybody', () => {
+    const g = fight('d7');
+    g.ship.subsystems.comms = 0.1;
+    assert.equal(g.callForHelp().ok, false);
+  });
+
+  test('the relief does not follow you into the next battle', () => {
+    // The countdown has a ship at the end of it. Left set past the fight it
+    // was called for, the next engagement gets a free ally dropping out of
+    // warp for a call the captain never made.
+    const g = fight('d7');
+    g.callForHelp();
+    assert.ok(g.helpInbound, 'nothing was inbound');
+    g.engagement.end('victory');
+    assert.equal(g.helpInbound, null, 'a ship is still on its way to a finished fight');
+    assert.deepEqual(checkAll(g, OPTS), []);
+  });
+
+  test('the checker objects to help inbound to a fight that is over', () => {
+    const g = fight('d7');
+    g.engagement.end('victory');
+    g.helpInbound = { classId: 'miranda', name: 'USS Nowhere', eta: 5 };
+    assert.ok(checkAll(g, OPTS).some((v) => v.code === 'game.help.orphan'),
+      JSON.stringify(checkAll(g, OPTS)));
+  });
+
+  test('an ally does not break the aftermath', () => {
+    // The whole reason this is in the invariants file rather than the sim one:
+    // a third party on the board is exactly the sort of thing that makes the
+    // salvage, the casualty count and the ledger disagree with each other.
+    const g = fight('d7');
+    g.callForHelp();
+    for (let i = 0; i < 30 * 240 && !g.lastCombat; i++) { pilot(g); g.update(STEP); }
+    assert.ok(g.lastCombat, 'the fight never ended');
+    assert.deepEqual(checkAll(g, OPTS), []);
+    assert.equal(g.engagement, null);
+    assert.ok(g.lastCombat.killed <= g.lastCombat.hostiles,
+      `${g.lastCombat.killed} kills out of ${g.lastCombat.hostiles} hostiles — an ally was counted`);
+  });
+
+  test('an ally lost in the fight is not counted as a kill of yours', () => {
+    const g = fight('d7');
+    g.callForHelp();
+    for (let i = 0; i < 30 * 90 && !g.engagement?.allies.length; i++) {
+      pilot(g); g.update(STEP);
+      if (!g.engagement || g.engagement.over) break;
+    }
+    const ally = g.engagement?.allies?.[0];
+    if (!ally) return;
+    ally.destroy('test');
+    const before = g.ledger.destroyedShips.length;
+    for (const s of g.engagement.hostiles) s.destroy('test');
+    g.engagement.end('victory');
+    assert.equal(g.lastCombat.killed, g.lastCombat.hostiles,
+      'the ally was tallied with the enemy');
+    const logged = g.ledger.destroyedShips.slice(before);
+    assert.equal(logged.length, g.lastCombat.hostiles,
+      `the ledger recorded ${logged.length} kills for ${g.lastCombat.hostiles} hostiles`);
+    assert.ok(!logged.some((k) => k.faction === 'federation'),
+      'a Starfleet ship went into the record as one of your kills');
+  });
+});
+
+// ============================================ the landing parties nobody could send
+
+describe('a landing party goes somewhere', () => {
+  // AWAY_TEMPLATES has held five multi-step missions since the away system was
+  // written — hazard levels, per-step checks, difficulty classes on every one —
+  // and no code has ever read the table. The order existed too: "assemble an
+  // away team" put one together and reported it standing by, which is a
+  // landing party that never went anywhere.
+
+  /** A hostile beaten to the point where a boarding party can cross. */
+  function crippled(g) {
+    const foe = g.engagement.hostiles[0];
+    for (const f of Object.keys(foe.shields)) foe.shields[f] = 0;
+    foe.hull = foe.maxHull * 0.2;
+    foe.x = 200; foe.y = 0; foe.z = 0;
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    return foe;
+  }
+
+  test('there is nowhere to send one from an empty bridge', () => {
+    const g = new Game({ seed: 2n, crewMode: 'original' });
+    assert.deepEqual(g.availableAwayMissions(), []);
+    assert.equal(g.awayMission('boarding_action').ok, false);
+  });
+
+  test('a beaten ship can be boarded, and a healthy one cannot', () => {
+    const g = fight('d7');
+    assert.deepEqual(g.availableAwayMissions(), [],
+      'a boarding party was offered against full shields');
+    crippled(g);
+    assert.deepEqual(g.availableAwayMissions().map((t) => t.id), ['boarding_action']);
+  });
+
+  test('every step is run and every result is reported', () => {
+    const g = fight('d7');
+    crippled(g);
+    const r = g.awayMission('boarding_action');
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.of, 3, 'a three-step template ran a different number of steps');
+    assert.equal(r.steps.length <= 3, true);
+    assert.ok(['success', 'partial', 'failure'].includes(r.outcome));
+    assert.equal(r.passed, r.steps.filter((s) => s.success).length);
+    assert.deepEqual(checkAll(g, OPTS), [], 'the checker objects after a boarding action');
+  });
+
+  test('a bridge taken is a ship out of the fight, and not a kill', () => {
+    // The whole point of crippling instead of killing. It must not show up in
+    // the destroyed-ships record, because it was not destroyed.
+    let taken = 0;
+    for (let seed = 1n; seed <= 40n && !taken; seed++) {
+      const g = fight('d7', { seed, difficulty: 'story' });
+      const foe = crippled(g);
+      const r = g.awayMission('boarding_action');
+      if (r.outcome !== 'success') continue;
+      taken++;
+      assert.equal(foe.withdrawn, true, 'the boarded ship kept fighting');
+      assert.equal(foe.destroyed, false, 'boarding a ship blew it up');
+      assert.ok(!g.ledger.destroyedShips.some((k) => k.name === foe.name),
+        'a captured ship went into the record as a kill');
+      assert.ok(!g.engagement || g.engagement.target !== foe,
+        'the guns are still locked on a ship that has gone');
+      assert.deepEqual(checkAll(g, OPTS), []);
+    }
+    assert.ok(taken > 0, 'no boarding action in forty attempts ever succeeded');
+  });
+
+  test('the fight ends when the last hostile is boarded', () => {
+    for (let seed = 1n; seed <= 40n; seed++) {
+      const g = fight('d7', { seed, difficulty: 'story' });
+      crippled(g);
+      if (g.awayMission('boarding_action').outcome !== 'success') continue;
+      for (let i = 0; i < 30 * 20 && !g.lastCombat; i++) g.update(STEP);
+      assert.ok(g.lastCombat, 'the board emptied and the fight never ended');
+      assert.equal(g.mode, 'bridge');
+      assert.deepEqual(checkAll(g, OPTS), []);
+      return;
+    }
+  });
+
+  test('a party with nobody left standing stops', () => {
+    // The loop breaks when the team is gone. Without it the remaining steps
+    // run against an empty team, which is a check with no officer behind it.
+    const g = fight('d7', { difficulty: 'admiral' });
+    crippled(g);
+    const r = g.awayMission('boarding_action');
+    assert.ok(r.steps.length >= 1);
+    assert.ok(r.steps.length <= 3);
+  });
+
+  test('the away order sends them somewhere instead of standing by', () => {
+    const g = fight('d7');
+    crippled(g);
+    const order = parseOrder('board them', g);
+    assert.equal(order.action, 'away_team');
+    assert.equal(order.prefer, 'board', 'the parser lost which mission was meant');
+  });
+});
+
+test('reinforcing a shield is not an anomaly', () => {
+  // Found by the order monkey in tools/verify-app.mjs on its first run, which
+  // is the point of having one: `pilot()` in this file has never reinforced a
+  // shield, so no fight the soak has ever run could reach the state.
+  //
+  // `reinforceShield` moves charge from five facings onto one and deliberately
+  // pushes it past `maxShield` — that IS the order. The checker read the
+  // normal ceiling, so giving an ordinary tactical order put an anomaly in the
+  // ship's log, and would have done so in front of a player with the debug
+  // flag on.
+  const g = fight('d7');
+  g.ship.reinforceShield('port');
+  assert.ok(g.ship.shields.port > g.ship.maxShield,
+    'the order did not overcharge anything, so this proves nothing');
+  assert.deepEqual(checkAll(g, OPTS), []);
+
+  // And the ceiling is still a ceiling.
+  g.ship.shields.port = g.ship.maxShield * 3;
+  assert.ok(checkAll(g, OPTS).some((v) => v.code === 'ship.shield.overmax'));
+});
+
+test('the overcharge bleeds back off on its own', () => {
+  const g = fight('d7');
+  g.ship.reinforceShield('port');
+  const peak = g.ship.shields.port;
+  for (let i = 0; i < 30 * 40; i++) g.update(STEP);
+  assert.ok(g.ship.shields.port < peak,
+    'a reinforced facing held its overcharge forever');
+  assert.deepEqual(checkAll(g, OPTS), []);
+});
+
+test('being dead is not a kind of being hurt', () => {
+  // Found by the order monkey, walking through orbit, a boarding action and a
+  // save/load round trip. `injured` survived death, so an officer wounded on
+  // one away mission and killed on the next was dead AND on the sick list —
+  // which is what `officer.dead-and-injured` says must never happen, and what
+  // every roster panel then reported.
+  const g = fight('d7');
+  const officer = g.crew.officers[0];
+  officer.injure(0.7);
+  assert.equal(officer.injured, true);
+  officer.kill('test');
+  assert.equal(officer.injured, false, 'a dead officer is still on the sick list');
+  assert.deepEqual(checkAll(g, OPTS), []);
+
+  // And the checker still objects if anything else produces the state.
+  officer.injured = true;
+  assert.ok(checkAll(g, OPTS).some((v) => v.code === 'officer.dead-and-injured'));
+});
+
+test('nothing brings the dead back on duty', () => {
+  const g = fight('d7');
+  const officer = g.crew.officers[0];
+  officer.injure(0.5);
+  assert.equal(officer.heal(), true);
+  assert.equal(officer.injured, false);
+  officer.kill('test');
+  assert.equal(officer.heal(), false, 'the dead were returned to duty');
+  assert.equal(officer.alive, false);
+});
+
+test('an enemy ship has a name, whoever fielded it', () => {
+  // Three code paths put hostiles on the board — a random encounter, a mission
+  // stage, and the Kobayashi Maru — and they carried two copies of a name
+  // table between them. The mission-stage path had neither and fielded
+  // "klingon vessel 1" while an ordinary encounter with the identical ship
+  // called it the IKS Rotarran.
+  const g = new Game({ seed: 6n, crewMode: 'original' });
+  const named = (s) => s.name && !/^\w+ vessel \d+$/i.test(s.name) && !/^Hostile/i.test(s.name);
+
+  assert.equal(hostileName('klingon', 0), HOSTILE_NAMES.klingon[0]);
+  assert.equal(hostileName('klingon', HOSTILE_NAMES.klingon.length), HOSTILE_NAMES.klingon[0],
+    'the list does not wrap');
+  assert.equal(hostileName('nobody_in_particular', 0), 'Unknown Vessel');
+
+  const fleet = buildHostiles(g.rng, 'romulan', 3, ['warbird', 'scoutship']);
+  assert.equal(fleet.length, 3);
+  for (const s of fleet) assert.ok(named(s), `an unnamed hostile: ${s.name}`);
+  assert.equal(new Set(fleet.map((s) => s.name)).size, 3, 'three ships, one name');
+
+  // And the relief that answers a distress call comes from the same table.
+  g.startCombat([new Ship('d7', { name: 'Hostile' })]);
+  const call = g.callForHelp();
+  if (call.answered) {
+    assert.ok(HOSTILE_NAMES.federation.includes(call.ship),
+      `${call.ship} is not on the Starfleet list`);
+  }
+});
+
+// =========================================== the same idea, one layer down
+
+describe('the game survives being called wrongly', () => {
+  // The order monkey in tools/verify-app.mjs gives every phrasing to a running
+  // app, which is the right test for "an order at the wrong moment". It cannot
+  // be the test for "a method with the wrong argument", because the parser
+  // never produces one — and every one of these methods is public, is called
+  // from a UI that can be mid-render, and several are reachable from a save
+  // file somebody edited.
+  //
+  // So: call them, with plausible arguments and with rubbish, in a shuffled
+  // order, thousands of times, and require the same two things the app
+  // requires. Nothing throws. Nothing breaks a rule.
+
+  /** Deterministic, so a failure names a sequence rather than a mood. */
+  function stream(seed) {
+    let s = seed >>> 0 || 1;
+    return () => {
+      s ^= s << 13; s >>>= 0;
+      s ^= s >> 17;
+      s ^= s << 5; s >>>= 0;
+      return s / 0x100000000;
+    };
+  }
+
+  const JUNK = [
+    undefined, null, NaN, Infinity, -Infinity, 0, -1, 1e9, '', 'nonsense',
+    {}, [], true, false, -0.5, '7', { id: 'nope' },
+  ];
+
+  /** One pass, from one seed. Three of them run below. */
+  function fuzz(seed, difficulty) {
+    const rand = stream(seed);
+    const pick = (list) => list[Math.floor(rand() * list.length)];
+
+    const g = new Game({ seed: BigInt(seed), crewMode: 'original', difficulty });
+    const systems = g.galaxy.systems.map((s) => s.id);
+    const bodies = (g.galaxy.systems.find((s) => s.id === g.locationId)?.bodies ?? [])
+      .map((b) => b.id);
+    const rooms = ['bridge', 'sickbay', 'engineering', 'transporter', 'nowhere', ''];
+    const facings = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral', 'sideways'];
+    const subsystems = ['weapons', 'shields', 'engines', 'warpcore', 'transporter', 'wings'];
+
+    // Every call the UI can make, with the arguments the UI can make it with —
+    // and with rubbish, because a save file is a thing a person can edit.
+    const CALLS = [
+      () => g.setCourse(pick([...systems, ...JUNK]), pick([1, 6, 9, ...JUNK])),
+      () => g.enterOrbit(pick([...bodies, ...JUNK])),
+      () => g.breakOrbit(),
+      () => g.beamDown(),
+      () => g.beamUp(),
+      () => g.dock(),
+      () => g.hail(pick(['identify', 'warn', 'negotiate', 'threaten', ...JUNK])),
+      () => g.callForHelp(),
+      () => g.awayMission(pick(['boarding_action', 'derelict_search', 'colony_rescue', ...JUNK])),
+      () => g.availableAwayMissions(),
+      () => g.stripWreck(),
+      () => g.fabricate(pick([...JUNK, 'torpedoes'])),
+      () => g.workTheShop(pick([1, 8, ...JUNK])),
+      () => g.setAlert(pick(['red', 'yellow', 'normal', 'blue', ...JUNK])),
+      () => g.handOverCon(pick(['first_officer', 'helm', ...JUNK])),
+      () => g.takeCon(),
+      () => g.diagnostic(pick([1, 5, ...JUNK])),
+      () => g.startCombat([new Ship(pick(['d7', 'bird_of_prey']), { name: 'Fuzz' })]),
+      () => g.engagement?.setThrottle(pick([0, 0.5, 1, ...JUNK])),
+      () => g.engagement?.setHeading(pick([0, 180, 359, ...JUNK])),
+      () => g.engagement?.fireAll(pick(['all', 'beam', 'torpedo', ...JUNK])),
+      () => g.engagement?.targetSubsystem(pick([...subsystems, ...JUNK])),
+      () => g.engagement?.cycleTarget(),
+      () => g.engagement?.beginWarpOut(),
+      () => g.engagement?.end(pick(['victory', 'routed', 'escaped', ...JUNK])),
+      () => g.ship.reinforceShield(pick([...facings, ...JUNK])),
+      () => { g.ship.shieldsUp = pick([true, false]); },
+      () => g.ship.cloak(),
+      () => g.ship.decloak(),
+      () => g.ship.ejectCore(),
+      () => g.ship.damageSubsystem(pick([...subsystems, ...JUNK]), pick([0.2, 5, ...JUNK])),
+      () => g.ship.takeDamage(pick([50, 5000, ...JUNK]), { facing: pick(facings) }),
+      () => g.ship.repair(pick([10, 1000, ...JUNK])),
+      () => g.ship.power.set(pick(['weapons', 'shields', 'engines', ...JUNK]), pick([0, 50, 200, ...JUNK])),
+      () => g.walk.enter(pick(rooms)),
+      () => g.walk.step(
+        { forward: pick([1, 0, -1, ...JUNK]), turn: pick([0, 1, ...JUNK]) },
+        pick([1 / 30, 0, 10, ...JUNK]),
+      ),
+      () => g.walk.useExit(pick([...rooms, ...JUNK])),
+      () => g.walk.sit(pick([true, false])),
+      () => g.buildAwayTeam(),
+      () => g.surveyFeature(pick([...JUNK, 'feature0', 'feature1'])),
+      () => g.update(1 / 30),
+
+      // The campaign layer, which the combat soak never touches.
+      () => g.startMission(pick([...JUNK, ...(g.availableMissions?.() ?? []).map((m) => m.id)])),
+      () => g.chooseMission(pick([...JUNK, '0', 'a'])),
+      () => g.earnReputation(pick(['combat_victory', 'colony_saved', ...JUNK])),
+      () => g.progress.addXP(pick([100, 1e6, ...JUNK]), { ledger: g.ledger }),
+      () => g.ledger.adjustStanding(pick(['klingon', 'federation', ...JUNK]), pick([5, -400, ...JUNK]), 'fuzz'),
+      () => g.pushLog(pick(['line', ...JUNK]), pick(['helm', ...JUNK])),
+      () => g.setPreset?.(pick(['balanced', 'attack', 'evade', ...JUNK])),
+      () => g.useSignature(),
+      () => {
+        const ready = g.readyAbilities();
+        return ready.length ? g.useAbility(ready[0].officer, ready[0].ability.id) : null;
+      },
+      () => g.useAbility(pick([...JUNK, 'helm', 'tactical']), pick([...JUNK, 'fire_at_will', 'eject_core'])),
+      () => g.useDevice(pick([...JUNK, 'shield_battery', 'hull_patch'])),
+
+      // Everything that used to live in the screen, now that it can be
+      // reached: the promotion ladder and both of its payoffs, the standing
+      // projects, and breaking off a course under way.
+      () => g.awardXP(pick([50, 1e6, ...JUNK])),
+      () => g.takeFeat(pick([...JUNK, 'unshakeable', 'improviser', 'ability_score']),
+        pick([null, ['command', 'daring'], ...JUNK])),
+      () => g.spendSkill(pick([...JUNK, 'sensors', 'leadership', 'beam_weapons'])),
+      () => g.buyProject(pick([...JUNK, 'federation', 'klingon']),
+        pick([...JUNK, 'fed_t1_torpedoes', 'rom_t3_cloak'])),
+      () => g.dropOutOfWarp(),
+      () => g.crew.at(pick(['helm', 'science', ...JUNK])),
+      () => g.crew.officers[0]?.injure(pick([0.5, 5, ...JUNK])),
+
+      // And what the app would come back as if it were closed right here.
+      () => {
+        const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+        for (const v of checkAll(back, OPTS)) {
+          throw new Error(`a save loaded broken: ${v.code} — ${v.text}`);
+        }
+      },
+    ];
+
+    const threw = [];
+    const broke = new Set();
+    for (let i = 0; i < 4000; i++) {
+      const call = pick(CALLS);
+      try {
+        call();
+      } catch (err) {
+        threw.push(`call ${i}: ${err?.message ?? err}`);
+        if (threw.length > 3) break;
+      }
+      // A dead captain stops the sweep testing anything; put the ship back.
+      if (g.over) {
+        g.over = false;
+        g.overReason = null;
+        g.ship.restore();
+        g.ship.crew = g.ship.maxCrew;
+      }
+      for (const v of checkAll(g, OPTS)) broke.add(`${v.code} — ${v.text}`);
+    }
+
+    return { threw, broke: [...broke] };
+  }
+
+  // Three seeds and three difficulty rungs: casualty scaling, permadeath and
+  // the enemy-count multiplier all move with the rung, and each of them is a
+  // different set of numbers flowing through the same calls.
+  for (const [seed, difficulty] of [
+    [0x9e3779b9, 'commander'],
+    [0x85ebca6b, 'story'],
+    [0xc2b2ae35, 'fleet_admiral'],
+  ]) {
+    test(`no public call throws or breaks a rule — seed ${seed.toString(16)}, ${difficulty}`, () => {
+      const { threw, broke } = fuzz(seed, difficulty);
+      assert.deepEqual(threw, [], 'a public call threw');
+      assert.deepEqual(broke, [], 'a public call left the simulation broken');
+    });
+  }
+});
+
+test('ejecting the core does not put a hull back together', () => {
+  // Found by the API fuzzer. `ejectCore` cleared `breaching` unconditionally,
+  // so a ship already at zero hull came out of it not destroyed, not breaching
+  // and not repairable — the one state `ship.zerohull.adrift` exists to forbid.
+  // The fight could then never end on 'destroyed' and the campaign carried on
+  // with a wreck the game did not know was a wreck.
+  const g = fight('d7');
+  g.ship.beginBreach(20);
+  g.ship.hull = 0;
+  assert.deepEqual(checkAll(g, OPTS), [], 'zero hull mid-breach is legal and was reported');
+
+  g.ship.ejectCore();
+  assert.equal(g.ship.destroyed, true, 'the ship came out of a breach at zero hull, intact');
+  assert.deepEqual(checkAll(g, OPTS), []);
+});
+
+test('ejecting the core with a hull left is still the way out', () => {
+  // The other half: the order has to keep working, or the fix above is just a
+  // way of losing the ship.
+  const g = fight('d7');
+  g.ship.hull = g.ship.maxHull * 0.4;
+  g.ship.beginBreach(20);
+  assert.equal(g.ship.ejectCore(), true);
+  assert.equal(g.ship.destroyed, false, 'ejecting the core killed a ship that was fine');
+  assert.equal(g.ship.breaching, false);
+  assert.equal(g.ship.subsystems.warpcore, 0);
+  assert.deepEqual(checkAll(g, OPTS), []);
+});
+
+test('a subsystem cannot be damaged to nonsense', () => {
+  // `takeDamage` clamps through a NaN-safe helper; `damageSubsystem` did raw
+  // arithmetic, and one non-finite write to a number the damage model, the
+  // power grid and the AI all read every tick is permanent.
+  const g = fight('d7');
+  for (const bad of [NaN, Infinity, -Infinity, undefined, null, 'lots', {}]) {
+    g.ship.damageSubsystem('engines', bad);
+    assert.ok(Number.isFinite(g.ship.subsystems.engines),
+      `damageSubsystem('engines', ${String(bad)}) left ${g.ship.subsystems.engines}`);
+    assert.ok(g.ship.subsystems.engines >= 0 && g.ship.subsystems.engines <= 1);
+  }
+  assert.deepEqual(checkAll(g, OPTS), []);
 });

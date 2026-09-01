@@ -3,7 +3,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, successChance } from '../src/rules/resolve.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import { RNG } from '../src/core/rng.js';
 import {
@@ -717,4 +719,252 @@ describe('continuous outcome resolution', () => {
     const combat = readFileSync(new URL('../src/sim/combat.js', import.meta.url), 'utf8');
     assert.ok(!/rules\/dice\.js/.test(combat), 'combat still imports the dice');
   });
+});
+
+// ------------------------------------- reputation projects deliver what they say
+
+// `reputation.buy` deducts the marks and records the perk. Everything a
+// project actually GIVES — the torpedoes, the antimatter, the console, the
+// cloaking device nobody signed for — was applied inside src/main.js, so a
+// project bought without a screen attached took the payment and handed over
+// nothing. The same shape of bug as the whole power tray living in the UI.
+
+/** A captain with enough standing in one track to buy anything in it. */
+function flush(trackId, tier = 5) {
+  const g = new Game({ seed: 606n, crewMode: 'original' });
+  const t = g.reputation.track(trackId);
+  t.tier = tier;
+  t.marks = 5000;
+  return g;
+}
+
+test('a reputation project hands over what it promised', () => {
+  // Torpedoes, from an empty magazine.
+  {
+    const g = flush('federation', 1);
+    g.ship.torpedoes = 0;
+    const r = g.buyProject('federation', 'fed_t1_torpedoes');
+    assert.ok(r.ok, r.reason);
+    assert.ok(g.ship.torpedoes > 0, 'the magazine is still empty');
+    assert.ok(r.lines.length > 0, 'nothing was said about it');
+  }
+  // A console, into stores. It arrives in inventory rather than fitted: what
+  // hangs in which slot is the captain's decision, not the quartermaster's.
+  {
+    const g = flush('federation', 1);
+    const before = g.loadout.inventory.length;
+    assert.ok(g.buyProject('federation', 'fed_t1_console').ok);
+    assert.ok(g.loadout.inventory.length > before, 'the console never arrived');
+    assert.ok(g.loadout.inventory.includes('shield_emitters'));
+  }
+  // The Romulan cloak, which is a capability the ship did not have.
+  {
+    const g = flush('romulan', 3);
+    assert.equal(g.ship.cloakCapable, false, 'a Constitution came with a cloak');
+    assert.ok(g.buyProject('romulan', 'rom_t3_cloak').ok);
+    assert.equal(g.ship.cloakCapable, true, 'the cloaking device was never installed');
+    assert.ok(g.reputation.has('cloak'));
+  }
+  // And a title is recorded on the track.
+  {
+    const g = flush('klingon', 5);
+    assert.ok(g.buyProject('klingon', 'kdf_t5_ally').ok);
+    assert.ok(g.reputation.allTitles.includes('Friend of the Empire'));
+  }
+});
+
+test('a project cannot be bought twice, or without the marks', () => {
+  const g = flush('federation', 1);
+  assert.ok(g.buyProject('federation', 'fed_t1_torpedoes').ok);
+  assert.equal(g.buyProject('federation', 'fed_t1_torpedoes').ok, false, 'bought twice');
+
+  const poor = new Game({ seed: 607n, crewMode: 'original' });
+  poor.reputation.track('federation').tier = 1;
+  poor.reputation.track('federation').marks = 0;
+  assert.equal(poor.buyProject('federation', 'fed_t1_torpedoes').ok, false, 'bought on credit');
+
+  assert.equal(g.buyProject('federation', 'no_such_project').ok, false);
+  assert.equal(g.buyProject('no_such_track', 'fed_t1_torpedoes').ok, false);
+});
+
+test('every project in every track can be bought and pays out', () => {
+  // The whole table, so a grant shape nobody handles cannot be added quietly.
+  for (const [trackId, track] of Object.entries(REP_TRACKS)) {
+    for (const p of track.projects ?? []) {
+      const g = flush(trackId);
+      const r = g.buyProject(trackId, p.id);
+      assert.ok(r.ok, `${trackId}/${p.id}: ${r.reason}`);
+      // A perk-only project has nothing to announce, and that is fine — the
+      // perk itself is the payload and the set is what reads it.
+      if (p.grant?.perk) assert.ok(g.reputation.has(p.grant.perk), `${p.id} granted no perk`);
+      if (p.grant?.title) assert.ok(g.reputation.allTitles.includes(p.grant.title));
+      if (p.grant?.console || p.grant?.torpedoes || p.grant?.antimatter || p.grant?.title) {
+        assert.ok(r.lines.length > 0, `${p.id} delivered silently`);
+      }
+    }
+  }
+});
+
+// ---------------------------------------- what a captain brings to a command
+
+// A career track grants a matching skill rank, a Starfleet family starts a pip
+// higher, and a reprimand already on file stays on file. All three were
+// applied in `App.startGame` — the character creator, which is in the browser
+// — so a `new Game` built anywhere else got none of them. Every test in this
+// repository, the combat soak, the balance suite and the API fuzzer were
+// measuring a captain the player never plays.
+
+const commissioned = (character) =>
+  new Game({ seed: 808n, crewMode: 'original', character: { speciesId: 'human', ...character } });
+
+test('a career track brings its own skill to the chair', () => {
+  for (const [careerId, skillId] of [
+    ['command', 'leadership'],
+    ['tactical', 'beam_weapons'],
+    ['engineering', 'damage_control'],
+    ['science', 'sensors'],
+    ['diplomatic', 'diplomacy'],
+  ]) {
+    const g = commissioned({ careerId });
+    assert.equal(g.progress.spent[skillId], 1,
+      `a ${careerId} captain arrived without ${skillId}`);
+  }
+  // And the points spent on it are not also still in hand.
+  const a = commissioned({ careerId: 'tactical' });
+  const b = commissioned({ careerId: 'medical' });   // no background skill
+  assert.equal(a.progress.unspent, b.progress.unspent,
+    'the career skill was given away for free');
+});
+
+test('a Starfleet family starts a pip higher', () => {
+  const plain = commissioned({ careerId: 'command' });
+  const legacy = commissioned({ careerId: 'command', originId: 'academy_legacy' });
+  assert.equal(legacy.progress.rankIndex, plain.progress.rankIndex + 1);
+});
+
+test('a reprimand already on file is on file from the first stardate', () => {
+  const clean = commissioned({ careerId: 'command' });
+  const marked = commissioned({ careerId: 'command', traits: ['insubordinate'] });
+  assert.equal(clean.ledger.entries.length, 0);
+  assert.equal(marked.ledger.count('order_disobeyed'), 1);
+  assert.ok(marked.ledger.entries[0].text.includes('reprimand'));
+});
+
+test('and a loaded save does not collect any of it twice', () => {
+  const g = commissioned({ careerId: 'tactical', originId: 'academy_legacy', traits: ['insubordinate'] });
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.equal(back.progress.rankIndex, g.progress.rankIndex);
+  assert.equal(back.progress.spent.beam_weapons, g.progress.spent.beam_weapons);
+  assert.equal(back.ledger.count('order_disobeyed'), 1);
+});
+
+// ------------------------------------------------- a promotion is a promotion
+
+// Twelve places in the codebase awarded experience; two of them looked at
+// whether it promoted anybody. And what a promotion MEANS — the character
+// levels up, and a feat is banked to choose — was done by an event listener in
+// src/main.js. So a captain could earn Fleet Captain over a five-year
+// commission and still be level one with no feats, unless somebody happened to
+// be looking at the screen when each promotion landed.
+
+test('a promotion levels the captain and banks a feat, with nobody watching', () => {
+  const g = new Game({ seed: 1212n, crewMode: 'original' });
+  const level = g.character.level;
+  const rank = g.progress.rankIndex;
+
+  const promo = g.awardXP(1e6);
+  assert.ok(promo?.promoted, 'a million experience promoted nobody');
+  assert.equal(g.progress.rankIndex, rank + 1);
+  assert.equal(g.character.level, level + 1, 'the captain did not level up');
+  assert.equal(g.pendingFeats, 1, 'no feat was banked');
+  assert.ok(g.progress.unspent > 0, 'no skill points arrived');
+  assert.ok(g.log.some((l) => /promoted/i.test(l.text)), 'nobody mentioned it');
+});
+
+test('and experience that promotes nobody changes nothing but the total', () => {
+  const g = new Game({ seed: 1213n, crewMode: 'original' });
+  const before = { level: g.character.level, rank: g.progress.rankIndex, xp: g.progress.xp };
+  assert.equal(g.awardXP(1), null);
+  assert.equal(g.character.level, before.level);
+  assert.equal(g.progress.rankIndex, before.rank);
+  assert.equal(g.progress.xp, before.xp + 1);
+  assert.equal(g.pendingFeats ?? 0, 0);
+});
+
+test('and nothing awards experience behind awardXP\'s back', () => {
+  // The structural half. Twelve call sites reached `progress.addXP` directly
+  // and ten of them dropped the promotion on the floor; one new one would put
+  // the bug straight back. `Game.awardXP` is the only caller allowed, and this
+  // is what says so.
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(path); continue; }
+      if (!entry.name.endsWith('.js')) continue;
+      const text = readFileSync(path, 'utf8');
+      for (const [i, line] of text.split('\n').entries()) {
+        if (!/\.addXP\s*\(/.test(line)) continue;
+        // The one legitimate caller is inside awardXP itself.
+        if (path.endsWith(join('core', 'state.js')) && /progress\.addXP/.test(line)) continue;
+        offenders.push(`${entry.name}:${i + 1} ${line.trim()}`);
+      }
+    }
+  };
+  walk(root);
+  assert.deepEqual(offenders, [], 'experience awarded without carrying the promotion');
+});
+
+test('a board of inquiry blocks the promotion and everything under it', () => {
+  const g = new Game({ seed: 1215n, crewMode: 'original' });
+  g.ledger.inquiryOpen = true;
+  const level = g.character.level;
+  const rank = g.progress.rankIndex;
+  const promo = g.awardXP(1e6);
+  assert.equal(promo?.promoted, undefined, 'Starfleet promoted a captain it was investigating');
+  assert.equal(g.progress.rankIndex, rank, 'the pip arrived anyway');
+  assert.equal(g.character.level, level, 'the level arrived anyway');
+  assert.equal(g.pendingFeats ?? 0, 0, 'the feat arrived anyway');
+});
+
+test('a feat can be taken without a screen, and only when one is banked', () => {
+  const g = new Game({ seed: 1216n, crewMode: 'original' });
+  assert.equal(g.takeFeat('unshakeable').ok, false, 'a feat was taken out of thin air');
+
+  g.awardXP(1e6);
+  assert.equal(g.pendingFeats, 1);
+  const feat = FEATS.find((f) => f.id !== 'ability_score' && (f.minRank ?? 0) <= g.progress.rankIndex);
+  const r = g.takeFeat(feat.id);
+  assert.ok(r.ok, r.reason);
+  assert.ok(g.character.feats.includes(feat.id), 'the feat was never recorded');
+  assert.equal(g.pendingFeats, 0, 'the bank was not spent');
+  assert.equal(g.takeFeat(feat.id).ok, false, 'the same feat was taken twice');
+  assert.ok(g.log.some((l) => l.text.includes(feat.name)), 'nobody said anything about it');
+});
+
+test('the repeatable field commission raises the scores it was given', () => {
+  const g = new Game({ seed: 1217n, crewMode: 'original' });
+  g.awardXP(1e6);
+  const before = g.character.score('command');
+  const r = g.takeFeat('ability_score', ['command', 'command']);
+  assert.ok(r.ok, r.reason);
+  assert.ok(g.character.score('command') > before, 'the scores did not move');
+  assert.equal(g.pendingFeats, 0);
+});
+
+test('spending a skill point takes the point and changes the ship', () => {
+  const g = new Game({ seed: 1218n, crewMode: 'original' });
+  const points = g.progress.unspent;
+  assert.ok(points > 0, 'a new captain has no points to spend');
+
+  const r = g.spendSkill('sensors');
+  assert.ok(r.ok, r.reason);
+  assert.equal(g.progress.unspent, points - 1);
+  assert.equal(g.progress.ranksIn('sensors'), r.ranks);
+
+  // And a point that does not exist is refused rather than taken on credit.
+  g.progress.unspent = 0;
+  assert.equal(g.spendSkill('sensors').ok, false);
+  assert.equal(g.spendSkill('no_such_skill').ok, false);
 });

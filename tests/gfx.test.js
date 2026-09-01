@@ -1810,8 +1810,15 @@ describe('no two Federation classes are the same shape', () => {
         if (a >= b) continue;
         const pa = prints.get(a);
         const pb = prints.get(b);
+        // 0.2, raised from 0.12. Building every hull to its published beam and
+        // height pulls the fingerprints together — proportions that used to
+        // differ by accident now agree on purpose — so the margin has to come
+        // from real structural difference instead. The closest pair went to
+        // 0.146 on that change and is back at 0.239, because an Intrepid now
+        // has the slight secondary hull and high short nacelles it is known
+        // for and a Sovereign has no neck at all.
         const diff = pa.reduce((n, v, i) => n + Math.abs(v - pb[i]), 0);
-        if (diff < 0.12) same.push(`${a} and ${b} (${diff.toFixed(3)})`);
+        if (diff < 0.2) same.push(`${a} and ${b} (${diff.toFixed(3)})`);
       }
     }
     assert.deepEqual(same, [],
@@ -1894,5 +1901,234 @@ describe('no two Federation classes are the same shape', () => {
       assert.ok(m.vertexCount > 0, `${id} built nothing`);
       assert.ok(m.triangles < 900, `${id} is ${m.triangles} triangles`);
     }
+  });
+});
+
+
+// ========================================= geometry you could never have seen
+
+/**
+ * Signed volume by the divergence theorem: the sum over triangles of
+ * dot(v0, cross(v1-v0, v2-v0)) / 6.
+ *
+ * For a closed surface wound outward this is the volume enclosed. Wound
+ * inward it is the same number negative. It is the one measurement that says
+ * which way a mesh faces without looking at it, and it does not care how many
+ * primitives went into it or whether they overlap.
+ */
+function signedVolume(m) {
+  const f = m.stride / 4;
+  let vol = 0;
+  for (let i = 0; i < m.vertexCount; i += 3) {
+    const p = (k) => [m.data[(i + k) * f], m.data[(i + k) * f + 1], m.data[(i + k) * f + 2]];
+    const [a, b, c] = [p(0), p(1), p(2)];
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [
+      u[1] * v[2] - u[2] * v[1],
+      u[2] * v[0] - u[0] * v[2],
+      u[0] * v[1] - u[1] * v[0],
+    ];
+    vol += (a[0] * n[0] + a[1] * n[1] + a[2] * n[2]) / 6;
+  }
+  return vol;
+}
+
+describe('every mesh faces the way it is meant to be seen from', () => {
+  // Back-face culling means a wrongly wound surface is not dim — it is gone,
+  // and it still costs its triangles. `mirrored` reverses winding as it copies
+  // for exactly this reason, and the bridge's ceiling light ring was forty
+  // triangles that had never once been drawn because one loop did not.
+  //
+  // A signed volume settles it for a whole mesh at once, whatever went into
+  // it: a ship is a solid seen from outside and must enclose a POSITIVE
+  // volume; a room is a space seen from inside and must enclose a negative
+  // one. Nothing else needs to be known about either.
+
+  test('every hull is a solid, seen from outside', () => {
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const vol = signedVolume(hullMesh(id, 'independent'));
+      assert.ok(vol > 0, `${id} encloses ${vol.toFixed(4)} — it is inside out`);
+    }
+  });
+
+  test('every room is a space, seen from inside', () => {
+    for (const id of Object.keys(ROOMS)) {
+      const solid = roomMeshes(id)?.solid;
+      if (!solid?.data) continue;
+      const vol = signedVolume(solid);
+      assert.ok(vol < 0, `${id} encloses ${vol.toFixed(1)} — it is turned inside out`);
+    }
+  });
+
+  test('and the measurement can tell the difference', () => {
+    // Without this the two tests above pass on a bug in `signedVolume`.
+    const hull = hullMesh('constitution', 'independent');
+    const flipped = { ...hull, data: new Float32Array(hull.data) };
+    for (let i = 0; i < flipped.vertexCount; i += 3) {
+      const f = hull.stride / 4;
+      for (let a = 0; a < 9; a++) {
+        const t = flipped.data[i * f + a];
+        flipped.data[i * f + a] = flipped.data[(i + 2) * f + a];
+        flipped.data[(i + 2) * f + a] = t;
+      }
+    }
+    assert.ok(signedVolume(hull) > 0);
+    assert.ok(signedVolume(flipped) < 0, 'reversing every triangle changed nothing');
+  });
+});
+
+describe('a warp pylon is a blade, not a filled corner', () => {
+  // A nacelle sits above the hull AND outboard of it, so the strut between
+  // them is a leaning blade. Built out of axis-aligned boxes with only
+  // fore-and-aft shears available, the only box that touches both ends is one
+  // that spans the whole gap in y AND the whole gap in z — a solid block
+  // filling the corner. Every Federation ship in the game carried two of them,
+  // and on a Galaxy each was a quarter of the ship's length across.
+  //
+  // The tell is which way the surfaces face. A ship is a streamlined thing:
+  // most of its area faces up, down or sideways, and very little of it faces
+  // straight ahead. A pair of corner blocks is a wall, and a wall faces
+  // forwards. So this measures the hull's fore-and-aft-facing area against its
+  // up-and-down-facing area, and asks for a ship rather than a wall.
+
+  /** Surface area facing each axis, summed over every triangle. */
+  function facingArea(mesh) {
+    const P = mesh.data;
+    const F = mesh.stride / 4;
+    let ax = 0; let ay = 0; let az = 0;
+    for (let t = 0; t < P.length; t += F * 3) {
+      const u = [P[t + F] - P[t], P[t + F + 1] - P[t + 1], P[t + F + 2] - P[t + 2]];
+      const v = [P[t + 2 * F] - P[t], P[t + 2 * F + 1] - P[t + 1], P[t + 2 * F + 2] - P[t + 2]];
+      ax += Math.abs(u[1] * v[2] - u[2] * v[1]) / 2;
+      ay += Math.abs(u[2] * v[0] - u[0] * v[2]) / 2;
+      az += Math.abs(u[0] * v[1] - u[1] * v[0]) / 2;
+    }
+    return { ax, ay, az };
+  }
+
+  // Every form that hangs a nacelle off a strut. `compact` has none — a
+  // Defiant's nacelles are buried in the hull — and it is in the list anyway,
+  // because a hull with no pylons at all should have even less wall than one
+  // with two.
+  const NACELLED = [
+    'starfleet', 'tos_starfleet', 'rollbar', 'twinhull', 'quadnacelle',
+    'podded', 'compact',
+  ];
+
+  test('no Federation hull is mostly wall', () => {
+    for (const [id, bp] of Object.entries(BLUEPRINTS)) {
+      if (!NACELLED.includes(bp.form)) continue;
+      const { ax, ay } = facingArea(hullMesh(id, 'federation'));
+      assert.ok(ax / ay < 0.3,
+        `${id} presents ${(ax / ay).toFixed(2)} as much area forward as it does upward`);
+    }
+  });
+
+  test('and the shear that makes a blade possible actually shears', () => {
+    // Without this the test above passes on a `flare` that silently does
+    // nothing, which is precisely how the slabs survived a comment calling
+    // them thin.
+    const straight = new MeshBuilder();
+    box(straight, { center: vec3(), size: vec3(1, 1, 0.1) });
+    const leaned = new MeshBuilder();
+    box(leaned, { center: vec3(), size: vec3(1, 1, 0.1), flare: 2 });
+
+    const zAt = (mb, sign) => {
+      let best = sign > 0 ? -Infinity : Infinity;
+      for (let i = 0; i < mb.positions.length; i += 3) {
+        if (Math.sign(mb.positions[i + 1]) !== sign) continue;
+        best = sign > 0
+          ? Math.max(best, mb.positions[i + 2])
+          : Math.min(best, mb.positions[i + 2]);
+      }
+      return best;
+    };
+    assert.equal(zAt(straight, 1), 0.05);
+    assert.equal(zAt(leaned, 1), 2.05, 'the top of a flared box did not move outboard');
+    assert.equal(zAt(leaned, -1), zAt(straight, -1), 'the bottom moved too');
+  });
+});
+
+describe('nothing in a room is drawn facing away from the room', () => {
+  // Back-face culling is on, so a surface whose normal points into the hull is
+  // not dim or subtle — it is ABSENT, and it still costs its triangles and its
+  // draw call. The bridge's ceiling light ring was wound that way: forty
+  // triangles that had never once been on screen, in the top forty per cent of
+  // the first thing a player ever sees, which is why that ceiling read as a
+  // flat grey plate.
+  //
+  // The rule is narrow on purpose. A box top a foot below the ceiling faces up
+  // and is correctly invisible from underneath — that is a lid, not a mistake.
+  // What cannot be right is a surface flush WITH the ceiling that faces up:
+  // there is no vantage point in the room from which it exists.
+  test('no surface flush with the ceiling faces upward', () => {
+    const offenders = [];
+    for (const id of Object.keys(ROOMS)) {
+      if (id === 'surface') continue;
+      const h = ROOMS[id].shape?.height;
+      if (!h) continue;
+      const built = roomMeshes(id);
+      for (const [key, m] of Object.entries(built ?? {})) {
+        if (!m?.data) continue;
+        const f = m.stride / 4;
+        let n = 0;
+        for (let i = 0; i < m.vertexCount; i += 3) {
+          if (m.data[i * f + 4] > 0.9 && Math.abs(m.data[i * f + 1] - h) < 0.06) n++;
+        }
+        if (n) offenders.push(`${id}.${key}: ${n} triangles`);
+      }
+    }
+    assert.deepEqual(offenders, []);
+  });
+
+  test('and the bridge ceiling has its light ring', () => {
+    // The positive half. Without this the test above is satisfied by deleting
+    // the ring, which is not the fix.
+    const built = roomMeshes('bridge');
+    const h = ROOMS.bridge.shape.height;
+    const m = built.glow;
+    let lit = 0;
+    for (let i = 0; i < m.vertexCount; i += 3) {
+      const f = m.stride / 4;
+      if (m.data[i * f + 4] < -0.9 && Math.abs(m.data[i * f + 1] - h) < 0.1) lit++;
+    }
+    assert.ok(lit >= 20, `only ${lit} downward-facing triangles in the bridge ceiling`);
+  });
+});
+
+
+describe('a landing party can see what it walked to', () => {
+  // The captain beams down, walks to the one thing on the horizon, and the
+  // screen fills with a flat green wall that has no top and no bottom. That
+  // was a two-metre plant with a crown wider than a person, and collision
+  // holding the walker at the plant's own size — so the away team stood UNDER
+  // the canopy and the survey panel described something nobody could see.
+  //
+  // A thing you walk up to has two sizes: how big it is, and how close you may
+  // get. For a console those are the same and nothing changes. For anything
+  // free-standing they are not.
+
+  test('every surface feature is smaller than the space you are held out of', async () => {
+    const { makeSurface } = await import('../src/world/surface.js');
+    const { WALKER_RADIUS } = await import('../src/sim/walk.js');
+    for (const kind of ['planet', 'desert', 'ice', 'moon']) {
+      makeSurface({ id: `see:${kind}`, kind, ordinal: 3 }, 'Test III');
+      for (const st of ROOMS.surface.stations) {
+        const draw = st.drawRadius ?? st.radius ?? 0;
+        const standoff = (st.radius ?? 0) + WALKER_RADIUS;
+        assert.ok(draw * 1.4 < standoff,
+          `${kind}/${st.kind}: drawn at ${draw.toFixed(2)} and approached to ${standoff.toFixed(2)}`);
+      }
+    }
+  });
+
+  test('and can still reach it', async () => {
+    // The other half. Standing back is only right if the thing is still
+    // usable from where you end up — reach is measured to the SURFACE, so it
+    // is the walker's own radius that has to fit inside it, not the feature's.
+    const { WALKER_RADIUS, REACH } = await import('../src/sim/walk.js');
+    assert.ok(WALKER_RADIUS < REACH,
+      `a walker of ${WALKER_RADIUS} cannot reach anything at ${REACH}`);
   });
 });

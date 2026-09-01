@@ -41,6 +41,9 @@ export const WITHDRAW_SECONDS = 8;
  */
 export const ARENA_RADIUS = 2600;
 
+/** Every way a fight can finish. `end` accepts nothing else. */
+export const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 export const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
 
@@ -545,13 +548,7 @@ export class Engagement {
         if (this.warpOutTimer <= 0) return this.end('escaped');
       }
     }
-    if (!this.liveHostiles.length) {
-      // An empty board is a win only if you emptied it. Anyone who withdrew
-      // under their own power was routed, not destroyed, and the ledger cares
-      // about the difference.
-      return this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
-    }
-    if (this.liveHostiles.every((s) => s.fleeing)) return this.end('routed');
+    if (this.settle()) return;
 
     // A fight in which nobody can touch anybody is over, whatever the AI
     // thinks it is doing. Held for a few seconds so a fast pass through the
@@ -561,6 +558,35 @@ export class Engagement {
     );
     this.separationTimer = unreachable ? this.separationTimer + dt : 0;
     if (this.separationTimer > 6) return this.end('routed');
+  }
+
+  /**
+   * The end conditions that need no clock, checked wherever the board changes.
+   *
+   * The tick is not the only thing that empties a board. A boarding party
+   * taking a bridge withdraws the last hostile from OUTSIDE the tick, and the
+   * fight then sat with nobody left to shoot, the player alive and `over`
+   * still false — which is `eng.unresolved`, the soft-lock shape, and the most
+   * important rule in the invariant file. It lasted one frame, and one frame
+   * is what the renderer draws.
+   *
+   * The warp-out countdown and the separation timer stay in `step`, because
+   * both of them are clocks and this is deliberately not.
+   *
+   * @returns {boolean} whether the fight is over
+   */
+  settle() {
+    if (this.over) return true;
+    if (this.player.destroyed) { this.end('destroyed'); return true; }
+    if (!this.liveHostiles.length) {
+      // An empty board is a win only if you emptied it. Anyone who withdrew
+      // under their own power was routed, not destroyed, and the ledger cares
+      // about the difference.
+      this.end(this.hostiles.every((s) => s.destroyed) ? 'victory' : 'routed');
+      return true;
+    }
+    if (this.liveHostiles.every((s) => s.fleeing)) { this.end('routed'); return true; }
+    return false;
   }
 
   updateProjectiles(dt) {
@@ -618,7 +644,12 @@ export class Engagement {
   end(outcome) {
     if (this.over) return;
     this.over = true;
-    this.outcome = outcome;
+    // A fight that is over has an outcome, always. `eng.outcome` in the
+    // invariant file says so, everything downstream reads it, and nothing in
+    // the game supplies a blank one — but this is a public method and a
+    // missing argument used to produce a finished engagement with no result.
+    // "Routed" is the neutral reading: it stopped, and nobody says why.
+    this.outcome = OUTCOMES.includes(outcome) ? outcome : 'routed';
     emit('combat:end', { outcome, engagement: this });
     if (this.stepping) this.settleWhenSafe = true;
     else this.onEnd?.(this);
@@ -734,25 +765,54 @@ export class Engagement {
 }
 
 /** Build a hostile group appropriate to a faction and difficulty. */
+/**
+ * What an enemy ship is called.
+ *
+ * This table existed twice — here and in world/encounters.js — and a third
+ * code path, the one a mission stage uses to start a fight, had neither and
+ * named its ships "klingon vessel 1". Two copies of a list is one copy too
+ * many; three ways of naming the same thing is a game that reads as unfinished
+ * in the one place the player is looking hardest.
+ */
+export const HOSTILE_NAMES = {
+  klingon: ['IKS Vor’cha', 'IKS Ch’Tang', 'IKS Bortas', 'IKS Rotarran', 'IKS Ning’tao'],
+  romulan: ['IRW Terix', 'IRW Belak', 'IRW Valdore', 'IRW Khazara', 'IRW Devoras'],
+  cardassian: ['CDS Prakesh', 'CDS Aldara', 'CDS Vetar', 'CDS Groumall'],
+  ferengi: ['Kreechta', 'Krayton', 'Quark’s Fortune'],
+  orion: ['Syndicate Raider', 'Green Wind', 'Profit Margin'],
+  tholian: ['Assembly Spinner', 'Lattice Warden'],
+  dominion: ['Jem’Hadar 4-7', 'Jem’Hadar 9-1', 'Jem’Hadar 2-2'],
+  borg: ['Borg Cube'],
+  // Starfleet is in here because ships of the line turn up on your side as
+  // well as in front of you — a relief answering a distress call is named from
+  // the same table as a hostile, because a ship is a ship.
+  federation: [
+    'USS Farragut', 'USS Potemkin', 'USS Lexington', 'USS Exeter', 'USS Yorktown',
+    'USS Hood', 'USS Republic', 'USS Defiance', 'USS Endeavour', 'USS Kongo',
+  ],
+  independent: ['SS Vico', 'SS Odin', 'SS Norkova'],
+};
+
+/** The nth ship of a faction in one engagement. */
+export function hostileName(factionId, index = 0) {
+  const list = HOSTILE_NAMES[factionId] ?? ['Unknown Vessel'];
+  return list[index % list.length];
+}
+
+/**
+ * A hostile force of a given strength, drawn from a pool of classes.
+ *
+ * Written when combat was, and called from nowhere for the whole life of the
+ * project: `world/encounters.js` grew its own copy rather than importing this
+ * one. It is the single builder now.
+ */
 export function buildHostiles(rng, factionId, strength = 1, classPool = []) {
-  const names = {
-    klingon: ['IKS Vor’cha', 'IKS Ch’Tang', 'IKS Bortas', 'IKS Rotarran', 'IKS Ning’tao'],
-    romulan: ['IRW Terix', 'IRW Belak', 'IRW Valdore', 'IRW Khazara', 'IRW Devoras'],
-    cardassian: ['CDS Prakesh', 'CDS Aldara', 'CDS Vetar', 'CDS Groumall'],
-    ferengi: ['Kreechta', 'Krayton', 'Quark’s Fortune'],
-    orion: ['Syndicate Raider', 'Green Wind', 'Profit Margin'],
-    tholian: ['Assembly Spinner', 'Lattice Warden'],
-    dominion: ['Jem’Hadar 4-7', 'Jem’Hadar 9-1', 'Jem’Hadar 2-2'],
-    borg: ['Borg Cube'],
-    independent: ['SS Vico', 'SS Odin', 'SS Norkova'],
-  };
   const count = Math.max(1, Math.round(strength));
-  const nameList = names[factionId] ?? ['Unknown Vessel'];
   const out = [];
   for (let i = 0; i < count; i++) {
     const cls = rng.pick(classPool);
     if (!cls) break;
-    out.push(new Ship(cls, { name: nameList[i % nameList.length], faction: factionId }));
+    out.push(new Ship(cls, { name: hostileName(factionId, i), faction: factionId }));
   }
   return out;
 }

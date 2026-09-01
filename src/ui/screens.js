@@ -10,6 +10,7 @@ import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { commandReference } from './orders.js';
+import { namesFor } from '../sim/address.js';
 import { ROOMS, DECKS } from '../world/interiors.data.js';
 import { listBackups, downloadSave } from '../core/save.js';
 import { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } from '../sim/fabrication.js';
@@ -419,15 +420,11 @@ export function transitPanel(app) {
 
   wrap.append(panel('Helm', [
     button('Drop out of warp', tap(() => {
-      const near = t.nearestSystem(g.galaxy);
-      g.locationId = near.id;
-      g.clock.advanceStardate(t.totalHours * t.progress / 24);
-      g.transit = null;
-      g.mode = MODES.BRIDGE;
-      audio.play('warp_drop');
-      g.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
+      // What this DOES is `Game.dropOutOfWarp`, so the typed order and the
+      // button are the same action rather than two that look alike.
+      if (g.dropOutOfWarp().ok) audio.play('warp_drop');
       app.render();
-    }, 'ui_back'), { say: 'all stop', color: 'ghost' }),
+    }, 'ui_back'), { say: 'drop out of warp', color: 'ghost' }),
   ]));
 
   return wrap;
@@ -528,8 +525,13 @@ export function viewscreenScreen(app) {
       g.ship.shieldsUp ? pill('shields up', 'green') : pill('shields down', 'red'),
     ].filter(Boolean)));
     if (t && !t.destroyed) {
-      status.push(readout(`${t.name} hull`, t.hullPct));
-      status.push(readout(`${t.name} shields`, t.shieldPct));
+      // The name once, then the two bars. `readout` puts its label in a fixed
+      // narrow column, so "IKS Ch'Tang hull" wrapped onto three lines and then
+      // said it again for the shields — six lines of label for two numbers, on
+      // a phone, with a Klingon shooting at you.
+      status.push(el('p', {}, [el('b', { text: t.name }), ' — ', t.cls.name]));
+      status.push(readout('Hull', t.hullPct));
+      status.push(readout('Shields', t.shieldPct));
     }
   }
   side.append(panel('On Screen', status, eng && !eng.over ? 'danger' : 'accent'));
@@ -723,11 +725,50 @@ export function tacticalScreen(app) {
   if (dc.length) side.append(panel('Damage Control', dc, 'danger'));
 
   // --- Comms ---
+  //
+  // Two directions: the ship shooting at you, and Starfleet. The distress call
+  // is here rather than on the chair because it is a comms order, and the sub
+  // line says what it will cost you — which is time, and the fight does not
+  // stop while you wait.
   const factionId = eng.hostiles[0]?.faction;
+  const inbound = g.helpInbound;
+  const comms = [];
   if (FACTIONS[factionId]?.hailable) {
-    side.append(panel('Communications', [
-      button('Hail them', tap(() => app.openHail(factionId)), { say: 'open a channel', color: 'lilac' }),
-    ]));
+    comms.push(button('Hail them', tap(() => app.openHail(factionId)),
+      { say: 'open a channel', color: 'lilac' }));
+  }
+  if (inbound) {
+    comms.push(el('p', { class: 'hint', text: `${inbound.name} inbound — ${Math.max(0, Math.round(inbound.eta))} seconds out.` }));
+  } else if (!g.helpCalled) {
+    comms.push(button('Send a distress call', tap(() => {
+      const r = g.callForHelp();
+      if (!r.ok) audio.play('ui_deny');
+      app.render();
+    }), {
+      say: 'send a distress call',
+      color: 'ice',
+      sub: 'Whoever is nearest, if anyone is. They will not arrive quickly.',
+    }));
+  } else {
+    comms.push(el('p', { class: 'hint', text: 'The call has been made.' }));
+  }
+  if (comms.length) side.append(panel('Communications', comms));
+
+  // --- Boarding ---
+  //
+  // Only offered when it is actually possible: shields down, the ship beaten
+  // or crippled, and close enough to beam across. That is what makes crippling
+  // a hostile a real alternative to killing it.
+  const boardable = g.availableAwayMissions().find((t) => t.id === 'boarding_action');
+  if (boardable) {
+    side.append(panel('Boarding Party', [
+      button(boardable.title, tap(() => app.runAwayMission('boarding_action')), {
+        say: 'board them',
+        color: 'amber',
+        sub: `${boardable.target.name} — shields down. Security can cross.`,
+      }),
+      el('p', { class: 'hint', text: 'A bridge taken is a ship out of the fight and not a kill. It is also the most dangerous thing you can ask of a landing party.' }),
+    ], 'warn'));
   }
 
   // The chair is where you are sitting, so it is on this screen too — with a
@@ -1039,8 +1080,7 @@ export function captainScreen(app) {
           el('button', {
             disabled: !p.canSpend(skill.id),
             onclick: p.canSpend(skill.id) ? tap(() => {
-              p.spend(skill.id);
-              g.applyAllMods();
+              g.spendSkill(skill.id);
               app.render();
             }, 'ui_confirm') : null,
             text: '+',
@@ -1209,6 +1249,30 @@ export function referenceScreen(app) {
     ]),
     el('p', { class: 'muted', text: 'You can address an officer — "Mister Sulu, come about" — and the order goes to that station. If something is ambiguous the bridge asks rather than guessing.' }),
   ], 'accent'));
+
+  // Who is aboard, and what they answer to.
+  //
+  // Telling a captain they may address an officer and not telling them the
+  // names is half a manual. The roster is per-game — canon crews, a generated
+  // one, whoever has survived — so this is read from the crew that is actually
+  // standing the watch rather than written down anywhere.
+  const crew = app?.game?.crew;
+  if (crew?.officers?.length) {
+    root.append(panel('Who You Can Talk To', [
+      el('p', { class: 'muted', text: 'Put the name at either end of the order. A name at the end needs its comma — "take us out, Mr. Sulu" — because a station is also a place you can walk to.' }),
+      ...crew.officers
+        .filter((o, i, all) => all.findIndex((x) => x.name === o.name) === i)
+        .map((o) => el('div', { class: 'ref-entry' }, [
+          el('div', { class: 'ref-help', text: `${o.rank} ${o.name}${o.alive ? '' : ' — lost'}` }),
+          // `namesFor` sorts longest-first because the MATCHER needs that.
+          // A reader wants the short one first — the surname is what a captain
+          // reaches for, and it is what the list should open with.
+          el('div', { class: 'ref-examples' },
+            namesFor(o).slice().reverse().slice(0, 5)
+              .map((n) => el('span', { class: 'ref-phrase', text: `“${n}”` }))),
+        ])),
+    ]));
+  }
 
   for (const group of ref.groups) {
     root.append(panel(group.label, group.entries.map((e) => el('div', { class: 'ref-entry' }, [

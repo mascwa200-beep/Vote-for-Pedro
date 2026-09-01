@@ -17,6 +17,21 @@ import { emit } from '../core/events.js';
 // the AI, the display, saves, and balance. They are worth paying for once.
 export const FACINGS = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'];
 
+/**
+ * How far past its normal ceiling one facing may be charged.
+ *
+ * `reinforceShield` moves charge from five facings onto one, and the point of
+ * the order is that the receiving facing ends up STRONGER than it can normally
+ * be — otherwise the manoeuvre buys nothing but a redistribution. The excess
+ * bleeds off over about twenty seconds.
+ *
+ * Exported because the invariant checker has to know it. It did not, and
+ * forbade any facing above `maxShield` outright, so reinforcing shields — an
+ * ordinary tactical order — reported an anomaly in the ship's log to any
+ * captain running with the checker on.
+ */
+export const SHIELD_OVERCHARGE = 1.2;
+
 export const FACING_LABEL = {
   fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
   dorsal: 'Dorsal', ventral: 'Ventral',
@@ -566,7 +581,16 @@ export class Ship {
 
   damageSubsystem(key, amount) {
     if (!(key in this.subsystems)) return;
-    this.subsystems[key] = Math.max(0, this.subsystems[key] - amount);
+    // Guarded the same way `repair` and `takeDamage` are, and for the same
+    // reason: a subsystem is a number between zero and one that the whole
+    // damage model, the power grid and the AI read every tick, and one
+    // non-finite write to it is permanent. `takeDamage` clamps through
+    // `clamp`, which is NaN-safe; this did raw arithmetic and did not.
+    //
+    // Found by the API fuzzer in tests/invariants.test.js, which calls every
+    // public method with rubbish precisely because a save file is a thing a
+    // person can edit and a computed damage figure is a thing that can go NaN.
+    this.subsystems[key] = clamp(this.subsystems[key] - clamp(amount, 0, 1), 0, 1);
     if (key === 'warpcore' && this.subsystems.warpcore <= 0.15 && !this.breaching) {
       this.beginBreach(this.subsystems.warpcore <= 0 ? 12 : 28);
     }
@@ -601,6 +625,16 @@ export class Ship {
     this.subsystems.warpcore = 0;
     this.power.cap = Math.round(this.cls.powerCap * 0.45);
     this.power.normalize();
+
+    // Ejecting the core stops the antimatter going up. It does not put a hull
+    // back together.
+    //
+    // Clearing `breaching` unconditionally was a soft-lock: a ship already at
+    // zero hull came out of it not destroyed, not breaching and not repairable
+    // — the one state `ship.zerohull.adrift` exists to forbid — so the fight
+    // could never end on 'destroyed' and the campaign carried on with a wreck
+    // that the game did not know was a wreck. Found by the API fuzzer.
+    if (this.hull <= 0) this.destroy('hull failure with the core clear');
     return true;
   }
 
@@ -633,7 +667,7 @@ export class Ship {
   /**
    * Emergency shield reinforcement to one facing, taken from the others.
    *
-   * The receiving facing is capped at 1.2x max, so it can only ever absorb a
+   * The receiving facing is capped at SHIELD_OVERCHARGE, so it can only ever absorb a
    * limited amount. Charge is conserved: we work out the headroom first and
    * draw exactly that much, proportionally, rather than stripping a fixed
    * fraction off five facings and letting the overflow evaporate.
@@ -643,7 +677,7 @@ export class Ship {
     const others = FACINGS.filter((f) => f !== facing);
     const draw = clamp(fraction, 0, 1);
     const available = others.reduce((n, f) => n + this.shields[f] * draw, 0);
-    const headroom = Math.max(0, this.maxShield * 1.2 - this.shields[facing]);
+    const headroom = Math.max(0, this.maxShield * SHIELD_OVERCHARGE - this.shields[facing]);
     const wanted = Math.min(available, headroom);
     if (wanted <= 0) return true;
 
@@ -656,7 +690,7 @@ export class Ship {
       this.shields[f] -= take;
       pooled += take;
     }
-    this.shields[facing] = Math.min(this.maxShield * 1.2, this.shields[facing] + pooled);
+    this.shields[facing] = Math.min(this.maxShield * SHIELD_OVERCHARGE, this.shields[facing] + pooled);
     return true;
   }
 

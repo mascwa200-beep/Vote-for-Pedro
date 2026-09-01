@@ -149,16 +149,25 @@ export function tube(mb, {
  * the near one.
  */
 export function box(mb, {
-  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0,
+  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0, flare = 0,
   color = [0.6, 0.64, 0.7],
 } = {}) {
   const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
   const [cx, cy, cz] = center;
-  // Eight corners; the +z corners carry the sweep and the +y corners the rake.
+  // Eight corners. The +z corners carry the sweep and the +y corners the rake,
+  // both of which shear the box fore-and-aft.
+  //
+  // `flare` is the third one, and its absence is why every warp pylon in the
+  // game was a brick. A pylon runs from a hull on the centreline to a nacelle
+  // that is both above it and outboard of it — a leaning blade. With only
+  // fore-aft shears the only box that touches both ends is one that spans the
+  // whole gap in y AND the whole gap in z: a solid block filling the corner,
+  // which is what a Galaxy was carrying, a quarter of the ship's length across.
+  // Shearing z by height makes the same box a strut.
   const p = (sx, sy, sz) => vec3(
     cx + sx * hx - (sz > 0 ? sweep : 0) - (sy > 0 ? rake : 0),
     cy + sy * hy,
-    cz + sz * hz,
+    cz + sz * hz + (sy > 0 ? flare : 0),
   );
 
   const v000 = p(-1, -1, -1); const v100 = p(1, -1, -1);

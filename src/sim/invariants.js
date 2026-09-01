@@ -26,7 +26,7 @@
 // Violations are data, not exceptions. The caller decides whether to throw
 // (tests), log (the debug overlay), or count (the fuzzer).
 
-import { FACINGS } from './ship.js';
+import { FACINGS, SHIELD_OVERCHARGE } from './ship.js';
 
 /**
  * How far outside the arena a ship may be before it counts as escaped.
@@ -125,8 +125,15 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
     r.must(ok(v), 'ship.shield.finite', 'fatal', `${who}: shields.${f} is ${v}`, who);
     r.must(num(v) >= 0, 'ship.shield.negative', 'error',
       `${who}: shields.${f} is ${v}`, who);
-    r.must(num(v) <= num(s.maxShield) + 1e-6, 'ship.shield.overmax', 'error',
-      `${who}: shields.${f} is ${v}, above max ${s.maxShield}`, who);
+    // The ceiling is the OVERCHARGE ceiling, not the normal one.
+    // `reinforceShield` deliberately pushes one facing past `maxShield` — that
+    // is the entire point of the order — and the excess bleeds off over about
+    // twenty seconds. This rule read the normal maximum, so an ordinary
+    // tactical order put an anomaly in the ship's log every time it was given.
+    // Found by the order monkey in tools/verify-app.mjs on its first run.
+    const ceiling = num(s.maxShield) * SHIELD_OVERCHARGE;
+    r.must(num(v) <= ceiling + 1e-6, 'ship.shield.overmax', 'error',
+      `${who}: shields.${f} is ${v}, above the ${ceiling} ceiling`, who);
   }
 
   for (const [k, v] of Object.entries(s.subsystems ?? {})) {
@@ -323,6 +330,18 @@ export function checkGame(game) {
     if (eng?.over) {
       r.must(game.mode !== 'combat' || game.over, 'game.mode.stuck', 'error',
         `the fight is over but the game is still in ${game.mode} mode`);
+    }
+
+    // Help that is on its way to a fight that is over.
+    //
+    // `helpInbound` is a countdown with a ship at the end of it. Left set past
+    // the battle it was called for, the next engagement gets a free ally
+    // dropping out of warp for a call the captain never made.
+    if (game.helpInbound) {
+      r.must(fighting, 'game.help.orphan', 'error',
+        'a ship is inbound to a battle that is not running');
+      r.must(num(game.helpInbound.eta) < 1e4, 'game.help.eta', 'error',
+        `the relief is ${game.helpInbound.eta} seconds out`);
     }
 
     // The con is a bridge thing, and a fight is the moment it matters most.

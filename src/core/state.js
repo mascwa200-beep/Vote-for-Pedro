@@ -7,15 +7,16 @@ import { emit } from './events.js';
 
 import { Ship } from '../sim/ship.js';
 import { Crew, Officer } from '../sim/officers.js';
-import { CaptainProgress, combatXP } from '../sim/skills.js';
-import { Loadout, startingLoadout } from '../sim/loadout.js';
-import { Engagement, ARENA_RADIUS } from '../sim/combat.js';
-import { AwayTeam } from '../sim/away.js';
+import { CaptainProgress, combatXP, SKILLS } from '../sim/skills.js';
+import { Loadout, startingLoadout, CONSOLES } from '../sim/loadout.js';
+import { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } from '../sim/combat.js';
+import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } from '../sim/away.js';
 import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import { resolveHail, STANDING_EFFECTS } from '../sim/diplomacy.js';
+import { applyAbility, applySignature, applyDevice } from '../sim/powers.js';
 
 import { Galaxy, plotTransit } from '../world/galaxy.js';
 // Placement only, and deterministic from the system id — see gfx/vista.js. The
@@ -35,7 +36,7 @@ import {
 } from '../missions/kobayashi.js';
 import { EPISODES } from '../missions/episodes/index.js';
 
-import { Character } from '../rules/character.js';
+import { Character, FEAT_BY_ID } from '../rules/character.js';
 import { Reputation, REP_TRACKS } from '../rules/reputation.js';
 import { DifficultySettings, DEFAULT_DIFFICULTY } from '../rules/difficulty.js';
 import { CampaignClock, absenceReport, COMMISSION_DAYS } from '../campaign/clock.js';
@@ -64,6 +65,16 @@ export const MODES = {
   COMBAT: 'combat',       // tactical engagement
   MISSION: 'mission',     // in an episode stage
   ENCOUNTER: 'encounter', // resolving a non-combat encounter
+};
+
+/**
+ * The skill a career track brings with it. One rank, on the thing that track
+ * is for, so a tactical captain starts able to shoot and a science captain
+ * starts able to read a sensor return.
+ */
+const BACKGROUND_SKILL = {
+  command: 'leadership', tactical: 'beam_weapons',
+  engineering: 'damage_control', science: 'sensors', diplomatic: 'diplomacy',
 };
 
 export class Game {
@@ -185,6 +196,9 @@ export class Game {
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
+    // Whether this fight's call for help has been made, and what is on its way.
+    this.helpCalled = false;
+    this.helpInbound = null;
     // Explicitly false rather than undefined: `over` is read as a boolean all
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
@@ -204,10 +218,42 @@ export class Game {
       compression: options.compression ?? 1,
     });
 
+    this.commission();
     this.pushLog(`Assumed command of the ${this.ship.name}, ${this.ship.registry}.`, 'captain');
   }
 
   // ------------------------------------------------------------------ setup
+
+  /**
+   * What a captain brings to their first command.
+   *
+   * A career track grants a matching skill rank; a Starfleet family starts a
+   * pip higher and with the scrutiny to match; a reprimand already on file
+   * stays on file. All three of these were applied in `App.startGame`, which
+   * is the character creator, which is in the browser — so a `new Game` built
+   * anywhere else got none of them. Every test, the soak, the fuzzer and the
+   * balance suite were measuring a captain the player never plays: no starting
+   * skill, no rank bonus, no reprimand.
+   *
+   * `Game.load` replaces `progress` and `ledger` wholesale after construction,
+   * so a loaded save keeps the record it saved and does not collect this twice.
+   */
+  commission() {
+    const skillId = BACKGROUND_SKILL[this.character?.careerId];
+    if (skillId && SKILLS[skillId]) {
+      this.progress.unspent++;
+      this.progress.spend(skillId);
+    }
+    if (this.character?.mechanic('startingRankBonus')) {
+      this.progress.rankIndex = Math.min(this.progress.rankIndex + 1, 10);
+    }
+    if (this.character?.mechanic('startingReprimand')) {
+      this.ledger.record('order_disobeyed', {
+        text: 'Prior reprimand on file at time of commission',
+      });
+    }
+    this.applyAllMods();
+  }
 
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
   applyAllMods() {
@@ -257,6 +303,118 @@ export class Game {
       );
       emit('reputation:tier', up);
     }
+  }
+
+  /**
+   * Award experience, and carry out the promotion if it earns one.
+   *
+   * Twelve places in this codebase awarded experience. Two of them checked
+   * whether it promoted the captain; the other ten threw the answer away, so
+   * a promotion earned by an away mission, an anomaly, a first survey, a
+   * mission reward or a diplomatic success happened silently: the rank index
+   * moved and nothing else did, not even the announcement.
+   *
+   * And what a promotion MEANS — the character levels up, proficiency goes up
+   * with it, and a feat is banked to choose — lived in an event listener in
+   * src/main.js. Headless, a captain could make Fleet Captain over five years
+   * and still be level one with no feats, which is the entire character half
+   * of the game not happening.
+   */
+  awardXP(amount, { silent = false } = {}) {
+    const promo = this.progress.addXP(amount, { ledger: this.ledger });
+    if (!promo?.promoted) return promo ?? null;
+
+    this.character?.levelUp();
+    this.pendingFeats = (this.pendingFeats ?? 0) + 1;
+    this.applyAllMods();
+    if (!silent) {
+      this.pushLog(
+        `Promoted to ${promo.rank.name}. ${promo.points} skill points and a feat to choose.`,
+        'captain',
+      );
+    }
+    emit('captain:promoted', promo);
+    return promo;
+  }
+
+  /**
+   * Take one of the feats a promotion banked.
+   *
+   * `character.takeFeat` records the feat. Spending the bank, recomputing the
+   * ship modifiers the feat changes and saying so were done in the sheet
+   * screen, so a feat taken any other way was free and had no effect on the
+   * ship — the two things that make it worth taking.
+   *
+   * `payload` is the ability list for the repeatable Field Commission; the
+   * screen asks which scores one at a time, and passes them here together.
+   */
+  takeFeat(featId, payload = null) {
+    if (!(this.pendingFeats > 0)) return { ok: false, reason: 'Nothing to choose, Captain.' };
+    if (!this.character?.takeFeat(featId, payload)) {
+      return { ok: false, reason: 'Not available, Captain.' };
+    }
+    this.pendingFeats--;
+    this.applyAllMods();
+    const name = FEAT_BY_ID[featId]?.name ?? featId;
+    this.pushLog(featId === 'ability_score'
+      ? 'Field commission: ability scores raised.'
+      : `Qualified: ${name}.`, 'captain');
+    return { ok: true, featId, name, remaining: this.pendingFeats };
+  }
+
+  /**
+   * Spend a skill point.
+   *
+   * One rank, and the ship modifiers that depend on it recomputed. Spending
+   * without recomputing left the point spent and the ship unchanged until
+   * something else happened to call `applyAllMods`, which is a rank that does
+   * nothing for an unpredictable length of time.
+   */
+  spendSkill(skillId) {
+    if (!this.progress.spend(skillId)) return { ok: false, reason: 'No points, Captain.' };
+    this.applyAllMods();
+    return { ok: true, skillId, ranks: this.progress.ranksIn(skillId), left: this.progress.unspent };
+  }
+
+  /**
+   * Spend marks on a reputation project, and receive what it grants.
+   *
+   * `reputation.buy` deducts the cost and records the perk. What the project
+   * actually GIVES you — the torpedoes, the antimatter, the console, the
+   * cloaking device nobody signed for — was applied in src/main.js, so a
+   * project bought without a screen attached took the marks and delivered
+   * nothing. Same shape as the power tray, and the same fix.
+   */
+  buyProject(trackId, projectId) {
+    const project = this.reputation?.buy(trackId, projectId);
+    if (!project) return { ok: false, reason: 'Not available, Captain.' };
+
+    const grant = project.grant ?? {};
+    const lines = [];
+    if (grant.console) {
+      this.loadout.acquire(grant.console);
+      const name = CONSOLES[grant.console]?.name ?? grant.console;
+      lines.push(`${name} received from ${trackId}.`);
+    }
+    if (grant.torpedoes) {
+      const before = this.ship.torpedoes;
+      this.ship.torpedoes = Math.min(this.ship.maxTorpedoes, before + grant.torpedoes);
+      lines.push(`Magazine restocked: ${this.ship.torpedoes - before} torpedoes aboard.`);
+    }
+    if (grant.antimatter) {
+      this.ship.antimatter = Math.min(100, this.ship.antimatter + grant.antimatter);
+      lines.push(`Antimatter topped up to ${Math.round(this.ship.antimatter)}%.`);
+    }
+    if (grant.perk === 'cloak') {
+      this.ship.cloakCapable = true;
+      lines.push('A cloaking device has been installed. Nobody has signed for it.');
+    }
+    if (grant.title) lines.push(`You are now styled "${grant.title}".`);
+
+    for (const line of lines) this.pushLog(line, 'engineering');
+    this.applyAllMods();
+    emit('reputation:project', { trackId, project });
+    return { ok: true, project, lines };
   }
 
   get location() { return this.galaxy.get(this.locationId); }
@@ -742,6 +900,16 @@ export class Game {
   /** Out of orbit and back to station-keeping. */
   breakOrbit() {
     if (!this.orbit) return { ok: false, error: 'We are not in orbit, Captain.' };
+    // Not with the captain on the ground.
+    //
+    // Breaking orbit while ashore left the landing party on a world the ship
+    // had left, `ashore` still true, and the transporter with nothing under
+    // it — and the next order to set a course took the ship out of the system
+    // entirely. You could maroon yourself, and the only thing that ever
+    // noticed was the API fuzzer walking into a room that was no longer there.
+    if (this.ashore) {
+      return { ok: false, error: 'You are on the surface, Captain. We are not leaving without you.' };
+    }
     const label = this.orbitLabel;
     this.orbit = null;
     if (label) this.officerSays('helm', `Breaking orbit of ${label}.`);
@@ -813,6 +981,12 @@ export class Game {
 
   setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
+    // The same refusal `breakOrbit` gives, for the same reason: a course order
+    // clears the orbit on its way out, so without this the ship would leave the
+    // system with the captain still standing on the planet.
+    if (this.ashore) {
+      return { ok: false, error: 'You are on the surface, Captain. We are not leaving without you.' };
+    }
     const plan = plotTransit(
       this.galaxy, this.locationId, destinationId, warpFactor,
       this.ship, this.progress.warpEfficiency,
@@ -837,6 +1011,39 @@ export class Game {
     return { ok: true, transit: this.transit, hours: plan.hours, fuel: plan.fuel };
   }
 
+  /**
+   * Break off a course under way, and coast in to whatever is nearest.
+   *
+   * This was implemented inside the Under Way panel in src/ui/screens.js: a
+   * button that moved the ship to a system, advanced the calendar, cleared the
+   * transit and set the mode, with none of it reachable from anywhere else.
+   * So there was no way to abort a course without a screen, the system you
+   * stopped at was never marked visited, nothing was ever waiting there when
+   * you got there — and the phrase printed on the button did something else
+   * entirely, which is the one thing this project does not allow a button
+   * to do.
+   */
+  dropOutOfWarp() {
+    const t = this.transit;
+    if (!t) return { ok: false, error: 'We are not under way, Captain.' };
+
+    const near = t.nearestSystem(this.galaxy);
+    this.locationId = near.id;
+    this.clock.advanceStardate(t.totalHours * t.progress / 24);
+    this.transit = null;
+    this.orbit = null;
+    this.mode = MODES.BRIDGE;
+
+    const isNew = this.galaxy.markVisited(this.locationId);
+    this.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
+    emit('arrived', { system: near, isNew, aborted: true });
+
+    // Stopping in the middle of nowhere is exactly when something finds you.
+    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger });
+    if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
+    return { ok: true, system: near, isNew };
+  }
+
   /** Arrive: advance the calendar, roll for what is waiting. */
   arrive() {
     const t = this.transit;
@@ -853,7 +1060,7 @@ export class Game {
     this.pushLog(`Arrived at ${t.to.name}.`, 'helm');
     if (isNew && t.to.unexplored) {
       this.ledger.record('anomaly_catalogued', { text: `First survey of ${t.to.name}`, system: t.to.id });
-      this.progress.addXP(250, { ledger: this.ledger });
+      this.awardXP(250);
     }
     emit('arrived', { system: t.to, isNew });
 
@@ -942,7 +1149,7 @@ export class Game {
         const lives = enc.lives ?? 200;
         this.ledger.record('distress_answered', { text: `Assisted at ${enc.system.name}`, system: enc.system.id });
         this.ledger.record('lives_saved', { count: lives, system: enc.system.id });
-        this.progress.addXP(300 + lives / 6, { ledger: this.ledger });
+        this.awardXP(300 + lives / 6);
         this.ledger.adjustStanding('federation', STANDING_EFFECTS.answered_distress, 'Answered a distress call');
         this.earnReputation('distress_answered');
         this.clock.advanceStardate(0.6);
@@ -970,7 +1177,7 @@ export class Game {
           this.ledger.record('anomaly_catalogued', {
             text: `Catalogued ${enc.anomaly?.name ?? 'phenomenon'} at ${enc.system.name}`, system: enc.system.id,
           });
-          this.progress.addXP(120 * (enc.anomaly?.value ?? 1), { ledger: this.ledger });
+          this.awardXP(120 * (enc.anomaly?.value ?? 1));
           this.galaxy.markSurveyed(enc.system.id, enc.anomaly?.name);
           out.messages.push(`Full sensor profile obtained. ${enc.anomaly?.name ?? 'Phenomenon'} catalogued.`);
         } else {
@@ -990,7 +1197,7 @@ export class Game {
           count: enc.anomaly?.value ?? 2,
           text: `Close survey of ${enc.anomaly?.name ?? 'phenomenon'}`, system: enc.system.id,
         });
-        this.progress.addXP(260 * (enc.anomaly?.value ?? 1), { ledger: this.ledger });
+        this.awardXP(260 * (enc.anomaly?.value ?? 1));
         this.galaxy.markSurveyed(enc.system.id, enc.anomaly?.name);
         this.earnReputation('anomaly_catalogued');
         out.messages.push('Close survey complete. Science has what they need.');
@@ -1008,7 +1215,7 @@ export class Game {
         if (r1.success && enc.salvage) {
           this.loadout.acquire(enc.salvage);
           out.messages.push('Salvage recovered and stowed.');
-          this.progress.addXP(350, { ledger: this.ledger });
+          this.awardXP(350);
         }
         break;
       }
@@ -1017,7 +1224,7 @@ export class Game {
         this.ledger.adjustStanding(enc.factionId ?? 'independent', STANDING_EFFECTS.completed_escort, 'Escort completed');
         this.latinum += Math.round((enc.escortReward ?? 300) * (this.reputation.has('better_prices') ? 1.25 : 1));
         this.earnReputation('escort_completed');
-        this.progress.addXP(280, { ledger: this.ledger });
+        this.awardXP(280);
         this.clock.advanceStardate(0.8);
         out.messages.push(`Escort complete. ${enc.escortReward ?? 300} credits transferred.`);
         break;
@@ -1029,13 +1236,13 @@ export class Game {
           this.ledger.record('first_contact', {
             text: `First contact with the ${enc.speciesName}`, system: enc.system.id,
           });
-          this.progress.addXP(900, { ledger: this.ledger });
+          this.awardXP(900);
           this.ledger.adjustStanding('federation', 12, 'First contact');
           this.earnReputation('first_contact');
           out.messages.push(`Contact established with the ${enc.speciesName}. They are... cautious, but talking.`);
         } else {
           out.messages.push('They break off without answering. The database gets a new entry and nothing else.');
-          this.progress.addXP(200, { ledger: this.ledger });
+          this.awardXP(200);
         }
         break;
       }
@@ -1089,7 +1296,7 @@ export class Game {
     if (result.standingDelta) {
       this.ledger.adjustStanding(factionId, result.standingDelta, 'Hail');
     }
-    if (result.xp) this.progress.addXP(result.xp, { ledger: this.ledger });
+    if (result.xp) this.awardXP(result.xp);
 
     if (result.surrender) {
       this.ledger.record('surrender_accepted', { text: 'Accepted a surrender', faction: factionId });
@@ -1213,6 +1420,10 @@ export class Game {
       ...opts, onEnd: () => this.resolveCombat(),
     });
     this.mode = MODES.COMBAT;
+    // A new fight is a new call. Left set, the answer to "we need help" is
+    // "we already asked" for the rest of the commission.
+    this.helpCalled = false;
+    this.helpInbound = null;
     this.engagement.pushLog(`${fleet.length} hostile contact${fleet.length > 1 ? 's' : ''}.`, 'tactical');
     emit('combat:begin', this.engagement);
     return this.engagement;
@@ -1239,8 +1450,13 @@ export class Game {
    * `Engagement.update`, which is why `combat:end` no longer resolves it.
    */
   resolveCombat() {
+    // Whether the game happens to be in combat MODE is not the question. A
+    // finished engagement has to be settled wherever the game has got to,
+    // because everything that follows a battle hangs off it — and requiring
+    // the mode meant anything that moved the mode out from under a running
+    // fight left one over-but-unsettled forever.
     const eng = this.engagement;
-    if (!eng?.over || this.mode !== MODES.COMBAT) return false;
+    if (!eng?.over) return false;
     this.finishCombat(eng.outcome);
     return true;
   }
@@ -1292,9 +1508,11 @@ export class Game {
       // The Empire respects a captain who kept fighting while losing.
       if (this.ship.hullPct < 0.35) this.earnReputation('fought_while_losing');
       this.earnReputation('combat_victory');
-      const promo = this.progress.addXP(xp, { ledger: this.ledger });
+      const promo = this.awardXP(xp, { silent: true });
       this.pushLog(`Engagement concluded. +${Math.round(xp)} experience.`, 'captain');
-      if (promo?.promoted) emit('captain:promoted', promo);
+      if (promo?.promoted) {
+        this.pushLog(`Promoted to ${promo.rank.name}. ${promo.points} skill points and a feat to choose.`, 'captain');
+      }
     }
 
     // Casualties from THIS fight.
@@ -1346,6 +1564,8 @@ export class Game {
 
     this.engagement = null;
     this.firstStrike = false;
+    this.helpCalled = false;
+    this.helpInbound = null;
     // The scenario and any channel forced open inside it end with the fight.
     // Left set, `gambitOpen` turns every later typed order into an appeal to a
     // Klingon commander who is no longer there.
@@ -1355,7 +1575,10 @@ export class Game {
       this.scriptedScenario = false;
       this.applyAllMods();   // hand the difficulty bonuses back
     }
-    this.mode = MODES.BRIDGE;
+    // Back to the bridge — unless the captain is somewhere else entirely. A
+    // fight that finishes while a mission is on screen should not throw the
+    // player off it.
+    if (this.mode === MODES.COMBAT) this.mode = MODES.BRIDGE;
     this.setAlert(outcome === 'destroyed' ? 'red' : 'normal');
     emit('combat:resolved', { outcome, killed });
 
@@ -1381,7 +1604,16 @@ export class Game {
   startMission(id) {
     const m = this.missions.start(id, this);
     if (m) {
-      this.mode = MODES.MISSION;
+      // Not while people are shooting.
+      //
+      // `chooseMission` has always been careful about this — setting the mode
+      // during a battle orphans the engagement, because Game.update stops
+      // stepping it. Starting one was not: the fight kept its object, stopped
+      // being ticked, and when something finally ended it the settle was
+      // skipped because the mode was no longer COMBAT. That left an engagement
+      // over-but-unsettled and a relief ship inbound to a battle that was not
+      // running. Found by the API fuzzer.
+      if (!this.engagement || this.engagement.over) this.mode = MODES.MISSION;
       this.pushLog(`Mission: ${m.title}`, 'captain');
     }
     return m;
@@ -1398,8 +1630,11 @@ export class Game {
     // A stage can start a fight.
     if (result.effects?.combat) {
       const spec = result.effects.combat;
+      // Named, like every other hostile in the game. A mission stage used to
+      // field "klingon vessel 1" while an ordinary encounter with the same
+      // ship called it the IKS Rotarran.
       const ships = (spec.ships ?? []).map((cls, i) =>
-        new Ship(cls, { name: `${spec.faction} vessel ${i + 1}`, faction: spec.faction }));
+        new Ship(cls, { name: hostileName(spec.faction, i), faction: spec.faction }));
       this.pendingCombat = { ships, returnToMission: true };
     }
 
@@ -1426,6 +1661,197 @@ export class Game {
       difficulty: this.difficulty,
     });
     return this.awayTeam;
+  }
+
+  /**
+   * The away missions this situation actually supports.
+   *
+   * `AWAY_TEMPLATES` has held five multi-step landing parties since the away
+   * system was written — board a derelict, evacuate a colony, open a
+   * negotiation, run a covert survey, take a hostile bridge — with hazard
+   * levels, per-step checks and difficulty classes on every one of them. No
+   * code has ever read the table. The whole of the casualty model, the
+   * officer-selection model and the consequence scaling was reachable through
+   * exactly one mission-stage button.
+   *
+   * What decides availability is where you are and what is in front of you,
+   * which is the same rule the rest of this game runs on.
+   */
+  availableAwayMissions() {
+    const out = [];
+    const eng = this.engagement;
+
+    // Taking a bridge. The ship has to be beaten first — a boarding party does
+    // not go through raised shields — and this is what makes crippling a
+    // hostile a real alternative to killing it.
+    const boardable = eng && !eng.over
+      ? eng.liveHostiles.find((s) => !s.cloaked
+        && s.shieldPct <= 0.05
+        && (s.hullPct <= 0.35 || s.subsystems.engines <= 0.15)
+        && this.ship.distanceTo(s) < 900)
+      : null;
+    if (boardable) out.push({ ...AWAY_TEMPLATES.boarding_action, target: boardable });
+
+    // A hulk with its logs still in it. Stripping a wreck is the machine shop's
+    // job; boarding one is the science officer's, and they are different orders
+    // with different risks.
+    if (!eng && this.wreckHere && !this.wreckHere.boarded) {
+      out.push({ ...AWAY_TEMPLATES.derelict_search });
+    }
+
+    if (!eng) {
+      const body = this.orbitBody;
+      const sys = this.location;
+      if (body && sys) {
+        if (this.encounter?.kind === 'distress' || sys.type === 'colony') {
+          out.push({ ...AWAY_TEMPLATES.colony_rescue });
+        }
+        if (sys.type === 'homeworld' || sys.type === 'core' || sys.faction !== 'none') {
+          out.push({ ...AWAY_TEMPLATES.diplomatic_landing });
+        }
+        // A world that has not invented warp is one you do not announce
+        // yourself to. The Prime Directive is the reason this template exists.
+        if (sys.preWarp || sys.type === 'frontier' || sys.type === 'unexplored') {
+          out.push({ ...AWAY_TEMPLATES.covert_landing });
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * Send the landing party, and live with what comes back.
+   *
+   * Every step is a real check against the officer best suited to it, with the
+   * hazard level deciding how badly a failure hurts — the machinery in
+   * src/sim/away.js, which already models injuries, deaths, security losses,
+   * difficulty scaling and permadeath, and which nothing has been able to reach
+   * with more than one step at a time.
+   *
+   * A step that fails does not end the mission. The team presses on with the
+   * next one and the outcome is how many of them worked, because "three of the
+   * four went right and we lost a man doing it" is the kind of result this
+   * game is about and a pass/fail is not.
+   */
+  awayMission(templateId) {
+    if (this.ashore) {
+      return { ok: false, reason: 'You are already on the surface, Captain.' };
+    }
+    const available = this.availableAwayMissions();
+    const template = available.find((t) => t.id === templateId);
+    if (!template) {
+      return { ok: false, reason: 'There is nowhere to send a team, Captain.' };
+    }
+    if (this.ship.subsystems.transporter !== undefined
+      && this.ship.subsystems.transporter < 0.3) {
+      return { ok: false, reason: 'The transporters are down, Captain.' };
+    }
+
+    // Who goes. A boarding action is security's job; everything else takes the
+    // department the first step needs.
+    const stations = template.id === 'boarding_action'
+      ? ['tactical', 'medical', 'engineering']
+      : ['science', 'medical', 'tactical'];
+    const team = this.buildAwayTeam(stations, false);
+    if (!team.members.length) {
+      return { ok: false, reason: 'There is nobody fit to send, Captain.' };
+    }
+
+    this.pushLog(`${template.title}. Landing party is away.`, 'transporter');
+    const steps = [];
+    for (const step of template.steps) {
+      const r = team.check(this.rng, step.check, {
+        dc: step.dc, hazard: template.hazard, label: step.text,
+      });
+      this.pushLog(`${step.text} — ${r.formatted}`, 'science');
+      if (r.killed) this.pushLog(`We lost ${r.killed.name}.`, 'medical');
+      else if (r.injured) this.pushLog(`${r.injured.name} is hurt.`, 'medical');
+      steps.push({ text: step.text, success: r.success, officer: r.officer?.name ?? null });
+      // A team that has nobody left standing does not carry on.
+      if (!team.members.length) break;
+    }
+
+    const won = steps.filter((s) => s.success).length;
+    const outcome = won === steps.length ? 'success'
+      : won === 0 ? 'failure' : 'partial';
+    const lost = team.casualties.filter((c) => c.killed).length;
+
+    this.applyAwayOutcome(template, outcome, won, steps.length);
+
+    const report = {
+      ok: true, id: template.id, title: template.title, outcome,
+      steps, passed: won, of: steps.length,
+      casualties: team.casualties.slice(), lost,
+    };
+    this.lastAway = report;
+    this.ledger.record('away_mission', {
+      text: `${template.title}: ${won} of ${steps.length} objectives`
+        + (lost ? `, ${lost} lost` : ''),
+      system: this.locationId,
+    });
+    this.pushLog(
+      `Landing party is back aboard. ${won} of ${steps.length} objectives.`
+      + (lost ? ` We lost ${lost}.` : ''),
+      'transporter',
+    );
+    emit('away:mission', report);
+    return report;
+  }
+
+  /** What a landing party's result changes about the world it happened in. */
+  applyAwayOutcome(template, outcome, won, total) {
+    const share = total ? won / total : 0;
+    this.awardXP(Math.round(120 * share * (HAZARD_LEVEL[template.hazard]?.death ?? 0.05) * 20));
+
+    if (template.id === 'boarding_action' && template.target) {
+      const foe = template.target;
+      if (outcome === 'success') {
+        // A bridge taken is a ship that stops fighting. It is not a kill, and
+        // the record is careful about the difference.
+        foe.fleeing = true;
+        foe.withdrawn = true;
+        // A withdrawn ship is off the board, and a lock on one is the exact
+        // state `eng.target.withdrawn` exists to report. Clear it here rather
+        // than waiting for the next tick to re-acquire, because the renderer
+        // draws between ticks and would put a reticle on a ship that has gone.
+        if (this.engagement?.target === foe) {
+          this.engagement.target = this.engagement.liveHostiles[0] ?? null;
+        }
+        this.engagement?.pushLog(
+          `${foe.name} is ours, Captain. Her crew have stood down.`, 'tactical');
+        // Taking the last bridge on the board ends the battle THERE. Left to
+        // the next tick, the fight spends a frame with nobody left to shoot
+        // and `over` still false, which is the soft-lock shape exactly.
+        this.engagement?.settle();
+        this.ledger.record('ship_captured', {
+          text: `${foe.name} boarded and taken`, faction: foe.faction, system: this.locationId,
+        });
+        this.earnReputation('accepted_surrender');
+      } else if (outcome === 'failure') {
+        this.engagement?.pushLog(
+          'They have repelled the boarding party, Captain.', 'tactical');
+      }
+      return;
+    }
+
+    if (template.id === 'derelict_search' && this.wreck) {
+      this.wreck.boarded = true;
+      if (share >= 0.5) this.earnReputation('anomaly_catalogued');
+    }
+    if (template.id === 'colony_rescue' && outcome !== 'failure') {
+      this.earnReputation(outcome === 'success' ? 'colony_saved' : 'distress_answered');
+    }
+    if (template.id === 'diplomatic_landing' && outcome === 'success') {
+      this.earnReputation('first_contact');
+    }
+    if (template.id === 'covert_landing' && outcome === 'failure') {
+      // Being seen is the failure that matters here, and it is not free.
+      this.ledger.adjustStanding('federation', -6, 'Observed by a pre-warp culture');
+      this.pushLog(
+        'We were seen, Captain. That will be in the report to the Prime Directive board.',
+        'science');
+    }
   }
 
   /**
@@ -1469,13 +1895,120 @@ export class Game {
         text: `Surveyed ${feature.label.toLowerCase()} on ${room.name}`,
         system: this.locationId,
       });
-      this.progress.addXP(60, { ledger: this.ledger });
+      this.awardXP(60);
     } else {
       this.pushLog(`${feature.label}: ${feature.failed}`, 'science');
     }
 
     emit('survey', { feature, result });
     return { ok: true, feature, result };
+  }
+
+  // ------------------------------------------------------------- calling for help
+
+  /**
+   * Ask for a hand, and find out whether Starfleet is close enough to give one.
+   *
+   * `Engagement` has supported allies since it was written: they are placed on
+   * the board, flown by the AI, drawn by all three renderers, targeted by
+   * hostiles and counted by every rule in the invariant checker. Nothing in the
+   * game ever created one. A whole side of the battle existed and was
+   * unreachable, which on this project is the shape of about half the bugs.
+   *
+   * What decides it is the thing a captain would expect to decide it: where
+   * you are and what your record says. Inside Federation space with a service
+   * record Starfleet respects, somebody diverts. Deep in the Neutral Zone with
+   * a record of shooting first, nobody does, and the reply says which.
+   *
+   * The help does not arrive instantly. A ship at warp takes time, and the
+   * gap between the call and the arrival is the point — it is a decision about
+   * whether you can hold on that long, not a button that wins the fight.
+   */
+  callForHelp() {
+    const eng = this.engagement;
+    if (!eng || eng.over) {
+      return { ok: false, reason: 'There is no one shooting at us, Captain.' };
+    }
+    if (this.helpCalled) {
+      return { ok: false, reason: 'We have already made the call, Captain. They are coming.' };
+    }
+    if (this.inKobayashi) {
+      // The whole point of the scenario is that nobody is coming.
+      return { ok: false, reason: 'No response on any Starfleet frequency. We are alone out here.' };
+    }
+    if (this.ship.subsystems.comms < 0.25) {
+      return { ok: false, reason: 'Long-range communications are out, Captain. Nobody can hear us.' };
+    }
+
+    const here = this.location;
+    const friendly = here?.faction === 'federation';
+    const standing = this.ledger.standingOf('federation');
+    const tier = this.reputation?.track('federation')?.tier ?? 0;
+
+    // Somebody has to be near enough to come. Federation space always has a
+    // patrol in it; outside it, only a record good enough to make a captain
+    // break off what they are doing will bring one.
+    if (!friendly && tier < 2) {
+      this.helpCalled = true;
+      this.pushLog('No Starfleet units within range, Captain. We are on our own.', 'comms');
+      return { ok: true, answered: false, reason: 'No Starfleet units within range.' };
+    }
+    if (standing < -20) {
+      this.helpCalled = true;
+      this.pushLog(
+        'Starfleet acknowledges the call and does not respond further, Captain.',
+        'comms',
+      );
+      return { ok: true, answered: false, reason: 'Starfleet acknowledged and did not respond.' };
+    }
+
+    // What answers scales with the record. A commendable captain gets a
+    // cruiser; a new one gets whatever was closest.
+    const classId = tier >= 3 ? 'excelsior' : (tier >= 1 ? 'constitution' : 'miranda');
+    // From the one ship-name table in src/sim/combat.js. A fourth private list
+    // of Starfleet names is how the same vessel ends up called two things.
+    const name = hostileName(
+      'federation',
+      Math.floor(this.rng.float() * HOSTILE_NAMES.federation.length),
+    );
+    // Between eighteen and forty seconds of holding on.
+    const eta = 18 + this.rng.float() * 22;
+    this.helpCalled = true;
+    this.helpInbound = { classId, name, eta };
+    this.pushLog(
+      `${this.helpInbound.name} answers, Captain — she is coming about now. `
+      + `Estimated ${Math.round(eta)} seconds.`,
+      'comms',
+    );
+    emit('help:called', this.helpInbound);
+    return { ok: true, answered: true, eta, ship: this.helpInbound.name };
+  }
+
+  /**
+   * Bring the help in when its clock runs out.
+   *
+   * Called from the tick, so a fight that ends before the ETA simply never
+   * sees it — which is right: they turn round and go home, and the log has
+   * already said they were coming.
+   */
+  updateHelp(dt) {
+    const inbound = this.helpInbound;
+    if (!inbound) return;
+    const eng = this.engagement;
+    if (!eng || eng.over) { this.helpInbound = null; return; }
+
+    inbound.eta -= dt;
+    if (inbound.eta > 0) return;
+    this.helpInbound = null;
+
+    const ally = new Ship(inbound.classId, { name: inbound.name, faction: 'federation' });
+    eng.allies.push(ally);
+    eng.placeCombatants();
+    eng.pushLog(`${ally.name} dropping out of warp, Captain. She is engaging.`, 'comms');
+    // No reputation for being rescued. Whatever the fleet thinks of a captain
+    // who needed help, it is not a commendation, and the ledger already
+    // records the engagement itself.
+    emit('help:arrived', ally);
   }
 
   // ------------------------------------------------------------------ docking
@@ -1551,6 +2084,7 @@ export class Game {
 
       case MODES.COMBAT: {
         if (!this.engagement) { this.mode = MODES.BRIDGE; break; }
+        this.updateHelp(dt);
         this.engagement.update(dt);
         // The game finishes its own fights.
         //
@@ -1877,6 +2411,50 @@ export class Game {
   }
 
   /** Start a job in the machine shop. */
+  // ------------------------------------------------------- powers and devices
+
+  /**
+   * Fire a bridge officer ability.
+   *
+   * `who` is an officer, a station name, or nothing at all — in which case the
+   * ability finds the officer who has it. `what` is an ability id or record.
+   *
+   * All of this used to live in the screen, which meant the entire STO-style
+   * power tray existed only when a browser was attached: no test could fire
+   * one, the soak never saw a buffed ship, and a fuzzer line reading
+   * `g.character?.useSignature?.(g)` had been optional-chaining into nothing
+   * for as long as it had been written.
+   */
+  useAbility(who, what) {
+    const abilityId = typeof what === 'string' ? what : what?.id;
+    let officer = null;
+    if (typeof who === 'object' && typeof who?.ready === 'function') officer = who;
+    // No station named: whoever holds the ability answers, which is what
+    // "fire at will" means when it is typed rather than tapped. A station that
+    // IS named and is not manned is refused — falling through to whoever else
+    // could do it would mean an order to a dead officer being carried out by
+    // somebody the captain did not address.
+    else if (who == null) officer = abilityId ? this.crew.officerFor(abilityId) : null;
+    else officer = this.crew.at(who) ?? null;
+    if (!officer) return { ok: false, reason: 'nobody at that station, Captain.' };
+    return applyAbility(this, officer, what ?? abilityId);
+  }
+
+  /** Every ability that could be fired right now, with its officer. */
+  readyAbilities() {
+    return this.crew.readyAbilities();
+  }
+
+  /** The career signature: one large effect, once per engagement. */
+  useSignature() {
+    return applySignature(this);
+  }
+
+  /** Spend one device out of the loadout. */
+  useDevice(id) {
+    return applyDevice(this, id);
+  }
+
   fabricate(recipeId) {
     // The machine shop is not a combat action. Left unguarded, a hull patch
     // could be started and finished under fire — hours of work compressed into
