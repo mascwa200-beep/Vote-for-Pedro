@@ -1433,7 +1433,7 @@ try {
   check('a typed order hands the con to the next ranking officer',
     !!handed.who && handed.given === true, JSON.stringify(handed));
   check('and the officer acknowledges it by name',
-    handed.said.includes(handed.who ?? ' '), handed.said);
+    handed.said.includes(handed.who ?? '(nobody has the con)'), handed.said);
 
   const conButton = await page.evaluate(() => {
     const b = [...document.querySelectorAll('button')]
@@ -2424,24 +2424,38 @@ try {
     });
     g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
     g.ship.heading = 0; g.ship.desiredHeading = 0; g.ship.throttle = 0;
+    // Watched over the whole exchange rather than read off the last frame.
+    // A beam lives 0.35 seconds and a weapon spends most of a cycle on
+    // cooldown, so on any given tick there is a good chance nothing is in
+    // flight — thirty-eight of these ninety ticks are empty. Reading only the
+    // final one asks "was a shot in the air at this instant", which is a coin
+    // toss, and it came up heads here and tails on the CI runner.
+    const seen = new Set();
+    let projectilesSeen = 0;
     for (let t = 0; t < 90; t++) {
       eng.fireAll();
       for (const h of eng.liveHostiles) h.heading = 180;
       g.update(1 / 30);
+      for (const e of eng.effects ?? []) seen.add(e.kind);
+      projectilesSeen = Math.max(projectilesSeen, (eng.projectiles ?? []).length);
     }
     return {
       mode: g.mode,
       screen: app.screen,
       live: eng.liveHostiles.length,
-      effects: (eng.effects ?? []).map((e) => e.kind),
-      projectiles: (eng.projectiles ?? []).length,
+      effects: [...seen],
+      projectiles: projectilesSeen,
+      atEnd: (eng.effects ?? []).map((e) => e.kind),
       range: Math.round(g.ship.distanceTo(eng.liveHostiles[0] ?? g.ship)),
     };
   });
   check('a fight leaves the captain on the bridge, not on a plot screen',
     fight.screen === 'bridge', JSON.stringify(fight));
   check('and the shooting is actually happening',
-    fight.effects.length > 0 && fight.live > 0, JSON.stringify(fight));
+    fight.live > 0
+    && (fight.effects.includes('beam') || fight.effects.includes('cannon'))
+    && fight.effects.includes('impact'),
+    JSON.stringify(fight));
 
   // Let a frame or two land with shots on the screen, then photograph the
   // aperture and measure what is in it.
