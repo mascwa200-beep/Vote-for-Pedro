@@ -13859,8 +13859,24 @@ class Officer {
   kill(cause = 'killed in action') {
     if (!this.alive) return;
     this.alive = false;
+    // Being dead is not a kind of being hurt.
+    //
+    // `injured` survived death, so an officer wounded on one away mission and
+    // killed on the next was dead AND on the sick list — which is what
+    // `officer.dead-and-injured` in the invariant file says must never happen,
+    // and what every roster panel then reported. Found by the order monkey.
+    this.injured = false;
+    this.injurySeverity = 0;
     this.cause = cause;
     emit('officer:killed', { officer: this, cause });
+  }
+
+  /** Back on duty. Nothing brings the dead back. */
+  heal() {
+    if (!this.alive) return false;
+    this.injured = false;
+    this.injurySeverity = 0;
+    return true;
   }
 
   save() {

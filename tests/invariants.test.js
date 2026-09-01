@@ -1362,3 +1362,33 @@ test('the overcharge bleeds back off on its own', () => {
     'a reinforced facing held its overcharge forever');
   assert.deepEqual(checkAll(g, OPTS), []);
 });
+
+test('being dead is not a kind of being hurt', () => {
+  // Found by the order monkey, walking through orbit, a boarding action and a
+  // save/load round trip. `injured` survived death, so an officer wounded on
+  // one away mission and killed on the next was dead AND on the sick list —
+  // which is what `officer.dead-and-injured` says must never happen, and what
+  // every roster panel then reported.
+  const g = fight('d7');
+  const officer = g.crew.officers[0];
+  officer.injure(0.7);
+  assert.equal(officer.injured, true);
+  officer.kill('test');
+  assert.equal(officer.injured, false, 'a dead officer is still on the sick list');
+  assert.deepEqual(checkAll(g, OPTS), []);
+
+  // And the checker still objects if anything else produces the state.
+  officer.injured = true;
+  assert.ok(checkAll(g, OPTS).some((v) => v.code === 'officer.dead-and-injured'));
+});
+
+test('nothing brings the dead back on duty', () => {
+  const g = fight('d7');
+  const officer = g.crew.officers[0];
+  officer.injure(0.5);
+  assert.equal(officer.heal(), true);
+  assert.equal(officer.injured, false);
+  officer.kill('test');
+  assert.equal(officer.heal(), false, 'the dead were returned to duty');
+  assert.equal(officer.alive, false);
+});

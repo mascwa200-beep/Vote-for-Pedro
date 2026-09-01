@@ -2502,6 +2502,7 @@ try {
     const { checkAll } = await import('./src/sim/invariants.js');
     const { ARENA_RADIUS } = await import('./src/sim/combat.js');
     const { Ship } = await import('./src/sim/ship.js');
+    const { Game } = await import('./src/core/state.js');
 
     // Leave whatever the last block was doing.
     if (g.engagement && !g.engagement.over) g.engagement.end('victory');
@@ -2527,21 +2528,56 @@ try {
     }
 
     const OPTS = { arenaRadius: ARENA_RADIUS };
+    // Deduplicated by code and subject. One persistent bad state — a dead
+    // officer still flagged injured, say — is reported by every check from the
+    // moment it appears, and without this the budget is spent five orders in
+    // and the other nine hundred are never given.
+    const seen = new Set();
     const violations = [];
     const threw = [];
     let given = 0;
+    const note = (where, v) => {
+      const key = `${v.code}|${v.subject ?? ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      violations.push(`${where}: ${v.code} — ${v.text}`);
+    };
 
     for (let i = 0; i < phrases.length; i++) {
       const text = phrases[i];
 
-      // Keep the world moving underneath the orders. A fight every so often,
-      // because half of these only mean anything with somebody shooting at
-      // you, and the interesting failures are at the seams.
-      if (i % 45 === 0 && (!g.engagement || g.engagement.over)) {
-        g.startCombat([new Ship('d7', { name: `Hostile ${i}` })]);
-      }
-      if (i % 90 === 45 && g.engagement && !g.engagement.over) {
-        g.engagement.end('routed');
+      // Keep the world moving underneath the orders, and keep MOVING it.
+      //
+      // Half of these phrasings only mean anything with somebody shooting at
+      // you, a quarter only in orbit, a handful only with the captain standing
+      // on a planet — and the interesting failures are at the seams between
+      // those, not inside any one of them. So the monkey is walked through the
+      // states as it goes rather than being left on a quiet bridge.
+      const phase = Math.floor(i / 40) % 5;
+      if (i % 40 === 0) {
+        // Put it back to a known place first, whatever the last phase left.
+        if (g.ashore) g.beamUp?.();
+        if (g.engagement && !g.engagement.over) g.engagement.end('routed');
+        g.update(1 / 30);
+        if (g.transit) g.transit = null;
+        if (g.orbit) g.breakOrbit?.();
+        g.ship.restore?.();
+        g.ship.crew = g.ship.maxCrew;
+
+        if (phase === 1) {
+          g.startCombat([new Ship('d7', { name: `Hostile ${i}` })]);
+        } else if (phase === 2) {
+          const body = g.galaxy.systems.find((sys) => sys.id === g.locationId)?.bodies
+            ?.find?.((b) => b.kind !== 'gas' && b.kind !== 'star');
+          if (body) g.enterOrbit(body.id);
+        } else if (phase === 3) {
+          const body = g.galaxy.systems.find((sys) => sys.id === g.locationId)?.bodies
+            ?.find?.((b) => b.kind !== 'gas' && b.kind !== 'star');
+          if (body) { g.enterOrbit(body.id); g.walk.enter('transporter'); g.beamDown?.(); }
+        } else if (phase === 4) {
+          const there = g.galaxy.systems.find((sys) => sys.id !== g.locationId);
+          if (there) g.setCourse(there.id, 6);
+        }
       }
 
       try {
@@ -2557,10 +2593,26 @@ try {
       // The ship keeps flying whatever was just said to it.
       for (let t = 0; t < 3; t++) g.update(1 / 30);
 
-      for (const v of checkAll(g, OPTS)) {
-        violations.push(`after "${text}": ${v.code} — ${v.text}`);
+      for (const v of checkAll(g, OPTS)) note(`after "${text}"`, v);
+
+      // And what the app would come back as if the player closed it here.
+      //
+      // A save is taken from whatever state the last order left, which is the
+      // only way to reach a save mid-transit, mid-orbit, standing on a planet
+      // and one order into a boarding action. Anything the round trip breaks
+      // shows up as a violation against the RESTORED game, not this one.
+      if (i % 25 === 12) {
+        try {
+          const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+          for (const v of checkAll(back, OPTS)) note(`saved after "${text}", loaded broken`, v);
+          for (let t = 0; t < 30; t++) back.update(1 / 30);
+          for (const v of checkAll(back, OPTS)) note(`saved after "${text}", broke a second later`, v);
+        } catch (err) {
+          threw.push(`save/load after "${text}": ${err?.message ?? err}`);
+        }
       }
-      if (violations.length > 6) break;
+
+      if (violations.length > 12) break;
 
       // Never leave the game over: the rest of the sweep would be testing a
       // dead bridge, and losing the ship IS one of the things these orders do.
