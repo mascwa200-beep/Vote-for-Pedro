@@ -524,9 +524,16 @@ export class Engagement {
       const dz = (p.target.z ?? 0) - (p.z ?? 0);
       const dist = Math.hypot(dx, dy, dz);
       if (dist < 26) {
-        const result = this.resolveHit(p.attacker, p.target, p.weapon,
-          p.attacker.distanceTo(p.target), p.subsystem);
-  emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y, z: p.z ?? 0 });
+        // A torpedo that has arrived has arrived.
+        //
+        // The range used here was the LAUNCHER's distance to the target at the
+        // moment of impact, not the torpedo's. Torpedoes fly for up to six
+        // seconds and both ships keep moving, so a shooter that had since
+        // drifted past the 1,200-unit torpedo range made `rangeFactor` return
+        // zero — and the torpedo arrived, exploded, and did nothing at all.
+        // Passing zero says what is true: the weapon is touching the hull.
+        const result = this.resolveHit(p.attacker, p.target, p.weapon, 0, p.subsystem);
+        emit('combat:torpedo-impact', { ...result, x: p.x, y: p.y, z: p.z ?? 0 });
         p.dead = true;
         continue;
       }

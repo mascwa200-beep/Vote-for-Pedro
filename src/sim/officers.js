@@ -188,10 +188,20 @@ export class Officer {
     for (const k of Object.keys(this.cooldowns)) {
       if (this.cooldowns[k] > 0) this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
     }
-    if (this.injured && this.injurySeverity > 0) {
-      this.injurySeverity = Math.max(0, this.injurySeverity - dt * 0.02);
-      if (this.injurySeverity <= 0) this.injured = false;
-    }
+    // One recovery rule, not two.
+    //
+    // This used to heal at `dt * 0.02`, which is a full recovery in fifty
+    // seconds of sitting on the bridge — while `recover(hours)` says the same
+    // injury takes 120 hours. The campaign-time sickbay could therefore never
+    // have an effect, because the injury was always gone before the app was
+    // closed, and an officer hurt in a battle was back at their post before the
+    // wreck had finished burning. A casualty that heals itself in under a
+    // minute is not a casualty.
+    //
+    // Simulation seconds are converted to ship hours and handed to the one
+    // rule that owns this. Getting hurt now costs you that officer until time
+    // passes or the ship docks.
+    this.recover(dt / 3600);
   }
 
   /**

@@ -1531,10 +1531,9 @@ class App {
         break;
       }
       case 'salvage': {
-        const haul = g.salvage({ tier: 3 });
-        const summary = Object.entries(haul).filter(([, n]) => n > 0)
-          .map(([m, n]) => `${n} ${m}`).join(', ');
-        ack('engineering', `Recovered ${summary}.`);
+        const r = g.stripWreck();
+        if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('engineering', r.reason); }
         break;
       }
 

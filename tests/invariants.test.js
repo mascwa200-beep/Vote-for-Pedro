@@ -485,3 +485,121 @@ test('casualties are counted per fight, not per campaign', () => {
   const recorded = g.ledger.entries.filter((e) => e.kind === 'lives_lost');
   assert.equal(recorded.length, 1, 'the ledger recorded a second casualty entry for the same deaths');
 });
+
+describe('a fight cannot be started into a mess', () => {
+  test('a second fight reinforces the first instead of deleting it', () => {
+    // startCombat used to overwrite `this.engagement` outright: the battle in
+    // progress was dropped with no outcome, no experience, no salvage and no
+    // ledger entry, and the ships in it stopped existing.
+    const g = fight('d7');
+    const first = g.engagement;
+    const before = first.hostiles.length;
+    g.startCombat([new Ship('bird_of_prey', { name: 'Latecomer' })]);
+
+    assert.equal(g.engagement, first, 'the fight in progress was thrown away');
+    assert.ok(g.engagement.hostiles.length > before, 'the new hostiles never arrived');
+    assert.deepEqual(checkAll(g, OPTS), []);
+  });
+
+  test('a captain on a planet is brought back before the shooting starts', () => {
+    const g = new Game({ seed: 3n, crewMode: 'original' });
+    const body = g.galaxy.systems.find((sys) => sys.id === g.locationId)?.bodies
+      ?.find?.((b) => b.kind !== 'gas' && b.kind !== 'star');
+    if (!body) return;                      // no landable world in this system
+    g.enterOrbit(body.id);
+    g.walkOrder = null;
+    g.walk.enter('transporter');
+    if (!g.beamDown().ok) return;
+    assert.equal(g.ashore, true);
+
+    g.startCombat([new Ship('d7', { name: 'Ambush' })]);
+    assert.equal(g.ashore, false, 'the captain was left on a planet during a battle');
+    assert.deepEqual(checkGame(g), []);
+  });
+
+  test('a fight drops the ship out of warp rather than running underneath it', () => {
+    const g = new Game({ seed: 3n, crewMode: 'original' });
+    const somewhere = g.galaxy.systems.map((sys) => sys.id).find((id) => id !== g.locationId);
+    g.setCourse(somewhere, 6);
+    assert.ok(g.transit, 'the course was never laid in');
+
+    g.startCombat([new Ship('d7', { name: 'Interceptor' })]);
+    assert.equal(g.transit, null, 'the ship was at warp and in a battle at once');
+    assert.deepEqual(checkGame(g), []);
+  });
+});
+
+test('the no-win scenario does not end the commission', () => {
+  // The Kobayashi Maru is unwinnable by design and was fought with the real
+  // ship, so running it ended the campaign on every difficulty where losing
+  // the ship is fatal — which is most of them. A cadet loses the scenario, not
+  // their command.
+  const g = new Game({ seed: 6n, crewMode: 'original', difficulty: 'commander' });
+  g.runKobayashiMaru();
+  for (let t = 0; t < 40000 && g.engagement && !g.engagement.over; t++) { pilot(g); g.update(STEP); }
+  for (let t = 0; t < 5; t++) g.update(STEP);
+
+  assert.equal(g.lastCombat?.outcome, 'destroyed', 'the no-win scenario was won');
+  assert.equal(g.over, false, `the commission ended: ${g.overReason}`);
+  assert.equal(g.ship.destroyed, false);
+  assert.ok(g.ship.crew > 0, 'the simulator killed the real crew');
+  assert.equal(g.kobayashiRuns, 1, 'the attempt went unrecorded');
+  assert.deepEqual(checkGame(g), []);
+});
+
+test('a ship recovered after a loss has people on it', () => {
+  // `restore()` puts the hull and the systems back and says nothing about the
+  // crew, so a ship recovered from total crew loss came back with nobody
+  // aboard — and a ship with no crew is destroyed on the first tick, so it
+  // died again at the start of every later fight, forever.
+  const g = new Game({ seed: 11n, crewMode: 'original', difficulty: 'story' });
+  g.ship.crew = 0;
+  g.ship.destroy('total crew loss');
+  g.loseTheShip();
+
+  assert.equal(g.over, false, 'Story difficulty ended the commission anyway');
+  assert.ok(g.ship.crew > 0, 'the ship was recovered with nobody aboard');
+
+  g.startCombat([new Ship('scoutship', { name: 'Next' })]);
+  for (let t = 0; t < 60; t++) g.update(STEP);
+  assert.equal(g.ship.destroyed, false, 'the recovered ship died on the first tick of the next fight');
+});
+
+test('an injury outlives the scene it happened in', () => {
+  // Healing at `dt * 0.02` is a full recovery in fifty seconds of sitting on
+  // the bridge, while the campaign rule says the same injury takes 120 hours.
+  // An officer hurt in a battle was back at their post before the wreck had
+  // finished burning, and the sickbay that works while the app is closed could
+  // never have an effect.
+  const g = fight();
+  const officer = g.crew.officers[0];
+  officer.injured = true;
+  officer.injurySeverity = 1;
+
+  for (let t = 0; t < 30 * 300; t++) g.update(STEP);   // five minutes of play
+  assert.equal(officer.injured, true, 'five minutes of play healed a serious injury');
+
+  officer.recover(200);                                 // and then time passes
+  assert.equal(officer.injured, false, 'campaign time never healed it either');
+});
+
+test('a watch officer who fought a battle has something to report', () => {
+  const g = new Game({ seed: 8n, crewMode: 'canon', era: 'tos' });
+  g.walkOrder = null;
+  g.walk.enter('engineering');
+  g.updateCon();
+  const held = g.conOfficer;
+  assert.ok(held, 'nobody took the con');
+
+  g.startCombat([new Ship('scoutship', { name: 'Raider' })]);
+  for (let t = 0; t < 20000 && g.engagement && !g.engagement.over; t++) { pilot(g); g.update(STEP); }
+  for (let t = 0; t < 5; t++) g.update(STEP);
+
+  g.walkOrder = null;
+  g.walk.enter('bridge');
+  const lines = g.takeCon().lines.join('\n');
+  assert.ok(!/Nothing to report/.test(lines),
+    `an officer who fought a battle reported nothing:\n${lines}`);
+  assert.match(lines, /engaged/i);
+  assert.match(lines, /Hull integrity/);
+});
