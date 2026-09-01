@@ -21937,6 +21937,16 @@ const LIMITS = {
   combatSeconds: 60 * 60,
 };
 
+/**
+ * The modes the game is allowed to be in.
+ *
+ * Spelled out here rather than imported from `core/state.js`, because that
+ * module imports this one and a cycle between the simulation and the thing that
+ * checks the simulation is a bad trade for five strings. A test asserts this
+ * set and `MODES` are the same set, so they cannot drift apart quietly.
+ */
+const LEGAL_MODES = new Set(['bridge', 'transit', 'combat', 'mission', 'encounter']);
+
 const SEVERITY = { fatal: 0, error: 1, warn: 2 };
 
 /** Sort worst-first. Exported so callers report the same order the fuzzer does. */
@@ -22241,6 +22251,47 @@ function checkGame(game) {
         `the con is held by ${game.conStation}, and nobody alive is at that post`);
     }
 
+    // The mode itself.
+    //
+    // Every rule above asks whether the mode is the RIGHT one and none of them
+    // ever asked whether it is a mode at all. A garbage value out of an old or
+    // hand-edited save routes to no screen: the game boots to a blank panel
+    // that takes no orders, and nothing anywhere says why.
+    r.must(LEGAL_MODES.has(game.mode), 'game.mode.unknown', 'fatal',
+      `the game is in "${game.mode}" mode, which is not a mode`);
+
+    // The hulk left after a battle.
+    //
+    // A wreck is the one thing a finished fight leaves lying in the world, and
+    // nothing has ever checked it. It is read back by `stripWreck`, which
+    // compares its system to where the ship is now, and by the machine shop,
+    // which multiplies its tier into a materials yield — so a wreck naming a
+    // system that does not exist is salvage you can never reach, and a
+    // non-finite tier is a hold full of NaN duranium.
+    if (game.wreck) {
+      r.must(ok(game.wreck.hulls) && game.wreck.hulls >= 1, 'game.wreck.hulls', 'error',
+        `a hulk of ${game.wreck.hulls} ships is adrift`);
+      r.must(ok(game.wreck.tier) && game.wreck.tier >= 0, 'game.wreck.tier', 'error',
+        `the hulk's tier is ${game.wreck.tier}`);
+      r.must(!!game.wreck.systemId, 'game.wreck.nowhere', 'error',
+        'a hulk is adrift in no system at all');
+    }
+
+    // The after-action record.
+    //
+    // `lastCombat` outlives the engagement it describes and is what the panel
+    // after a fight reads — the panel used to do its own arithmetic and got the
+    // casualty count wrong for the life of the game, reporting every death the
+    // commission had ever suffered after every quiet battle. Now that it reads
+    // this instead, this is worth guarding: a count larger than the crew is not
+    // a number anybody should be shown.
+    if (game.lastCombat) {
+      const lost = game.lastCombat.crewLost;
+      r.must(ok(lost) && lost >= 0 && lost <= (game.ship?.maxCrew ?? Infinity),
+        'game.lastCombat.crew', 'error',
+        `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
+    }
+
     r.must(ok(game.latinum) && game.latinum >= 0, 'game.latinum', 'error',
       `latinum is ${game.latinum}`);
     for (const [k, v] of Object.entries(game.stores ?? {})) {
@@ -22352,6 +22403,7 @@ class Watchdog {
 }
 
 __exports.LIMITS = LIMITS;
+__exports.LEGAL_MODES = LEGAL_MODES;
 __exports.bySeverity = bySeverity;
 __exports.checkCombat = checkCombat;
 __exports.checkGame = checkGame;
@@ -22551,6 +22603,36 @@ function resolveHail(rng, optionId, {
   }
 }
 
+/**
+ * How a hail that ends a fight is recorded as an ENDING.
+ *
+ * `resolveHail` names its results for what happened at the table — they
+ * surrendered, we bought them off, they were deterred. `Engagement.end` takes
+ * one of five endings, and none of these is one of them, so every single one of
+ * them was silently coerced to `routed` — the ending that means "we drove them
+ * off in a fight". Measured: bribing a Klingon captain to leave paid 790
+ * experience and a `combat_victory` reputation on top of the 180 the bribe
+ * itself pays, and the panel reported "They have broken off and gone to warp"
+ * about a conversation.
+ *
+ * They all end the same way, because they are all the same thing: the fight
+ * stopped because somebody talked. What each one is WORTH is already decided,
+ * per option, by the `xp` and `standingDelta` on the result — this table exists
+ * so that reward is the only one, rather than a bonus on top of a battle's.
+ *
+ * Keeping it here, beside the results it maps, is deliberate: a new hail
+ * outcome added twenty lines above is not finished until it appears here, and
+ * a test asserts exactly that rather than trusting anyone to remember.
+ */
+const HAIL_ENDING = {
+  surrendered: 'parley',
+  bought_off: 'parley',
+  stand_down: 'parley',
+  deterred: 'parley',
+  accepted_aid: 'parley',
+  acknowledged: 'parley',
+};
+
 /** Standing change from an action, before the ledger applies it. */
 const STANDING_EFFECTS = {
   destroyed_their_ship: -12,
@@ -22569,6 +22651,7 @@ const STANDING_EFFECTS = {
 __exports.HAIL_OPTIONS = HAIL_OPTIONS;
 __exports.availableHails = availableHails;
 __exports.resolveHail = resolveHail;
+__exports.HAIL_ENDING = HAIL_ENDING;
 __exports.STANDING_EFFECTS = STANDING_EFFECTS;
 
 });
@@ -22953,7 +23036,7 @@ __define("src/world/galaxy.js", function (__exports, __require) {
 // Travel is not a menu jump. A course is plotted through charted lanes, it
 // takes stardate time and antimatter, and it can be interrupted en route.
 
-const { SYSTEMS, SYSTEM_BY_ID, distanceLy } = __require("src/world/systems.data.js");
+const { SYSTEMS, SYSTEM_BY_ID, distanceLy, systemDepth } = __require("src/world/systems.data.js");
 const { emit } = __require("src/core/events.js");
 const { clamp } = __require("src/core/num.js");
 
@@ -23136,7 +23219,20 @@ class Transit {
     return Math.max(0, Math.min(1, this.elapsedReal / this.realSeconds));
   }
 
-  /** Current position along the route, for the map. */
+  /**
+   * Current position along the route, for the map.
+   *
+   * The third axis is interpolated with the other two. It has to be: the chart
+   * lifts every star off the plane by `systemDepth`, and this returned only x
+   * and y — so the map, which projects `pos.z ?? 0`, drew the ship travelling
+   * along the flat while the two stars it was travelling between sat above and
+   * below it. Lay the chart over and the marker leaves its own lane.
+   *
+   * This is presentation only. `distanceLy` stays planar on purpose — folding
+   * depth into it would change every lane length, every transit time and the
+   * balance of the whole campaign to buy an accuracy nobody can see. There is a
+   * test that guards exactly that.
+   */
   positionIn(galaxy) {
     const path = this.route.path;
     const t = this.progress * (path.length - 1);
@@ -23144,7 +23240,13 @@ class Transit {
     const frac = t - i;
     const a = galaxy.get(path[i]);
     const b = galaxy.get(path[i + 1]) ?? a;
-    return { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac };
+    const az = systemDepth(a);
+    const bz = systemDepth(b);
+    return {
+      x: a.x + (b.x - a.x) * frac,
+      y: a.y + (b.y - a.y) * frac,
+      z: az + (bz - az) * frac,
+    };
   }
 
   /** @returns {'travelling'|'arrived'} */
@@ -25421,7 +25523,7 @@ const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
-const { resolveHail, STANDING_EFFECTS } = __require("src/sim/diplomacy.js");
+const { resolveHail, STANDING_EFFECTS, HAIL_ENDING } = __require("src/sim/diplomacy.js");
 const { applyAbility, applySignature, applyDevice } = __require("src/sim/powers.js");
 
 const { Galaxy, plotTransit } = __require("src/world/galaxy.js");
@@ -26706,7 +26808,10 @@ class Game {
     }
 
     if (result.endsCombat) {
-      if (eng) { eng.end(result.outcome); }
+      // A hail's result is not an ending — see HAIL_ENDING. Passing it straight
+      // through meant `end` did not recognise it and fell back on "routed",
+      // which pays a battle's experience and reputation for a conversation.
+      if (eng) { eng.end(HAIL_ENDING[result.outcome] ?? 'parley'); }
       else this.endEncounter();
       // `end` settles the fight on the spot — see Engagement.end — so by the
       // line below there is no engagement left and the bridge is already back
@@ -31470,7 +31575,14 @@ class App {
       parley: ['They are standing off. Nobody fired.', 'Rescue operations may proceed.'],
     }[outcome] ?? ['The engagement has ended.'];
     if (outcome !== 'destroyed') {
-      const lost = g.ship.maxCrew - g.ship.crew;
+      // From the after-action record, which counts the dead of THIS fight.
+      //
+      // This used to be `maxCrew - crew`, which is the standing deficit for the
+      // whole commission — the exact bug `finishCombat` was fixed for, left
+      // behind in the panel the player actually reads. Eleven people lost in
+      // the first engagement were reported again after every quiet battle for
+      // the rest of the five years, next to a ledger entry that had it right.
+      const lost = g.lastCombat?.crewLost ?? 0;
       if (lost > 0) lines.push(`${lost} crew did not survive it.`);
       lines.push(`Hull at ${Math.round(g.ship.hullPct * 100)}%.`);
     }

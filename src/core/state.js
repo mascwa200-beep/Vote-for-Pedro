@@ -15,7 +15,7 @@ import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
-import { resolveHail, STANDING_EFFECTS } from '../sim/diplomacy.js';
+import { resolveHail, STANDING_EFFECTS, HAIL_ENDING } from '../sim/diplomacy.js';
 import { applyAbility, applySignature, applyDevice } from '../sim/powers.js';
 
 import { Galaxy, plotTransit } from '../world/galaxy.js';
@@ -1304,7 +1304,10 @@ export class Game {
     }
 
     if (result.endsCombat) {
-      if (eng) { eng.end(result.outcome); }
+      // A hail's result is not an ending — see HAIL_ENDING. Passing it straight
+      // through meant `end` did not recognise it and fell back on "routed",
+      // which pays a battle's experience and reputation for a conversation.
+      if (eng) { eng.end(HAIL_ENDING[result.outcome] ?? 'parley'); }
       else this.endEncounter();
       // `end` settles the fight on the spot — see Engagement.end — so by the
       // line below there is no engagement left and the bridge is already back

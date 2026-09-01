@@ -189,6 +189,36 @@ export function resolveHail(rng, optionId, {
   }
 }
 
+/**
+ * How a hail that ends a fight is recorded as an ENDING.
+ *
+ * `resolveHail` names its results for what happened at the table — they
+ * surrendered, we bought them off, they were deterred. `Engagement.end` takes
+ * one of five endings, and none of these is one of them, so every single one of
+ * them was silently coerced to `routed` — the ending that means "we drove them
+ * off in a fight". Measured: bribing a Klingon captain to leave paid 790
+ * experience and a `combat_victory` reputation on top of the 180 the bribe
+ * itself pays, and the panel reported "They have broken off and gone to warp"
+ * about a conversation.
+ *
+ * They all end the same way, because they are all the same thing: the fight
+ * stopped because somebody talked. What each one is WORTH is already decided,
+ * per option, by the `xp` and `standingDelta` on the result — this table exists
+ * so that reward is the only one, rather than a bonus on top of a battle's.
+ *
+ * Keeping it here, beside the results it maps, is deliberate: a new hail
+ * outcome added twenty lines above is not finished until it appears here, and
+ * a test asserts exactly that rather than trusting anyone to remember.
+ */
+export const HAIL_ENDING = {
+  surrendered: 'parley',
+  bought_off: 'parley',
+  stand_down: 'parley',
+  deterred: 'parley',
+  accepted_aid: 'parley',
+  acknowledged: 'parley',
+};
+
 /** Standing change from an action, before the ledger applies it. */
 export const STANDING_EFFECTS = {
   destroyed_their_ship: -12,

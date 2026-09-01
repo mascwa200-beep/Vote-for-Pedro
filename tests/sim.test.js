@@ -3,12 +3,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { RNG, hashSeed } from '../src/core/rng.js';
 import { Ship, facingForBearing, inArc, FACINGS } from '../src/sim/ship.js';
 import { PowerGrid, effectiveness } from '../src/sim/power.js';
 import {
-  Engagement, rangeFactor, ARENA_RADIUS, MAX_WEAPON_RANGE, WITHDRAW_SECONDS,
+  Engagement, rangeFactor, ARENA_RADIUS, MAX_WEAPON_RANGE, WITHDRAW_SECONDS, OUTCOMES,
 } from '../src/sim/combat.js';
 import { CaptainProgress, RANKS } from '../src/sim/skills.js';
 import { Loadout, startingLoadout } from '../src/sim/loadout.js';
@@ -22,7 +23,7 @@ import { Game } from '../src/core/state.js';
 import { getShipClass, SHIP_LIST } from '../src/world/ships.data.js';
 import { SYSTEMS, SYSTEM_BY_ID } from '../src/world/systems.data.js';
 import { buildRoster, STATIONS } from '../src/world/crews.data.js';
-import { resolveHail } from '../src/sim/diplomacy.js';
+import { resolveHail, HAIL_ENDING } from '../src/sim/diplomacy.js';
 import { ABILITIES, ABILITY_LIST, abilityPool, Officer } from '../src/sim/officers.js';
 import { CAREERS, Character } from '../src/rules/character.js';
 import { checkAll } from '../src/sim/invariants.js';
@@ -598,6 +599,67 @@ test('bribery works on the bribeable and is unavailable elsewhere', () => {
     if (r.outcome === 'bought_off') bought++;
   }
   assert.ok(bought > 100, `expected bribery to usually work on Ferengi, got ${bought}/200`);
+});
+
+// A hail's RESULT is not an ENDING, and nothing used to notice.
+//
+// `resolveHail` names what happened at the table — surrendered, bought_off,
+// deterred. `Engagement.end` takes one of five endings and silently falls back
+// on "routed" for anything it does not recognise, which is the ending that
+// means "we drove them off in a fight" and pays accordingly. So every hail that
+// ended a battle paid a battle's experience and a `combat_victory` reputation
+// on top of the award the hail itself already carries.
+//
+// This is a structural test on purpose: a seventh hail outcome added later is
+// not finished until it is mapped, and this fails until it is.
+test('every hail outcome that ends a fight maps to a real ending', () => {
+  const source = readFileSync(new URL('../src/sim/diplomacy.js', import.meta.url), 'utf8');
+  // Every `outcome: '...'` resolveHail can return, read out of the file rather
+  // than listed here, so the two cannot drift apart.
+  const produced = [...source.matchAll(/outcome:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  assert.ok(produced.length >= 6, `found only ${produced.length} hail outcomes`);
+
+  for (const [result, ending] of Object.entries(HAIL_ENDING)) {
+    assert.ok(produced.includes(result), `HAIL_ENDING maps '${result}', which nothing produces`);
+    assert.ok(OUTCOMES.includes(ending), `'${result}' maps to '${ending}', which is not an ending`);
+  }
+
+  // The ones that do NOT end a fight need no mapping; the ones that do, do.
+  const ending = new Set(['surrendered', 'bought_off', 'stand_down', 'deterred', 'accepted_aid', 'acknowledged']);
+  for (const outcome of produced) {
+    if (!ending.has(outcome)) continue;
+    assert.ok(HAIL_ENDING[outcome], `'${outcome}' ends a fight and has no ending mapped`);
+  }
+});
+
+test('talking your way out pays what the talking is worth, not a battle', () => {
+  // Driven through `hail`, not through a hand-called `end`, because the bug
+  // lived in the wiring between them.
+  const tried = [];
+  for (const option of ['bribe', 'negotiate', 'offer_aid', 'demand_surrender']) {
+    let done = false;
+    for (let seed = 1; seed <= 400 && !done; seed++) {
+      const g = new Game({ seed: BigInt(seed) * 104729n });
+      g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Talk' })], { name: 'Parley' });
+      // Visibly winning, so demanding a surrender is a credible thing to do.
+      for (const h of g.engagement.hostiles) h.hull = h.maxHull * 0.15;
+      const before = g.progress.xp;
+      const result = g.hail(option);
+      if (!result?.endsCombat) continue;
+      g.update(1 / 30);
+      done = true;
+      tried.push(option);
+
+      assert.equal(g.lastCombat?.outcome, 'parley',
+        `${option} ended the fight as '${g.lastCombat?.outcome}'`);
+      assert.equal(Math.round(g.progress.xp - before), result.xp,
+        `${option} paid ${Math.round(g.progress.xp - before)} where the hail is worth ${result.xp}`);
+      // And no salvage: you agreed to stand down, not to strip their dead.
+      assert.equal(g.wreck, null, `${option} left a wreck behind`);
+      assert.equal(g.engagement, null, `${option} left the engagement behind`);
+    }
+  }
+  assert.equal(tried.length, 4, `only ${tried.join(', ')} ever succeeded`);
 });
 
 // ---------------------------------------------------------------- orders
