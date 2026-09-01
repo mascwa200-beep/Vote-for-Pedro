@@ -1108,7 +1108,7 @@ describe('the aftermath of a fight is coherent whatever the fight was', () => {
 
     const record = { ...g.lastCombat };
     const xp = g.progress.xp;
-    const kills = g.ledger.counters?.ships_destroyed ?? 0;
+    const kills = g.ledger.destroyedShips.length;
     const wreck = g.wreckHere;
 
     g.finishCombat('victory');
@@ -1117,7 +1117,118 @@ describe('the aftermath of a fight is coherent whatever the fight was', () => {
 
     assert.deepEqual({ ...g.lastCombat }, record, 'the after-action record was rewritten');
     assert.equal(g.progress.xp, xp, 'the experience was paid twice');
-    assert.equal(g.ledger.counters?.ships_destroyed ?? 0, kills, 'the kill was counted twice');
+    assert.equal(g.ledger.destroyedShips.length, kills, 'the kill was counted twice');
     assert.deepEqual(g.wreckHere, wreck, 'a second hulk appeared out of nothing');
+  });
+});
+
+// ============================================= a side of the fight that existed
+
+describe('somebody answers the distress call', () => {
+  // `Engagement` has supported allies since it was written: placed on the
+  // board, flown by the AI, drawn by all three renderers, targeted by hostiles
+  // and counted by every rule in this file. Nothing in the game ever created
+  // one. A whole side of the battle existed and was unreachable.
+
+  test('there is nobody to call when nobody is shooting', () => {
+    const g = new Game({ seed: 4n, crewMode: 'original' });
+    assert.equal(g.callForHelp().ok, false);
+  });
+
+  test('the call is made once per fight, and again in the next one', () => {
+    const g = fight('d7');
+    assert.equal(g.callForHelp().ok, true);
+    assert.equal(g.callForHelp().ok, false, 'the call went out twice');
+
+    g.engagement.end('routed');
+    g.startCombat([new Ship('d7', { name: 'More of them' })]);
+    assert.equal(g.callForHelp().ok, true, 'a new fight inherited the old call');
+  });
+
+  test('help arrives, fights, and is on your side', () => {
+    const g = fight('d7');
+    const call = g.callForHelp();
+    assert.equal(call.answered, true, call.reason);
+
+    for (let i = 0; i < 30 * 90 && !g.engagement?.allies.length; i++) {
+      pilot(g); g.update(STEP);
+      if (!g.engagement || g.engagement.over) break;
+    }
+    const ally = g.engagement?.allies?.[0];
+    assert.ok(ally, 'nobody came');
+    assert.equal(ally.faction, 'federation');
+    assert.ok(g.engagement.allShips.includes(ally), 'the ally is not on the board');
+
+    // And every rule that applies to a combatant applies to this one.
+    assert.deepEqual(checkAll(g, OPTS), []);
+  });
+
+  test('nobody comes for the no-win scenario', () => {
+    const g = new Game({ seed: 8n, crewMode: 'original' });
+    if (typeof g.runKobayashiMaru !== 'function') return;
+    g.runKobayashiMaru();
+    assert.equal(g.callForHelp().ok, false, 'the Kobayashi Maru was made winnable');
+  });
+
+  test('a wrecked subspace radio cannot call anybody', () => {
+    const g = fight('d7');
+    g.ship.subsystems.comms = 0.1;
+    assert.equal(g.callForHelp().ok, false);
+  });
+
+  test('the relief does not follow you into the next battle', () => {
+    // The countdown has a ship at the end of it. Left set past the fight it
+    // was called for, the next engagement gets a free ally dropping out of
+    // warp for a call the captain never made.
+    const g = fight('d7');
+    g.callForHelp();
+    assert.ok(g.helpInbound, 'nothing was inbound');
+    g.engagement.end('victory');
+    assert.equal(g.helpInbound, null, 'a ship is still on its way to a finished fight');
+    assert.deepEqual(checkAll(g, OPTS), []);
+  });
+
+  test('the checker objects to help inbound to a fight that is over', () => {
+    const g = fight('d7');
+    g.engagement.end('victory');
+    g.helpInbound = { classId: 'miranda', name: 'USS Nowhere', eta: 5 };
+    assert.ok(checkAll(g, OPTS).some((v) => v.code === 'game.help.orphan'),
+      JSON.stringify(checkAll(g, OPTS)));
+  });
+
+  test('an ally does not break the aftermath', () => {
+    // The whole reason this is in the invariants file rather than the sim one:
+    // a third party on the board is exactly the sort of thing that makes the
+    // salvage, the casualty count and the ledger disagree with each other.
+    const g = fight('d7');
+    g.callForHelp();
+    for (let i = 0; i < 30 * 240 && !g.lastCombat; i++) { pilot(g); g.update(STEP); }
+    assert.ok(g.lastCombat, 'the fight never ended');
+    assert.deepEqual(checkAll(g, OPTS), []);
+    assert.equal(g.engagement, null);
+    assert.ok(g.lastCombat.killed <= g.lastCombat.hostiles,
+      `${g.lastCombat.killed} kills out of ${g.lastCombat.hostiles} hostiles — an ally was counted`);
+  });
+
+  test('an ally lost in the fight is not counted as a kill of yours', () => {
+    const g = fight('d7');
+    g.callForHelp();
+    for (let i = 0; i < 30 * 90 && !g.engagement?.allies.length; i++) {
+      pilot(g); g.update(STEP);
+      if (!g.engagement || g.engagement.over) break;
+    }
+    const ally = g.engagement?.allies?.[0];
+    if (!ally) return;
+    ally.destroy('test');
+    const before = g.ledger.destroyedShips.length;
+    for (const s of g.engagement.hostiles) s.destroy('test');
+    g.engagement.end('victory');
+    assert.equal(g.lastCombat.killed, g.lastCombat.hostiles,
+      'the ally was tallied with the enemy');
+    const logged = g.ledger.destroyedShips.slice(before);
+    assert.equal(logged.length, g.lastCombat.hostiles,
+      `the ledger recorded ${logged.length} kills for ${g.lastCombat.hostiles} hostiles`);
+    assert.ok(!logged.some((k) => k.faction === 'federation'),
+      'a Starfleet ship went into the record as one of your kills');
   });
 });

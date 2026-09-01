@@ -325,6 +325,18 @@ export function checkGame(game) {
         `the fight is over but the game is still in ${game.mode} mode`);
     }
 
+    // Help that is on its way to a fight that is over.
+    //
+    // `helpInbound` is a countdown with a ship at the end of it. Left set past
+    // the battle it was called for, the next engagement gets a free ally
+    // dropping out of warp for a call the captain never made.
+    if (game.helpInbound) {
+      r.must(fighting, 'game.help.orphan', 'error',
+        'a ship is inbound to a battle that is not running');
+      r.must(num(game.helpInbound.eta) < 1e4, 'game.help.eta', 'error',
+        `the relief is ${game.helpInbound.eta} seconds out`);
+    }
+
     // The con is a bridge thing, and a fight is the moment it matters most.
     if (game.conStation) {
       r.must(!!game.crew?.at?.(game.conStation), 'game.con.ghost', 'error',

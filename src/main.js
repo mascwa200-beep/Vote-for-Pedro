@@ -1525,6 +1525,13 @@ class App {
         else { audio.play('ui_deny'); ack('computer', r.reason); }
         break;
       }
+      case 'call_for_help': {
+        const r = g.callForHelp();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play(r.answered ? 'computer_ack' : 'ui_deny');
+        haptic(r.answered ? 'confirm' : 'deny');
+        break;
+      }
       case 'take_con': {
         const r = g.takeCon();
         if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }

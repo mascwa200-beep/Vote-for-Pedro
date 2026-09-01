@@ -185,6 +185,9 @@ export class Game {
     this.log = [];
     this.pendingCombat = null;
     this.firstStrike = false;
+    // Whether this fight's call for help has been made, and what is on its way.
+    this.helpCalled = false;
+    this.helpInbound = null;
     // Explicitly false rather than undefined: `over` is read as a boolean all
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
@@ -1213,6 +1216,10 @@ export class Game {
       ...opts, onEnd: () => this.resolveCombat(),
     });
     this.mode = MODES.COMBAT;
+    // A new fight is a new call. Left set, the answer to "we need help" is
+    // "we already asked" for the rest of the commission.
+    this.helpCalled = false;
+    this.helpInbound = null;
     this.engagement.pushLog(`${fleet.length} hostile contact${fleet.length > 1 ? 's' : ''}.`, 'tactical');
     emit('combat:begin', this.engagement);
     return this.engagement;
@@ -1346,6 +1353,8 @@ export class Game {
 
     this.engagement = null;
     this.firstStrike = false;
+    this.helpCalled = false;
+    this.helpInbound = null;
     // The scenario and any channel forced open inside it end with the fight.
     // Left set, `gambitOpen` turns every later typed order into an appeal to a
     // Klingon commander who is no longer there.
@@ -1478,6 +1487,111 @@ export class Game {
     return { ok: true, feature, result };
   }
 
+  // ------------------------------------------------------------- calling for help
+
+  /**
+   * Ask for a hand, and find out whether Starfleet is close enough to give one.
+   *
+   * `Engagement` has supported allies since it was written: they are placed on
+   * the board, flown by the AI, drawn by all three renderers, targeted by
+   * hostiles and counted by every rule in the invariant checker. Nothing in the
+   * game ever created one. A whole side of the battle existed and was
+   * unreachable, which on this project is the shape of about half the bugs.
+   *
+   * What decides it is the thing a captain would expect to decide it: where
+   * you are and what your record says. Inside Federation space with a service
+   * record Starfleet respects, somebody diverts. Deep in the Neutral Zone with
+   * a record of shooting first, nobody does, and the reply says which.
+   *
+   * The help does not arrive instantly. A ship at warp takes time, and the
+   * gap between the call and the arrival is the point — it is a decision about
+   * whether you can hold on that long, not a button that wins the fight.
+   */
+  callForHelp() {
+    const eng = this.engagement;
+    if (!eng || eng.over) {
+      return { ok: false, reason: 'There is no one shooting at us, Captain.' };
+    }
+    if (this.helpCalled) {
+      return { ok: false, reason: 'We have already made the call, Captain. They are coming.' };
+    }
+    if (this.inKobayashi) {
+      // The whole point of the scenario is that nobody is coming.
+      return { ok: false, reason: 'No response on any Starfleet frequency. We are alone out here.' };
+    }
+    if (this.ship.subsystems.comms < 0.25) {
+      return { ok: false, reason: 'Long-range communications are out, Captain. Nobody can hear us.' };
+    }
+
+    const here = this.location;
+    const friendly = here?.faction === 'federation';
+    const standing = this.ledger.standingOf('federation');
+    const tier = this.reputation?.track('federation')?.tier ?? 0;
+
+    // Somebody has to be near enough to come. Federation space always has a
+    // patrol in it; outside it, only a record good enough to make a captain
+    // break off what they are doing will bring one.
+    if (!friendly && tier < 2) {
+      this.helpCalled = true;
+      this.pushLog('No Starfleet units within range, Captain. We are on our own.', 'comms');
+      return { ok: true, answered: false, reason: 'No Starfleet units within range.' };
+    }
+    if (standing < -20) {
+      this.helpCalled = true;
+      this.pushLog(
+        'Starfleet acknowledges the call and does not respond further, Captain.',
+        'comms',
+      );
+      return { ok: true, answered: false, reason: 'Starfleet acknowledged and did not respond.' };
+    }
+
+    // What answers scales with the record. A commendable captain gets a
+    // cruiser; a new one gets whatever was closest.
+    const classId = tier >= 3 ? 'excelsior' : (tier >= 1 ? 'constitution' : 'miranda');
+    const name = this.rng.pick([
+      'Farragut', 'Potemkin', 'Lexington', 'Exeter', 'Yorktown', 'Hood',
+      'Republic', 'Defiance', 'Endeavour', 'Kongo',
+    ]);
+    // Between eighteen and forty seconds of holding on.
+    const eta = 18 + this.rng.float() * 22;
+    this.helpCalled = true;
+    this.helpInbound = { classId, name: `USS ${name}`, eta };
+    this.pushLog(
+      `${this.helpInbound.name} answers, Captain — she is coming about now. `
+      + `Estimated ${Math.round(eta)} seconds.`,
+      'comms',
+    );
+    emit('help:called', this.helpInbound);
+    return { ok: true, answered: true, eta, ship: this.helpInbound.name };
+  }
+
+  /**
+   * Bring the help in when its clock runs out.
+   *
+   * Called from the tick, so a fight that ends before the ETA simply never
+   * sees it — which is right: they turn round and go home, and the log has
+   * already said they were coming.
+   */
+  updateHelp(dt) {
+    const inbound = this.helpInbound;
+    if (!inbound) return;
+    const eng = this.engagement;
+    if (!eng || eng.over) { this.helpInbound = null; return; }
+
+    inbound.eta -= dt;
+    if (inbound.eta > 0) return;
+    this.helpInbound = null;
+
+    const ally = new Ship(inbound.classId, { name: inbound.name, faction: 'federation' });
+    eng.allies.push(ally);
+    eng.placeCombatants();
+    eng.pushLog(`${ally.name} dropping out of warp, Captain. She is engaging.`, 'comms');
+    // No reputation for being rescued. Whatever the fleet thinks of a captain
+    // who needed help, it is not a commendation, and the ledger already
+    // records the engagement itself.
+    emit('help:arrived', ally);
+  }
+
   // ------------------------------------------------------------------ docking
 
   canDock() {
@@ -1551,6 +1665,7 @@ export class Game {
 
       case MODES.COMBAT: {
         if (!this.engagement) { this.mode = MODES.BRIDGE; break; }
+        this.updateHelp(dt);
         this.engagement.update(dt);
         // The game finishes its own fights.
         //

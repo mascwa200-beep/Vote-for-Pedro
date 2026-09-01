@@ -1089,6 +1089,81 @@ try {
   check('the officer who was named is the one who answers',
     answered.spoke === true, `${answered.helm}: ${answered.tail}`);
 
+  // ---- Somebody answers the distress call ----
+  //
+  // `Engagement` has supported allies since it was written and nothing in the
+  // game ever made one. Driven here through the real order line, because the
+  // half that matters is whether a third ship on the board breaks the plot,
+  // the labels, the target cycling or the aftermath.
+  const relief = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.ship.crew = g.ship.maxCrew;
+    g.startCombat([new Ship('d7', { name: 'Klingon cruiser' })]);
+    return { fighting: g.mode === 'combat', called: g.helpCalled };
+  });
+  check('a fight starts for the distress-call check', relief.fighting, JSON.stringify(relief));
+
+  await page.fill('.orderbar input', 'send a distress call');
+  await page.click('.orderbar button.send');
+  await page.waitForTimeout(400);
+  const answered2 = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return {
+      inbound: g.helpInbound?.name ?? null,
+      eta: g.helpInbound?.eta ?? null,
+      said: g.log.slice(-6).map((e) => e.text).join(' | '),
+    };
+  });
+  check('a typed distress call reaches Starfleet',
+    !!answered2.inbound, answered2.said);
+
+  // Run the clock down and let them arrive, then draw the three-ship plot.
+  const reliefArrived = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    if (g.helpInbound) g.helpInbound.eta = 0.5;
+    for (let i = 0; i < 30 * 3 && !g.engagement?.allies.length; i++) g.update(1 / 30);
+    app.go('tactical');
+    for (let i = 0; i < 40; i++) app.tactical?.render(g.engagement, 0, 1 / 60);
+    const { checkAll } = await import('./src/sim/invariants.js');
+    const { ARENA_RADIUS } = await import('./src/sim/combat.js');
+    return {
+      allies: g.engagement?.allies?.map((s) => s.name) ?? [],
+      violations: checkAll(g, { arenaRadius: ARENA_RADIUS }).map((v) => v.code),
+      drawn: app.tactical?.stats?.drawCalls ?? 0,
+    };
+  });
+  check('the relief arrives and joins the fight',
+    reliefArrived.allies.length === 1, JSON.stringify(reliefArrived));
+  check('a third ship on the board breaks no rule',
+    reliefArrived.violations.length === 0, reliefArrived.violations.join(', '));
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const app = globalThis.__app;
+    for (let i = 0; i < 10; i++) app.tactical?.render(app.game.engagement, 0, 1 / 60);
+  });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: join(SHOTS, '18-relief.png') });
+
+  // Leave the bridge as it was found. Everything after this checks the
+  // first-person view and the chair, and neither is on the tactical plot.
+  await page.evaluate(() => {
+    const app = globalThis.__app;
+    const g = app.game;
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.ship.crew = g.ship.maxCrew;
+    app.go('bridge');
+    app.render();
+  });
+  await page.waitForTimeout(350);
+
   // And it must actually notice. Poison one number and confirm the running
   // game reports it rather than carrying on with a broken ship.
   const caught = await page.evaluate(async () => {

@@ -26,7 +26,7 @@ export const STATION_AFFINITY = {
     'target_subsystem', 'shields', 'reinforce', 'alert', 'cloak'],
   engineering: ['power', 'preset', 'eject_core', 'reinforce'],
   science: ['scan'],
-  comms: ['hail', 'demand_surrender'],
+  comms: ['hail', 'demand_surrender', 'call_for_help'],
   medical: [],
   transporter: ['transport', 'away_team'],
   security: [],
@@ -571,6 +571,35 @@ export const INTENTS = [
     ],
     keywords: { hail: 3.5, channel: 2.5, contact: 2, communicate: 2.5, frequencies: 3 },
     build: () => ({ action: 'hail' }),
+  },
+  {
+    // The other side of the comms panel: not talking to them, talking to
+    // Starfleet. `Engagement` has supported allies since it was written and
+    // nothing in the game ever made one, so this is the order that does.
+    id: 'call_for_help',
+    help: 'Send a distress call / call for backup',
+    phrases: [
+      'send a distress call', 'send a distress signal', 'call for help',
+      'call for backup', 'call for assistance', 'request assistance',
+      'request backup', 'request support', 'we need help',
+      'signal starfleet', 'call starfleet', 'contact starfleet',
+      'broadcast a distress call', 'send out a distress call',
+      'mayday', 'send a mayday', 'get us some help', 'is anyone out there',
+      'ask for reinforcements', 'call in reinforcements', 'request reinforcements',
+      'tell starfleet we are under attack', 'priority one distress call',
+      'send a general distress call', 'all ships this is the enterprise',
+    ],
+    // `help` is deliberately NOT a keyword here. The bare word opens the
+    // manual, which is the discovery path for the whole order layer, and a
+    // distress call must not take it. The multi-word phrasings above still
+    // match as phrases.
+    keywords: {
+      distress: 3.5, backup: 3, reinforcements: 3.2, mayday: 4,
+      starfleet: 2.4, assistance: 2.6,
+    },
+    // "Hail them" is talking to the ship shooting at you; this is not.
+    veto: ['them', 'they', 'their', 'him', 'her', 'surrender'],
+    build: () => ({ action: 'call_for_help' }),
   },
   {
     id: 'demand_surrender',

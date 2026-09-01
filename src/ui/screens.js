@@ -724,12 +724,34 @@ export function tacticalScreen(app) {
   if (dc.length) side.append(panel('Damage Control', dc, 'danger'));
 
   // --- Comms ---
+  //
+  // Two directions: the ship shooting at you, and Starfleet. The distress call
+  // is here rather than on the chair because it is a comms order, and the sub
+  // line says what it will cost you — which is time, and the fight does not
+  // stop while you wait.
   const factionId = eng.hostiles[0]?.faction;
+  const inbound = g.helpInbound;
+  const comms = [];
   if (FACTIONS[factionId]?.hailable) {
-    side.append(panel('Communications', [
-      button('Hail them', tap(() => app.openHail(factionId)), { say: 'open a channel', color: 'lilac' }),
-    ]));
+    comms.push(button('Hail them', tap(() => app.openHail(factionId)),
+      { say: 'open a channel', color: 'lilac' }));
   }
+  if (inbound) {
+    comms.push(el('p', { class: 'hint', text: `${inbound.name} inbound — ${Math.max(0, Math.round(inbound.eta))} seconds out.` }));
+  } else if (!g.helpCalled) {
+    comms.push(button('Send a distress call', tap(() => {
+      const r = g.callForHelp();
+      if (!r.ok) audio.play('ui_deny');
+      app.render();
+    }), {
+      say: 'send a distress call',
+      color: 'ice',
+      sub: 'Whoever is nearest, if anyone is. They will not arrive quickly.',
+    }));
+  } else {
+    comms.push(el('p', { class: 'hint', text: 'The call has been made.' }));
+  }
+  if (comms.length) side.append(panel('Communications', comms));
 
   // The chair is where you are sitting, so it is on this screen too — with a
   // different set of controls, because blue alert is not a combat condition
