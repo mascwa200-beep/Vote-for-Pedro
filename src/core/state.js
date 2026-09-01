@@ -119,6 +119,7 @@ export class Game {
     this.clock = new Clock(eraDef?.stardate ?? 4523.3);
     this.galaxy = new Galaxy(this.rng);
     this.ledger = new Ledger();
+    this.ledger.stardate = eraDef?.stardate ?? 4523.3;
     this.missions = new MissionBook(EPISODES);
     this.locationId = options.startAt ?? 'sol';
     this.galaxy.markVisited(this.locationId);
@@ -1482,6 +1483,9 @@ export class Game {
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
     this.updateWalk(dt);
+    // Keep the ledger's clock current, so anything recorded during this tick is
+    // stamped without every caller having to remember to pass a date.
+    this.ledger.stardate = this.clock.stardate;
     this.watchdog?.tick(this, { arenaRadius: ARENA_RADIUS });
     // A watch is time somebody stood, not only time the app was closed.
     //

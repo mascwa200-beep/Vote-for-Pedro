@@ -54,7 +54,18 @@ export class Ledger {
    * @param {object} detail  { stardate, system, text, count, faction, ... }
    */
   record(kind, detail = {}) {
-    const entry = { kind, ...detail, seq: this.entries.length };
+    // Everything that happens, happens on a date.
+    //
+    // `stardate` was only ever recorded when a caller thought to pass it, and
+    // most did not — so the Service Record, which is the whole point of keeping
+    // this, rendered most of a five-year commission as "SD —". The ledger now
+    // carries the current date and stamps anything that did not bring its own.
+    const entry = {
+      kind,
+      stardate: this.stardate ?? null,
+      ...detail,
+      seq: this.entries.length,
+    };
     this.entries.push(entry);
     this.counters[kind] = (this.counters[kind] ?? 0) + (detail.count ?? 1);
 

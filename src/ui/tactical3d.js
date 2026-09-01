@@ -123,6 +123,8 @@ export class TacticalView3D {
     this._model = mat4();
     this._pos = vec3();
     this._quat = quat();
+    // Scratch for the normal matrix; see the note in firstperson.js.
+    this._normal = new Float64Array(9);
     this._nose = vec3();
     this._eyeTmp = vec3();
     this._look = vec3();
@@ -543,7 +545,7 @@ export class TacticalView3D {
       compose(this._pos, this._quat, b.radius, this._model);
       this.renderer.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: b.emissive,
         tint: b.tint,
         // Scenery is meant to be far away. Fogging it against a falloff tuned
@@ -562,7 +564,7 @@ export class TacticalView3D {
     compose(this.eye(), quat(), 1, this._model);
     this.renderer.draw('stars', stars, {
       model: this._model,
-      normalMatrix: normalMatrix(this._model),
+      normalMatrix: normalMatrix(this._model, this._normal),
       emissive: 1,
       tint: [1, 1, 1],
       // The sky is not a distant object in the scene, it is the backdrop. It
@@ -579,7 +581,7 @@ export class TacticalView3D {
     identity(this._model);
     this.renderer.draw('grid', gridMesh(), {
       model: this._model,
-      normalMatrix: normalMatrix(this._model),
+      normalMatrix: normalMatrix(this._model, this._normal),
       emissive: 1,
       alpha: 0.55,
       tint: [1, 1, 1],
@@ -600,7 +602,7 @@ export class TacticalView3D {
 
     this.renderer.draw(`hull:${ship.classId}:${ship.faction}`, mesh, {
       model: this._model,
-      normalMatrix: normalMatrix(this._model),
+      normalMatrix: normalMatrix(this._model, this._normal),
       tint,
       alpha: ship.cloaked ? 0.22 : 1,
     });
@@ -613,7 +615,7 @@ export class TacticalView3D {
       this._model[5] = Math.abs(alt);      // stretch the unit line to the drop
       this.renderer.draw('dropline', dropLineMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         alpha: 0.4,
         tint: [1, 1, 1],
@@ -629,7 +631,7 @@ export class TacticalView3D {
       const p = paletteFor(ship.faction);
       this.renderer.draw('shield', shieldMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         alpha: 0.04 + 0.07 * (ship.shieldPct ?? 0),
         tint: p.glow,
@@ -651,7 +653,7 @@ export class TacticalView3D {
       const p = paletteFor(e.faction);
       this.renderer.draw('beam', beamMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         alpha: clamp(e.life * 2.4, 0, 0.9),
         tint: p.glow,
@@ -662,7 +664,7 @@ export class TacticalView3D {
       compose(vec3(p.x, p.z ?? 0, p.y), quat(), 9, this._model);
       this.renderer.draw('torpedo', torpedoMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         tint: [1, 1, 1],
       });
@@ -674,7 +676,7 @@ export class TacticalView3D {
       compose(vec3(e.x, e.z ?? 0, e.y), quat(), 30 + age * 130, this._model);
       this.renderer.draw('explosion', explosionMesh(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         alpha: 1 - age,
         tint: [1, 1, 1],

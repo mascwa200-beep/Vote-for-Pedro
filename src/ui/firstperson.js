@@ -88,6 +88,12 @@ export class FirstPersonView {
     this._at = vec3();
     this._pos = vec3();
     this._quat = quat();
+    // Scratch for the normal matrix. `normalMatrix` allocates a fresh
+    // Float64Array when it is not given somewhere to write, and it is called
+    // once per draw call — so the one part of this renderer documented as
+    // allocation-free was producing nine doubles of garbage per hull, per
+    // frame. The uniform is uploaded synchronously, so one buffer is safe.
+    this._normal = new Float64Array(9);
     this._nose = vec3();
     this._screenVP = mat4();
     // How far the warp field has streamed past. Wraps every WARP_LENGTH, which
@@ -503,7 +509,7 @@ export class FirstPersonView {
       compose(this._pos, along, 1, this._model);
       r.draw('warp', warpfield(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
@@ -513,7 +519,7 @@ export class FirstPersonView {
       compose(eye, quat(), 1, this._model);
       r.draw('stars', starfield(), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
@@ -530,7 +536,7 @@ export class FirstPersonView {
       compose(this._pos, this._quat, body.radius, this._model);
       r.draw(`world:${body.kind}`, worldMesh(body.kind, body.ordinal ?? 0), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: emisOf(0),
         tint: tintOf([1, 1, 1]),
         fogFar: 1e9,
@@ -541,7 +547,7 @@ export class FirstPersonView {
       compose(this._pos, this._quat, body.radius, this._model);
       r.draw(`limb:${body.kind}`, limbMesh(body.kind), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         emissive: 1,
         tint: tintOf([1, 1, 1]),
         alpha: 0.8,
@@ -567,7 +573,7 @@ export class FirstPersonView {
         compose(this._pos, quat(), b.radius, this._model);
         r.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
           model: this._model,
-          normalMatrix: normalMatrix(this._model),
+          normalMatrix: normalMatrix(this._model, this._normal),
           emissive: emisOf(b.emissive),
           tint: tintOf(b.tint),
           fogFar: 90000,
@@ -601,7 +607,7 @@ export class FirstPersonView {
         compose(this._pos, this._quat, hullScale(s.classId), this._model);
         r.draw(`hull:${s.classId}:${s.faction}`, hullMesh(s.classId, s.faction), {
           model: this._model,
-          normalMatrix: normalMatrix(this._model),
+          normalMatrix: normalMatrix(this._model, this._normal),
           tint: tintOf([1, 1, 1]),
           emissive: emisOf(0),
           alpha: s.cloaked ? 0.22 : 1,
@@ -616,7 +622,7 @@ export class FirstPersonView {
     const m = roomMeshes(room.id);
     if (!m) return;
     compose(vec3(0, 0, 0), quat(), 1, this._model);
-    const nm = normalMatrix(this._model);
+    const nm = normalMatrix(this._model, this._normal);
     // Rooms are 10 metres across, not 3,000 — the tactical falloff would fog a
     // bulkhead you are standing next to.
     this.renderer.draw(`room:${room.id}`, m.solid, {
@@ -665,7 +671,7 @@ export class FirstPersonView {
       compose(this._pos, this._quat, 1, this._model);
       this.renderer.draw(`crew:${st.crew}:${st.mounted}`, officerMesh(st.crew, st.mounted), {
         model: this._model,
-        normalMatrix: normalMatrix(this._model),
+        normalMatrix: normalMatrix(this._model, this._normal),
         fogFar: 1e6,
       });
     }

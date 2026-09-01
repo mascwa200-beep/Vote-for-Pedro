@@ -1657,6 +1657,9 @@ try {
   const km = await page.evaluate(async () => {
     const g = globalThis.__app.game;
     const locked = g.gambit;
+    // In the scenario, because forcing a channel reroutes the order line into
+    // an appeal and there has to be somebody on the other end of it.
+    g.runKobayashiMaru();
     // A green captain must be refused, and told both reasons.
     const refused = g.forceChannel();
 
@@ -1671,7 +1674,7 @@ try {
       'This is Captain Okafor. You know my record. I spared three of your '
       + 'crews. There are civilians aboard. Withdraw and we take them off together.');
 
-    return {
+    const result = {
       startsLocked: locked.unlocked === false,
       reasonsGiven: locked.reasons.length,
       refused: refused.ok === false,
@@ -1679,6 +1682,14 @@ try {
       won: outcome.success,
       recorded: (g.ledger.counters.kobayashi_maru_solved ?? 0) === 1,
     };
+
+    // Put the simulator away. `runKobayashiMaru` starts a real engagement and
+    // combat:begin navigates the app to the tactical screen, so leaving it
+    // running takes every check after this one with it.
+    if (g.engagement && !g.engagement.over) g.engagement.end('parley');
+    for (let i = 0; i < 5; i++) g.update(1 / 30);
+    globalThis.__app.go('bridge');
+    return result;
   });
   check('the Kobayashi Maru technique starts locked', km.startsLocked);
   check('and says both of the reasons why', km.reasonsGiven === 2, String(km.reasonsGiven));
