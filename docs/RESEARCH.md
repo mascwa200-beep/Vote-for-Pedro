@@ -531,6 +531,113 @@ Sources: [Sky & Telescope — the 1991 letter identifying 40 Eridani A](https://
 
 ---
 
+## 13. Every hull, to its published numbers
+
+The ships in this game are all the same size. That is not a figure of speech.
+
+`hullScale` compresses length logarithmically before anything is drawn:
+
+```js
+108 * (0.5 + 0.5 * Math.log10(metres / 20) / Math.log10(150))
+```
+
+Measured against a Constitution, this is what the renderer actually produces:
+
+| class | real length | true ratio | drawn at |
+|---|---|---|---|
+| Danube runabout | 23 m | 0.08× | **0.67×** |
+| Defiant | 171 m | 0.59× | **0.93×** |
+| Constitution | 289 m | 1.00× | 1.00× |
+| Excelsior | 467 m | 1.62× | **1.06×** |
+| Galaxy | 641 m | 2.22× | **1.10×** |
+| D'deridex | 1042 m | 3.60× | **1.17×** |
+| Borg cube | 3040 m | 10.52× | **1.31×** |
+
+A three-kilometre cube draws a third larger than a heavy cruiser. A
+twenty-three-metre runabout draws two-thirds its size. The lengths were already
+right; the function consuming them threw the information away.
+
+### The table
+
+Length × beam × height in metres, then decks and complement. **Bold** figures
+are well attested across the published technical material. Figures in brackets
+are the game's own, kept where the source material gives no number — they are
+proportions read off the screen, and they are marked so nobody mistakes them for
+measurements.
+
+| Class | Length | Beam | Height | Decks | Crew |
+|---|---|---|---|---|---|
+| Constitution | **289** | **132** | **73** | **23** | **430** |
+| Constitution (refit) | **305** | **132** | **71** | **23** | 500 |
+| Miranda | **278** | **141** | **62** | (12) | 220 |
+| Oberth | **120** | **66** | **35** | (8) | 80 |
+| Excelsior | **467** | **186** | **78** | **34** | 750 |
+| Constellation | **260** | **160** | **60** | (14) | 535 |
+| Ambassador | **526** | **326** | **130** | **36** | 700 |
+| Galaxy | **641** | **464** | **195** | **42** | **1012** |
+| Nebula | **442** | **318** | **130** | (30) | 750 |
+| Intrepid | **345** | **132** | **66** | **15** | **141** |
+| Defiant | **171** | **134** | **30** | **4** | **50** |
+| Sovereign | **685** | **251** | **88** | **24** | **855** |
+| Danube runabout | **23** | **14** | **5** | **1** | **4** |
+| B'rel bird-of-prey | **158** | **182** | **98** | (3) | 12 |
+| D7 battlecruiser | **228** | **152** | **60** | (18) | 400 |
+| K't'inga | **235** | **152** | **60** | (18) | 440 |
+| Vor'cha | **481** | **342** | **107** | (28) | 1900 |
+| Negh'Var | **682** | **470** | **137** | (35) | 2500 |
+| D'deridex warbird | **1042** | **774** | **307** | (60) | 1500 |
+| Romulan scout | (68) | (44) | (18) | (3) | 24 |
+| Galor | **372** | **192** | **59** | (16) | 300 |
+| Keldon | (400) | (208) | (64) | (18) | 400 |
+| D'Kora marauder | **367** | **234** | **103** | (20) | 450 |
+| Orion raider | (110) | (64) | (30) | (5) | 60 |
+| Tholian web spinner | (130) | (96) | (26) | (4) | 12 |
+| Jem'Hadar attack ship | **179** | **130** | **26** | (3) | 50 |
+| Jem'Hadar battleship | (800) | (420) | (150) | (40) | 900 |
+| Borg cube | **3040** | **3040** | **3040** | — | 64000 |
+| Bioship | (600) | (420) | (200) | — | 1 |
+| Transport | (120) | (58) | (34) | (6) | 1400 |
+| Freighter | (220) | (92) | (58) | (10) | 14 |
+
+### Three of these break the obvious rules, and they are supposed to
+
+**A Bird-of-Prey is wider than it is long.** 182 metres across the wings against
+158 nose to tail. It is the only hull in the table like that, it is why the
+`wings` primitive exists in the mesh builder, and any check that asserts "beam
+is less than length" has to know about it or it will be quietly wrong for the
+one ship whose shape is its whole identity.
+
+**A Borg cube is a cube.** Length, beam and height are all 3,040 metres. It has
+no decks in any sense the word applies to, and no beam-versus-length relation to
+test.
+
+**The contradictions are left in.** The Miranda is given as 243 m in some
+published material and 277.6 m in others; K't'inga figures range from 228 m to
+349 m. Where sources disagree the game's existing figure is kept, because
+changing it would move a hull that the balance was tuned against to buy nothing
+except a different disputed number.
+
+### What the build takes from this
+
+The compression goes. `hullScale` becomes length in metres times one constant,
+chosen so a Constitution keeps roughly the size it draws at today — which makes
+this a change to *relative* size only and leaves every existing weapon arc,
+range and camera distance meaningful.
+
+Beam, height and decks are recorded now and used later. Turning them into
+geometry means giving each class its own silhouette instead of the one shared
+`starfleet` form, and that is its own piece of work. Recording them first means
+the numbers are sitting there, checkable, when it starts.
+
+Sources: [Memory Alpha — Constitution class](https://memory-alpha.fandom.com/wiki/Constitution_class),
+[Memory Alpha — Galaxy class](https://memory-alpha.fandom.com/wiki/Galaxy_class),
+[Memory Alpha — Defiant class](https://memory-alpha.fandom.com/wiki/Defiant_class),
+[Memory Alpha — B'rel class](https://memory-alpha.fandom.com/wiki/B%27rel_class),
+[Memory Alpha — D'deridex class](https://memory-alpha.fandom.com/wiki/D%27deridex_class),
+[Memory Beta — Star Trek: Star Charts](https://memory-beta.fandom.com/wiki/Star_Trek:_Star_Charts)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
