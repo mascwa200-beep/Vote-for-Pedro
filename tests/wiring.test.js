@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { Game } from '../src/core/state.js';
+import { on } from '../src/core/events.js';
+import { plotTransit } from '../src/world/galaxy.js';
 import {
   SYSTEMS, systemDepth, distanceLy, REAL_DECLINATION,
 } from '../src/world/systems.data.js';
@@ -611,6 +613,82 @@ test('breaking off a fight actually leaves', () => {
   assert.equal(g.transit, null, 'never arrived');
   assert.equal(g.locationId, ranTo, 'arrived somewhere other than the escape course');
   assert.ok(g.clock.stardate > stardateBefore, 'running took no time at all');
+});
+
+test('the ship is already at warp when the fight report is written', () => {
+  // `emit` is synchronous, and the panel that reports how a fight ended reads
+  // `game.transit` to decide whether to say "we are clear and at warp" or "we
+  // are not going anywhere". The escape used to run twenty lines BELOW that
+  // emit, so the panel read a transit that nothing had set yet: every
+  // successful escape announced that the ship was going nowhere, and then the
+  // ship went somewhere. The same defect the escape was built to fix, one line
+  // apart from the fix.
+  const g = gameWith();
+  let sawAtEmit = null;
+  const off = on('combat:resolved', () => {
+    sawAtEmit = g.transit ? g.transit.to.id : null;
+  });
+  try {
+    g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Chaser' })]);
+    g.engagement.end('escaped');
+    g.update(1 / 30);
+  } finally { off?.(); }
+
+  assert.ok(sawAtEmit, 'the report was written before the ship went to warp');
+  assert.equal(sawAtEmit, g.transit?.to?.id,
+    'the report named a different course than the one flown');
+});
+
+test('a ship that can only limp still gets away', () => {
+  // Fuel goes as the 2.4th power of the warp factor, so warp 1 costs about a
+  // hundred and fiftieth of warp 8. The escape asked for maximum warp and
+  // nothing else, so a ship with ample antimatter to crawl to any neighbour
+  // was told it was not going anywhere and left sitting where it had just
+  // fought.
+  const probe = gameWith();
+  const here = probe.locationId;
+  const top = probe.ship.cls.maxWarp ?? 8;
+  const costs = probe.galaxy.neighbors(here).map((n) => ({
+    fast: plotTransit(probe.galaxy, here, n.id, top, probe.ship, 1).fuel,
+    slow: plotTransit(probe.galaxy, here, n.id, 1, probe.ship, 1).fuel,
+  }));
+  const tank = (Math.min(...costs.map((c) => c.fast)) + Math.min(...costs.map((c) => c.slow))) / 2;
+
+  const g = gameWith();
+  g.ship.antimatter = tank;
+  g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Chaser' })]);
+  g.engagement.end('escaped');
+  g.update(1 / 30);
+
+  assert.ok(g.transit,
+    `${tank.toFixed(2)}% antimatter is not enough to run at any speed at all`);
+  assert.ok(g.transit.warpFactor < top,
+    `ran at warp ${g.transit.warpFactor} on a tank that cannot afford warp ${top}`);
+});
+
+test('you cannot warp out of a web that is holding you', () => {
+  // The stage says it plainly — "a ship that cannot go to warp until the
+  // lattice is broken" — and the combat spec had no way to say it to the
+  // engagement. While breaking off went nowhere that did not matter. Now that
+  // it goes somewhere, it would have warped you cleanly out of the thing that
+  // is holding you.
+  const web = EPISODES.find((e) => e.stages?.inside?.choices
+    ?.some((c) => c.effects?.combat?.ships?.includes('tholian_web_spinner')));
+  assert.ok(web, 'the Tholian web episode is gone');
+  const spec = web.stages.inside.choices[0].effects.combat;
+  assert.equal(spec.canWarpOut, false, 'the web lets you leave');
+
+  // And the flag survives the trip from a mission stage into the engagement,
+  // which is where it used to be dropped.
+  const g = gameWith();
+  g.pendingCombat = {
+    ships: [new Ship('tholian_web_spinner', { faction: 'tholian', name: 'Spinner' })],
+    canWarpOut: false,
+  };
+  g.update(1 / 30);
+  assert.ok(g.engagement, 'the queued fight never started');
+  assert.equal(g.engagement.canWarpOut, false, 'the engagement will let you run');
+  assert.equal(g.engagement.beginWarpOut(), false, 'the helm plotted an escape anyway');
 });
 
 test('a ship that cannot run says so instead of pretending', () => {
