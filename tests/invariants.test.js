@@ -33,6 +33,7 @@ import {
   ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES, OUTCOMES,
 } from '../src/sim/combat.js';
 import { parseOrder } from '../src/ui/orders.js';
+import { ABILITIES } from '../src/sim/officers.js';
 
 const STEP = 1 / 30;
 const OPTS = { arenaRadius: ARENA_RADIUS };
@@ -242,6 +243,7 @@ test('a tour of duty: fight after fight, on one commission', () => {
   let fought = 0;
   let lost = 0;
   const outcomes = new Set();
+  const usedPowers = new Set();
 
   for (const [seed, difficulty, crewMode, shipClass, HOSTILES] of [
     [91001, 'story', 'canon', 'constitution', TOS],
@@ -300,7 +302,7 @@ test('a tour of duty: fight after fight, on one commission', () => {
           const ready = g.readyAbilities();
           if (ready.length) {
             const p = ready[Math.floor(rand() * ready.length)];
-            g.useAbility(p.officer, p.ability.id);
+            if (g.useAbility(p.officer, p.ability.id).ok) usedPowers.add(p.ability.id);
           }
         } else if (roll < 0.034) {
           g.useDevice(pick(['shield_battery', 'weapons_battery', 'engine_battery', 'hull_patch']));
@@ -354,6 +356,16 @@ test('a tour of duty: fight after fight, on one commission', () => {
         () => {
           if (g.progress.unspent > 0) g.spendSkill('beam_weapons');
         },
+        () => {
+          // Training, which is the only route to the rank-three abilities.
+          // Without it the tour fired twenty-one of the twenty-six and the
+          // five it never reached were exactly the five that training exists
+          // for — so the soak proved nothing at all about them.
+          for (const o of g.crew.available) {
+            const next = g.trainableFor(o)[0];
+            if (next) { g.trainOfficer(o, next.id); return; }
+          }
+        },
       ];
       for (let i = 0; i < 8; i++) {
         pick(between)();
@@ -372,6 +384,11 @@ test('a tour of duty: fight after fight, on one commission', () => {
   assert.ok(outcomes.has('victory') || outcomes.has('routed'),
     `nothing was ever won: ${[...outcomes]}`);
   assert.ok(lost < 5, 'every commission ended with the ship lost');
+  // No silent gaps: a power the soak never fires is a power the soak says
+  // nothing about, and saying nothing is not the same as saying it is fine.
+  const neverFired = Object.keys(ABILITIES).filter((id) => !usedPowers.has(id));
+  assert.deepEqual(neverFired, [], 'abilities the tour never once used');
+
   assert.deepEqual(dog.summary.map((v) => `${v.severity} ${v.code}: ${v.text}`), [],
     `${dog.total} invariant violations across ${ticks} ticks of a tour`);
 });

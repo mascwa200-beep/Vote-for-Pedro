@@ -31,6 +31,19 @@ export function weakestFacing(ship) {
 export function applyAbility(game, officer, ability) {
   const a = typeof ability === 'string' ? ABILITIES[ability] : ability;
   if (!game || !officer || !a) return { ok: false, reason: 'no such ability' };
+  // Three different noes, and they used to be one. When every officer of a
+  // department held an identical tray, "not ready" could only ever mean a
+  // cooldown; now that the six departments differ, "the helm is not trained
+  // for that" is a thing a captain needs to be told, and so is "she is in
+  // sickbay" — because the answer to those two is training and a doctor, not
+  // waiting thirty seconds.
+  if (!officer.abilities.includes(a.id)) {
+    return { ok: false, reason: `${officer.name} is not trained for that, Captain.`, ability: a, officer };
+  }
+  if (!officer.available) {
+    const why = officer.alive ? 'is in sickbay' : 'is gone';
+    return { ok: false, reason: `${officer.name} ${why}, Captain.`, ability: a, officer };
+  }
   if (!officer.ready(a.id)) return { ok: false, reason: 'on cooldown', ability: a, officer };
 
   const eng = game.engagement && !game.engagement.over ? game.engagement : null;
@@ -96,6 +109,101 @@ export function applyAbility(game, officer, ability) {
           w.cooldown = 0;
           eng.fireWeapon(game.ship, w, target);
         }
+      }
+      break;
+    }
+
+    // ---- Command ----
+    case 'formation': {
+      // The only power that speaks to an ally. Allies have existed in
+      // `Engagement` since it was written and arrive on a distress call, and
+      // until now there was nothing to say to them: they flew their own fight
+      // beside yours. They take the same order the ship just took, and they
+      // come round onto your heading to take it.
+      const live = (eng?.allies ?? []).filter((s) => !s.destroyed);
+      for (const s of live) {
+        s.addBuff({ id: a.id, label: a.name, until: a.duration || 20, mods: a.mods });
+        s.desiredHeading = game.ship.heading;
+      }
+      report = {
+        kind: 'formation',
+        title: a.name,
+        lines: live.length
+          ? [`${live.length} ship${live.length === 1 ? '' : 's'} holding station on us.`]
+          : ['Nobody out there to hold station on us, Captain. The ship tightens up regardless.'],
+        allies: live.length,
+      };
+      break;
+    }
+
+    // ---- Medical ----
+    case 'return_officer': {
+      // One officer out of sickbay and back on a post. A station standing
+      // empty is a capability the ship has lost, so this is worth more than
+      // the number of people it moves.
+      const wounded = game.crew.officers.find((o) => o.alive && o.injured);
+      if (wounded) {
+        wounded.heal();
+        report = {
+          kind: 'duty', title: a.name,
+          lines: [`${wounded.name} is cleared for duty and back at ${wounded.station}.`],
+          officer: wounded.name,
+        };
+      } else {
+        report = { kind: 'duty', title: a.name, lines: ['Nobody in sickbay, Captain.'], officer: null };
+      }
+      break;
+    }
+    case 'treat_wounded': {
+      // The wounded are a running total that only ever went up: `injured`
+      // climbs with every hull hit and nothing in a fight ever brought it
+      // down. This is the one thing that does.
+      const before = game.ship.injured ?? 0;
+      game.ship.injured = Math.max(0, Math.round(before * 0.4));
+      report = {
+        kind: 'sickbay', title: a.name,
+        lines: [`${before - game.ship.injured} treated and out of danger. ${game.ship.injured} still in sickbay.`],
+        treated: before - game.ship.injured,
+      };
+      break;
+    }
+
+    // ---- Operations ----
+    case 'read_intent': {
+      // Information, and nothing else. `scan` reads one ship; this reads the
+      // board — who is out there, what state they are in, and who each of them
+      // is shooting at, which is the one thing a captain cannot otherwise see.
+      const board = (eng?.liveHostiles ?? []).map((s) => {
+        const at = s.aiTarget === game.ship ? 'us'
+          : s.aiTarget ? s.aiTarget.name
+            : 'nobody yet';
+        const state = s.fleeing ? 'breaking off' : s.cloaked ? 'cloaked' : 'engaged';
+        return `${s.name}: hull ${Math.round(s.hullPct * 100)}%, shields ${Math.round(s.shieldPct * 100)}%, ${state}, firing on ${at}.`;
+      });
+      report = {
+        kind: 'traffic', title: a.name,
+        lines: board.length ? board : ['Nothing on any frequency, Captain.'],
+        count: board.length,
+      };
+      break;
+    }
+    case 'false_signal': {
+      // A ship that is not there. Every targeting solution out there was
+      // computed against it, so every one of them has to be thrown out and
+      // taken again.
+      //
+      // This is deliberately the small, repeatable version of what the
+      // Intelligence captain's signature does once per engagement: their
+      // weapons go back on cooldown and they shoot worse while they reacquire,
+      // but the signature also decloaks the room and lasts longer. A bridge
+      // officer power should be the lesser of the two.
+      for (const s of eng?.liveHostiles ?? []) {
+        for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, (a.duration || 12) * 0.4);
+        s.aiTarget = null;
+        s.addBuff({
+          id: 'reacquiring', label: 'Reacquiring', until: a.duration || 12,
+          mods: { accuracy: 0.75 },
+        });
       }
       break;
     }

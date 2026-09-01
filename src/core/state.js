@@ -6,7 +6,7 @@ import { Ledger } from './ledger.js';
 import { emit } from './events.js';
 
 import { Ship } from '../sim/ship.js';
-import { Crew, Officer } from '../sim/officers.js';
+import { Crew, Officer, ABILITIES, ABILITY_LIST } from '../sim/officers.js';
 import { CaptainProgress, combatXP, SKILLS } from '../sim/skills.js';
 import { Loadout, startingLoadout, CONSOLES } from '../sim/loadout.js';
 import { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } from '../sim/combat.js';
@@ -2443,6 +2443,55 @@ export class Game {
   /** Every ability that could be fired right now, with its officer. */
   readyAbilities() {
     return this.crew.readyAbilities();
+  }
+
+  /**
+   * Teach an officer something new. A day of ship's time.
+   *
+   * `officer.learn` records it. The day, the log line, the recomputed ship
+   * modifiers and every refusal were in the officer detail modal in
+   * `src/ui/screens.js` — so training was one more thing that only existed
+   * when a screen was attached, and it was the only route to the six
+   * abilities nobody held at commission.
+   */
+  trainOfficer(who, abilityId) {
+    const officer = (typeof who === 'object' && typeof who?.learn === 'function')
+      ? who
+      : this.crew.at(who);
+    if (!officer) return { ok: false, reason: 'Nobody at that station, Captain.' };
+    if (!officer.alive) return { ok: false, reason: `${officer.name} is gone, Captain.` };
+    if (officer.injured) return { ok: false, reason: `${officer.name} is in sickbay, Captain.` };
+
+    const ability = ABILITIES[abilityId];
+    if (!ability) return { ok: false, reason: 'No such training, Captain.' };
+    if (ability.dept !== officer.dept) {
+      return { ok: false, reason: `That is not ${officer.name}'s department, Captain.` };
+    }
+    if (officer.abilities.includes(abilityId)) {
+      return { ok: false, reason: `${officer.name} already knows that one, Captain.` };
+    }
+    // Gated on the CAPTAIN's rank, not the officer's: what a crew is allowed to
+    // train for is a function of the ship's standing orders.
+    if (ability.rank > this.progress.rank.tier) {
+      return { ok: false, reason: 'We are not cleared for that yet, Captain.' };
+    }
+
+    if (!officer.learn(abilityId)) return { ok: false, reason: 'Training did not take, Captain.' };
+    this.clock.advanceStardate(1);
+    this.applyAllMods();
+    this.pushLog(`${officer.name} completed training in ${ability.name}.`, 'captain');
+    return { ok: true, officer, ability };
+  }
+
+  /** What each officer could still be taught, given the captain's rank. */
+  trainableFor(who) {
+    const officer = (typeof who === 'object' && typeof who?.learn === 'function')
+      ? who
+      : this.crew.at(who);
+    if (!officer?.alive) return [];
+    return ABILITY_LIST.filter((a) => a.dept === officer.dept
+      && !officer.abilities.includes(a.id)
+      && a.rank <= this.progress.rank.tier);
   }
 
   /** The career signature: one large effect, once per engagement. */

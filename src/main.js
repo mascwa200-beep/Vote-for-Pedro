@@ -231,7 +231,20 @@ class App {
       this.needsRender = true;
     });
 
-    on('combat:begin', () => { this.go('tactical'); });
+    // A fight does NOT take the screen. You stay where you are — on the
+    // bridge, in the chair, with the enemy on the main viewer — and the
+    // tactical plot stays a console you walk to when you want to read the
+    // fight rather than watch it.
+    //
+    // This listener said `this.go('tactical')`, which is the exact behaviour
+    // the comment in `render()` thirty lines below says the whole restructure
+    // exists to stop: "being teleported to a plot view the moment somebody
+    // decloaks". The render-time override was removed and the listener that
+    // did the same thing was left behind, so every fight still yanked the
+    // player off the bridge — which is also why nobody noticed the main viewer
+    // had been black since the day it was written. You were never looking at
+    // it while anything was happening.
+    on('combat:begin', () => { this.needsRender = true; });
     // Presentation only. The game settles the fight itself on its own tick —
     // see the COMBAT case in Game.update — and says so with `combat:resolved`.
     // This listener used to be the thing that awarded the experience and took
@@ -469,6 +482,21 @@ class App {
     // A MISSION still takes the screen, because a mission stage IS text.
 
     const old = this.screenEl;
+
+    // Scroll positions have to survive the swap below.
+    //
+    // `replaceWith` throws the old DOM away, and in combat `render` runs about
+    // four times a second — so a captain who scrolled down to the bridge
+    // officer tray, which lives under the plot and the target panel, was
+    // thrown back to the top of the page before they could reach one. On a
+    // phone that made the whole tray unusable in the one situation it exists
+    // for. Carried across only when the same screen is being redrawn: moving
+    // to a different screen should start at the top, and does.
+    const sameScreen = screen === this.renderedScreen;
+    const heldScroll = sameScreen
+      ? [old, ...old.querySelectorAll('.scroll')].map((n) => n.scrollTop)
+      : null;
+
     let node;
     switch (screen) {
       case 'tactical': node = screens.tacticalScreen(this); break;
@@ -493,6 +521,13 @@ class App {
 
     old.replaceWith(node);
     this.screenEl = node;
+    this.renderedScreen = screen;
+    if (heldScroll) {
+      const now = [node, ...node.querySelectorAll('.scroll')];
+      for (let i = 0; i < now.length && i < heldScroll.length; i++) {
+        if (heldScroll[i] > 0) now[i].scrollTop = heldScroll[i];
+      }
+    }
 
     // The first-person bridge shares the one GL canvas with the tactical plot.
     // Two contexts on one element is a bug this project has already fixed, and

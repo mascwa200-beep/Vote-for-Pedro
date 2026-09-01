@@ -5297,6 +5297,46 @@ class Renderer {
   }
 
   /**
+   * Draw into a rectangle of the canvas instead of all of it.
+   *
+   * Top-left origin, same as `setScissor`, because everything else in this
+   * codebase measures the canvas that way and GL is the odd one out.
+   *
+   * This is what makes a picture-in-picture possible: a camera built for the
+   * rectangle rather than for the canvas. Scissoring alone crops a full-canvas
+   * projection down, which is a very different picture — the main viewer was
+   * showing a fourteen-degree slice of a seventy-four-degree cone, and a slice
+   * that narrow contains less than one star.
+   */
+  setViewport(x, y, w, h) {
+    if (this.lost) return;
+    const H = this.canvas.height;
+    this.gl.viewport(
+      Math.round(x), Math.round(H - y - h),
+      Math.max(1, Math.round(w)), Math.max(1, Math.round(h)),
+    );
+  }
+
+  /** Back to the whole canvas. */
+  resetViewport() {
+    if (!this.lost) this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  /**
+   * Reset the depth buffer, honouring the scissor if one is set.
+   *
+   * `glClear` obeys the scissor test, which makes this the way to say "what
+   * comes next sits in front of everything already drawn HERE" without saying
+   * anything about the rest of the frame. The alternative — squeezing the
+   * background into a thin slice at the far end of the depth range — depends
+   * on the depth buffer having enough bits to tell that slice apart from the
+   * cleared value, and on a 16-bit buffer it does not.
+   */
+  clearDepth() {
+    if (!this.lost) this.gl.clear(this.gl.DEPTH_BUFFER_BIT);
+  }
+
+  /**
    * Push a draw to the back of the depth buffer, or restore the full range.
    *
    * The other half of the viewscreen: the exterior is drawn first into the
@@ -7747,6 +7787,179 @@ __exports.joltTint = joltTint;
 
 });
 
+__define("src/gfx/effects.js", function (__exports, __require) {
+// What a fight looks like: beams, torpedoes, explosions, and the flare where
+// a shot lands.
+//
+// This used to live inside `src/ui/tactical3d.js`, which is the plot — the
+// console you walk to when you want to READ a fight. The place a fight is
+// actually meant to happen is the bridge, with the enemy on the main viewer,
+// and that view drew the hulls and nothing they were doing: a Bird-of-Prey
+// crossed the screen, hit you, and all you saw was a shape drifting and the
+// picture flashing. Two renderers need the same drawing, so it is in one place
+// rather than two — the ship-name table went wrong twice before it was made
+// one table, and this is the same shape of thing.
+//
+// The one piece that is new here is the impact flare. Every hit has always
+// pushed `{kind: 'impact', facing, penetrated, crit}` onto the engagement's
+// effects, and the only file that ever read it was the 2D fallback for devices
+// with no WebGL. On every device that has WebGL it was recorded on every shot
+// and drawn by nothing.
+
+const { vec3, quat, compose, normalize, cross, sub, length: vlength, normalMatrix } = __require("src/gfx/math.js");
+const { beamMesh, torpedoMesh, explosionMesh, shieldMesh } = __require("src/gfx/scene.js");
+const { paletteFor, hullScale } = __require("src/gfx/blueprint.js");
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// One set of scratch matrices for the module. Only one view draws at a time —
+// the bridge aperture and the tactical plot are different screens — so this
+// costs nothing and keeps the per-frame allocation at zero, which is the same
+// reason every other renderer in this project holds its own.
+const _model = new Float32Array(16);
+const _normal = new Float32Array(9);
+const _pos = vec3();
+const _dir = vec3();
+
+/**
+ * Simulation space is (x, y) with an optional z; render space is (x, z, y)
+ * with +y up. Every renderer in this project does this conversion and every
+ * one of them used to do it inline.
+ */
+function toRender(p, out = vec3()) {
+  out[0] = p.x;
+  out[1] = p.z ?? 0;
+  out[2] = p.y;
+  return out;
+}
+
+/** Lay a unit +x mesh along `dir`, `thickness` wide, starting at `from`. */
+function orientAlong(dir, from, len, thickness, m = _model) {
+  const x = normalize(dir);
+  let up = vec3(0, 1, 0);
+  if (Math.abs(x[1]) > 0.98) up = vec3(1, 0, 0);
+  const z = normalize(cross(x, up));
+  const y = cross(z, x);
+
+  m[0] = x[0] * len; m[1] = x[1] * len; m[2] = x[2] * len; m[3] = 0;
+  m[4] = y[0] * thickness; m[5] = y[1] * thickness; m[6] = y[2] * thickness; m[7] = 0;
+  m[8] = z[0] * thickness; m[9] = z[1] * thickness; m[10] = z[2] * thickness; m[11] = 0;
+  m[12] = from[0]; m[13] = from[1]; m[14] = from[2]; m[15] = 1;
+  return m;
+}
+
+/** Every `kind` on `engagement.effects` that this module knows how to draw. */
+const DRAWN_EFFECTS = ['beam', 'cannon', 'explosion', 'impact'];
+
+/**
+ * Draw everything happening in an engagement that is not a hull.
+ *
+ * @param {object} renderer  the shared GL renderer
+ * @param {object} engagement
+ * @param {object} opts  {fogFar, cap} — `cap` bounds the work in a large
+ *   fight and REPORTS what it dropped rather than dropping it quietly.
+ * @returns {{drawn: number, dropped: number}}
+ */
+function drawCombatEffects(renderer, engagement, opts = {}) {
+  const out = { drawn: 0, dropped: 0 };
+  if (!renderer || !engagement) return out;
+
+  const fogFar = opts.fogFar ?? 1e9;
+  // A six-ship engagement all firing at once is the worst case, and the bridge
+  // pass already carries a room, seven officers and a starfield inside a
+  // sixty-draw budget. The cap is generous; what matters is that going over it
+  // is reported.
+  const cap = opts.cap ?? 40;
+
+  const draw = (key, mesh, params) => {
+    if (out.drawn >= cap) { out.dropped++; return; }
+    renderer.draw(key, mesh, { ...params, fogFar });
+    out.drawn++;
+  };
+
+  // Beams: a unit tube along +x, rotated onto the shot and stretched to it.
+  for (const e of engagement.effects ?? []) {
+    if (e.kind !== 'beam' && e.kind !== 'cannon') continue;
+    const from = toRender(e.from, _pos);
+    const to = toRender(e.to, _dir);
+    const dir = sub(to, from);
+    const len = vlength(dir);
+    if (len < 1) continue;
+
+    orientAlong(dir, from, len, e.kind === 'cannon' ? 5 : 3);
+    draw('beam', beamMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      alpha: clamp(e.life * 2.4, 0, 0.9),
+      tint: paletteFor(e.faction).glow,
+    });
+  }
+
+  for (const p of engagement.projectiles ?? []) {
+    compose(toRender(p, _pos), quat(), 9, _model);
+    draw('torpedo', torpedoMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      tint: [1, 1, 1],
+    });
+  }
+
+  // The flare where a shot lands.
+  //
+  // Placed on the struck facing rather than at the middle of the ship, which
+  // is what makes it readable: a hit on the bow and a hit on the stern are
+  // different pieces of information, and so is whether it stopped. A shot the
+  // shields held flares in the shield's colour, off the hull; one that got
+  // through burns white on the plating itself.
+  for (const e of engagement.effects ?? []) {
+    if (e.kind !== 'impact') continue;
+    const age = clamp(1 - e.life / 0.4, 0, 1);
+    const r = hullScale(e.classId) * 0.5;
+    const at = toRender(e, _pos);
+    // `from` is the unit vector toward whoever fired, recorded at the moment
+    // of the hit — the effect outlives the tick and may outlive the ship, so
+    // it carries what it needs rather than holding a reference to one.
+    const off = e.from ? toRender(e.from, _dir) : vec3(0, 0, 0);
+    const stand = e.penetrated ? r * 0.55 : r * 1.15;
+    _pos[0] = at[0] + off[0] * stand;
+    _pos[1] = at[1] + off[1] * stand;
+    _pos[2] = at[2] + off[2] * stand;
+
+    const size = r * (e.penetrated ? 0.45 : 0.7) * (e.crit ? 1.5 : 1) * (1 - age * 0.4);
+    compose(_pos, quat(), Math.max(1, size), _model);
+    draw('impact', shieldMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      alpha: (1 - age) * (e.penetrated ? 0.95 : 0.6),
+      // White-hot through the hull; the shield's own colour when it holds.
+      tint: e.penetrated ? [1, 0.92, 0.7] : [0.55, 0.8, 1],
+    });
+  }
+
+  for (const e of engagement.effects ?? []) {
+    if (e.kind !== 'explosion') continue;
+    const age = clamp(1 - e.life / 1.6, 0, 1);
+    compose(toRender(e, _pos), quat(), 30 + age * 130, _model);
+    draw('explosion', explosionMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      alpha: 1 - age,
+      tint: [1, 1, 1],
+    });
+  }
+
+  return out;
+}
+
+__exports.DRAWN_EFFECTS = DRAWN_EFFECTS;
+__exports.drawCombatEffects = drawCombatEffects;
+
+});
+
 __define("src/ui/tactical3d.js", function (__exports, __require) {
 // The tactical display, in three dimensions.
 //
@@ -7773,6 +7986,7 @@ const { Renderer } = __require("src/gfx/gl.js");
 const { hullMesh, hullScale, paletteFor } = __require("src/gfx/blueprint.js");
 const { starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh, dropLineMesh, bodyMesh, VOLUME } = __require("src/gfx/scene.js");
 const { vista, bearingOf, fovFor, noseOf } = __require("src/gfx/vista.js");
+const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -8441,49 +8655,15 @@ class TacticalView3D {
     }
   }
 
+  /**
+   * Beams, torpedoes, impacts and explosions.
+   *
+   * The drawing itself is `src/gfx/effects.js`, because the main viewer needs
+   * exactly the same picture against a different camera and two copies of it
+   * would mean fixing a beam in one of two places.
+   */
   drawEffects(engagement) {
-    // Beams: a unit tube along +x, rotated onto the shot and stretched to it.
-    for (const e of engagement.effects) {
-      if (e.kind !== 'beam' && e.kind !== 'cannon') continue;
-      const from = vec3(e.from.x, e.from.z ?? 0, e.from.y);
-      const to = vec3(e.to.x, e.to.z ?? 0, e.to.y);
-      const dir = sub(to, from);
-      const len = vlength(dir);
-      if (len < 1) continue;
-
-      this.orientAlong(dir, from, len, e.kind === 'cannon' ? 5 : 3);
-      const p = paletteFor(e.faction);
-      this.renderer.draw('beam', beamMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        alpha: clamp(e.life * 2.4, 0, 0.9),
-        tint: p.glow,
-      });
-    }
-
-    for (const p of engagement.projectiles) {
-      compose(vec3(p.x, p.z ?? 0, p.y), quat(), 9, this._model);
-      this.renderer.draw('torpedo', torpedoMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        tint: [1, 1, 1],
-      });
-    }
-
-    for (const e of engagement.effects) {
-      if (e.kind !== 'explosion') continue;
-      const age = clamp(1 - e.life / 1.6, 0, 1);
-      compose(vec3(e.x, e.z ?? 0, e.y), quat(), 30 + age * 130, this._model);
-      this.renderer.draw('explosion', explosionMesh(), {
-        model: this._model,
-        normalMatrix: normalMatrix(this._model, this._normal),
-        emissive: 1,
-        alpha: 1 - age,
-        tint: [1, 1, 1],
-      });
-    }
+    return drawCombatEffects(this.renderer, engagement);
   }
 
   /** Build a model matrix that lays a unit +x mesh along `dir`, `thickness` wide. */
@@ -10240,7 +10420,23 @@ function officer3d(solid, station) {
   });
 }
 
-/** The viewscreen: a dark rectangle in the forward wall with a lit surround. */
+/**
+ * The viewscreen: an aperture in the forward wall with a lit surround.
+ *
+ * It used to be an aperture with a near-black quad filling it, and that quad
+ * was the reason the main viewer had never shown anything. The first-person
+ * view draws the exterior FIRST, scissored to the screen's rectangle and
+ * pinned to the far end of the depth buffer, and then draws the room over the
+ * top — so the bulkhead covers the difference between the axis-aligned scissor
+ * box and the trapezoid the screen actually occupies. A filled panel inside
+ * that trapezoid, drawn in the room pass at its own depth, covers the picture
+ * as well.
+ *
+ * Everything behind it was being rendered and thrown away: the starfield, the
+ * warp streaks, the world in orbit with its terminator laid on by the system's
+ * own primary, and the hostiles during a fight. All of it, every frame, behind
+ * a black rectangle.
+ */
 function viewscreen3d(solid, glow, vs) {
   const [x, z] = vs.at;
   const w = vs.width / 2;
@@ -10256,10 +10452,21 @@ function viewscreen3d(solid, glow, vs) {
     z + u * nx + nz * d,
   );
 
-  glow.quad(at(-w - 0.14, -h - 0.14, inset), at(w + 0.14, -h - 0.14, inset),
-    at(w + 0.14, h + 0.14, inset), at(-w - 0.14, h + 0.14, inset), PALETTE.panelGold);
-  solid.quad(at(-w, -h, inset + 0.01), at(w, -h, inset + 0.01),
-    at(w, h, inset + 0.01), at(-w, h, inset + 0.01), [0.05, 0.06, 0.09]);
+  // The surround only. What is inside the frame is outside the ship.
+  //
+  // Drawn as four strips rather than one quad with a hole in it, because the
+  // bezel has to be solid where it is and absent where the picture is, and a
+  // quad cannot be both.
+  const bez = 0.14;
+  const strip = (u0, v0, u1, v1) => glow.quad(
+    at(u0, v0, inset), at(u1, v0, inset), at(u1, v1, inset), at(u0, v1, inset),
+    PALETTE.panelGold,
+  );
+  strip(-w - bez, h, w + bez, h + bez);        // over the top
+  strip(-w - bez, -h - bez, w + bez, -h);      // under the bottom
+  strip(-w - bez, -h, -w, h);                  // down the left
+  strip(w, -h, w + bez, h);                    // down the right
+  void solid;
 }
 
 // ------------------------------------------------------------- occlusion
@@ -10668,6 +10875,7 @@ const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
 const { hullMesh, hullScale } = __require("src/gfx/blueprint.js");
 const { vista, fovFor, noseOf, joltShake, joltTint } = __require("src/gfx/vista.js");
+const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
@@ -10910,7 +11118,19 @@ class FirstPersonView {
     if (screen) this.drawThroughScreen(game, screen, aspect, height);
 
     // Pass two: the room, over the top of it.
+    //
+    // The depth buffer is reset inside the aperture first, while the scissor
+    // is still set — so the room is in front of the exterior by construction
+    // rather than by arithmetic. It used to be by arithmetic: the exterior was
+    // squeezed into the far 0.1% of the depth range, which needs the buffer to
+    // have enough bits to tell 0.99999 from 1.0. On a 16-bit depth buffer it
+    // does not, every fragment of space landed on exactly the cleared value,
+    // and the depth test threw all of it away. The starfield, the warp
+    // streaks, the world in orbit with its terminator, the hostiles in a
+    // fight: rendered every frame, discarded every frame.
+    if (screen) this.renderer.clearDepth();
     this.renderer.clearScissor();
+    this.renderer.resetViewport();
     this.renderer.setDepthRange(0, 1);
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
@@ -11028,15 +11248,24 @@ class FirstPersonView {
   drawThroughScreen(game, screen, aspect, height = 0) {
     const r = this.renderer;
     r.setScissor(screen.x, screen.y, screen.w, screen.h);
+    // The aperture gets its own viewport, so the camera below is built FOR the
+    // screen rather than for the canvas and then cropped. Cropping is what it
+    // used to do, and it is why the main viewer showed nothing: a 74° cone
+    // across the whole canvas, scissored to three per cent of it, is a
+    // fourteen-degree window — and a window that narrow onto a sphere of 260
+    // stars contains, on average, less than one of them.
+    r.setViewport(screen.x, screen.y, screen.w, screen.h);
+    const lens = screen.h > 0 ? screen.w / screen.h : aspect;
     // Back to vacuum inside the screen: one hard sun, deep shadow, which is
     // what a hull a thousand kilometres away actually looks like.
     r.setLighting({
       key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
       ambient: 0.20, keyPower: 0.9, gloss: 0,
     });
-    // The far slice of the depth buffer, so the room drawn afterwards covers
-    // everything except the aperture.
-    r.setDepthRange(0.9990, 1.0);
+    // The whole depth range, so the exterior sorts against itself properly —
+    // a planet behind a ship stays behind it. What keeps the ROOM in front of
+    // all of it is the depth clear after this pass, not a reserved slice.
+    r.setDepthRange(0, 1);
 
     // A hit costs the picture its sync.
     //
@@ -11064,24 +11293,23 @@ class FirstPersonView {
     // screen at the moment they matter most.
     const world = eng ? null : this.orbitWorld(game);
 
-    // How wide the lens is. The projection is built for the whole canvas and
-    // then scissored down to the aperture, so what the player sees is a slice
-    // of it — which means the aperture's field of view is a fraction of the
-    // canvas's, and the fraction is exactly `screen.h / height`.
+    // How wide the lens is. Now that the aperture has its own viewport this is
+    // the field of view of the SCREEN, which is what a viewscreen's field of
+    // view means, rather than a fraction of the canvas's.
     //
-    // In orbit that has to be solved rather than assumed. The world's angular
-    // radius is fixed by the altitude at 21°, and the picture wants that disc
-    // to come out about half the height of the aperture, so the lens is chosen
-    // to put it there: tan(V/2) = tan(θ) · (height/2) / (wanted pixels). Which
-    // is the ship widening its field to look at a world, and not the ship
-    // parking somewhere the show never put it.
-    let fovy = fovFor(aspect, 74);
+    // In orbit it is solved rather than chosen. The world's angular radius is
+    // fixed by the altitude at 21°, and the picture wants that disc to come
+    // out about three quarters of the height of the aperture — so the lens is
+    // whatever puts it there. That is the ship widening its field to look at a
+    // world, and not the ship parking somewhere the show never put it.
+    let fovy = fovFor(lens, 74);
     let tilt = 0;
-    if (world && height > 0 && screen.h > 0) {
+    if (world) {
       const theta = angularRadius();
-      fovy = Math.min(2.9, 2 * Math.atan(Math.tan(theta) * (height / 2) / (0.78 * screen.h)));
+      fovy = Math.min(2.9, 2 * Math.atan(Math.tan(theta) / 0.78));
       tilt = theta * 0.34;
     }
+    void height;
 
     const eye = vec3();
     const at = vec3();
@@ -11096,7 +11324,7 @@ class FirstPersonView {
       at[2] = eye[2] + nose[2] * 8000;
       this._up[0] = 0; this._up[1] = 1; this._up[2] = 0;
     }
-    perspective(fovy, aspect, 2, 40000, this._proj);
+    perspective(fovy, lens, 2, 40000, this._proj);
     lookAt(eye, at, this._up, this._view);
     multiply(this._proj, this._view, this._screenVP);
     r.setCamera(this._screenVP);
@@ -11242,6 +11470,13 @@ class FirstPersonView {
           fogFar: VOLUME * 6,
         });
       }
+
+      // And what they are doing. The viewer drew the ships and none of their
+      // weapons: a hull crossed the screen, hit you, and the only thing that
+      // said so was the picture flashing. Not jolt-tinted — a beam is the
+      // CAUSE of the flash, and washing it through the same colour is the one
+      // way to make a hit unreadable.
+      this.stats.effects = drawCombatEffects(r, eng, { fogFar: 1e9 });
     }
   }
 
@@ -13823,12 +14058,6 @@ const ABILITIES = {
     mods: { repairRate: 4.0 }, special: 'extinguish',
     say: 'Damage control parties away.',
   },
-  ramming_speed: {
-    id: 'ramming_speed', dept: 'engineering', rank: 3, name: 'Overload Impulse',
-    order: 'All available power to engines', cooldown: 60, duration: 15,
-    mods: { impulse: 1.6, turn: 1.3 },
-    say: 'She’ll take it — for fifteen seconds.',
-  },
   eject_core: {
     id: 'eject_core', dept: 'engineering', rank: 3, name: 'Eject Warp Core',
     order: 'Eject the core', cooldown: 0, duration: 0, special: 'eject',
@@ -13883,13 +14112,86 @@ const ABILITIES = {
     mods: { damage: 1.15, repairRate: 1.5, accuracy: 1.1 },
     say: 'You heard the captain!',
   },
+  hold_formation: {
+    // The only power in the game that speaks to an ally. Allies arrive on a
+    // distress call and there has never been anything to say to them.
+    id: 'hold_formation', dept: 'command', rank: 2, name: 'Hold Formation',
+    order: 'Hold formation', cooldown: 50, duration: 20,
+    mods: { defense: 1.15, accuracy: 1.1 }, special: 'formation',
+    say: 'Signalling them to hold station on us.',
+  },
+
+  // --- Medical ---
+  //
+  // The first abilities in the game whose payoff is crew and casualties rather
+  // than hull and shields, which is the test of whether the department was
+  // worth having. See docs/RESEARCH.md §17.
+  casualty_teams: {
+    id: 'casualty_teams', dept: 'medical', rank: 1, name: 'Casualty Teams',
+    order: 'Casualty teams to the decks', cooldown: 45, duration: 30,
+    mods: { crewProtect: 0.35 },
+    say: 'Casualty teams to every deck.',
+  },
+  stimulants: {
+    id: 'stimulants', dept: 'medical', rank: 2, name: 'Stimulants',
+    order: 'Break out the stimulants', cooldown: 60, duration: 20,
+    mods: { repairRate: 1.4, accuracy: 1.08 },
+    say: 'They will feel this tomorrow. Not today.',
+  },
+  back_to_duty: {
+    id: 'back_to_duty', dept: 'medical', rank: 2, name: 'Back to Duty',
+    order: 'Clear someone for duty', cooldown: 90, duration: 0,
+    special: 'return_officer',
+    say: 'I can give you one of them back. One.',
+  },
+  surgical_bay: {
+    id: 'surgical_bay', dept: 'medical', rank: 3, name: 'Surgical Bay',
+    order: 'Open the surgical bay', cooldown: 120, duration: 40,
+    mods: { crewProtect: 0.5 }, special: 'treat_wounded',
+    say: 'Surgical bay open. Send them down.',
+  },
+
+  // --- Operations: the helm and communications ---
+  attack_pattern_delta: {
+    id: 'attack_pattern_delta', dept: 'operations', rank: 1, name: 'Attack Pattern Delta',
+    order: 'Attack pattern delta', cooldown: 35, duration: 15,
+    mods: { defense: 1.4, turn: 1.2 },
+    say: 'Pattern delta, aye.',
+  },
+  traffic_analysis: {
+    id: 'traffic_analysis', dept: 'operations', rank: 2, name: 'Traffic Analysis',
+    order: 'Read their signal traffic', cooldown: 50, duration: 0,
+    special: 'read_intent',
+    say: 'Reading their signal traffic now.',
+  },
+  false_signal: {
+    id: 'false_signal', dept: 'operations', rank: 2, name: 'False Signal',
+    order: 'Put a false signal out', cooldown: 55, duration: 12,
+    special: 'false_signal',
+    say: 'Broadcasting a ship that is not there.',
+  },
+  ramming_speed: {
+    // Moved here from engineering. When it is ordered, it is ordered to the
+    // helm — it sat in the engineering table because that is where the power
+    // it draws comes from, which is not the same thing as who flies it.
+    id: 'ramming_speed', dept: 'operations', rank: 3, name: 'Overload Impulse',
+    order: 'All available power to engines', cooldown: 60, duration: 15,
+    mods: { impulse: 1.6, turn: 1.3 },
+    say: 'She’ll take it — for fifteen seconds.',
+  },
 };
 const ABILITY_LIST = Object.values(ABILITIES);
 
-/** Abilities an officer at a station could ever learn. */
+/**
+ * Abilities an officer at a station could ever learn.
+ *
+ * This used to remap `operations` and `medical` onto `command`, because
+ * neither department had a single ability of its own — so the doctor and the
+ * helmsman called attack patterns, and four of the seven officers on a bridge
+ * held an identical tray. Every department has its own table now.
+ */
 function abilityPool(dept) {
-  const d = dept === 'operations' || dept === 'medical' ? 'command' : dept;
-  return ABILITY_LIST.filter((a) => a.dept === d);
+  return ABILITY_LIST.filter((a) => a.dept === dept);
 }
 class Officer {
   constructor(data) {
@@ -13922,10 +14224,24 @@ class Officer {
     return this.alive && !this.injured;
   }
 
+  /**
+   * What an officer comes aboard already knowing.
+   *
+   * A rule, not a truncation. This used to take `pool.slice(0, 3)` — the first
+   * three entries of the department table, in whatever order they happened to
+   * be written in — which made every officer of a department identical to every
+   * other and left six of the abilities in the game held by nobody at all.
+   *
+   * Ranks one and two are the working repertoire of the station; rank three is
+   * what training opens up, and the captain's own rank is what gates that. A
+   * green officer arrives with the rank-one set only, which is the difference
+   * between an experienced bridge and a fresh one.
+   */
   learnStartingAbilities() {
-    const pool = abilityPool(this.dept)
-      .filter((a) => a.rank <= 1 + Math.floor(this.expertise / 40));
-    this.abilities = pool.slice(0, 3).map((a) => a.id);
+    const gate = this.expertise >= 70 ? 2 : 1;
+    this.abilities = abilityPool(this.dept)
+      .filter((a) => a.rank <= gate)
+      .map((a) => a.id);
   }
 
   learn(abilityId) {
@@ -19985,9 +20301,22 @@ class Engagement {
       direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
     });
 
+    // Where on the hull it landed, and how big the hull is.
+    //
+    // An effect outlives the tick that made it and may outlive the ship it
+    // landed on, so it carries what a renderer needs rather than a reference
+    // to something that might be a wreck by the time the flare fades. `from`
+    // is the unit vector toward whoever fired, which is also the direction the
+    // struck facing points.
+    const ax = attacker.x - target.x;
+    const ay = attacker.y - target.y;
+    const az = (attacker.z ?? 0) - (target.z ?? 0);
+    const ad = Math.hypot(ax, ay, az) || 1;
     this.effects.push({
       kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4,
       facing: result.facing, penetrated: result.penetrated, crit,
+      from: { x: ax / ad, y: ay / ad, z: az / ad },
+      classId: target.classId,
     });
 
     emit('combat:hit', {
@@ -22299,6 +22628,19 @@ function weakestFacing(ship) {
 function applyAbility(game, officer, ability) {
   const a = typeof ability === 'string' ? ABILITIES[ability] : ability;
   if (!game || !officer || !a) return { ok: false, reason: 'no such ability' };
+  // Three different noes, and they used to be one. When every officer of a
+  // department held an identical tray, "not ready" could only ever mean a
+  // cooldown; now that the six departments differ, "the helm is not trained
+  // for that" is a thing a captain needs to be told, and so is "she is in
+  // sickbay" — because the answer to those two is training and a doctor, not
+  // waiting thirty seconds.
+  if (!officer.abilities.includes(a.id)) {
+    return { ok: false, reason: `${officer.name} is not trained for that, Captain.`, ability: a, officer };
+  }
+  if (!officer.available) {
+    const why = officer.alive ? 'is in sickbay' : 'is gone';
+    return { ok: false, reason: `${officer.name} ${why}, Captain.`, ability: a, officer };
+  }
   if (!officer.ready(a.id)) return { ok: false, reason: 'on cooldown', ability: a, officer };
 
   const eng = game.engagement && !game.engagement.over ? game.engagement : null;
@@ -22364,6 +22706,101 @@ function applyAbility(game, officer, ability) {
           w.cooldown = 0;
           eng.fireWeapon(game.ship, w, target);
         }
+      }
+      break;
+    }
+
+    // ---- Command ----
+    case 'formation': {
+      // The only power that speaks to an ally. Allies have existed in
+      // `Engagement` since it was written and arrive on a distress call, and
+      // until now there was nothing to say to them: they flew their own fight
+      // beside yours. They take the same order the ship just took, and they
+      // come round onto your heading to take it.
+      const live = (eng?.allies ?? []).filter((s) => !s.destroyed);
+      for (const s of live) {
+        s.addBuff({ id: a.id, label: a.name, until: a.duration || 20, mods: a.mods });
+        s.desiredHeading = game.ship.heading;
+      }
+      report = {
+        kind: 'formation',
+        title: a.name,
+        lines: live.length
+          ? [`${live.length} ship${live.length === 1 ? '' : 's'} holding station on us.`]
+          : ['Nobody out there to hold station on us, Captain. The ship tightens up regardless.'],
+        allies: live.length,
+      };
+      break;
+    }
+
+    // ---- Medical ----
+    case 'return_officer': {
+      // One officer out of sickbay and back on a post. A station standing
+      // empty is a capability the ship has lost, so this is worth more than
+      // the number of people it moves.
+      const wounded = game.crew.officers.find((o) => o.alive && o.injured);
+      if (wounded) {
+        wounded.heal();
+        report = {
+          kind: 'duty', title: a.name,
+          lines: [`${wounded.name} is cleared for duty and back at ${wounded.station}.`],
+          officer: wounded.name,
+        };
+      } else {
+        report = { kind: 'duty', title: a.name, lines: ['Nobody in sickbay, Captain.'], officer: null };
+      }
+      break;
+    }
+    case 'treat_wounded': {
+      // The wounded are a running total that only ever went up: `injured`
+      // climbs with every hull hit and nothing in a fight ever brought it
+      // down. This is the one thing that does.
+      const before = game.ship.injured ?? 0;
+      game.ship.injured = Math.max(0, Math.round(before * 0.4));
+      report = {
+        kind: 'sickbay', title: a.name,
+        lines: [`${before - game.ship.injured} treated and out of danger. ${game.ship.injured} still in sickbay.`],
+        treated: before - game.ship.injured,
+      };
+      break;
+    }
+
+    // ---- Operations ----
+    case 'read_intent': {
+      // Information, and nothing else. `scan` reads one ship; this reads the
+      // board — who is out there, what state they are in, and who each of them
+      // is shooting at, which is the one thing a captain cannot otherwise see.
+      const board = (eng?.liveHostiles ?? []).map((s) => {
+        const at = s.aiTarget === game.ship ? 'us'
+          : s.aiTarget ? s.aiTarget.name
+            : 'nobody yet';
+        const state = s.fleeing ? 'breaking off' : s.cloaked ? 'cloaked' : 'engaged';
+        return `${s.name}: hull ${Math.round(s.hullPct * 100)}%, shields ${Math.round(s.shieldPct * 100)}%, ${state}, firing on ${at}.`;
+      });
+      report = {
+        kind: 'traffic', title: a.name,
+        lines: board.length ? board : ['Nothing on any frequency, Captain.'],
+        count: board.length,
+      };
+      break;
+    }
+    case 'false_signal': {
+      // A ship that is not there. Every targeting solution out there was
+      // computed against it, so every one of them has to be thrown out and
+      // taken again.
+      //
+      // This is deliberately the small, repeatable version of what the
+      // Intelligence captain's signature does once per engagement: their
+      // weapons go back on cooldown and they shoot worse while they reacquire,
+      // but the signature also decloaks the room and lasts longer. A bridge
+      // officer power should be the lesser of the two.
+      for (const s of eng?.liveHostiles ?? []) {
+        for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, (a.duration || 12) * 0.4);
+        s.aiTarget = null;
+        s.addBuff({
+          id: 'reacquiring', label: 'Reacquiring', until: a.duration || 12,
+          mods: { accuracy: 0.75 },
+        });
       }
       break;
     }
@@ -24996,7 +25433,7 @@ const { Ledger } = __require("src/core/ledger.js");
 const { emit } = __require("src/core/events.js");
 
 const { Ship } = __require("src/sim/ship.js");
-const { Crew, Officer } = __require("src/sim/officers.js");
+const { Crew, Officer, ABILITIES, ABILITY_LIST } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP, SKILLS } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
 const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
@@ -27431,6 +27868,55 @@ class Game {
     return this.crew.readyAbilities();
   }
 
+  /**
+   * Teach an officer something new. A day of ship's time.
+   *
+   * `officer.learn` records it. The day, the log line, the recomputed ship
+   * modifiers and every refusal were in the officer detail modal in
+   * `src/ui/screens.js` — so training was one more thing that only existed
+   * when a screen was attached, and it was the only route to the six
+   * abilities nobody held at commission.
+   */
+  trainOfficer(who, abilityId) {
+    const officer = (typeof who === 'object' && typeof who?.learn === 'function')
+      ? who
+      : this.crew.at(who);
+    if (!officer) return { ok: false, reason: 'Nobody at that station, Captain.' };
+    if (!officer.alive) return { ok: false, reason: `${officer.name} is gone, Captain.` };
+    if (officer.injured) return { ok: false, reason: `${officer.name} is in sickbay, Captain.` };
+
+    const ability = ABILITIES[abilityId];
+    if (!ability) return { ok: false, reason: 'No such training, Captain.' };
+    if (ability.dept !== officer.dept) {
+      return { ok: false, reason: `That is not ${officer.name}'s department, Captain.` };
+    }
+    if (officer.abilities.includes(abilityId)) {
+      return { ok: false, reason: `${officer.name} already knows that one, Captain.` };
+    }
+    // Gated on the CAPTAIN's rank, not the officer's: what a crew is allowed to
+    // train for is a function of the ship's standing orders.
+    if (ability.rank > this.progress.rank.tier) {
+      return { ok: false, reason: 'We are not cleared for that yet, Captain.' };
+    }
+
+    if (!officer.learn(abilityId)) return { ok: false, reason: 'Training did not take, Captain.' };
+    this.clock.advanceStardate(1);
+    this.applyAllMods();
+    this.pushLog(`${officer.name} completed training in ${ability.name}.`, 'captain');
+    return { ok: true, officer, ability };
+  }
+
+  /** What each officer could still be taught, given the captain's rank. */
+  trainableFor(who) {
+    const officer = (typeof who === 'object' && typeof who?.learn === 'function')
+      ? who
+      : this.crew.at(who);
+    if (!officer?.alive) return [];
+    return ABILITY_LIST.filter((a) => a.dept === officer.dept
+      && !officer.abilities.includes(a.id)
+      && a.rank <= this.progress.rank.tier);
+  }
+
   /** The career signature: one large effect, once per engagement. */
   useSignature() {
     return applySignature(this);
@@ -28470,14 +28956,55 @@ function powerPanel(app) {
   ]);
 }
 
+/** The order the bridge is read in, forward to aft. */
+const DEPT_ORDER = ['command', 'tactical', 'operations', 'engineering', 'science', 'medical'];
+const DEPT_LABEL = {
+  command: 'Command', tactical: 'Tactical', operations: 'Helm and Communications',
+  engineering: 'Engineering', science: 'Science', medical: 'Medical',
+};
+
 function abilitiesPanel(app) {
   const g = app.game;
-  const ready = g.crew.readyAbilities();
-  const nodes = ready.slice(0, 8).map(({ officer, ability }) =>
-    button(ability.name, tap(() => {
-      app.useAbility(officer, ability);
-      app.render();
-    }, 'computer_ack'), { color: 'lilac', sub: `${officer.name} — ${ability.order}` }));
+
+  // Grouped by department, and one button per ABILITY rather than one per
+  // officer holding it. Two officers share a department — the helm and comms
+  // are both operations — so the same power appeared twice with no way to tell
+  // the buttons apart. It is still worth having twice, because it is two
+  // independent cooldowns, so the second holder is named on the button.
+  //
+  // And the list is not truncated. It used to be `ready.slice(0, 8)`, which was
+  // harmless when four of the seven officers held an identical tray and a
+  // third of the list was duplicates. With six departments there are twenty-odd
+  // powers ready at once and eight of them were shown, silently, in roster
+  // order.
+  const byAbility = new Map();
+  for (const { officer, ability } of g.crew.readyAbilities()) {
+    if (!byAbility.has(ability.id)) byAbility.set(ability.id, { ability, officers: [] });
+    byAbility.get(ability.id).officers.push(officer);
+  }
+
+  const nodes = [];
+  for (const dept of DEPT_ORDER) {
+    const inDept = [...byAbility.values()]
+      .filter(({ ability }) => ability.dept === dept)
+      .sort((a, b) => a.ability.rank - b.ability.rank);
+    if (!inDept.length) continue;
+    nodes.push(el('h3', { text: DEPT_LABEL[dept] ?? dept }));
+    for (const { ability, officers } of inDept) {
+      const who = officers[0];
+      const also = officers.length > 1 ? ` (+${officers.length - 1} ready)` : '';
+      // Every button prints the phrase that fires it — but for most of these
+      // the phrase IS the title, and printing it twice on a phone is two lines
+      // saying one thing. The phrase only goes underneath when it differs.
+      const said = ability.order.toLowerCase() === ability.name.toLowerCase()
+        ? `${who.name}${also}`
+        : `${who.name}${also} — ${ability.order}`;
+      nodes.push(button(ability.name, tap(() => {
+        app.useAbility(who, ability);
+        app.render();
+      }, 'computer_ack'), { color: 'lilac', sub: said }));
+    }
+  }
 
   const cooling = [];
   for (const o of g.crew.available) {
@@ -28647,17 +29174,15 @@ function officerDetail(app, officer) {
     nodes.push(el('p', { class: 'muted', text: 'Currently in sickbay and unavailable for duty.' }));
   }
 
-  // Officers you can teach something new.
+  // Officers you can teach something new. What training COSTS and what it
+  // changes is `Game.trainOfficer`; this is the list and the button.
   const g = app.game;
-  const learnable = Object.values(ABILITIES).filter((a) =>
-    a.dept === officer.dept && !officer.abilities.includes(a.id) && a.rank <= g.progress.rank.tier);
+  const learnable = g.trainableFor(officer);
   if (learnable.length && officer.alive) {
     nodes.push(el('h3', { text: 'Training' }));
-    for (const a of learnable.slice(0, 4)) {
+    for (const a of learnable) {
       nodes.push(button(`Train: ${a.name}`, tap(() => {
-        officer.learn(a.id);
-        g.clock.advanceStardate(1);
-        g.pushLog(`${officer.name} completed training in ${a.name}.`, 'captain');
+        g.trainOfficer(officer, a.id);
         app.closeModal();
         app.render();
       }, 'ui_confirm'), { color: 'blue', sub: `“${a.order}” · one day` }));
@@ -30272,7 +30797,20 @@ class App {
       this.needsRender = true;
     });
 
-    on('combat:begin', () => { this.go('tactical'); });
+    // A fight does NOT take the screen. You stay where you are — on the
+    // bridge, in the chair, with the enemy on the main viewer — and the
+    // tactical plot stays a console you walk to when you want to read the
+    // fight rather than watch it.
+    //
+    // This listener said `this.go('tactical')`, which is the exact behaviour
+    // the comment in `render()` thirty lines below says the whole restructure
+    // exists to stop: "being teleported to a plot view the moment somebody
+    // decloaks". The render-time override was removed and the listener that
+    // did the same thing was left behind, so every fight still yanked the
+    // player off the bridge — which is also why nobody noticed the main viewer
+    // had been black since the day it was written. You were never looking at
+    // it while anything was happening.
+    on('combat:begin', () => { this.needsRender = true; });
     // Presentation only. The game settles the fight itself on its own tick —
     // see the COMBAT case in Game.update — and says so with `combat:resolved`.
     // This listener used to be the thing that awarded the experience and took
@@ -30510,6 +31048,21 @@ class App {
     // A MISSION still takes the screen, because a mission stage IS text.
 
     const old = this.screenEl;
+
+    // Scroll positions have to survive the swap below.
+    //
+    // `replaceWith` throws the old DOM away, and in combat `render` runs about
+    // four times a second — so a captain who scrolled down to the bridge
+    // officer tray, which lives under the plot and the target panel, was
+    // thrown back to the top of the page before they could reach one. On a
+    // phone that made the whole tray unusable in the one situation it exists
+    // for. Carried across only when the same screen is being redrawn: moving
+    // to a different screen should start at the top, and does.
+    const sameScreen = screen === this.renderedScreen;
+    const heldScroll = sameScreen
+      ? [old, ...old.querySelectorAll('.scroll')].map((n) => n.scrollTop)
+      : null;
+
     let node;
     switch (screen) {
       case 'tactical': node = screens.tacticalScreen(this); break;
@@ -30534,6 +31087,13 @@ class App {
 
     old.replaceWith(node);
     this.screenEl = node;
+    this.renderedScreen = screen;
+    if (heldScroll) {
+      const now = [node, ...node.querySelectorAll('.scroll')];
+      for (let i = 0; i < now.length && i < heldScroll.length; i++) {
+        if (heldScroll[i] > 0) now[i].scrollTop = heldScroll[i];
+      }
+    }
 
     // The first-person bridge shares the one GL canvas with the tactical plot.
     // Two contexts on one element is a bug this project has already fixed, and

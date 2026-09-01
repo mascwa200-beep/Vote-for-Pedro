@@ -824,6 +824,63 @@ re-read for the strut geometry rather than the envelope.
 
 ---
 
+## 17. What the other four stations do while the shooting is going on
+
+The bridge officer powers were written for the three departments that fire
+things: tactical, engineering, science. Medical and operations got no table of
+their own and were quietly pointed at Command's, so the doctor and the helmsman
+called attack patterns. That is not a modelling shortcut, it is a gap in what
+the game thinks a bridge is for — so this is what the other stations are shown
+doing under fire, and what each of the new abilities is modelled on.
+
+**The doctor.** The medical officer's war is casualties, and it is fought in
+three ways. Triage — sorting the wounded so the ones who can be saved are
+treated first — is the standing procedure and is what makes the difference
+between casualties and deaths. Stimulants and pressure hypos put people back on
+their feet for the duration of an emergency, explicitly at a cost paid
+afterwards. And a single officer pulled out of sickbay and returned to a post
+can matter more than a dozen crew, because a bridge station standing empty is a
+capability the ship has lost. So: casualty reduction over a window, a wounded
+officer back on duty, and the crew pushed past what they have left.
+
+**The helm.** Evasive action is the helmsman's, not the captain's — the captain
+orders it and the helm flies it, and the named patterns are the helm's own
+repertoire. Full or emergency impulse for a short burst is repeatedly shown as
+something the engines will tolerate briefly and object to afterwards. And
+ramming speed, when it is ordered, is ordered to the helm; it sits in the
+engineering table in this game only because that is where somebody put it. It
+belongs at the conn.
+
+**Communications.** Three distinct jobs beyond hailing. Jamming an opponent's
+targeting or comms is a comms function as often as a science one. Traffic
+analysis — reading who is signalling whom, and inferring intent before the
+shooting starts — is the one that has no combat equivalent in the game yet and
+is the most worth having. And the false signal: a fake transponder, a decoy
+distress call, a ship that appears to be somewhere it is not. The game already
+has decoys as a tactical device; this is the same idea coming from the comms
+station and aimed at what the enemy *believes* rather than what it shoots at.
+
+**Command.** Battle stations is a real state change, not an announcement: it is
+the ship going from cruising to fighting, with everything that entails. Holding
+formation is what a command officer does with an ally present — and the game
+has allies now, arriving on a distress call, with nothing to say to them.
+
+None of this needs a number from a technical manual, because none of it is a
+dimension. What it needs is that each ability does something the department is
+actually for, and that it is not a reskin of a power another department already
+has. The three medical abilities are the first in the game whose payoff is
+`crew` and `injured` rather than hull and shields, which is the test of whether
+the department was worth adding at all.
+
+Sources: the depiction of bridge duty stations across the series, as summarised
+in the reference material rather than quoted from it.
+[Memory Alpha — bridge](https://memory-alpha.fandom.com/wiki/Main_bridge),
+[Memory Alpha — conn](https://memory-alpha.fandom.com/wiki/Conn),
+[Memory Alpha — evasive manoeuvres](https://memory-alpha.fandom.com/wiki/Evasive_maneuvers),
+[Memory Alpha — triage](https://memory-alpha.fandom.com/wiki/Triage)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

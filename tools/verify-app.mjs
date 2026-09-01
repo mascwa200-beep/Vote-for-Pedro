@@ -232,6 +232,45 @@ try {
     built.science >= 14 && built.proficientScience,
     `science ${built.science}, proficient ${built.proficientScience}`);
 
+  // ---- The main viewer is showing something ----
+  //
+  // The bridge's whole set points at it, and it had never shown anything. The
+  // exterior is drawn first, scissored to the screen's rectangle and pinned to
+  // the far end of the depth buffer; the room is drawn over the top so the
+  // bulkhead can cover the difference between the axis-aligned scissor box and
+  // the trapezoid. A filled panel inside that trapezoid — which is what the
+  // room mesh carried — covered the picture along with it.
+  //
+  // "The aperture exists" was already asserted and had been passing the whole
+  // time, which is the difference between checking a rectangle and checking a
+  // picture. This photographs the middle of the aperture: a region of solid
+  // black compresses to almost nothing, and a starfield does not.
+  const aperture = await page.evaluate(() => {
+    const fpv = globalThis.__app.fpv;
+    const r = fpv?.stats?.screenRect;
+    const canvas = fpv?.canvas;
+    if (!r || !canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    const dpr = canvas.width / box.width;
+    // `screenRect` is in device pixels from the TOP left, same as a
+    // screenshot; `setScissor` is what flips it for GL.
+    return {
+      x: box.x + (r.x + r.w * 0.2) / dpr,
+      y: box.y + (r.y + r.h * 0.2) / dpr,
+      width: Math.max(8, (r.w * 0.6) / dpr),
+      height: Math.max(8, (r.h * 0.6) / dpr),
+    };
+  });
+  check('the main viewer has an aperture the exterior is drawn into',
+    aperture !== null, JSON.stringify(aperture));
+  if (aperture) {
+    const png = await page.screenshot({ clip: aperture });
+    await page.screenshot({ path: join(SHOTS, '02b-viewscreen.png'), clip: aperture });
+    // A flat black rectangle of this size compresses to a few hundred bytes.
+    check('and there is something on it', png.length > 1200,
+      `${png.length}B from ${Math.round(aperture.width)}x${Math.round(aperture.height)}`);
+  }
+
   await page.screenshot({ path: join(SHOTS, '02-bridge.png') });
 
   // ------------------------------------------------ audio graph
@@ -573,6 +612,28 @@ try {
   check('the orbital scene stays inside the frame budget',
     inOrbit.tris > 0 && inOrbit.tris <= 8000 && inOrbit.draws <= 60,
     `${inOrbit.tris} triangles in ${inOrbit.draws} draws`);
+  // And the world is ON the viewer, not merely computed for it. In orbit the
+  // aperture holds a lit disc with a terminator across it; in open space it
+  // holds a handful of stars. The first compresses to many times the second,
+  // which is the difference this measures.
+  const orbitViewer = await page.evaluate(() => {
+    const fpv = globalThis.__app.fpv;
+    const r = fpv?.stats?.screenRect;
+    const canvas = fpv?.canvas;
+    if (!r || !canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    const dpr = canvas.width / box.width;
+    return {
+      x: box.x + (r.x + r.w * 0.2) / dpr, y: box.y + (r.y + r.h * 0.2) / dpr,
+      width: Math.max(8, (r.w * 0.6) / dpr), height: Math.max(8, (r.h * 0.6) / dpr),
+    };
+  });
+  if (orbitViewer) {
+    const png = await page.screenshot({ clip: orbitViewer });
+    await page.screenshot({ path: join(SHOTS, '03e-viewscreen-orbit.png'), clip: orbitViewer });
+    check('the world the ship is orbiting is on the main viewer',
+      png.length > 4000, `${png.length}B`);
+  }
   await page.screenshot({ path: join(SHOTS, '03c-orbit.png') });
 
   // ---- And down onto it ----
@@ -1636,8 +1697,16 @@ try {
     });
   });
   await page.waitForTimeout(1500);
-  check('combat enters the tactical screen',
+  check('a fight puts the game in combat',
     await page.evaluate(() => globalThis.__app.game.mode === 'combat'));
+  // And leaves the captain where they were. A fight used to yank the screen to
+  // the tactical plot, which is the exact thing `render()` says the combat
+  // restructure exists to stop — so everything below has to WALK to the plot,
+  // the way a captain does.
+  check('a fight does not take the screen',
+    await page.evaluate(() => globalThis.__app.screen !== 'tactical'),
+    await page.evaluate(() => globalThis.__app.screen));
+  await goTo(page, 'tactical');
   check('tactical canvas is present', await page.locator('#tactical').isVisible());
 
   // The tactical canvas is WebGL when the device can manage it and 2D when it
@@ -1826,6 +1895,86 @@ try {
       String(backToPlot.drawCalls));
   }
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
+
+  // ---- The bridge officer tray ----
+  //
+  // Four of the seven officers used to hold an identical tray, because Medical
+  // and Operations had no abilities of their own and borrowed Command's. The
+  // panel then showed `ready.slice(0, 8)` of a list that was largely
+  // duplicates, so the truncation never showed. It would now.
+  const tray = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    const panels = [...document.querySelectorAll('.panel')];
+    const el = panels.find((p) => /Bridge Officers/i.test(p.querySelector('h2')?.textContent ?? ''));
+    const buttons = el ? [...el.querySelectorAll('.btn')] : [];
+    const depts = el ? [...el.querySelectorAll('h3')].map((h) => h.textContent) : [];
+    // What the simulation says is ready, against what the screen offers.
+    const ready = new Set(g.readyAbilities().map((r) => r.ability.id));
+    return {
+      buttons: buttons.length,
+      depts: depts.length,
+      ready: ready.size,
+      // Every button prints the phrase that fires it — as its title when the
+      // title IS the phrase, and underneath when it is not.
+      spoken: buttons.every((b) => {
+        const said = (b.textContent ?? '').toLowerCase().replace(/\s+/g, ' ');
+        const id = [...g.readyAbilities()].find((r) =>
+          said.includes(r.ability.name.toLowerCase()));
+        return !!id && said.includes(id.ability.order.toLowerCase());
+      }),
+      // Nothing on screen twice.
+      unique: new Set(buttons.map((b) => b.querySelector('.btn-label')?.textContent
+        ?? b.textContent.split('\n')[0])).size === buttons.length,
+      // How many departments the tray can offer from at all, which is the
+      // thing the six tables were added for. Counted over the whole roster
+      // rather than the ready list, because half the tray is on cooldown in
+      // the middle of a fight — and over every station rather than the living
+      // ones, because by this point in the harness somebody may have died and
+      // a dead officer's station is still a station on the bridge.
+      onRoster: new Set(g.crew.officers.map((o) => o.dept)).size,
+      distinctTrays: new Set(g.crew.officers.map((o) => o.abilities.join(','))).size,
+    };
+  });
+  check('the bridge officer tray offers every power that is ready, and no more',
+    tray.buttons === tray.ready && tray.ready > 6, JSON.stringify(tray));
+  check('and groups them rather than truncating the list',
+    tray.depts >= 2 && tray.unique === true, JSON.stringify(tray));
+  check('and a full bridge has six departments to offer from',
+    tray.onRoster >= 6 && tray.distinctTrays >= 5, JSON.stringify(tray));
+  check('and every one of them prints the phrase that says it',
+    tray.spoken === true, JSON.stringify(tray));
+  // Scrolled to, because the tray lives below the plot and the target panel
+  // and a screenshot of the top of the screen says nothing about it.
+  const scrolled = await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.panel')];
+    const el = panels.find((p) => /Bridge Officers/i.test(p.querySelector('h2')?.textContent ?? ''));
+    if (!el) return { found: false };
+    // Walk up to whatever actually scrolls. `scrollIntoView` on its own moved
+    // nothing: the screen scrolls inside a container, not the window.
+    let box = el.parentElement;
+    while (box && box.scrollHeight <= box.clientHeight + 4) box = box.parentElement;
+    if (box) box.scrollTop = el.offsetTop - (box.offsetTop ?? 0) - 8;
+    return { found: true, box: box?.className ?? null, top: box?.scrollTop ?? -1 };
+  });
+  await page.waitForTimeout(250);
+  check('and the tray can be scrolled to on a phone-sized screen',
+    scrolled.found === true && scrolled.top > 0, JSON.stringify(scrolled));
+  // And it STAYS scrolled to. The whole screen is rebuilt and swapped on every
+  // render, and in combat that happens about four times a second — so a
+  // captain who scrolled down to their bridge officers was thrown back to the
+  // top of the page before they could reach one.
+  await page.waitForTimeout(900);
+  const held = await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.panel')];
+    const el = panels.find((p) => /Bridge Officers/i.test(p.querySelector('h2')?.textContent ?? ''));
+    let box = el?.parentElement;
+    while (box && box.scrollHeight <= box.clientHeight + 4) box = box.parentElement;
+    return { top: box?.scrollTop ?? -1 };
+  });
+  check('and a combat re-render does not throw the captain back to the top',
+    held.top > 0, JSON.stringify({ scrolled, held }));
+  await page.screenshot({ path: join(SHOTS, '20-bridge-officers.png') });
+
 
   // ---- The helm's eight warp switches ----
   //
@@ -2241,6 +2390,152 @@ try {
     namedWeapon.afterTorps < namedWeapon.afterBeams, JSON.stringify(namedWeapon));
   await dismissModals(page);
 
+  // ---- A fight, from the chair ----
+  //
+  // This is the presentation the whole restructure is built on: you stay on
+  // the bridge and the enemy is on the main viewer. Nothing had ever
+  // photographed it. The viewer was black for the life of that design, and
+  // once it was not, it turned out to draw the hulls and none of their
+  // weapons — no beams, no torpedoes, and an impact effect that the
+  // simulation has recorded on every shot since combat was written and that
+  // only the 2D fallback had ever drawn.
+  await goTo(page, 'bridge');
+  await page.evaluate(async () => {
+    const { hullScale } = await import('./src/gfx/blueprint.js');
+    globalThis.__hullScale = hullScale;
+  });
+  const fight = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.startCombat([
+      new Ship('d7', { faction: 'klingon', name: 'IKS Probe' }),
+      new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Nearby' }),
+    ], { name: 'Bridge view', relentless: true });
+
+    // Put them where a fight actually happens and point the guns, then run it
+    // long enough that beams are in flight and shots have landed.
+    const eng = g.engagement;
+    eng.hostiles.forEach((h, i) => {
+      h.x = 340 + i * 90; h.y = (i - 0.5) * 120; h.z = 0;
+      h.throttle = 0; h.heading = 180;
+    });
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    g.ship.heading = 0; g.ship.desiredHeading = 0; g.ship.throttle = 0;
+    for (let t = 0; t < 90; t++) {
+      eng.fireAll();
+      for (const h of eng.liveHostiles) h.heading = 180;
+      g.update(1 / 30);
+    }
+    return {
+      mode: g.mode,
+      screen: app.screen,
+      live: eng.liveHostiles.length,
+      effects: (eng.effects ?? []).map((e) => e.kind),
+      projectiles: (eng.projectiles ?? []).length,
+      range: Math.round(g.ship.distanceTo(eng.liveHostiles[0] ?? g.ship)),
+    };
+  });
+  check('a fight leaves the captain on the bridge, not on a plot screen',
+    fight.screen === 'bridge', JSON.stringify(fight));
+  check('and the shooting is actually happening',
+    fight.effects.length > 0 && fight.live > 0, JSON.stringify(fight));
+
+  // Let a frame or two land with shots on the screen, then photograph the
+  // aperture and measure what is in it.
+  await page.waitForTimeout(120);
+  const combatViewer = await page.evaluate(() => {
+    const app = globalThis.__app;
+    // Fire once more and draw the frame here, because a beam lives 0.35
+    // seconds and the screenshot above spent most of that. Reading the stats
+    // after they had all expired said "no weapons fire" about a fight that was
+    // full of it.
+    const live = app.game.engagement;
+    if (live) {
+      for (const w of app.game.ship.weapons) w.cooldown = 0;
+      live.fireAll();
+      for (const h of live.liveHostiles) { for (const w of h.weapons) w.cooldown = 0; }
+      app.game.update(1 / 30);
+      app.fpv?.render(app.game, 1 / 60);
+    }
+    const fpv = app.fpv;
+    const r = fpv?.stats?.screenRect;
+    const canvas = fpv?.canvas;
+    if (!r || !canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    const dpr = canvas.width / box.width;
+
+    // How wide is a hostile on the screen? True range, no lens tricks — so
+    // this is the number that says whether you can see them, and it is
+    // asserted rather than hoped for.
+    const eng = app.game.engagement;
+    const h = eng?.liveHostiles?.[0];
+    let px = 0;
+    let far = 0;
+    let span = 0;
+    let range = 0;
+    if (h) {
+      // The hull's TRUE length in world units — the same number the renderer
+      // scales the mesh by — against the true distance from the camera, which
+      // sits a fixed lead ahead of the bow. No stand-ins: the point of the
+      // true-range decision is that this number is real.
+      span = globalThis.__hullScale(h.classId);
+      range = Math.max(1, app.game.ship.distanceTo(h) - 140);
+      const fov = 74 * Math.PI / 180;
+      const across = (d) => r.w * (2 * Math.atan(span / (2 * d))) / fov;
+      px = across(range);
+      // And at the far end of the envelope, which is the number that decides
+      // whether true range is workable at all: a hull you cannot see is a hull
+      // you cannot fight without walking to the plot.
+      far = across(900);
+    }
+    return {
+      clip: {
+        x: box.x + (r.x + r.w * 0.15) / dpr, y: box.y + (r.y + r.h * 0.15) / dpr,
+        width: Math.max(8, (r.w * 0.7) / dpr), height: Math.max(8, (r.h * 0.7) / dpr),
+      },
+      hostilePx: Math.round(px),
+      farPx: Math.round(far),
+      hullSpan: Math.round(span),
+      range: Math.round(range),
+      effects: fpv.stats.effects ?? null,
+      draws: fpv.stats.drawCalls,
+      tris: fpv.stats.triangles,
+    };
+  });
+  if (combatViewer) {
+    const png = await page.screenshot({ clip: combatViewer.clip });
+    await page.screenshot({ path: join(SHOTS, '21-fight-from-the-chair.png') });
+    await page.screenshot({ path: join(SHOTS, '21b-viewscreen-fight.png'), clip: combatViewer.clip });
+    // Busier than a starfield, which is the point — and much busier than the
+    // black rectangle this was for the whole life of the feature.
+    check('a fight is visible on the main viewer', png.length > 6000,
+      `${png.length}B ${JSON.stringify({ ...combatViewer, clip: undefined })}`);
+    check('and the weapons fire reaches it, not just the hulls',
+      (combatViewer.effects?.drawn ?? 0) > 0 && (combatViewer.effects?.dropped ?? 0) === 0,
+      JSON.stringify(combatViewer.effects));
+    check('a hostile is big enough on the screen to see at true range',
+      combatViewer.hostilePx >= 12 && combatViewer.farPx >= 6,
+      `${combatViewer.hostilePx}px at ${combatViewer.range} units and ${combatViewer.farPx}px at 900 — a ${combatViewer.hullSpan}-unit hull on a ${Math.round(combatViewer.clip.width)}px-wide crop`);
+    check('and the bridge with a fight on the viewer stays inside the budget',
+      combatViewer.draws <= 60 && combatViewer.tris <= 8000,
+      `${combatViewer.tris} triangles in ${combatViewer.draws} draws`);
+  }
+
+  // Leave it as it was found; everything after this assumes a quiet ship.
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    for (let i = 0; i < 5; i++) g.update(1 / 30);
+    g.ship.restore();
+    g.ship.crew = g.ship.maxCrew;
+    g.wreck = null;
+    globalThis.__app.go('bridge');
+  });
+  await dismissModals(page);
+
   // ------------------------------------------------ the rest of the screens
   for (const [navLabel, shot] of [['Ship', '06-ship'], ['Crew', '07-crew'], ['Record', '08-record']]) {
     await nav(page, navLabel);
@@ -2378,6 +2673,9 @@ try {
     const app = globalThis.__app;
     const { Ship } = await import('./src/sim/ship.js');
     app.game.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Sig' })]);
+    // The plot is where the signature button lives, and a fight no longer
+    // takes you there — you walk to the console, which is the point.
+    app.go('tactical');
     app.render();
     const before = {
       used: app.game.character.signatureUsed,
