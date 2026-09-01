@@ -9579,6 +9579,16 @@ function ringShell(solid, glow, room) {
   }
 
   // The ceiling light ring.
+  //
+  // Wound to be seen from BELOW, which is the only place anybody will ever be
+  // standing. It was wound the other way, so its normal pointed up into the
+  // hull and back-face culling removed all forty triangles of it — the light
+  // ring existed, cost its draw call, and had never once been on screen. The
+  // bridge's ceiling was forty per cent of the first thing a player sees and
+  // it was a flat grey plate.
+  //
+  // The floor and ceiling fans a few lines up reverse their corner order for
+  // exactly this reason; this loop did not.
   for (let i = 0; i < bays * 2; i++) {
     const a0 = (i / (bays * 2)) * Math.PI * 2;
     const a1 = ((i + 1) / (bays * 2)) * Math.PI * 2;
@@ -9586,9 +9596,9 @@ function ringShell(solid, glow, room) {
     const r1 = R * 0.68;
     glow.quad(
       vec3(Math.sin(a0) * r0, h - 0.04, Math.cos(a0) * r0),
-      vec3(Math.sin(a0) * r1, h - 0.04, Math.cos(a0) * r1),
-      vec3(Math.sin(a1) * r1, h - 0.04, Math.cos(a1) * r1),
       vec3(Math.sin(a1) * r0, h - 0.04, Math.cos(a1) * r0),
+      vec3(Math.sin(a1) * r1, h - 0.04, Math.cos(a1) * r1),
+      vec3(Math.sin(a0) * r1, h - 0.04, Math.cos(a0) * r1),
       PALETTE.strip,
     );
   }

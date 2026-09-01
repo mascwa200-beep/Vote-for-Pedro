@@ -1903,3 +1903,53 @@ describe('no two Federation classes are the same shape', () => {
     }
   });
 });
+
+
+// ========================================= geometry you could never have seen
+
+describe('nothing in a room is drawn facing away from the room', () => {
+  // Back-face culling is on, so a surface whose normal points into the hull is
+  // not dim or subtle — it is ABSENT, and it still costs its triangles and its
+  // draw call. The bridge's ceiling light ring was wound that way: forty
+  // triangles that had never once been on screen, in the top forty per cent of
+  // the first thing a player ever sees, which is why that ceiling read as a
+  // flat grey plate.
+  //
+  // The rule is narrow on purpose. A box top a foot below the ceiling faces up
+  // and is correctly invisible from underneath — that is a lid, not a mistake.
+  // What cannot be right is a surface flush WITH the ceiling that faces up:
+  // there is no vantage point in the room from which it exists.
+  test('no surface flush with the ceiling faces upward', () => {
+    const offenders = [];
+    for (const id of Object.keys(ROOMS)) {
+      if (id === 'surface') continue;
+      const h = ROOMS[id].shape?.height;
+      if (!h) continue;
+      const built = roomMeshes(id);
+      for (const [key, m] of Object.entries(built ?? {})) {
+        if (!m?.data) continue;
+        const f = m.stride / 4;
+        let n = 0;
+        for (let i = 0; i < m.vertexCount; i += 3) {
+          if (m.data[i * f + 4] > 0.9 && Math.abs(m.data[i * f + 1] - h) < 0.06) n++;
+        }
+        if (n) offenders.push(`${id}.${key}: ${n} triangles`);
+      }
+    }
+    assert.deepEqual(offenders, []);
+  });
+
+  test('and the bridge ceiling has its light ring', () => {
+    // The positive half. Without this the test above is satisfied by deleting
+    // the ring, which is not the fix.
+    const built = roomMeshes('bridge');
+    const h = ROOMS.bridge.shape.height;
+    const m = built.glow;
+    let lit = 0;
+    for (let i = 0; i < m.vertexCount; i += 3) {
+      const f = m.stride / 4;
+      if (m.data[i * f + 4] < -0.9 && Math.abs(m.data[i * f + 1] - h) < 0.1) lit++;
+    }
+    assert.ok(lit >= 20, `only ${lit} downward-facing triangles in the bridge ceiling`);
+  });
+});
