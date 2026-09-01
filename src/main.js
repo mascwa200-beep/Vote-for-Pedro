@@ -292,15 +292,14 @@ class App {
     });
 
     on('captain:promoted', (promo) => {
+      // The level, the feat and the recomputed modifiers are `Game.awardXP`'s
+      // job now. They used to be this listener's, which meant a promotion
+      // earned with no screen attached moved the rank index and did nothing
+      // else at all.
       audio.play('promotion');
       audio.play('boatswain');
       haptic('confirm');
       const g = this.game;
-      if (g) {
-        g.character.levelUp();
-        g.pendingFeats = (g.pendingFeats ?? 0) + 1;
-        g.applyAllMods();
-      }
       this.showMessage('Promotion', [
         `You are promoted to ${promo.rank.name}.`,
         `${promo.points} skill points awarded, and a feat to choose on the Captain screen.`,

@@ -3,7 +3,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, successChance } from '../src/rules/resolve.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import { RNG } from '../src/core/rng.js';
 import {
@@ -854,4 +856,74 @@ test('and a loaded save does not collect any of it twice', () => {
   assert.equal(back.progress.rankIndex, g.progress.rankIndex);
   assert.equal(back.progress.spent.beam_weapons, g.progress.spent.beam_weapons);
   assert.equal(back.ledger.count('order_disobeyed'), 1);
+});
+
+// ------------------------------------------------- a promotion is a promotion
+
+// Twelve places in the codebase awarded experience; two of them looked at
+// whether it promoted anybody. And what a promotion MEANS — the character
+// levels up, and a feat is banked to choose — was done by an event listener in
+// src/main.js. So a captain could earn Fleet Captain over a five-year
+// commission and still be level one with no feats, unless somebody happened to
+// be looking at the screen when each promotion landed.
+
+test('a promotion levels the captain and banks a feat, with nobody watching', () => {
+  const g = new Game({ seed: 1212n, crewMode: 'original' });
+  const level = g.character.level;
+  const rank = g.progress.rankIndex;
+
+  const promo = g.awardXP(1e6);
+  assert.ok(promo?.promoted, 'a million experience promoted nobody');
+  assert.equal(g.progress.rankIndex, rank + 1);
+  assert.equal(g.character.level, level + 1, 'the captain did not level up');
+  assert.equal(g.pendingFeats, 1, 'no feat was banked');
+  assert.ok(g.progress.unspent > 0, 'no skill points arrived');
+  assert.ok(g.log.some((l) => /promoted/i.test(l.text)), 'nobody mentioned it');
+});
+
+test('and experience that promotes nobody changes nothing but the total', () => {
+  const g = new Game({ seed: 1213n, crewMode: 'original' });
+  const before = { level: g.character.level, rank: g.progress.rankIndex, xp: g.progress.xp };
+  assert.equal(g.awardXP(1), null);
+  assert.equal(g.character.level, before.level);
+  assert.equal(g.progress.rankIndex, before.rank);
+  assert.equal(g.progress.xp, before.xp + 1);
+  assert.equal(g.pendingFeats ?? 0, 0);
+});
+
+test('and nothing awards experience behind awardXP\'s back', () => {
+  // The structural half. Twelve call sites reached `progress.addXP` directly
+  // and ten of them dropped the promotion on the floor; one new one would put
+  // the bug straight back. `Game.awardXP` is the only caller allowed, and this
+  // is what says so.
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(path); continue; }
+      if (!entry.name.endsWith('.js')) continue;
+      const text = readFileSync(path, 'utf8');
+      for (const [i, line] of text.split('\n').entries()) {
+        if (!/\.addXP\s*\(/.test(line)) continue;
+        // The one legitimate caller is inside awardXP itself.
+        if (path.endsWith(join('core', 'state.js')) && /progress\.addXP/.test(line)) continue;
+        offenders.push(`${entry.name}:${i + 1} ${line.trim()}`);
+      }
+    }
+  };
+  walk(root);
+  assert.deepEqual(offenders, [], 'experience awarded without carrying the promotion');
+});
+
+test('a board of inquiry blocks the promotion and everything under it', () => {
+  const g = new Game({ seed: 1215n, crewMode: 'original' });
+  g.ledger.inquiryOpen = true;
+  const level = g.character.level;
+  const rank = g.progress.rankIndex;
+  const promo = g.awardXP(1e6);
+  assert.equal(promo?.promoted, undefined, 'Starfleet promoted a captain it was investigating');
+  assert.equal(g.progress.rankIndex, rank, 'the pip arrived anyway');
+  assert.equal(g.character.level, level, 'the level arrived anyway');
+  assert.equal(g.pendingFeats ?? 0, 0, 'the feat arrived anyway');
 });

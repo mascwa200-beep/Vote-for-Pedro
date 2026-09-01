@@ -306,6 +306,38 @@ export class Game {
   }
 
   /**
+   * Award experience, and carry out the promotion if it earns one.
+   *
+   * Twelve places in this codebase awarded experience. Two of them checked
+   * whether it promoted the captain; the other ten threw the answer away, so
+   * a promotion earned by an away mission, an anomaly, a first survey, a
+   * mission reward or a diplomatic success happened silently: the rank index
+   * moved and nothing else did, not even the announcement.
+   *
+   * And what a promotion MEANS — the character levels up, proficiency goes up
+   * with it, and a feat is banked to choose — lived in an event listener in
+   * src/main.js. Headless, a captain could make Fleet Captain over five years
+   * and still be level one with no feats, which is the entire character half
+   * of the game not happening.
+   */
+  awardXP(amount, { silent = false } = {}) {
+    const promo = this.progress.addXP(amount, { ledger: this.ledger });
+    if (!promo?.promoted) return promo ?? null;
+
+    this.character?.levelUp();
+    this.pendingFeats = (this.pendingFeats ?? 0) + 1;
+    this.applyAllMods();
+    if (!silent) {
+      this.pushLog(
+        `Promoted to ${promo.rank.name}. ${promo.points} skill points and a feat to choose.`,
+        'captain',
+      );
+    }
+    emit('captain:promoted', promo);
+    return promo;
+  }
+
+  /**
    * Spend marks on a reputation project, and receive what it grants.
    *
    * `reputation.buy` deducts the cost and records the perk. What the project
@@ -989,7 +1021,7 @@ export class Game {
     this.pushLog(`Arrived at ${t.to.name}.`, 'helm');
     if (isNew && t.to.unexplored) {
       this.ledger.record('anomaly_catalogued', { text: `First survey of ${t.to.name}`, system: t.to.id });
-      this.progress.addXP(250, { ledger: this.ledger });
+      this.awardXP(250);
     }
     emit('arrived', { system: t.to, isNew });
 
@@ -1078,7 +1110,7 @@ export class Game {
         const lives = enc.lives ?? 200;
         this.ledger.record('distress_answered', { text: `Assisted at ${enc.system.name}`, system: enc.system.id });
         this.ledger.record('lives_saved', { count: lives, system: enc.system.id });
-        this.progress.addXP(300 + lives / 6, { ledger: this.ledger });
+        this.awardXP(300 + lives / 6);
         this.ledger.adjustStanding('federation', STANDING_EFFECTS.answered_distress, 'Answered a distress call');
         this.earnReputation('distress_answered');
         this.clock.advanceStardate(0.6);
@@ -1106,7 +1138,7 @@ export class Game {
           this.ledger.record('anomaly_catalogued', {
             text: `Catalogued ${enc.anomaly?.name ?? 'phenomenon'} at ${enc.system.name}`, system: enc.system.id,
           });
-          this.progress.addXP(120 * (enc.anomaly?.value ?? 1), { ledger: this.ledger });
+          this.awardXP(120 * (enc.anomaly?.value ?? 1));
           this.galaxy.markSurveyed(enc.system.id, enc.anomaly?.name);
           out.messages.push(`Full sensor profile obtained. ${enc.anomaly?.name ?? 'Phenomenon'} catalogued.`);
         } else {
@@ -1126,7 +1158,7 @@ export class Game {
           count: enc.anomaly?.value ?? 2,
           text: `Close survey of ${enc.anomaly?.name ?? 'phenomenon'}`, system: enc.system.id,
         });
-        this.progress.addXP(260 * (enc.anomaly?.value ?? 1), { ledger: this.ledger });
+        this.awardXP(260 * (enc.anomaly?.value ?? 1));
         this.galaxy.markSurveyed(enc.system.id, enc.anomaly?.name);
         this.earnReputation('anomaly_catalogued');
         out.messages.push('Close survey complete. Science has what they need.');
@@ -1144,7 +1176,7 @@ export class Game {
         if (r1.success && enc.salvage) {
           this.loadout.acquire(enc.salvage);
           out.messages.push('Salvage recovered and stowed.');
-          this.progress.addXP(350, { ledger: this.ledger });
+          this.awardXP(350);
         }
         break;
       }
@@ -1153,7 +1185,7 @@ export class Game {
         this.ledger.adjustStanding(enc.factionId ?? 'independent', STANDING_EFFECTS.completed_escort, 'Escort completed');
         this.latinum += Math.round((enc.escortReward ?? 300) * (this.reputation.has('better_prices') ? 1.25 : 1));
         this.earnReputation('escort_completed');
-        this.progress.addXP(280, { ledger: this.ledger });
+        this.awardXP(280);
         this.clock.advanceStardate(0.8);
         out.messages.push(`Escort complete. ${enc.escortReward ?? 300} credits transferred.`);
         break;
@@ -1165,13 +1197,13 @@ export class Game {
           this.ledger.record('first_contact', {
             text: `First contact with the ${enc.speciesName}`, system: enc.system.id,
           });
-          this.progress.addXP(900, { ledger: this.ledger });
+          this.awardXP(900);
           this.ledger.adjustStanding('federation', 12, 'First contact');
           this.earnReputation('first_contact');
           out.messages.push(`Contact established with the ${enc.speciesName}. They are... cautious, but talking.`);
         } else {
           out.messages.push('They break off without answering. The database gets a new entry and nothing else.');
-          this.progress.addXP(200, { ledger: this.ledger });
+          this.awardXP(200);
         }
         break;
       }
@@ -1225,7 +1257,7 @@ export class Game {
     if (result.standingDelta) {
       this.ledger.adjustStanding(factionId, result.standingDelta, 'Hail');
     }
-    if (result.xp) this.progress.addXP(result.xp, { ledger: this.ledger });
+    if (result.xp) this.awardXP(result.xp);
 
     if (result.surrender) {
       this.ledger.record('surrender_accepted', { text: 'Accepted a surrender', faction: factionId });
@@ -1437,9 +1469,11 @@ export class Game {
       // The Empire respects a captain who kept fighting while losing.
       if (this.ship.hullPct < 0.35) this.earnReputation('fought_while_losing');
       this.earnReputation('combat_victory');
-      const promo = this.progress.addXP(xp, { ledger: this.ledger });
+      const promo = this.awardXP(xp, { silent: true });
       this.pushLog(`Engagement concluded. +${Math.round(xp)} experience.`, 'captain');
-      if (promo?.promoted) emit('captain:promoted', promo);
+      if (promo?.promoted) {
+        this.pushLog(`Promoted to ${promo.rank.name}. ${promo.points} skill points and a feat to choose.`, 'captain');
+      }
     }
 
     // Casualties from THIS fight.
@@ -1729,8 +1763,7 @@ export class Game {
   /** What a landing party's result changes about the world it happened in. */
   applyAwayOutcome(template, outcome, won, total) {
     const share = total ? won / total : 0;
-    this.progress.addXP(Math.round(120 * share * (HAZARD_LEVEL[template.hazard]?.death ?? 0.05) * 20),
-      { ledger: this.ledger });
+    this.awardXP(Math.round(120 * share * (HAZARD_LEVEL[template.hazard]?.death ?? 0.05) * 20));
 
     if (template.id === 'boarding_action' && template.target) {
       const foe = template.target;
@@ -1823,7 +1856,7 @@ export class Game {
         text: `Surveyed ${feature.label.toLowerCase()} on ${room.name}`,
         system: this.locationId,
       });
-      this.progress.addXP(60, { ledger: this.ledger });
+      this.awardXP(60);
     } else {
       this.pushLog(`${feature.label}: ${feature.failed}`, 'science');
     }

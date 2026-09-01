@@ -159,8 +159,11 @@ export class Mission {
     }
 
     if (effects.xp) {
-      const promo = g.progress.addXP(effects.xp, { ledger: g.ledger });
-      if (promo?.promoted) emit('captain:promoted', promo);
+      // `awardXP` carries out the promotion as well as recording it: the level,
+      // the proficiency bonus and the banked feat used to happen in a listener
+      // in main.js, so a captain promoted by a mission got the pip and nothing
+      // else unless somebody was looking at the screen.
+      g.awardXP(effects.xp);
       out.messages.push(`Service record updated: +${effects.xp} experience.`);
     }
 
