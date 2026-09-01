@@ -16,6 +16,7 @@ import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '
 import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import { resolveHail, STANDING_EFFECTS } from '../sim/diplomacy.js';
+import { applyAbility, applySignature, applyDevice } from '../sim/powers.js';
 
 import { Galaxy, plotTransit } from '../world/galaxy.js';
 // Placement only, and deterministic from the system id — see gfx/vista.js. The
@@ -2222,6 +2223,50 @@ export class Game {
   }
 
   /** Start a job in the machine shop. */
+  // ------------------------------------------------------- powers and devices
+
+  /**
+   * Fire a bridge officer ability.
+   *
+   * `who` is an officer, a station name, or nothing at all — in which case the
+   * ability finds the officer who has it. `what` is an ability id or record.
+   *
+   * All of this used to live in the screen, which meant the entire STO-style
+   * power tray existed only when a browser was attached: no test could fire
+   * one, the soak never saw a buffed ship, and a fuzzer line reading
+   * `g.character?.useSignature?.(g)` had been optional-chaining into nothing
+   * for as long as it had been written.
+   */
+  useAbility(who, what) {
+    const abilityId = typeof what === 'string' ? what : what?.id;
+    let officer = null;
+    if (typeof who === 'object' && typeof who?.ready === 'function') officer = who;
+    // No station named: whoever holds the ability answers, which is what
+    // "fire at will" means when it is typed rather than tapped. A station that
+    // IS named and is not manned is refused — falling through to whoever else
+    // could do it would mean an order to a dead officer being carried out by
+    // somebody the captain did not address.
+    else if (who == null) officer = abilityId ? this.crew.officerFor(abilityId) : null;
+    else officer = this.crew.at(who) ?? null;
+    if (!officer) return { ok: false, reason: 'nobody at that station, Captain.' };
+    return applyAbility(this, officer, what ?? abilityId);
+  }
+
+  /** Every ability that could be fired right now, with its officer. */
+  readyAbilities() {
+    return this.crew.readyAbilities();
+  }
+
+  /** The career signature: one large effect, once per engagement. */
+  useSignature() {
+    return applySignature(this);
+  }
+
+  /** Spend one device out of the loadout. */
+  useDevice(id) {
+    return applyDevice(this, id);
+  }
+
   fabricate(recipeId) {
     // The machine shop is not a combat action. Left unguarded, a hull patch
     // could be started and finished under fire — hours of work compressed into

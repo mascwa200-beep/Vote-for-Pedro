@@ -23,6 +23,8 @@ import { getShipClass, SHIP_LIST } from '../src/world/ships.data.js';
 import { SYSTEMS, SYSTEM_BY_ID } from '../src/world/systems.data.js';
 import { buildRoster, STATIONS } from '../src/world/crews.data.js';
 import { resolveHail } from '../src/sim/diplomacy.js';
+import { ABILITIES } from '../src/sim/officers.js';
+import { CAREERS, Character } from '../src/rules/character.js';
 
 // ---------------------------------------------------------------- RNG
 
@@ -1479,4 +1481,248 @@ test('picking an option by voice takes the same path as pressing it', () => {
   assert.ok(r, 'the choice did nothing');
   assert.notEqual(g.missions.active?.stageId ?? null, before,
     'the episode did not move on');
+});
+
+// ----------------------------------------- the power tray, without a screen
+
+// Seventeen bridge officer abilities, seven career signatures and four
+// devices. Every one of them used to be implemented inside src/main.js, which
+// is to say inside the browser: headless they did not exist, so nothing below
+// could have been written at all, the soak could never fire one, and the
+// API fuzzer's `g.character?.useSignature?.(g)` was optional-chaining into
+// nothing and passing for it.
+//
+// These assert the EFFECT of each power, not that the table has an entry.
+
+/** A game in a fight, with one officer holding one named ability. */
+function armed(abilityId, opts = {}) {
+  const g = new Game({ seed: 4711n, crewMode: 'original', difficulty: 'commander', ...opts });
+  g.startCombat([new Ship('d7', { name: 'Target' })], { relentless: true });
+  const a = ABILITIES[abilityId];
+  const officer = g.crew.at(a.dept === 'command' ? 'helm' : a.dept) ?? g.crew.living[0];
+  if (!officer.abilities.includes(abilityId)) officer.abilities.push(abilityId);
+  officer.cooldowns = {};
+  return { g, officer };
+}
+
+const hasBuff = (ship, id) => (ship.buffs ?? []).some((b) => b.id === id);
+
+test('every bridge officer ability can be fired without a screen', () => {
+  for (const id of Object.keys(ABILITIES)) {
+    const { g, officer } = armed(id);
+    if (id === 'eject_core') g.ship.breaching = true;
+    const r = g.useAbility(officer, id);
+    assert.ok(r.ok, `${id} refused: ${r.reason}`);
+    // Ejecting the core is the one power with no cooldown, because it is not
+    // a thing you do twice: the ship's own guard stops that, not a timer.
+    if (ABILITIES[id].cooldown > 0) {
+      assert.ok(officer.cooldowns[id] > 0, `${id} started no cooldown`);
+      assert.ok(!officer.ready(id), `${id} was ready again immediately`);
+      assert.equal(g.useAbility(officer, id).ok, false, `${id} fired twice`);
+    } else {
+      assert.equal(g.ship.ejectCore(), false, `${id} could be done twice`);
+    }
+  }
+});
+
+test('an ability with modifiers puts them on the ship', () => {
+  for (const [id, a] of Object.entries(ABILITIES)) {
+    if (!a.mods) continue;
+    const { g, officer } = armed(id);
+    assert.ok(!hasBuff(g.ship, id), `${id} was already running`);
+    g.useAbility(officer, id);
+    assert.ok(hasBuff(g.ship, id), `${id} granted nothing`);
+  }
+});
+
+test('the abilities that do a thing do the thing', () => {
+  // Damage control teams put fires out.
+  {
+    const { g, officer } = armed('damage_control');
+    g.ship.fires = 3;
+    g.useAbility(officer, 'damage_control');
+    assert.equal(g.ship.fires, 0, 'the fires were left burning');
+  }
+  // A tachyon sweep uncloaks whoever is out there.
+  {
+    const { g, officer } = armed('tachyon_sweep');
+    const cloaky = g.engagement.liveHostiles[0];
+    cloaky.cloakCapable = true;
+    cloaky.cloaked = true;
+    g.useAbility(officer, 'tachyon_sweep');
+    assert.equal(cloaky.cloaked, false, 'they stayed cloaked through a tachyon sweep');
+  }
+  // Jamming their sensors lands on THEM, not on us.
+  {
+    const { g, officer } = armed('jam_sensors');
+    g.useAbility(officer, 'jam_sensors');
+    for (const s of g.engagement.liveHostiles) {
+      assert.ok(hasBuff(s, 'jammed'), `${s.name} was not jammed`);
+    }
+    assert.ok(!hasBuff(g.ship, 'jammed'), 'we jammed ourselves');
+  }
+  // A scan comes back with something to read.
+  {
+    const { g, officer } = armed('scan_target');
+    const r = g.useAbility(officer, 'scan_target');
+    assert.equal(r.report?.kind, 'scan');
+    assert.ok(r.report.lines.length >= 3, 'a scan that reported nothing');
+  }
+  // Rotating harmonics clears whatever the enemy had learned about us.
+  {
+    const { g, officer } = armed('shield_harmonics');
+    g.engagement.hostiles[0].adaptation = { phaser: 0.4 };
+    g.useAbility(officer, 'shield_harmonics');
+    assert.deepEqual(g.engagement.hostiles[0].adaptation, {});
+  }
+  // Ejecting the core takes the core — and only when there is one to eject.
+  {
+    const { g, officer } = armed('eject_core');
+    g.useAbility(officer, 'eject_core');
+    assert.equal(g.ship.coreEjected, false, 'the core went out with nothing wrong');
+    officer.cooldowns = {};
+    g.ship.breaching = true;
+    g.useAbility(officer, 'eject_core');
+    assert.ok(g.ship.coreEjected || g.ship.destroyed, 'the core is still aboard');
+  }
+});
+
+test('an ability nobody has is refused rather than fired', () => {
+  const g = new Game({ seed: 12n, crewMode: 'original' });
+  const stranger = g.crew.living[0];
+  const unknown = Object.keys(ABILITIES).find((id) => !stranger.abilities.includes(id));
+  assert.equal(g.useAbility(stranger, unknown).ok, false, 'an officer used a power they do not have');
+  assert.equal(g.useAbility('nowhere', 'fire_at_will').ok, false, 'a station nobody mans gave an order');
+  assert.equal(g.useAbility(null, 'not_an_ability').ok, false);
+});
+
+test('every career signature fires once, and only once, per engagement', () => {
+  for (const career of CAREERS) {
+    const g = new Game({
+      seed: 909n, crewMode: 'original',
+      character: new Character({ speciesId: 'human', careerId: career.id }),
+    });
+    g.startCombat([new Ship('d7', { name: 'Target' })], { relentless: true });
+    const r = g.useSignature();
+    assert.ok(r.ok, `${career.id}: ${r.reason}`);
+    assert.ok(r.line, `${career.id} announced nothing`);
+    assert.equal(g.character.signatureUsed, true);
+    assert.equal(g.useSignature().ok, false, `${career.id} fired twice in one engagement`);
+  }
+});
+
+test('each signature leaves its own mark', () => {
+  const sig = (careerId, before) => {
+    const g = new Game({
+      seed: 55n, crewMode: 'original',
+      character: new Character({ speciesId: 'human', careerId }),
+    });
+    g.startCombat([new Ship('d7', { name: 'Target' })], { relentless: true });
+    before?.(g);
+    const r = g.useSignature();
+    assert.ok(r.ok, `${careerId}: ${r.reason}`);
+    return g;
+  };
+
+  // Command: every station is ready again.
+  {
+    const g = sig('command', (game) => {
+      for (const o of game.crew.officers) o.cooldowns = { anything: 30 };
+    });
+    for (const o of g.crew.officers) {
+      assert.deepEqual(o.cooldowns, {}, `${o.name} was left on cooldown`);
+    }
+  }
+  // Tactical: a guaranteed crit is banked and a subsystem chosen.
+  {
+    const g = sig('tactical');
+    assert.ok(g.engagement.guaranteedCrits >= 1);
+    assert.ok(g.engagement.targetedSubsystem, 'called shot at nothing in particular');
+  }
+  // Engineering: hull back, fires out.
+  {
+    const g = sig('engineering', (game) => {
+      game.ship.hull = game.ship.maxHull * 0.4;
+      game.ship.fires = 2;
+    });
+    assert.ok(g.ship.hullPct > 0.6, `hull only reached ${g.ship.hullPct}`);
+    assert.equal(g.ship.fires, 0);
+  }
+  // Science and Intelligence and Medical each hang a buff on the ship.
+  for (const [careerId, buffId] of [
+    ['science', 'insight'], ['intelligence', 'prior_knowledge'], ['medical', 'triage'],
+  ]) {
+    const g = sig(careerId);
+    assert.ok((g.ship.buffs ?? []).some((b) => b.id === buffId),
+      `${careerId} granted no ${buffId}`);
+  }
+  // Medical also gets somebody back on their feet.
+  {
+    const g = sig('medical', (game) => { game.crew.living[0].injure(0.5); });
+    assert.ok(!g.crew.officers.some((o) => o.alive && o.injured),
+      'the wounded officer stayed in sickbay');
+  }
+  // Diplomatic forces the channel and says who to open it with.
+  {
+    const g = sig('diplomatic');
+    assert.equal(g.parleyForced, true);
+    assert.ok(g.useSignature().ok === false);
+  }
+  // Intelligence also sets their weapons back.
+  {
+    const g = sig('intelligence');
+    for (const s of g.engagement.liveHostiles) {
+      for (const w of s.weapons) assert.ok(w.cooldown >= 6, `${s.name} could still shoot`);
+    }
+  }
+});
+
+test('a signature that needs a fight is refused outside one', () => {
+  for (const careerId of ['tactical', 'diplomatic']) {
+    const g = new Game({
+      seed: 3n, crewMode: 'original',
+      character: new Character({ speciesId: 'human', careerId }),
+    });
+    assert.equal(g.useSignature().ok, false, `${careerId} fired on a quiet bridge`);
+    assert.equal(g.character.signatureUsed, false, `${careerId} was spent on nothing`);
+  }
+});
+
+test('devices are spent, and spending one does something', () => {
+  const g = new Game({ seed: 71n, crewMode: 'original' });
+  g.startCombat([new Ship('d7', { name: 'Target' })], { relentless: true });
+
+  // Whatever the loadout starts with, each device is checked on its own terms.
+  const effects = {
+    shield_battery: (game) => {
+      for (const f of FACINGS) game.ship.shields[f] = 0;
+      return () => assert.ok(game.ship.shields.fore > 0, 'the battery charged nothing');
+    },
+    weapons_battery: (game) => () =>
+      assert.ok((game.ship.buffs ?? []).some((b) => b.id === 'weapons_battery')),
+    engine_battery: (game) => () =>
+      assert.ok((game.ship.buffs ?? []).some((b) => b.id === 'engine_battery')),
+    hull_patch: (game) => {
+      game.ship.hull = game.ship.maxHull * 0.5;
+      game.ship.fires = 2;
+      return () => {
+        assert.ok(game.ship.hullPct > 0.55, 'the patch patched nothing');
+        assert.equal(game.ship.fires, 0);
+      };
+    },
+  };
+
+  let tried = 0;
+  for (const [id, arrange] of Object.entries(effects)) {
+    // Exactly one in the locker, regardless of what the starting loadout
+    // rolled, so "spent" means something.
+    g.loadout.equipped.device = [id];
+    const check = arrange(g);
+    const r = g.useDevice(id);
+    if (!r.ok) continue;   // a loadout that cannot carry it is not a failure
+    tried++;
+    check();
+    assert.equal(g.useDevice(id).ok, false, `${id} was used twice from one charge`);
+  }
+  assert.ok(tried >= 3, `only ${tried} devices could be used at all`);
 });

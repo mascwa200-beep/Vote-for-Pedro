@@ -933,65 +933,15 @@ class App {
   }
 
   useAbility(officer, ability) {
-    const g = this.game;
-    if (!officer.ready(ability.id)) { audio.play('ui_deny'); return; }
-
-    // The officer gets a say.
-    const reaction = officer.reactTo({ risk: ability.id === 'eject_core' ? 0.9 : 0.2 });
-    officer.startCooldown(ability.id);
-
-    if (ability.mods) {
-      g.ship.addBuff({ id: ability.id, label: ability.name, until: ability.duration || 12, mods: ability.mods });
-    }
-    switch (ability.special) {
-      case 'evasive': g.engagement?.evasive(true); break;
-      case 'extinguish': g.ship.fires = 0; break;
-      case 'eject': g.ship.ejectCore(); audio.play('explosion'); break;
-      case 'reset_adaptation': {
-        for (const s of g.engagement?.hostiles ?? []) s.adaptation = {};
-        break;
-      }
-      case 'detect_cloak': {
-        for (const s of g.engagement?.liveHostiles ?? []) if (s.cloaked) s.decloak();
-        audio.play('scan');
-        break;
-      }
-      case 'jam': {
-        for (const s of g.engagement?.liveHostiles ?? []) {
-          s.addBuff({ id: 'jammed', label: 'Sensors jammed', until: ability.duration, mods: { accuracy: 0.55 } });
-        }
-        break;
-      }
-      case 'subsystem': g.engagement?.targetSubsystem('weapons'); break;
-      case 'scan': {
-        const t = g.engagement?.target;
-        if (t) {
-          this.showMessage(`Scan — ${t.name}`, [
-            `${t.cls.name}. ${t.cls.description}`,
-            `Hull ${Math.round(t.hullPct * 100)}%, shields ${Math.round(t.shieldPct * 100)}%.`,
-            `Weakest facing: ${FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore')}.`,
-          ]);
-        }
-        break;
-      }
-      case 'spread': {
-        // Fire every torpedo tube at once, ignoring arcs for this volley.
-        const target = g.engagement?.target;
-        if (target) {
-          for (const w of g.ship.weapons.filter((x) => x.type === 'torpedo')) {
-            w.cooldown = 0;
-            g.engagement.fireWeapon(g.ship, w, target);
-          }
-          audio.play('torpedo_launch');
-        }
-        break;
-      }
-      default: break;
-    }
-
-    const line = officer.acknowledge(reaction === 'comply' ? 'order' : reaction);
-    g.pushLog(`${officer.name}: ${ability.say ?? line}`, officer.station);
-    if (this.settings.voice) audio.speak(ability.say ?? line);
+    // What the power DOES is in src/sim/powers.js, so it can be fired without
+    // a screen. What is left here is what it sounds like.
+    const r = this.game.useAbility(officer, ability);
+    if (!r.ok) { audio.play('ui_deny'); return; }
+    if (this.settings.voice) audio.speak(r.line);
+    if (r.report) this.showMessage(r.report.title, r.report.lines);
+    if (r.ability?.special === 'eject') audio.play('explosion');
+    if (r.ability?.special === 'detect_cloak') audio.play('scan');
+    if (r.ability?.special === 'spread') audio.play('torpedo_launch');
     haptic('confirm');
   }
 
@@ -999,139 +949,30 @@ class App {
    * Career signature powers: one big effect, once per engagement.
    *
    * Each reuses machinery that already exists — buffs, repair, cooldowns —
-   * rather than inventing a parallel system.
+   * rather than inventing a parallel system. All seven are in
+   * src/sim/powers.js; this is the announcement.
    */
   useSignature() {
-    const g = this.game;
-    const c = g?.character;
-    const eng = g?.engagement;
-    if (!c || c.signatureUsed) { audio.play('ui_deny'); return false; }
+    const r = this.game.useSignature();
+    if (!r.ok) { audio.play('ui_deny'); return false; }
 
-    const career = c.career;
-    let line = '';
-    // A power that ends in a screen of its own rather than a confirmation.
-    let openAfter = null;
-
-    switch (c.careerId) {
-      case 'command': {
-        // Take the Conn — every bridge officer is ready again.
-        for (const o of g.crew.officers) o.cooldowns = {};
-        line = 'Every station reports ready.';
-        break;
-      }
-      case 'tactical': {
-        // Called Shot — the next hit that lands is a guaranteed critical.
-        if (!eng) { audio.play('ui_deny'); return false; }
-        eng.guaranteedCrits += 1;
-        if (!eng.targetedSubsystem) eng.targetSubsystem('weapons');
-        line = `Called shot on their ${eng.targetedSubsystem}. Standing by.`;
-        break;
-      }
-      case 'engineering': {
-        const before = g.ship.hullPct;
-        g.ship.repair(g.ship.maxHull * 0.3);
-        g.ship.fires = 0;
-        line = `Hull integrity ${Math.round(before * 100)}% to ${Math.round(g.ship.hullPct * 100)}%. Fires are out.`;
-        break;
-      }
-      case 'science': {
-        // Insight — see everything, and roll better for twenty seconds.
-        g.ship.addBuff({
-          id: 'insight', label: 'Insight', until: 20,
-          mods: { accuracy: 1.25, critChance: 0.15 },
-        });
-        c.insightUntil = 20;
-        if (eng?.target) {
-          const t = eng.target;
-          const weakest = FACINGS.reduce((w, f) => (t.shieldPctOf(f) < t.shieldPctOf(w) ? f : w), 'fore');
-          line = `${t.name}: weakest facing is ${weakest}, hull at ${Math.round(t.hullPct * 100)}%.`;
-        } else {
-          line = 'Full spectrum analysis running.';
-        }
-        break;
-      }
-      case 'medical': {
-        // Triage — one officer back on their feet, and fewer losses after.
-        const wounded = g.crew.officers.find((o) => o.alive && o.injured);
-        if (wounded) { wounded.injured = false; wounded.injurySeverity = 0; }
-        g.ship.addBuff({
-          id: 'triage', label: 'Triage', until: 30, mods: { crewProtect: 0.5 },
-        });
-        line = wounded
-          ? `${wounded.name} is back on duty. Sickbay is holding.`
-          : 'Sickbay is prepped. Casualties will be lighter.';
-        break;
-      }
-      case 'diplomatic': {
-        // Parley — they will hear you out whatever their doctrine says.
-        if (!eng || eng.over) { audio.play('ui_deny'); return false; }
-        g.parleyForced = true;
-        line = 'Channel forced open. They are listening whether they meant to or not.';
-        // Opened AFTER the announcement, not before it. `showMessage` replaces
-        // whatever modal is up, so opening the channel here meant the power's
-        // own confirmation dialog immediately closed the channel it had just
-        // forced open — the one thing the ability exists to do.
-        openAfter = () => this.openHail(eng.hostiles[0]?.faction);
-        break;
-      }
-      case 'intelligence': {
-        // Prior Knowledge — you move first, and they lose a beat.
-        if (eng) {
-          for (const s of eng.liveHostiles) {
-            for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, 6);
-            if (s.cloaked) s.decloak();
-          }
-        }
-        g.ship.addBuff({
-          id: 'prior_knowledge', label: 'Prior Knowledge', until: 15,
-          mods: { accuracy: 1.2, defense: 1.4 },
-        });
-        line = 'We know what they are about to do. Six seconds of it.';
-        break;
-      }
-      default:
-        audio.play('ui_deny');
-        return false;
-    }
-
-    c.signatureUsed = true;
-    g.pushLog(`${career.signature}: ${line}`, 'captain');
-    if (this.settings.voice) audio.speak(line);
+    if (this.settings.voice) audio.speak(r.line);
     audio.play('ui_confirm');
     audio.play('computer_ack');
     haptic('confirm');
     // A power whose whole result is a screen of its own shows that instead of
     // a dialog it would only have to close again. The line is in the log
-    // either way.
-    if (openAfter) openAfter();
-    else this.showMessage(career.signature, [line]);
+    // either way — and the channel is opened AFTER the announcement, because
+    // `showMessage` replaces whatever modal is up, so opening it first meant
+    // the confirmation closed the channel the power had just forced open.
+    if (r.openHail !== null && r.openHail !== undefined) this.openHail(r.openHail);
+    else this.showMessage(r.career.signature, [r.line]);
     this.render();
     return true;
   }
 
   useDevice(id) {
-    const g = this.game;
-    if (!g.loadout.useDevice(id)) { audio.play('ui_deny'); return; }
-    switch (id) {
-      case 'shield_battery':
-        for (const f of FACINGS) {
-          g.ship.shields[f] = Math.min(g.ship.maxShield, g.ship.shields[f] + g.ship.maxShield * 0.4);
-        }
-        g.pushLog('Shield battery discharged. Facings reinforced.', 'engineering');
-        break;
-      case 'weapons_battery':
-        g.ship.addBuff({ id: 'weapons_battery', label: 'Weapons battery', until: 20, mods: { damage: 1.4 } });
-        break;
-      case 'engine_battery':
-        g.ship.addBuff({ id: 'engine_battery', label: 'Engine battery', until: 20, mods: { impulse: 1.5, turn: 1.3 } });
-        break;
-      case 'hull_patch':
-        g.ship.repair(g.ship.maxHull * 0.2);
-        g.ship.fires = 0;
-        g.pushLog('Emergency hull patch applied. Fires out.', 'engineering');
-        break;
-      default: break;
-    }
+    if (!this.game.useDevice(id).ok) { audio.play('ui_deny'); return; }
     audio.play('power_reroute');
     haptic('confirm');
   }

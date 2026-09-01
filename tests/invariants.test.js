@@ -285,7 +285,20 @@ test('a tour of duty: fight after fight, on one commission', () => {
         else if (roll < 0.010) eng.deployDecoy(2 + rand() * 4);
         else if (roll < 0.012) g.setAlert(pick(['red', 'yellow', 'normal']));
         else if (roll < 0.013) g.callForHelp();
-        else if (roll < 0.014) g.character?.useSignature?.(g);
+        else if (roll < 0.014) g.useSignature();
+        else if (roll < 0.030) {
+          // The power tray. Whatever is off cooldown, fired at random — this
+          // is the most stateful part of combat (buffs stacking, durations
+          // expiring, specials reaching into the hostiles) and until it moved
+          // out of the screen no soak could reach it at all.
+          const ready = g.readyAbilities();
+          if (ready.length) {
+            const p = ready[Math.floor(rand() * ready.length)];
+            g.useAbility(p.officer, p.ability.id);
+          }
+        } else if (roll < 0.034) {
+          g.useDevice(pick(['shield_battery', 'weapons_battery', 'engine_battery', 'hull_patch']));
+        }
         eng.fireAll(rand() < 0.15 ? 'torpedo' : 'all');
 
         g.update(STEP);
@@ -1660,7 +1673,13 @@ describe('the game survives being called wrongly', () => {
       () => g.ledger.adjustStanding(pick(['klingon', 'federation', ...JUNK]), pick([5, -400, ...JUNK]), 'fuzz'),
       () => g.pushLog(pick(['line', ...JUNK]), pick(['helm', ...JUNK])),
       () => g.setPreset?.(pick(['balanced', 'attack', 'evade', ...JUNK])),
-      () => g.character?.useSignature?.(g),
+      () => g.useSignature(),
+      () => {
+        const ready = g.readyAbilities();
+        return ready.length ? g.useAbility(ready[0].officer, ready[0].ability.id) : null;
+      },
+      () => g.useAbility(pick([...JUNK, 'helm', 'tactical']), pick([...JUNK, 'fire_at_will', 'eject_core'])),
+      () => g.useDevice(pick([...JUNK, 'shield_battery', 'hull_patch'])),
       () => g.crew.at(pick(['helm', 'science', ...JUNK])),
       () => g.crew.officers[0]?.injure(pick([0.5, 5, ...JUNK])),
 
