@@ -769,6 +769,61 @@ one. [Memory Alpha — Constitution class](https://memory-alpha.fandom.com/wiki/
 
 ---
 
+## 16. The gap under the nacelles
+
+The thing that makes a Starfleet ship read as a Starfleet ship, once the saucer
+is right, is empty space. The nacelles are carried well clear of the hull on
+struts, and you can see sky between them and the engineering hull from almost
+every angle. That gap is most of the silhouette.
+
+The models had no gap. Each pylon was an axis-aligned box sized to span the
+whole distance from hull to nacelle in *both* the vertical and the transverse
+direction — which is not a strut, it is a solid block filling the corner. On a
+Galaxy each of the two blocks measured 0.07 × 0.24 × 0.25 of the ship's length:
+a slab a quarter of the ship across and nearly a quarter of it tall, and the
+first thing the eye landed on.
+
+What the published drawings actually show, measured off the orthographic views:
+
+| class | pylon chord ÷ length | thickness ÷ length | notes |
+|---|---|---|---|
+| Constitution (1966) | ~0.14 | ~0.01 | slender, raked aft, near-constant chord |
+| Constitution refit | ~0.17 | ~0.03 | thicker and swept forward |
+| Excelsior | ~0.15 | ~0.02 | nearly vertical, tall |
+| Galaxy | ~0.14 | ~0.03 | heavily swept, tapering outboard |
+| Intrepid | ~0.13 | ~0.02 | variable-geometry, measured stowed |
+
+Chord — the fore-and-aft measurement, the one you see from the side — is
+between an eighth and a sixth of the ship's length on every one of them.
+Thickness is one to three per cent. So a pylon is a wing: broad in profile,
+almost invisible head-on. The blocks had it exactly backwards, being thin in
+the one direction that should be broad.
+
+The fix is a shear rather than a shape. A box whose top face is displaced
+outboard by the width of the gap is a leaning blade with the same eight
+corners, so the primitive stays a box and the pylon becomes a strut. The
+measurable effect, and the one the tests assert: how much of a hull's surface
+area faces fore-and-aft against how much faces up and down. A ship is
+streamlined and that ratio is small; two corner blocks are a wall and it is
+not. Across the thirteen Federation classes it fell from 0.19–0.38 to
+0.06–0.27.
+
+The same measurement found a second thing worth recording. The secondary hull
+sat at 0.24 of the ship's height below the saucer, which on most classes put
+the two masses in contact — no daylight, no visible neck, one lump. The
+published side views put it at roughly 0.4–0.45 of the height down, and the
+overall height figure is preserved regardless because the mesh is rescaled onto
+the published ratio afterwards. Moving it down costs nothing and buys the
+profile.
+
+Sources: orthographic views and dimension figures as recorded in §13 and §15,
+re-read for the strut geometry rather than the envelope.
+[Memory Alpha — Constitution class](https://memory-alpha.fandom.com/wiki/Constitution_class),
+[Memory Alpha — Galaxy class](https://memory-alpha.fandom.com/wiki/Galaxy_class),
+[DITL — ship specifications](https://www.ditl.org/)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

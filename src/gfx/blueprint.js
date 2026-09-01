@@ -93,7 +93,7 @@ const FORMS = {
       rimColor: p.trim,
     });
 
-    const hy = b.hullY ?? -high * 0.24;
+    const hy = b.hullY ?? -high * 0.42;
     if (b.neck !== false) {
       box(mb, {
         center: vec3(sx - sr * 0.5, hy / 2, 0),
@@ -127,15 +127,31 @@ const FORMS = {
     // shape no Starfleet cruiser has.
     const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
     const nr = b.nacelleRadius ?? high * 0.12;
+    // Where the blade leaves the hull, and how thick and how deep it is.
+    // A pylon is a wing: a chord you can see from the side and a thickness you
+    // can barely see from the front.
+    const zRoot = nz * (b.pylonRoot ?? 0.16);
     mirrored(mb, (m) => {
       // The pylon reaches from the hull to the nacelle, measured rather than
       // guessed at a fixed 0.34 — which was right for a Constitution and left
       // every ship with higher nacelles connected to nothing.
+      //
+      // It is a leaning blade, not a block. Spanning the gap in z as a box
+      // size — which is what this did — fills the entire corner between hull
+      // and nacelle with solid geometry: on a Galaxy that was a slab 0.25 of
+      // the ship's length across and nearly as tall, and it is the first thing
+      // you saw when you looked at one. `flare` carries the top of a thin
+      // blade outboard to meet the nacelle instead.
       box(m, {
-        center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
-        size: vec3(high * 0.24, Math.abs(ny - hy) + high * 0.16, nz * 0.9),
+        center: vec3(nx + nl * 0.3, (ny + hy) / 2, zRoot),
+        size: vec3(
+          b.pylonChord ?? high * 0.62,
+          Math.abs(ny - hy) + high * 0.16,
+          b.pylonThick ?? high * 0.1,
+        ),
         sweep: b.pylonSweep ?? 0.06,
         rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.7,
+        flare: nz - zRoot,
         color: p.trim,
       });
       tube(m, {
@@ -186,7 +202,7 @@ const FORMS = {
     const high = b.ratioHeight ?? 0.25;
     const sr = b.saucerRadius ?? wide / 2;
     const sx = b.saucerX ?? 0.5 - sr;
-    const hullY = b.hullY ?? -high * 0.24;
+    const hullY = b.hullY ?? -high * 0.44;
 
     saucer(mb, {
       origin: vec3(sx, b.saucerY ?? 0, 0),
@@ -258,13 +274,24 @@ const FORMS = {
     const nx = b.nacelleX ?? -0.46;
     const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
     const nr = b.nacelleRadius ?? high * 0.115;
+    const zRoot = nz * (b.pylonRoot ?? 0.14);
     mirrored(mb, (m) => {
       // Thin, swept harder than the generic slab, and leaning aft as it rises.
+      //
+      // "Thin" was a comment rather than a shape: the box was slim fore-and-aft
+      // and then a full nacelle-span wide, so the 1966 struts — which are the
+      // slenderest thing on the ship, and the reason there is daylight under
+      // the nacelles at all — were drawn as two filled corners.
       box(m, {
-        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, nz * 0.55),
-        size: vec3(high * 0.2, Math.abs(ny - hullY) + high * 0.12, nz * 0.92),
+        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, zRoot),
+        size: vec3(
+          b.pylonChord ?? high * 0.56,
+          Math.abs(ny - hullY) + high * 0.12,
+          b.pylonThick ?? high * 0.08,
+        ),
         sweep: b.pylonSweep ?? 0.05,
         rake: b.pylonRake ?? Math.max(0, ny - hullY) * 0.8,
+        flare: nz - zRoot,
         color: p.trim,
       });
       tube(m, {

@@ -201,13 +201,19 @@ export const FEDERATION_FORMS = {
     const nz = b.nacelleZ ?? wide * 0.46;
     const high2 = b.nacelleY ?? high * 0.32;
     const stack = b.nacelleStack ?? high * 0.62;
+    // Four nacelles means four pylons, and two of them run downward from the
+    // hull rather than up. The blade leans outboard on the way to the nacelle
+    // whichever way that is, so the lean is measured from the hull end.
+    const zRoot = nz * 0.15;
     for (const ny of [high2, high2 - stack]) {
+      const up = ny >= hy;
       mirrored(mb, (m) => {
         box(m, {
-          center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
-          size: vec3(high * 0.2, Math.abs(ny - hy) + high * 0.14, nz * 0.85),
+          center: vec3(nx + nl * 0.3, (ny + hy) / 2, up ? zRoot : nz),
+          size: vec3(high * 0.5, Math.abs(ny - hy) + high * 0.14, high * 0.09),
           sweep: b.pylonSweep ?? 0.04,
           rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.5,
+          flare: up ? nz - zRoot : zRoot - nz,
           color: p.trim,
         });
         nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? high * 0.11 });

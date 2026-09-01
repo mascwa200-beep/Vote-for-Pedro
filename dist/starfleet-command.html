@@ -5530,16 +5530,25 @@ function tube(mb, {
  * the near one.
  */
 function box(mb, {
-  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0,
+  center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0, flare = 0,
   color = [0.6, 0.64, 0.7],
 } = {}) {
   const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
   const [cx, cy, cz] = center;
-  // Eight corners; the +z corners carry the sweep and the +y corners the rake.
+  // Eight corners. The +z corners carry the sweep and the +y corners the rake,
+  // both of which shear the box fore-and-aft.
+  //
+  // `flare` is the third one, and its absence is why every warp pylon in the
+  // game was a brick. A pylon runs from a hull on the centreline to a nacelle
+  // that is both above it and outboard of it — a leaning blade. With only
+  // fore-aft shears the only box that touches both ends is one that spans the
+  // whole gap in y AND the whole gap in z: a solid block filling the corner,
+  // which is what a Galaxy was carrying, a quarter of the ship's length across.
+  // Shearing z by height makes the same box a strut.
   const p = (sx, sy, sz) => vec3(
     cx + sx * hx - (sz > 0 ? sweep : 0) - (sy > 0 ? rake : 0),
     cy + sy * hy,
-    cz + sz * hz,
+    cz + sz * hz + (sy > 0 ? flare : 0),
   );
 
   const v000 = p(-1, -1, -1); const v100 = p(1, -1, -1);
@@ -5821,13 +5830,19 @@ const FEDERATION_FORMS = {
     const nz = b.nacelleZ ?? wide * 0.46;
     const high2 = b.nacelleY ?? high * 0.32;
     const stack = b.nacelleStack ?? high * 0.62;
+    // Four nacelles means four pylons, and two of them run downward from the
+    // hull rather than up. The blade leans outboard on the way to the nacelle
+    // whichever way that is, so the lean is measured from the hull end.
+    const zRoot = nz * 0.15;
     for (const ny of [high2, high2 - stack]) {
+      const up = ny >= hy;
       mirrored(mb, (m) => {
         box(m, {
-          center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
-          size: vec3(high * 0.2, Math.abs(ny - hy) + high * 0.14, nz * 0.85),
+          center: vec3(nx + nl * 0.3, (ny + hy) / 2, up ? zRoot : nz),
+          size: vec3(high * 0.5, Math.abs(ny - hy) + high * 0.14, high * 0.09),
           sweep: b.pylonSweep ?? 0.04,
           rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.5,
+          flare: up ? nz - zRoot : zRoot - nz,
           color: p.trim,
         });
         nacelle(m, p, { x: nx, y: ny, z: nz, length: nl, radius: b.nacelleRadius ?? high * 0.11 });
@@ -6044,7 +6059,7 @@ const FORMS = {
       rimColor: p.trim,
     });
 
-    const hy = b.hullY ?? -high * 0.24;
+    const hy = b.hullY ?? -high * 0.42;
     if (b.neck !== false) {
       box(mb, {
         center: vec3(sx - sr * 0.5, hy / 2, 0),
@@ -6078,15 +6093,31 @@ const FORMS = {
     // shape no Starfleet cruiser has.
     const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
     const nr = b.nacelleRadius ?? high * 0.12;
+    // Where the blade leaves the hull, and how thick and how deep it is.
+    // A pylon is a wing: a chord you can see from the side and a thickness you
+    // can barely see from the front.
+    const zRoot = nz * (b.pylonRoot ?? 0.16);
     mirrored(mb, (m) => {
       // The pylon reaches from the hull to the nacelle, measured rather than
       // guessed at a fixed 0.34 — which was right for a Constitution and left
       // every ship with higher nacelles connected to nothing.
+      //
+      // It is a leaning blade, not a block. Spanning the gap in z as a box
+      // size — which is what this did — fills the entire corner between hull
+      // and nacelle with solid geometry: on a Galaxy that was a slab 0.25 of
+      // the ship's length across and nearly as tall, and it is the first thing
+      // you saw when you looked at one. `flare` carries the top of a thin
+      // blade outboard to meet the nacelle instead.
       box(m, {
-        center: vec3(nx + nl * 0.3, (ny + hy) / 2, nz * 0.55),
-        size: vec3(high * 0.24, Math.abs(ny - hy) + high * 0.16, nz * 0.9),
+        center: vec3(nx + nl * 0.3, (ny + hy) / 2, zRoot),
+        size: vec3(
+          b.pylonChord ?? high * 0.62,
+          Math.abs(ny - hy) + high * 0.16,
+          b.pylonThick ?? high * 0.1,
+        ),
         sweep: b.pylonSweep ?? 0.06,
         rake: b.pylonRake ?? Math.max(0, ny - hy) * 0.7,
+        flare: nz - zRoot,
         color: p.trim,
       });
       tube(m, {
@@ -6137,7 +6168,7 @@ const FORMS = {
     const high = b.ratioHeight ?? 0.25;
     const sr = b.saucerRadius ?? wide / 2;
     const sx = b.saucerX ?? 0.5 - sr;
-    const hullY = b.hullY ?? -high * 0.24;
+    const hullY = b.hullY ?? -high * 0.44;
 
     saucer(mb, {
       origin: vec3(sx, b.saucerY ?? 0, 0),
@@ -6209,13 +6240,24 @@ const FORMS = {
     const nx = b.nacelleX ?? -0.46;
     const nl = b.nacelleLength ?? 0.44 + sx * 0.6;
     const nr = b.nacelleRadius ?? high * 0.115;
+    const zRoot = nz * (b.pylonRoot ?? 0.14);
     mirrored(mb, (m) => {
       // Thin, swept harder than the generic slab, and leaning aft as it rises.
+      //
+      // "Thin" was a comment rather than a shape: the box was slim fore-and-aft
+      // and then a full nacelle-span wide, so the 1966 struts — which are the
+      // slenderest thing on the ship, and the reason there is daylight under
+      // the nacelles at all — were drawn as two filled corners.
       box(m, {
-        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, nz * 0.55),
-        size: vec3(high * 0.2, Math.abs(ny - hullY) + high * 0.12, nz * 0.92),
+        center: vec3(nx + nl * 0.34, (ny + hullY) / 2, zRoot),
+        size: vec3(
+          b.pylonChord ?? high * 0.56,
+          Math.abs(ny - hullY) + high * 0.12,
+          b.pylonThick ?? high * 0.08,
+        ),
         sweep: b.pylonSweep ?? 0.05,
         rake: b.pylonRake ?? Math.max(0, ny - hullY) * 0.8,
+        flare: nz - zRoot,
         color: p.trim,
       });
       tube(m, {

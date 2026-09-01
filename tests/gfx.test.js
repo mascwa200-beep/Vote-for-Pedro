@@ -1978,6 +1978,78 @@ describe('every mesh faces the way it is meant to be seen from', () => {
   });
 });
 
+describe('a warp pylon is a blade, not a filled corner', () => {
+  // A nacelle sits above the hull AND outboard of it, so the strut between
+  // them is a leaning blade. Built out of axis-aligned boxes with only
+  // fore-and-aft shears available, the only box that touches both ends is one
+  // that spans the whole gap in y AND the whole gap in z — a solid block
+  // filling the corner. Every Federation ship in the game carried two of them,
+  // and on a Galaxy each was a quarter of the ship's length across.
+  //
+  // The tell is which way the surfaces face. A ship is a streamlined thing:
+  // most of its area faces up, down or sideways, and very little of it faces
+  // straight ahead. A pair of corner blocks is a wall, and a wall faces
+  // forwards. So this measures the hull's fore-and-aft-facing area against its
+  // up-and-down-facing area, and asks for a ship rather than a wall.
+
+  /** Surface area facing each axis, summed over every triangle. */
+  function facingArea(mesh) {
+    const P = mesh.data;
+    const F = mesh.stride / 4;
+    let ax = 0; let ay = 0; let az = 0;
+    for (let t = 0; t < P.length; t += F * 3) {
+      const u = [P[t + F] - P[t], P[t + F + 1] - P[t + 1], P[t + F + 2] - P[t + 2]];
+      const v = [P[t + 2 * F] - P[t], P[t + 2 * F + 1] - P[t + 1], P[t + 2 * F + 2] - P[t + 2]];
+      ax += Math.abs(u[1] * v[2] - u[2] * v[1]) / 2;
+      ay += Math.abs(u[2] * v[0] - u[0] * v[2]) / 2;
+      az += Math.abs(u[0] * v[1] - u[1] * v[0]) / 2;
+    }
+    return { ax, ay, az };
+  }
+
+  // Every form that hangs a nacelle off a strut. `compact` has none — a
+  // Defiant's nacelles are buried in the hull — and it is in the list anyway,
+  // because a hull with no pylons at all should have even less wall than one
+  // with two.
+  const NACELLED = [
+    'starfleet', 'tos_starfleet', 'rollbar', 'twinhull', 'quadnacelle',
+    'podded', 'compact',
+  ];
+
+  test('no Federation hull is mostly wall', () => {
+    for (const [id, bp] of Object.entries(BLUEPRINTS)) {
+      if (!NACELLED.includes(bp.form)) continue;
+      const { ax, ay } = facingArea(hullMesh(id, 'federation'));
+      assert.ok(ax / ay < 0.3,
+        `${id} presents ${(ax / ay).toFixed(2)} as much area forward as it does upward`);
+    }
+  });
+
+  test('and the shear that makes a blade possible actually shears', () => {
+    // Without this the test above passes on a `flare` that silently does
+    // nothing, which is precisely how the slabs survived a comment calling
+    // them thin.
+    const straight = new MeshBuilder();
+    box(straight, { center: vec3(), size: vec3(1, 1, 0.1) });
+    const leaned = new MeshBuilder();
+    box(leaned, { center: vec3(), size: vec3(1, 1, 0.1), flare: 2 });
+
+    const zAt = (mb, sign) => {
+      let best = sign > 0 ? -Infinity : Infinity;
+      for (let i = 0; i < mb.positions.length; i += 3) {
+        if (Math.sign(mb.positions[i + 1]) !== sign) continue;
+        best = sign > 0
+          ? Math.max(best, mb.positions[i + 2])
+          : Math.min(best, mb.positions[i + 2]);
+      }
+      return best;
+    };
+    assert.equal(zAt(straight, 1), 0.05);
+    assert.equal(zAt(leaned, 1), 2.05, 'the top of a flared box did not move outboard');
+    assert.equal(zAt(leaned, -1), zAt(straight, -1), 'the bottom moved too');
+  });
+});
+
 describe('nothing in a room is drawn facing away from the room', () => {
   // Back-face culling is on, so a surface whose normal points into the hull is
   // not dim or subtle — it is ABSENT, and it still costs its triangles and its
