@@ -675,12 +675,14 @@ export function tacticalScreen(app) {
     // face you are not presenting. Until this row existed the player's only
     // elevation control was "Come about", which merely points at the target.
     el('div', { class: 'grid-3' }, [
+      // Twenty degrees a press, and "climb" is now twenty degrees a word. The
+      // button and the phrase printed on it have to be the same order.
       button('Climb', tap(() => {
-        eng.setPitch(g.ship.desiredPitch + 20); app.render();
+        eng.setPitch((g.ship.desiredPitch ?? 0) + 20); app.render();
       }), { say: 'climb', color: 'blue' }),
       button('Level', tap(() => { eng.setPitch(0); app.render(); }), { say: 'level off', color: 'blue' }),
       button('Dive', tap(() => {
-        eng.setPitch(g.ship.desiredPitch - 20); app.render();
+        eng.setPitch((g.ship.desiredPitch ?? 0) - 20); app.render();
       }), { say: 'dive', color: 'blue' }),
     ]),
     readout('Elevation', (g.ship.pitch + 70) / 140,

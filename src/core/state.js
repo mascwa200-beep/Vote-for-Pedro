@@ -1456,6 +1456,13 @@ export class Game {
   }
 
   dock() {
+    // Not in the middle of a firefight. "Request docking" restores the hull,
+    // the shields, every subsystem, the magazine and the whole crew — so given
+    // during a battle it was a full repair, instantly, for nothing, and it
+    // could be given again on the next tick.
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'Nobody is opening a spacedock door for us while we are under fire, Captain.' };
+    }
     if (!this.canDock()) return { ok: false, error: 'No docking facilities here, Captain.' };
     const damaged = this.ship.hullPct < 1 || this.ship.crew < this.ship.maxCrew;
     this.ship.restore();
@@ -1821,6 +1828,12 @@ export class Game {
 
   /** Start a job in the machine shop. */
   fabricate(recipeId) {
+    // The machine shop is not a combat action. Left unguarded, a hull patch
+    // could be started and finished under fire — hours of work compressed into
+    // a battle, repeatedly, which is a free repair with extra steps.
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'The shop is sealed at red alert, Captain.' };
+    }
     return beginFabrication(this, recipeId);
   }
 
@@ -1829,6 +1842,9 @@ export class Game {
    * than hours that merely passed. Costs the same time on the stardate.
    */
   workTheShop(hours = 1) {
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'Not while we are under fire, Captain.' };
+    }
     if (!this.fabrication) return { ok: false, reason: 'Nothing on the bench, Captain.' };
     const done = advanceFabrication(this, hours);
     this.clock.advanceStardate(hours / 24);

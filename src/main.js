@@ -1288,8 +1288,9 @@ class App {
         break;
       }
       case 'pitch': {
-        if (!eng) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
-        eng.setPitch(order.value);
+        if (!eng || eng.over) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        const from = order.relative ? (g.ship.desiredPitch ?? 0) : 0;
+        eng.setPitch(from + order.value);
         const said = order.value === 0 ? 'Levelling off.'
           : order.value > 0 ? `Coming up ${Math.round(order.value)} degrees.`
             : `Taking her down ${Math.round(-order.value)} degrees.`;
@@ -1319,6 +1320,9 @@ class App {
         break;
       case 'shields':
         g.ship.shieldsUp = order.up;
+        // Lowering them on purpose is a standing decision; being shot out is
+        // not. Only the first survives the emitter being repaired.
+        g.ship.shieldsDown = !order.up;
         ack('tactical', order.up ? 'Shields up.' : 'Shields down.');
         break;
       case 'reinforce':
@@ -1352,8 +1356,11 @@ class App {
         break;
       }
       case 'fire': {
-        if (!eng) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
-        const n = eng.fireAll();
+        if (!eng || eng.over) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
+        // What was actually asked for. The parser has always read the weapon
+        // out of the order and this threw it away, so "fire phasers" launched
+        // torpedoes.
+        const n = eng.fireAll(order.weaponType ?? 'all');
         if (!n) audio.play('ui_deny');
         break;
       }
@@ -1560,6 +1567,16 @@ class App {
       case 'ability': {
         const ability = ABILITIES[order.ability];
         const officer = ability ? g.crew.officerFor(ability.id) : null;
+        // An officer who is not ready is the same as no officer, for the
+        // purpose of choosing between the ability and the plain order behind
+        // it. `useAbility` refuses on cooldown with a deny beep and returns, so
+        // "evasive manoeuvres" — which is BOTH a trained ability and an
+        // ordinary helm order — silently did nothing at all for thirty seconds
+        // after its first use.
+        if (officer && ability && !officer.ready(ability.id) && order.fallback) {
+          this.executeOrder(order.fallback, raw);
+          return;
+        }
         if (officer && ability) {
           this.useAbility(officer, ability);
         } else if (order.fallback) {

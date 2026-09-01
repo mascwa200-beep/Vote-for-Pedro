@@ -257,10 +257,26 @@ export class Engagement {
   // ---------------- firing ----------------
 
   /** Fire everything that bears on the current target. */
-  fireAll() {
-    if (!this.target || this.target.destroyed) return 0;
+  /**
+   * Open fire.
+   *
+   * @param {string} type 'all', or one of the weapon types — 'beam',
+   *        'cannon', 'torpedo'. The parser has always read this off the order
+   *        ("fire phasers" gives 'beam') and it was thrown away here, so every
+   *        order to fire fired everything: asking for phasers launched photon
+   *        torpedoes, and a captain holding torpedoes for one shot could not.
+   */
+  fireAll(type = 'all') {
+    if (!this.validTarget(this.target)) return 0;
+    const wanted = this.player.weapons.filter(
+      (w) => type === 'all' || type === undefined || w.type === type,
+    );
+    if (!wanted.length) {
+      this.pushLog(`We have no ${type} weapons, Captain.`, 'tactical');
+      return 0;
+    }
     let fired = 0;
-    for (const w of this.player.weapons) {
+    for (const w of wanted) {
       if (this.fireWeapon(this.player, w, this.target)) fired++;
     }
     if (!fired) this.pushLog('No weapons bear on the target.', 'tactical');

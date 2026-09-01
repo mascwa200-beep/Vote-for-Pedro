@@ -2098,7 +2098,13 @@ const CUES = {
       // enforce. A bed mixed under that floor is a bed nobody on a phone ever
       // hears, which is the complaint this whole audio pass started from — and
       // the bleeps were continuous on the show, not subliminal.
-      gain: 0.13 + Math.random() * 0.05,
+      //
+      // The FLOOR of the range is what has to clear the bar, not the middle of
+      // it. The ambience bus reaches the speaker at 1.52, so the audibility
+      // threshold of 0.2 is a cue gain of 0.132 — and this range used to start
+      // at 0.13, so the quietest few per cent of bleeps were inaudible and the
+      // mixer test failed at random about one run in thirty.
+      gain: 0.15 + Math.random() * 0.05,
       release: 0.04,
     });
     // Half of them are a pair, a step apart, which is what makes the bed sound
@@ -2107,7 +2113,7 @@ const CUES = {
       fmTone(ctx, bus, {
         at: 0.06 + Math.random() * 0.05,
         carrier: base * (rising ? 1.34 : 0.76),
-        ratio: 3, index: 180, duration: 0.04, gain: 0.12, release: 0.04,
+        ratio: 3, index: 180, duration: 0.04, gain: 0.15, release: 0.04,
       });
     }
   },
@@ -3415,6 +3421,9 @@ class Ship {
     this.shields = Object.fromEntries(FACINGS.map((f) => [f, this.maxShield]));
     this.shieldRegen = cls.shieldRegen / FACINGS.length;
     this.shieldsUp = true;
+    // Lowered deliberately, as opposed to shot out. Only the first stays down
+    // once the emitter is repaired.
+    this.shieldsDown = false;
 
     // ---- crew ----
     this.maxCrew = cls.crew;
@@ -3485,8 +3494,12 @@ class Ship {
     const prevMaxShield = this.maxShield;
     const prevMaxHull = this.maxHull;
 
-    this.maxHull = this.cls.hull * this.mods.hullMax;
-    this.maxShield = (this.cls.shields / FACINGS.length) * this.mods.shieldMax;
+    // `mod()` rather than `mods`, so a BUFF counts. Reading the raw table meant
+    // every temporary shieldMax or hullMax an officer ability granted was
+    // computed, reported in the UI, and then silently ignored by the only two
+    // numbers it was supposed to change.
+    this.maxHull = this.cls.hull * this.mod('hullMax');
+    this.maxShield = (this.cls.shields / FACINGS.length) * this.mod('shieldMax');
 
     if (prevMaxShield > 0) {
       const ratio = this.maxShield / prevMaxShield;
@@ -3514,6 +3527,10 @@ class Ship {
   addBuff(buff) {
     this.buffs = this.buffs.filter((b) => b.id !== buff.id);
     this.buffs.push(buff);
+    // A buff can raise a maximum, and the maxima are cached. Without this the
+    // ability took effect only the next time something else happened to
+    // recompute them, which for most of a fight is never.
+    this.recomputeDerived();
   }
 
   hasBuff(id) {
@@ -3641,11 +3658,14 @@ class Ship {
 
     this.power.update(dt);
 
-    // Buffs expire.
+    // Buffs expire. A buff that raised a maximum has to give it back, so the
+    // maxima are recomputed on the tick anything actually left.
     if (this.buffs.length) {
+      const before = this.buffs.length;
       this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
       for (const b of this.buffs) if (b.until !== undefined) b.until -= dt;
       this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
+      if (this.buffs.length !== before) this.recomputeDerived();
     }
 
     // Movement — yaw, then pitch, then integrate along the nose.
@@ -3681,12 +3701,33 @@ class Ship {
     this.y += this.velocity.y * dt;
     this.z = (this.z ?? 0) + this.velocity.z * dt;
 
+    // The emitter is back, so the shields are back — unless they were lowered
+    // on purpose, which is a different thing and stays that way.
+    if (!this.shieldsUp && !this.shieldsDown && !this.cloaked && this.subsystems.shields > 0.25) {
+      this.shieldsUp = true;
+      emit('ship:shields', { ship: this, up: true, reason: 'emitter restored' });
+    }
+
     // Shield regeneration — suppressed while cloaked or shields down.
     if (this.shieldsUp && !this.cloaked && this.subsystems.shields > 0.05) {
       const rate = this.shieldRegen * this.power.factor('shields')
         * this.subsystems.shields * this.mod('shieldRegen') * dt;
       for (const f of FACINGS) {
+        // Regeneration RAISES a shield. It must never lower one, and it did:
+        // the clamp was a flat Math.min against maxShield, so the twenty per
+        // cent overcharge that `reinforceShield` had just moved onto the bow
+        // was deleted on the very next tick. The order took charge off five
+        // facings and destroyed it — strictly worse than not giving it.
+        if (this.shields[f] >= this.maxShield) continue;
         this.shields[f] = Math.min(this.maxShield, this.shields[f] + rate);
+      }
+    }
+
+    // An overcharged facing bleeds back toward its normal ceiling rather than
+    // holding forever. Slow enough to survive the pass it was called for.
+    for (const f of FACINGS) {
+      if (this.shields[f] > this.maxShield) {
+        this.shields[f] = Math.max(this.maxShield, this.shields[f] - this.maxShield * 0.012 * dt);
       }
     }
 
@@ -3830,6 +3871,11 @@ class Ship {
     if (key === 'warpcore' && this.subsystems.warpcore <= 0.15 && !this.breaching) {
       this.beginBreach(this.subsystems.warpcore <= 0 ? 12 : 28);
     }
+    // Losing the emitter drops the shields. Getting it back has to raise them
+    // again, and nothing did — passive repair walked `subsystems.shields` from
+    // zero to a clean 1.0 over ten minutes and left `shieldsUp` false forever,
+    // so one hit on the shield generator cost you shields for the rest of the
+    // commission. `shieldsDown` remembers whether it was the captain's doing.
     if (key === 'shields' && this.subsystems.shields <= 0.05) this.shieldsUp = false;
   }
 
@@ -13888,7 +13934,14 @@ const INTENTS = [
     // the extracted elevation is the only thing that identifies it.
     mustHave: ['elevation'],
     requires: ['elevation'],
-    build: (c) => ({ action: 'pitch', value: c.elevation ?? 0 }),
+    build: (c) => ({
+      action: 'pitch',
+      value: c.elevation ?? 0,
+      // A named angle is an attitude to come to. A bare "climb" is a step from
+      // wherever the nose is now, which is what the button does and what makes
+      // saying it twice mean twice as much.
+      relative: (c.elevation ?? 0) !== 0 && !/\d/.test(c.text),
+    }),
   },
   {
     id: 'turn',
@@ -15204,9 +15257,15 @@ function findElevation(text, tokens = text.split(/\s+/).filter(Boolean)) {
 
   if (up === down) return null;   // neither, or a contradictory both
 
-  // "climb 30 degrees" is exact; a bare "climb" is a decisive but sane angle.
+  // "climb 30 degrees" names an attitude and is exact. A bare "climb" is a
+  // step, and the step is twenty degrees because that is what the Climb button
+  // on the helm console does — a button and the phrase printed on it have to
+  // be the same order, and they were not: the button moved the nose twenty
+  // degrees from where it was pointed and the word set it to thirty-five
+  // absolute, so pressing twice gave forty and saying it twice gave
+  // thirty-five.
   const m = text.match(/\b(-?\d{1,2})\s*(?:deg|degrees?)?\b/);
-  const magnitude = m ? Math.min(70, Math.abs(parseInt(m[1], 10))) : 35;
+  const magnitude = m ? Math.min(70, Math.abs(parseInt(m[1], 10))) : 20;
   return (up ? 1 : -1) * magnitude;
 }
 
@@ -18110,10 +18169,26 @@ class Engagement {
   // ---------------- firing ----------------
 
   /** Fire everything that bears on the current target. */
-  fireAll() {
-    if (!this.target || this.target.destroyed) return 0;
+  /**
+   * Open fire.
+   *
+   * @param {string} type 'all', or one of the weapon types — 'beam',
+   *        'cannon', 'torpedo'. The parser has always read this off the order
+   *        ("fire phasers" gives 'beam') and it was thrown away here, so every
+   *        order to fire fired everything: asking for phasers launched photon
+   *        torpedoes, and a captain holding torpedoes for one shot could not.
+   */
+  fireAll(type = 'all') {
+    if (!this.validTarget(this.target)) return 0;
+    const wanted = this.player.weapons.filter(
+      (w) => type === 'all' || type === undefined || w.type === type,
+    );
+    if (!wanted.length) {
+      this.pushLog(`We have no ${type} weapons, Captain.`, 'tactical');
+      return 0;
+    }
     let fired = 0;
-    for (const w of this.player.weapons) {
+    for (const w of wanted) {
       if (this.fireWeapon(this.player, w, this.target)) fired++;
     }
     if (!fired) this.pushLog('No weapons bear on the target.', 'tactical');
@@ -24222,6 +24297,13 @@ class Game {
   }
 
   dock() {
+    // Not in the middle of a firefight. "Request docking" restores the hull,
+    // the shields, every subsystem, the magazine and the whole crew — so given
+    // during a battle it was a full repair, instantly, for nothing, and it
+    // could be given again on the next tick.
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'Nobody is opening a spacedock door for us while we are under fire, Captain.' };
+    }
     if (!this.canDock()) return { ok: false, error: 'No docking facilities here, Captain.' };
     const damaged = this.ship.hullPct < 1 || this.ship.crew < this.ship.maxCrew;
     this.ship.restore();
@@ -24587,6 +24669,12 @@ class Game {
 
   /** Start a job in the machine shop. */
   fabricate(recipeId) {
+    // The machine shop is not a combat action. Left unguarded, a hull patch
+    // could be started and finished under fire — hours of work compressed into
+    // a battle, repeatedly, which is a free repair with extra steps.
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'The shop is sealed at red alert, Captain.' };
+    }
     return beginFabrication(this, recipeId);
   }
 
@@ -24595,6 +24683,9 @@ class Game {
    * than hours that merely passed. Costs the same time on the stardate.
    */
   workTheShop(hours = 1) {
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, error: 'Not while we are under fire, Captain.' };
+    }
     if (!this.fabrication) return { ok: false, reason: 'Nothing on the bench, Captain.' };
     const done = advanceFabrication(this, hours);
     this.clock.advanceStardate(hours / 24);
@@ -25421,12 +25512,14 @@ function tacticalScreen(app) {
     // face you are not presenting. Until this row existed the player's only
     // elevation control was "Come about", which merely points at the target.
     el('div', { class: 'grid-3' }, [
+      // Twenty degrees a press, and "climb" is now twenty degrees a word. The
+      // button and the phrase printed on it have to be the same order.
       button('Climb', tap(() => {
-        eng.setPitch(g.ship.desiredPitch + 20); app.render();
+        eng.setPitch((g.ship.desiredPitch ?? 0) + 20); app.render();
       }), { say: 'climb', color: 'blue' }),
       button('Level', tap(() => { eng.setPitch(0); app.render(); }), { say: 'level off', color: 'blue' }),
       button('Dive', tap(() => {
-        eng.setPitch(g.ship.desiredPitch - 20); app.render();
+        eng.setPitch((g.ship.desiredPitch ?? 0) - 20); app.render();
       }), { say: 'dive', color: 'blue' }),
     ]),
     readout('Elevation', (g.ship.pitch + 70) / 140,
@@ -28364,8 +28457,9 @@ class App {
         break;
       }
       case 'pitch': {
-        if (!eng) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
-        eng.setPitch(order.value);
+        if (!eng || eng.over) { ack('helm', 'We are not manoeuvring, Captain.'); break; }
+        const from = order.relative ? (g.ship.desiredPitch ?? 0) : 0;
+        eng.setPitch(from + order.value);
         const said = order.value === 0 ? 'Levelling off.'
           : order.value > 0 ? `Coming up ${Math.round(order.value)} degrees.`
             : `Taking her down ${Math.round(-order.value)} degrees.`;
@@ -28395,6 +28489,9 @@ class App {
         break;
       case 'shields':
         g.ship.shieldsUp = order.up;
+        // Lowering them on purpose is a standing decision; being shot out is
+        // not. Only the first survives the emitter being repaired.
+        g.ship.shieldsDown = !order.up;
         ack('tactical', order.up ? 'Shields up.' : 'Shields down.');
         break;
       case 'reinforce':
@@ -28428,8 +28525,11 @@ class App {
         break;
       }
       case 'fire': {
-        if (!eng) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
-        const n = eng.fireAll();
+        if (!eng || eng.over) { audio.play('ui_deny'); g.pushLog('No target, Captain.', 'tactical'); break; }
+        // What was actually asked for. The parser has always read the weapon
+        // out of the order and this threw it away, so "fire phasers" launched
+        // torpedoes.
+        const n = eng.fireAll(order.weaponType ?? 'all');
         if (!n) audio.play('ui_deny');
         break;
       }
@@ -28636,6 +28736,16 @@ class App {
       case 'ability': {
         const ability = ABILITIES[order.ability];
         const officer = ability ? g.crew.officerFor(ability.id) : null;
+        // An officer who is not ready is the same as no officer, for the
+        // purpose of choosing between the ability and the plain order behind
+        // it. `useAbility` refuses on cooldown with a deny beep and returns, so
+        // "evasive manoeuvres" — which is BOTH a trained ability and an
+        // ordinary helm order — silently did nothing at all for thirty seconds
+        // after its first use.
+        if (officer && ability && !officer.ready(ability.id) && order.fallback) {
+          this.executeOrder(order.fallback, raw);
+          return;
+        }
         if (officer && ability) {
           this.useAbility(officer, ability);
         } else if (order.fallback) {

@@ -230,7 +230,14 @@ export const INTENTS = [
     // the extracted elevation is the only thing that identifies it.
     mustHave: ['elevation'],
     requires: ['elevation'],
-    build: (c) => ({ action: 'pitch', value: c.elevation ?? 0 }),
+    build: (c) => ({
+      action: 'pitch',
+      value: c.elevation ?? 0,
+      // A named angle is an attitude to come to. A bare "climb" is a step from
+      // wherever the nose is now, which is what the button does and what makes
+      // saying it twice mean twice as much.
+      relative: (c.elevation ?? 0) !== 0 && !/\d/.test(c.text),
+    }),
   },
   {
     id: 'turn',
