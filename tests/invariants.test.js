@@ -296,3 +296,192 @@ describe('the game finishes its own fights', () => {
     assert.equal(JSON.stringify(g.stores), stores, 'a second finishCombat salvaged the wreck again');
   });
 });
+
+// ================================================== what the audit turned up
+
+describe('a kill is an event, whatever did the killing', () => {
+  // `onDestroyed` used to be called from one place: straight after a hit
+  // landed, on `if (target.destroyed)`. But a hit never destroys anything —
+  // takeDamage takes the hull to zero and starts a warp core breach, and the
+  // ship is not flagged destroyed until that countdown ends twenty seconds
+  // later inside Ship.update. So the explosion, the sound, the event and the
+  // log line fired only when a ship was hit again while already breaching.
+  // Almost every kill in this game happened in complete silence.
+
+  test('a ship that dies to its own breach is still announced', async () => {
+    const { on } = await import('../src/core/events.js');
+    const seen = [];
+    on('combat:destroyed', ({ ship }) => seen.push(ship.name));
+
+    // Relentless, or the fight ends the instant a hostile at zero hull is
+    // flagged as fleeing and the breach never gets to run.
+    const g = new Game({ seed: 7n, crewMode: 'original' });
+    g.startCombat([new Ship('scoutship', { name: 'Doomed' })], { relentless: true });
+    const enemy = g.engagement.hostiles[0];
+    enemy.hull = 0;
+    enemy.beginBreach(0.5);
+    for (let t = 0; t < 120 && g.engagement && !g.engagement.over; t++) g.update(STEP);
+
+    assert.ok(enemy.destroyed, 'the breach never went off');
+    assert.ok(seen.includes(enemy.name), `nothing announced the death of ${enemy.name}`);
+  });
+
+  test('and announced exactly once', () => {
+    const g = fight('scoutship');
+    const eng = g.engagement;
+    const enemy = eng.hostiles[0];
+    enemy.hull = 0;
+    enemy.destroy('catastrophic hull failure');
+    eng.reportDeaths();
+    eng.reportDeaths();
+    eng.onDestroyed(enemy, g.ship);
+    const said = eng.log.filter((l) => /destroyed/.test(l.text));
+    assert.equal(said.length, 1, said.map((l) => l.text).join(' | '));
+    assert.match(said[0].text, /catastrophic hull failure/);
+  });
+});
+
+describe('the guns keep looking for something to shoot', () => {
+  test('a destroyed target is replaced, not held', () => {
+    const g = fight('scoutship', { count: 2 });
+    const eng = g.engagement;
+    const first = eng.target;
+    first.hull = 0;
+    first.destroy();
+    g.update(STEP);
+
+    assert.notEqual(g.engagement.target, first, 'auto-fire kept its lock on a wreck');
+    assert.ok(g.engagement.target, 'the guns were left with no target at all');
+    assert.ok(eng.log.some((l) => /Re-acquiring/.test(l.text)), 'nobody said so');
+  });
+
+  test('a target that has gone to warp cannot be locked', () => {
+    const g = fight('bird_of_prey', { count: 2 });
+    const eng = g.engagement;
+    const runner = eng.hostiles[0];
+    const stayer = eng.hostiles[1];
+    eng.setTarget(stayer);
+    runner.withdrawn = true;
+    eng.setTarget(runner);
+    assert.equal(eng.target, stayer, 'locked onto a ship that had left the system');
+  });
+
+  test('a ship that has gone to warp is no longer flown around the arena', () => {
+    // holdTheArena clamps everything present and turns it back toward the
+    // middle. A withdrawn hostile was still present, so a ship the log had
+    // just announced as gone came about at the boundary and flew back through
+    // the fight — drawn, solid, and untargetable.
+    const g = fight('bird_of_prey', { count: 2 });
+    const eng = g.engagement;
+    const gone = eng.hostiles[0];
+    gone.withdrawn = true;
+    gone.x = ARENA_RADIUS * 4;
+    const before = gone.x;
+    for (let t = 0; t < 60; t++) g.update(STEP);
+    assert.equal(gone.x, before, 'a withdrawn ship was still being steered');
+    assert.ok(!eng.allShips.includes(gone), 'a withdrawn ship is still in the fight');
+  });
+});
+
+describe('breaking off', () => {
+  test('dying on the escape tick is dying, not escaping', () => {
+    const g = fight('vorcha');
+    const eng = g.engagement;
+    eng.warpOutTimer = STEP / 2;
+    g.ship.hull = 0;
+    g.ship.destroy('catastrophic hull failure');
+    g.update(STEP);
+
+    assert.equal(g.lastCombat?.outcome ?? eng.outcome, 'destroyed',
+      'a destroyed ship warped away and kept the campaign going');
+  });
+
+  test('the escape has to stay possible for all eight seconds', () => {
+    // Checked once, at the order, and never again — so a core ejected during
+    // the countdown still got you to warp on a ship with no warp drive.
+    const g = fight('d7');
+    const eng = g.engagement;
+    assert.equal(eng.beginWarpOut(), true);
+    assert.ok(eng.warpOutTimer > 0);
+    // The warp core takes a hit during the run-up, which is exactly the
+    // situation the countdown was never re-checking.
+    g.ship.damageSubsystem('warpcore', 1);
+    g.update(STEP);
+    assert.equal(eng.warpOutTimer, 0, 'the countdown carried on without a warp drive');
+    assert.ok(eng.log.some((l) => /not going anywhere/.test(l.text)));
+  });
+});
+
+test('an order can only target a system that exists', () => {
+  // "Target their bridge" is a thing a captain says, and no ship in this game
+  // has a `bridge` subsystem — so the order set targetedSubsystem to a key
+  // damageSubsystem returns early on, silently removing ALL subsystem damage
+  // from the fight while reporting that the order had been given.
+  const g = fight();
+  const eng = g.engagement;
+  assert.equal(eng.targetSubsystem('bridge'), false);
+  assert.equal(eng.targetedSubsystem, null);
+  assert.equal(eng.targetSubsystem('engines'), true);
+  assert.equal(eng.targetedSubsystem, 'engines');
+  assert.equal(eng.targetSubsystem(null), true);
+  assert.equal(eng.targetedSubsystem, null);
+});
+
+test('the combat log does not drown itself', () => {
+  // The log holds sixty lines and "No weapons bear on the target" is reported
+  // every time the trigger is pulled out of arc — thirty times a second in a
+  // stern chase. A minute of manoeuvring flushed every real event out of it.
+  const g = fight();
+  const eng = g.engagement;
+  for (let i = 0; i < 500; i++) eng.pushLog('No weapons bear on the target.', 'tactical');
+  eng.pushLog('Hostile destroyed.', 'tactical');
+
+  const noise = eng.log.filter((l) => /No weapons bear/.test(l.text));
+  assert.equal(noise.length, 1, `${noise.length} copies of one line`);
+  assert.equal(noise[0].repeats, 500);
+  assert.ok(eng.log.some((l) => /Hostile destroyed/.test(l.text)),
+    'the line that mattered was pushed out of the log');
+});
+
+test('a warp core breach survives being saved', () => {
+  // Left out of the save, a record taken during the twenty seconds you have to
+  // eject the core came back as a ship at zero hull with no countdown running
+  // and no way to die — which is exactly `ship.zerohull.adrift`.
+  const g = fight();
+  g.ship.hull = 0;
+  g.ship.beginBreach(20);
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+
+  assert.equal(back.ship.breaching, true, 'the breach was cancelled by saving');
+  assert.ok(back.ship.breachTimer > 0, `breach timer came back as ${back.ship.breachTimer}`);
+  assert.deepEqual(checkGame(back), []);
+});
+
+test('a record written before breaches were saved still loads sanely', () => {
+  const g = fight();
+  g.ship.hull = 0;
+  g.ship.beginBreach(20);
+  const data = JSON.parse(JSON.stringify(g.save()));
+  delete data.ship.breaching;
+  delete data.ship.breachTimer;
+
+  const back = Game.load(data);
+  assert.equal(back.ship.breaching, true, 'an old save left a dead ship that could not die');
+  assert.deepEqual(checkGame(back), []);
+});
+
+test('casualties are counted per fight, not per campaign', () => {
+  // Crew losses are permanent, so `maxCrew - crew` is the whole campaign's
+  // dead. Every later battle re-reported every death that had ever happened.
+  const g = fight('scoutship');
+  g.ship.crew -= 40;
+  g.finishCombat('victory');
+  assert.equal(g.lastCombat.crewLost, 40);
+
+  g.startCombat([new Ship('scoutship', { name: 'Second' })]);
+  g.finishCombat('victory');
+  assert.equal(g.lastCombat.crewLost, 0, 'a fight in which nobody was hurt reported the last one’s dead');
+
+  const recorded = g.ledger.entries.filter((e) => e.kind === 'lives_lost');
+  assert.equal(recorded.length, 1, 'the ledger recorded a second casualty entry for the same deaths');
+});

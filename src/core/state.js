@@ -1202,8 +1202,15 @@ export class Game {
       if (promo?.promoted) emit('captain:promoted', promo);
     }
 
-    // Casualties are permanent and recorded by name where we have one.
-    const lost = this.ship.maxCrew - this.ship.crew;
+    // Casualties from THIS fight.
+    //
+    // The count used to be `maxCrew - crew`, which is the standing deficit and
+    // not what happened here: crew losses are permanent, so every subsequent
+    // battle re-reported every death that had ever happened. A campaign that
+    // lost eleven people in its first engagement then recorded eleven more in
+    // the next one where nobody was hurt, and the ledger, the after-action
+    // report and the post-fight panel all grew without bound.
+    const lost = Math.max(0, Math.round((eng.crewAtStart ?? this.ship.maxCrew) - this.ship.crew));
     if (lost > 0) {
       this.ledger.record('lives_lost', {
         count: lost, text: `${lost} crew lost in action at ${this.location?.name}`, system: this.locationId,
@@ -1223,7 +1230,7 @@ export class Game {
       killed: killed.length,
       hostiles: eng.hostiles.length,
       hullLeft: this.ship.hullPct,
-      crewLost: Math.max(0, Math.round(this.ship.maxCrew - this.ship.crew)),
+      crewLost: lost,
       seconds: Math.round(eng.time),
       systemId: this.locationId,
       stardate: this.clock.stardate,

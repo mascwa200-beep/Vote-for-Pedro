@@ -661,6 +661,12 @@ export class Ship {
       crew: this.crew, injured: this.injured,
       subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
       fires: this.fires, coreEjected: this.coreEjected, mods: this.mods,
+      // A breach in progress is state, not decoration. Left out, a save taken
+      // during the twenty seconds you have to eject the core came back as a
+      // ship sitting at zero hull with no countdown running and no way to die
+      // — undamaged by anything that followed, and never destroyed.
+      breaching: this.breaching, breachTimer: this.breachTimer,
+      destroyed: this.destroyed, destroyCause: this.destroyCause ?? null,
       power: this.power.save(),
     };
   }
@@ -680,7 +686,15 @@ export class Ship {
       crew: data.crew, injured: data.injured ?? 0,
       torpedoes: data.torpedoes ?? s.torpedoes, antimatter: data.antimatter ?? 100,
       fires: data.fires ?? 0, coreEjected: data.coreEjected ?? false,
+      breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
+      destroyed: data.destroyed === true,
+      destroyCause: data.destroyCause ?? null,
     });
+    // A record written before a breach was saved, restored onto a hull that is
+    // already gone, would load as the very thing the invariant checker calls
+    // `ship.zerohull.adrift` — dead, not dying, and on the board forever. Give
+    // it the countdown it should have had.
+    if (s.hull <= 0 && !s.destroyed && !s.breaching) s.beginBreach();
     // Shield migration, from four facings to six.
     //
     // A save written before the third axis existed has no dorsal or ventral
