@@ -1907,6 +1907,77 @@ describe('no two Federation classes are the same shape', () => {
 
 // ========================================= geometry you could never have seen
 
+/**
+ * Signed volume by the divergence theorem: the sum over triangles of
+ * dot(v0, cross(v1-v0, v2-v0)) / 6.
+ *
+ * For a closed surface wound outward this is the volume enclosed. Wound
+ * inward it is the same number negative. It is the one measurement that says
+ * which way a mesh faces without looking at it, and it does not care how many
+ * primitives went into it or whether they overlap.
+ */
+function signedVolume(m) {
+  const f = m.stride / 4;
+  let vol = 0;
+  for (let i = 0; i < m.vertexCount; i += 3) {
+    const p = (k) => [m.data[(i + k) * f], m.data[(i + k) * f + 1], m.data[(i + k) * f + 2]];
+    const [a, b, c] = [p(0), p(1), p(2)];
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [
+      u[1] * v[2] - u[2] * v[1],
+      u[2] * v[0] - u[0] * v[2],
+      u[0] * v[1] - u[1] * v[0],
+    ];
+    vol += (a[0] * n[0] + a[1] * n[1] + a[2] * n[2]) / 6;
+  }
+  return vol;
+}
+
+describe('every mesh faces the way it is meant to be seen from', () => {
+  // Back-face culling means a wrongly wound surface is not dim — it is gone,
+  // and it still costs its triangles. `mirrored` reverses winding as it copies
+  // for exactly this reason, and the bridge's ceiling light ring was forty
+  // triangles that had never once been drawn because one loop did not.
+  //
+  // A signed volume settles it for a whole mesh at once, whatever went into
+  // it: a ship is a solid seen from outside and must enclose a POSITIVE
+  // volume; a room is a space seen from inside and must enclose a negative
+  // one. Nothing else needs to be known about either.
+
+  test('every hull is a solid, seen from outside', () => {
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const vol = signedVolume(hullMesh(id, 'independent'));
+      assert.ok(vol > 0, `${id} encloses ${vol.toFixed(4)} — it is inside out`);
+    }
+  });
+
+  test('every room is a space, seen from inside', () => {
+    for (const id of Object.keys(ROOMS)) {
+      const solid = roomMeshes(id)?.solid;
+      if (!solid?.data) continue;
+      const vol = signedVolume(solid);
+      assert.ok(vol < 0, `${id} encloses ${vol.toFixed(1)} — it is turned inside out`);
+    }
+  });
+
+  test('and the measurement can tell the difference', () => {
+    // Without this the two tests above pass on a bug in `signedVolume`.
+    const hull = hullMesh('constitution', 'independent');
+    const flipped = { ...hull, data: new Float32Array(hull.data) };
+    for (let i = 0; i < flipped.vertexCount; i += 3) {
+      const f = hull.stride / 4;
+      for (let a = 0; a < 9; a++) {
+        const t = flipped.data[i * f + a];
+        flipped.data[i * f + a] = flipped.data[(i + 2) * f + a];
+        flipped.data[(i + 2) * f + a] = t;
+      }
+    }
+    assert.ok(signedVolume(hull) > 0);
+    assert.ok(signedVolume(flipped) < 0, 'reversing every triangle changed nothing');
+  });
+});
+
 describe('nothing in a room is drawn facing away from the room', () => {
   // Back-face culling is on, so a surface whose normal points into the hull is
   // not dim or subtle — it is ABSENT, and it still costs its triangles and its
