@@ -324,6 +324,24 @@ test('a tour of duty: fight after fight, on one commission', () => {
       assert.equal(g.helpInbound, null, 'a relief ship outlived the fight it was sent to');
       outcomes.add(g.lastCombat.outcome);
       if (g.over) { lost++; break; }
+
+      // A fight broken off ends at warp, because breaking off now goes
+      // somewhere. Ride it out to wherever the escape course led — that is the
+      // sequence a captain actually flies, and it walks `arrive` on a ship that
+      // just ran, which nothing else does.
+      if (g.lastCombat.outcome === 'escaped' && g.transit) {
+        const ranTo = g.transit.to.id;
+        for (let t = 0; t < 30 * 400 && g.transit; t++) { g.update(STEP); dog.tick(g, OPTS); ticks++; }
+        assert.equal(g.transit, null,
+          `${difficulty} fight ${f + 1}: the escape course never arrived`);
+        assert.equal(g.locationId, ranTo,
+          `${difficulty} fight ${f + 1}: ran for ${ranTo} and ended up at ${g.locationId}`);
+        // Arriving can drop an encounter in your lap, which is fair, but the
+        // tour is measuring fights it started itself.
+        if (g.encounter) g.endEncounter();
+        if (g.engagement && !g.engagement.over) g.engagement.end('routed');
+        g.update(STEP);
+      }
       assert.equal(g.mode, 'bridge', `${difficulty} fight ${f + 1}: left the game in ${g.mode}`);
 
       // Damage control between engagements, which is what a captain who
@@ -1072,7 +1090,11 @@ describe('a fight that ends on a sentence ends immediately', () => {
 
   /** Every way the game can settle a fight, and what must be true after. */
   function settled(g, how) {
-    assert.equal(g.mode, 'bridge', `${how}: still in ${g.mode} mode`);
+    // Out of combat means the bridge — or at warp, if the way out was running.
+    // Breaking off now goes somewhere, which is what it always said it did.
+    const ran = g.lastCombat?.outcome === 'escaped';
+    assert.ok(g.mode === 'bridge' || (ran && g.mode === 'transit'),
+      `${how}: still in ${g.mode} mode`);
     assert.equal(g.engagement, null, `${how}: the engagement was left hanging`);
     assert.equal(g.alert, 'normal', `${how}: still at battle stations`);
     assert.ok(g.lastCombat, `${how}: no after-action record`);
@@ -1242,7 +1264,12 @@ describe('the aftermath of a fight is coherent whatever the fight was', () => {
 
         // And the fight must be finished, not merely stopped.
         assert.equal(g.engagement, null, 'an engagement was left hanging');
-        assert.ok(g.mode === 'bridge' || g.over,
+        // Breaking off now goes to warp, because that is what breaking off
+        // said it was doing for the whole life of the game while leaving the
+        // ship exactly where it was. So an escape ends at warp and everything
+        // else ends on the bridge.
+        const restingPlaces = outcome === 'escaped' ? ['bridge', 'transit'] : ['bridge'];
+        assert.ok(restingPlaces.includes(g.mode) || g.over,
           `left in ${g.mode} mode with the fight over`);
         assert.ok(g.lastCombat, 'no after-action record was written');
         assert.ok(Number.isFinite(g.lastCombat.crewLost) && g.lastCombat.crewLost >= 0,
@@ -1255,12 +1282,19 @@ describe('the aftermath of a fight is coherent whatever the fight was', () => {
           assert.equal(g.alert, 'normal', 'still at battle stations');
         }
 
-        // Where the ship WAS is not changed by a fight it survived.
-        if (!g.over) {
+        // Where the ship WAS is not changed by a fight it survived — except by
+        // running from one, which is the whole point of running. An escape
+        // leaves orbit and leaves the system, and is the only ending that does.
+        if (!g.over && outcome !== 'escaped') {
           assert.equal(g.walk?.roomId === 'surface', wasAshore,
             'the captain was moved between the ship and the ground by a battle');
           const orbitAfter = g.orbitBody ?? g.orbit ?? null;
           assert.equal(!!orbitAfter, !!orbitBefore, 'orbit was gained or lost in a fight');
+        }
+        if (!g.over && outcome === 'escaped') {
+          // Never abandoned on the surface, whatever else running costs.
+          assert.equal(g.walk?.roomId === 'surface', false,
+            'the ship ran and left the captain standing on a planet');
         }
       });
     }
