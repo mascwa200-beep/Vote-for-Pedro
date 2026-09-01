@@ -982,3 +982,142 @@ describe('a fight that ends on a sentence ends immediately', () => {
     }
   });
 });
+
+// ====================================== every ending, in every situation
+
+describe('the aftermath of a fight is coherent whatever the fight was', () => {
+  // "Okay, engage in combat. Okay, combat's done. And the stuff that comes
+  // after it is also messed up."
+  //
+  // Individual endings have their own tests. What none of them covered is the
+  // CROSS PRODUCT: five outcomes against the half-dozen situations a captain
+  // can be in when the shooting starts. A fight that ends cleanly on an empty
+  // bridge is not evidence that one ending in orbit, mid-mission, with the con
+  // handed to the first officer, leaves anything behind in one piece.
+  //
+  // Every combination below has to satisfy the same list, so a rule added to
+  // src/sim/invariants.js defends all of them at once.
+
+  const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+
+  /** The situations a captain can be in when the shooting starts. */
+  const SITUATIONS = {
+    'on a quiet bridge': () => {},
+    'in standard orbit': (g) => {
+      const body = g.galaxy.systems.find((s) => s.id === g.locationId)?.bodies
+        ?.find?.((b) => b.kind !== 'gas' && b.kind !== 'star');
+      if (body) g.enterOrbit(body.id);
+    },
+    'with the con handed over': (g) => { g.handOverCon?.(); },
+    'on a mission': (g) => {
+      const m = g.availableMissions?.()[0];
+      if (m) g.startMission(m.id);
+    },
+    'at red alert with shields already down': (g) => {
+      g.setAlert('red');
+      for (const f of Object.keys(g.ship.shields)) g.ship.shields[f] = 0;
+      g.ship.shieldsUp = false;
+    },
+    'already carrying a wreck': (g) => {
+      g.wreck = { tier: 2, systemId: g.locationId, hulls: 1, name: 'Earlier kill' };
+    },
+  };
+
+  /**
+   * Force a fight to a given ending without waiting for the dice.
+   *
+   * Through `Ship.destroy`, not by setting the flag: destroying a ship zeroes
+   * its hull and its shields, and a test that sets `destroyed = true` on its
+   * own builds a state the simulation cannot reach and then complains the
+   * checker noticed.
+   */
+  function endWith(g, outcome) {
+    const eng = g.engagement;
+    if (outcome === 'victory') for (const s of eng.hostiles) s.destroy('test');
+    if (outcome === 'routed') for (const s of eng.hostiles) s.fleeing = true;
+    if (outcome === 'destroyed') g.ship.destroy('test');
+    eng.end(outcome);
+  }
+
+  for (const outcome of OUTCOMES) {
+    for (const [where, setUp] of Object.entries(SITUATIONS)) {
+      test(`${outcome}, ${where}`, () => {
+        const g = new Game({ seed: 5n, crewMode: 'original', difficulty: 'commander' });
+        setUp(g);
+        const wasAshore = g.walk?.roomId === 'surface';
+        const orbitBefore = g.orbitBody ?? g.orbit ?? null;
+
+        g.startCombat([new Ship('d7', { name: 'Hostile' })]);
+        assert.equal(g.mode, 'combat', 'the fight did not start');
+
+        for (let i = 0; i < 30 * 4; i++) { pilot(g); g.update(STEP); }
+        if (!g.lastCombat) endWith(g, outcome);
+
+        // Whatever happened, the simulation must be self-consistent.
+        assert.deepEqual(checkAll(g, OPTS), [], 'the checker objects to the result');
+
+        // And the fight must be finished, not merely stopped.
+        assert.equal(g.engagement, null, 'an engagement was left hanging');
+        assert.ok(g.mode === 'bridge' || g.over,
+          `left in ${g.mode} mode with the fight over`);
+        assert.ok(g.lastCombat, 'no after-action record was written');
+        assert.ok(Number.isFinite(g.lastCombat.crewLost) && g.lastCombat.crewLost >= 0,
+          `crewLost is ${g.lastCombat.crewLost}`);
+        assert.ok(g.lastCombat.crewLost <= g.ship.maxCrew,
+          `${g.lastCombat.crewLost} lost from a crew of ${g.ship.maxCrew}`);
+
+        // The bridge stands down unless the ship was lost.
+        if (!g.over && g.lastCombat.outcome !== 'destroyed') {
+          assert.equal(g.alert, 'normal', 'still at battle stations');
+        }
+
+        // Where the ship WAS is not changed by a fight it survived.
+        if (!g.over) {
+          assert.equal(g.walk?.roomId === 'surface', wasAshore,
+            'the captain was moved between the ship and the ground by a battle');
+          const orbitAfter = g.orbitBody ?? g.orbit ?? null;
+          assert.equal(!!orbitAfter, !!orbitBefore, 'orbit was gained or lost in a fight');
+        }
+      });
+    }
+  }
+
+  test('the orders a fight forbids come back when it ends', () => {
+    // dock, fabricate and the machine shop all refuse mid-combat. Refusing
+    // FOREVER because a flag was left set is the same bug as accepting them
+    // during a battle, and much harder to notice.
+    const g = fight('d7');
+    assert.equal(g.dock().ok, false, 'docked in the middle of a firefight');
+
+    g.engagement.end('routed');
+    assert.equal(g.mode, 'bridge');
+    const after = g.dock();
+    assert.ok(typeof after === 'object' && after !== null, 'dock returned nothing');
+    assert.notEqual(after.reason, 'in combat',
+      'the ship is still refusing to dock because of a battle that is over');
+  });
+
+  test('the same fight cannot pay out twice', () => {
+    // `end` is idempotent and so is the settling behind it. Calling it again
+    // must not hand out the experience, the salvage or the standing a second
+    // time — and nothing stops a UI, a mission stage and the tick all having a
+    // go at it in the same frame.
+    const g = fight('d7');
+    for (const s of g.engagement.hostiles) s.destroy('test');
+    g.engagement.end('victory');
+
+    const record = { ...g.lastCombat };
+    const xp = g.progress.xp;
+    const kills = g.ledger.counters?.ships_destroyed ?? 0;
+    const wreck = g.wreckHere;
+
+    g.finishCombat('victory');
+    g.finishCombat('victory');
+    g.update(STEP);
+
+    assert.deepEqual({ ...g.lastCombat }, record, 'the after-action record was rewritten');
+    assert.equal(g.progress.xp, xp, 'the experience was paid twice');
+    assert.equal(g.ledger.counters?.ships_destroyed ?? 0, kills, 'the kill was counted twice');
+    assert.deepEqual(g.wreckHere, wreck, 'a second hulk appeared out of nothing');
+  });
+});
