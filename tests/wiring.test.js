@@ -551,6 +551,86 @@ test('a wreck does not follow the ship to the next system', () => {
   assert.equal(g.stripWreck().ok, false);
 });
 
+test('and leaving the system loses it, which is what the game says it costs', () => {
+  // `finishCombat` calls the salvage a choice: strip it, or leave the system
+  // and lose it. Leaving did not lose it. `wreckHere` stopped offering the hulk
+  // once you were elsewhere, so it looked lost — but the object survived in the
+  // save, and coming back handed it straight back. A wreck could be banked for
+  // the whole five years and cashed in whenever the stores ran low.
+  const g = gameWith();
+  const home = g.locationId;
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  g.engagement.hostiles[0].destroyed = true;
+  g.finishCombat('victory');
+  assert.ok(g.wreckHere, 'a destroyed ship left nothing adrift');
+
+  // Travel for real, rather than assigning the location: the loss happens on
+  // arrival, and a test that skips the journey skips the thing under test.
+  const elsewhere = g.galaxy.systems.find((s) => s.id !== home);
+  assert.equal(g.setCourse(elsewhere.id, 6).ok, true, 'could not leave');
+  for (let t = 0; t < 30 * 120 && g.transit; t++) g.update(1 / 30);
+  assert.equal(g.transit, null, 'never arrived');
+  assert.notEqual(g.locationId, home, 'never left');
+  assert.equal(g.wreck, null, 'the hulk followed us');
+
+  // And it is gone, not merely out of reach: going back does not restore it.
+  assert.equal(g.setCourse(home, 6).ok, true, 'could not go back');
+  for (let t = 0; t < 30 * 120 && g.transit; t++) g.update(1 / 30);
+  assert.equal(g.locationId, home, 'never got back');
+  assert.equal(g.wreckHere, null, 'the hulk was waiting where we left it');
+  assert.equal(g.stripWreck().ok, false, 'stripped a wreck that should be long gone');
+});
+
+test('breaking off a fight actually leaves', () => {
+  // The helm said "plotting an escape course, eight seconds to warp", the
+  // panel said "we are clear and at warp", and the ship stayed in the same
+  // system, in the same orbit, having burned nothing. The one ending in the
+  // game that is ABOUT leaving was the only one that did not move you.
+  const g = gameWith();
+  const home = g.locationId;
+  const body = g.location?.bodies?.find((b) => b.kind !== 'star');
+  if (body) g.enterOrbit(body.id);
+  const fuelBefore = g.ship.antimatter;
+  const stardateBefore = g.clock.stardate;
+
+  g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Chaser' })]);
+  g.engagement.end('escaped');
+  g.update(1 / 30);
+
+  assert.equal(g.lastCombat.outcome, 'escaped');
+  assert.ok(g.transit, 'the ship went to warp and stayed where it was');
+  assert.equal(g.mode, 'transit', `left in ${g.mode} mode`);
+  assert.equal(g.orbit, null, 'held an orbit while running for it at warp');
+  assert.ok(g.ship.antimatter < fuelBefore, 'the escape was free');
+
+  // And it arrives somewhere real, which is the cost: not a destination the
+  // captain chose.
+  const ranTo = g.transit.to.id;
+  assert.notEqual(ranTo, home, 'the escape course led back where we started');
+  for (let t = 0; t < 30 * 400 && g.transit; t++) g.update(1 / 30);
+  assert.equal(g.transit, null, 'never arrived');
+  assert.equal(g.locationId, ranTo, 'arrived somewhere other than the escape course');
+  assert.ok(g.clock.stardate > stardateBefore, 'running took no time at all');
+});
+
+test('a ship that cannot run says so instead of pretending', () => {
+  // No antimatter and nowhere to plot to is a real outcome. Claiming a warp
+  // that cannot happen is the bug this whole change is about, so the failing
+  // case has to be honest too.
+  const g = gameWith();
+  g.ship.antimatter = 0;
+  g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Chaser' })]);
+  g.engagement.end('escaped');
+  g.update(1 / 30);
+
+  assert.equal(g.lastCombat.outcome, 'escaped');
+  assert.equal(g.transit, null, 'went to warp on an empty tank');
+  assert.equal(g.mode, 'bridge', `left in ${g.mode} mode`);
+  const said = g.log.slice(-6).map((e) => e.text).join(' ');
+  assert.match(said, /not going anywhere|holding station/i,
+    `nothing said we were stuck: ${said}`);
+});
+
 test('a trap has no way out that involves shooting', () => {
   // The whole point of these: `engage` is not on the menu and withdrawing does
   // not work. If a trap ever grows a combat option, this fails.

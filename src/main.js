@@ -479,7 +479,10 @@ class App {
     // and left the canvas showing a frozen frame of a bridge nobody was in.
     // Their panels appear in the bridge's own strip instead.
     //
-    // A MISSION still takes the screen, because a mission stage IS text.
+    // A MISSION does not take the screen either, whatever this used to say. It
+    // hangs on the bridge's side strip like the rest — `missionPanel`, appended
+    // by `bridgeScreen` whenever an episode is active. The full-screen
+    // `missionScreen` below is reachable only by asking for it by name.
 
     const old = this.screenEl;
 
@@ -918,7 +921,9 @@ class App {
     const lines = {
       victory: ['All hostile contacts destroyed.'],
       routed: ['They have broken off and gone to warp.'],
-      escaped: ['We are clear and at warp.'],
+      escaped: g.transit
+        ? [`We are clear and at warp, making for ${g.transit.to?.name ?? 'the nearest system'}.`]
+        : ['We are clear of them. We are not going anywhere — holding station.'],
       destroyed: ['The ship is lost.'],
       // Talking your way out used to be the rarest ending in the game — it was
       // reachable only through the Kobayashi Maru, because every hail that

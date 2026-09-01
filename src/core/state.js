@@ -28,7 +28,7 @@ import { ROOMS } from '../world/interiors.data.js';
 import { rollEncounter, environmentalHazard } from '../world/encounters.js';
 import { buildRoster, ERAS } from '../world/crews.data.js';
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
-import { SYSTEM_BY_ID } from '../world/systems.data.js';
+import { SYSTEM_BY_ID, distanceLy } from '../world/systems.data.js';
 
 import { MissionBook } from '../missions/engine.js';
 import {
@@ -1056,6 +1056,16 @@ export class Game {
     this.orbit = null;
     this.mode = MODES.BRIDGE;
 
+    // The hulk you left behind is gone.
+    //
+    // `finishCombat` describes the salvage as a choice — "strip it, or leave
+    // the system and lose it" — and leaving did not lose it. `wreckHere`
+    // stopped offering the hulk once you were elsewhere, so it LOOKED lost, but
+    // the object survived in the save and came back the moment you returned to
+    // that system. A wreck could be banked for the whole five years and cashed
+    // in whenever the machine shop ran dry, which is not a choice at all.
+    if (this.wreck && this.wreck.systemId !== this.locationId) this.wreck = null;
+
     const isNew = this.galaxy.markVisited(this.locationId);
     this.pushLog(`Arrived at ${t.to.name}.`, 'helm');
     if (isNew && t.to.unexplored) {
@@ -1597,6 +1607,52 @@ export class Game {
       this.ship.crew = this.ship.maxCrew;
       this.pushLog('Simulation ends. The bridge lights come back up.', 'computer');
     }
+
+    // You said you were going to warp, so go.
+    //
+    // Breaking off ran a full eight-second countdown, announced "helm plotting
+    // an escape course", reported "we are clear and at warp" — and left the
+    // ship in the same system, in the same orbit, having burned nothing. The
+    // one ending in the game that is ABOUT leaving was the only one that did
+    // not move you. Now the countdown finishes into a real transit, which is
+    // also what makes breaking off cost something: the antimatter, the days,
+    // and arriving somewhere you did not choose.
+    if (outcome === 'escaped' && !simulated) this.escapeToWarp();
+  }
+
+  /**
+   * Where an escape course actually goes.
+   *
+   * The nearest charted neighbour: fleeing is the shortest hop out of the
+   * system, not a considered destination, and it has to be somewhere the ship
+   * could plot a course to in eight seconds. Deterministic, because everything
+   * here is — the same fight from the same seed strands you in the same place.
+   *
+   * Failing to leave is a real outcome and it says so. A ship with no
+   * antimatter, or in a system with nothing charted next to it, broke contact
+   * and is holding station, which is honest in a way that "we are clear and at
+   * warp" was not.
+   */
+  escapeToWarp() {
+    const here = this.locationId;
+    const options = this.galaxy.neighbors(here)
+      .filter((s) => s && s.id !== here)
+      .sort((a, b) => distanceLy(here, a.id) - distanceLy(here, b.id));
+
+    for (const dest of options) {
+      // Flat out. Nobody breaks off a firefight at cruising speed.
+      const best = this.ship.cls.maxWarp ?? 8;
+      const result = this.setCourse(dest.id, best);
+      if (result.ok) {
+        this.pushLog(`Clear of them and running for ${dest.name}.`, 'helm');
+        return result;
+      }
+    }
+
+    this.officerSays('helm',
+      'We are clear of them, Captain, but we are not going anywhere — holding station.',
+      'report');
+    return { ok: false, error: 'nowhere to run' };
   }
 
   // ------------------------------------------------------------------ missions
@@ -1639,7 +1695,14 @@ export class Game {
       // ship called it the IKS Rotarran.
       const ships = (spec.ships ?? []).map((cls, i) =>
         new Ship(cls, { name: hostileName(spec.faction, i), faction: spec.faction }));
-      this.pendingCombat = { ships, returnToMission: true };
+      // No `returnToMission` flag. There used to be one, set here and read by
+      // nobody: the consumer in `update` destructures `{ ships }` and drops the
+      // rest. It was not a missing feature either — a mission stage hangs on
+      // the bridge's own side strip (`missionPanel`), so a fight that finishes
+      // and puts you back on the bridge has already put you back on the
+      // mission. A field naming an intention nothing acts on is worse than no
+      // field: it reads like the behaviour is handled.
+      this.pendingCombat = { ships };
     }
 
     if (result.complete) {
