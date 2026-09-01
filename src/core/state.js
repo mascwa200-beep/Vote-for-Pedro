@@ -15,6 +15,7 @@ import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
+import { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer } from '../sim/duty.js';
 import { resolveHail, STANDING_EFFECTS, HAIL_ENDING } from '../sim/diplomacy.js';
 import { applyAbility, applySignature, applyDevice } from '../sim/powers.js';
 
@@ -118,6 +119,21 @@ export class Game {
     const classId = options.shipClass ?? eraDef?.shipClass ?? 'constitution';
     this.progress = new CaptainProgress(options.progress);
     this.loadout = startingLoadout(getShipClass(classId));
+
+    // The rest of the crew. Sized from the hull's complement rather than a
+    // constant — a runabout does not carry a xenobiologist and a cartographer
+    // and a yeoman. See docs/RESEARCH.md §18.
+    //
+    // Built from its OWN stream, derived from the seed, rather than from
+    // `this.rng`. Drawing a dozen names out of the main stream shifts every
+    // random number the game makes afterwards, which silently re-rolls every
+    // seeded outcome in the campaign — the balance tests noticed within a
+    // minute of it being written. A derived stream gives the same people for
+    // the same seed forever and leaves everything downstream exactly as it was.
+    this.dutyRoster = buildDutyRoster(
+      new RNG(hashSeed(`duty:${this.seed}`)), getShipClass(classId)?.crew ?? 0,
+    );
+    this.assignments = [];
     this.ship = new Ship(classId, {
       name: options.shipName ?? 'Enterprise',
       registry: options.registry ?? FEDERATION_REGISTRIES[0],
@@ -1050,6 +1066,12 @@ export class Game {
     if (!t) return;
     this.locationId = t.to.id;
     this.clock.advanceStardate(t.totalHours / 24);
+    // A detail sent out before a two-day voyage is finished when you arrive.
+    // The transit is where the bulk of a commission's hours actually pass, and
+    // nothing aboard used to notice them going by.
+    for (const back of advanceAssignments(this, t.totalHours, this.rng)) {
+      this.pushLog(`${back.assignment.name} finished on the way. ${back.text}`, 'comms');
+    }
     this.transit = null;
     // Arriving somewhere new is not arriving in orbit. The order to make orbit
     // is a separate one and the captain gives it.
@@ -2303,6 +2325,8 @@ export class Game {
       campaign: this.campaign?.save() ?? null,
       stores: this.stores,
       fabrication: this.fabrication,
+      dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
+      assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
 
@@ -2401,6 +2425,14 @@ export class Game {
     const finished = fighting ? null : advanceFabrication(this, pending);
     if (finished) {
       this.pushLog(`${finished.recipe.name} completed while you were away. ${finished.text}`, 'engineering');
+    }
+
+    // And the details that were out. Same clock, same reason: a survey party
+    // sent out on Tuesday is back on Thursday whether anybody was watching.
+    if (!fighting) {
+      for (const back of advanceAssignments(this, pending, this.rng)) {
+        this.pushLog(`${back.assignment.name} finished while you were away. ${back.text}`, 'comms');
+      }
     }
 
     // One stardate unit is roughly a day.
@@ -2627,7 +2659,18 @@ export class Game {
     if (this.engagement && !this.engagement.over) {
       return { ok: false, error: 'Not while we are under fire, Captain.' };
     }
-    if (!this.fabrication) return { ok: false, reason: 'Nothing on the bench, Captain.' };
+    // The details out are not the machine shop, and they do not wait on it.
+    // Spending hours is spending hours: this used to sit below the guard
+    // beneath it, so a survey party sent out on a ship with nothing on the
+    // bench never came back at all.
+    const back = advanceAssignments(this, hours, this.rng);
+    if (!this.fabrication) {
+      if (back.length) {
+        this.clock.advanceStardate(hours / 24);
+        return { ok: true, done: null, back, remaining: 0 };
+      }
+      return { ok: false, reason: 'Nothing on the bench, Captain.' };
+    }
     const done = advanceFabrication(this, hours);
     this.clock.advanceStardate(hours / 24);
     return { ok: true, done, remaining: this.fabrication?.hoursRemaining ?? 0 };
@@ -2724,6 +2767,13 @@ export class Game {
 
     g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };
     g.fabrication = data.fabrication ?? null;
+    // The roster is rebuilt from the seed by the constructor, so a save that
+    // predates it still has one. What loads here is what happened TO them:
+    // who is out, who is in sickbay, and who did not come back.
+    if (Array.isArray(data.dutyRoster) && data.dutyRoster.length) {
+      g.dutyRoster = data.dutyRoster.map((p) => new DutyOfficer(p));
+    }
+    g.assignments = Array.isArray(data.assignments) ? data.assignments : [];
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
 

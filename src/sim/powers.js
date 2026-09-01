@@ -16,6 +16,7 @@
 
 import { FACINGS } from './ship.js';
 import { ABILITIES } from './officers.js';
+import { specialistBonusFor } from './duty.js';
 
 /** The weakest facing on a ship, for a scan report. */
 export function weakestFacing(ship) {
@@ -54,8 +55,13 @@ export function applyAbility(game, officer, ability) {
   officer.startCooldown(a.id);
 
   if (a.mods) {
+    // The specialists at the back of the bridge get a say in how long it holds.
+    // A science officer with a sensor analyst and a xenobiologist aboard gets
+    // more out of the same order than one working alone — and loses it when
+    // they are out on a detail or in sickbay.
+    const support = specialistBonusFor(game, officer.station);
     game.ship.addBuff({
-      id: a.id, label: a.name, until: a.duration || 12, mods: a.mods,
+      id: a.id, label: a.name, until: (a.duration || 12) * support, mods: a.mods,
     });
   }
 

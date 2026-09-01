@@ -56,6 +56,9 @@ export const LIMITS = {
  */
 export const LEGAL_MODES = new Set(['bridge', 'transit', 'combat', 'mission', 'encounter']);
 
+/** The states a member of the duty roster can be in. Mirrors `DutyOfficer`. */
+export const DUTY_STATES = new Set(['aboard', 'assigned', 'recovering', 'lost']);
+
 const SEVERITY = { fatal: 0, error: 1, warn: 2 };
 
 /** Sort worst-first. Exported so callers report the same order the fuzzer does. */
@@ -399,6 +402,41 @@ export function checkGame(game) {
       r.must(ok(lost) && lost >= 0 && lost <= (game.ship?.maxCrew ?? Infinity),
         'game.lastCombat.crew', 'error',
         `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
+    }
+
+    // The duty roster, and the details that are out on it.
+    //
+    // These are people, and a fight can hurt them: somebody counted as both
+    // lost and out on an assignment is a casualty who is still working, and a
+    // detail naming somebody who is not on the roster pays out to nobody.
+    const roster = game.dutyRoster ?? [];
+    for (const person of roster) {
+      r.must(DUTY_STATES.has(person.state), 'duty.state', 'error',
+        `${person.name} is "${person.state}", which is not a state`, person.name);
+      r.must(ok(person.expertise) && ok(person.discipline), 'duty.scores', 'error',
+        `${person.name} has scores of ${person.expertise}/${person.discipline}`, person.name);
+    }
+    const assigned = new Set();
+    for (const job of game.assignments ?? []) {
+      r.must(ok(job.hoursRemaining), 'duty.assignment.hours', 'error',
+        `a detail has ${job.hoursRemaining} hours left on it`);
+      for (const id of job.team ?? []) {
+        const person = roster.find((p) => p.id === id);
+        r.must(!!person, 'duty.assignment.ghost', 'error',
+          `a detail names ${id}, who is not aboard`);
+        r.must(person?.state !== 'lost', 'duty.assignment.dead', 'error',
+          `${person?.name ?? id} is out on a detail and also dead`, person?.name);
+        r.must(!assigned.has(id), 'duty.assignment.twice', 'error',
+          `${person?.name ?? id} is out on two details at once`, person?.name);
+        assigned.add(id);
+      }
+    }
+    // Somebody marked as out who is not on any detail is a person the roster
+    // will never offer again — the state leaks and the slot never comes back.
+    for (const person of roster) {
+      if (person.state !== 'assigned') continue;
+      r.must(assigned.has(person.id), 'duty.stranded', 'error',
+        `${person.name} is marked as out and is on no detail`, person.name);
     }
 
     r.must(ok(game.latinum) && game.latinum >= 0, 'game.latinum', 'error',

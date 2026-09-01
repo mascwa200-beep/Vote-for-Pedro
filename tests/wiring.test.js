@@ -34,6 +34,11 @@ import { EPISODES } from '../src/missions/episodes/index.js';
 import { CaptainProgress, SKILL_LIST, combatXP } from '../src/sim/skills.js';
 import { Reputation, REP_TIERS, MAX_TIER, TRACK_LIST } from '../src/rules/reputation.js';
 import { Ledger } from '../src/core/ledger.js';
+import {
+  SPECIALITIES, DIVISIONS, specialitiesIn, rosterSizeFor,
+  beginAssignment, advanceAssignments, dutySlots, specialistBonusFor,
+} from '../src/sim/duty.js';
+import { checkAll } from '../src/sim/invariants.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -1274,5 +1279,173 @@ describe('the sector map is a volume', () => {
     // And the lane is actually off the plane, or this proves nothing.
     assert.ok(seen.some((z) => Math.abs(z) > 0.5),
       `Sol to Vulcan is flat: ${seen.map((z) => z.toFixed(2)).join(', ')}`);
+  });
+});
+
+// ============================================== the other four hundred and twenty
+
+describe('the duty roster', () => {
+  test('every speciality is a job somebody in the show actually had', () => {
+    // §18: the divisions are command, operations and sciences, and the trap is
+    // communications — Uhura wears operations red, not command gold, and so do
+    // Scott and Yeoman Rand. A table built from bridge stations alone puts the
+    // comms officer and the yeoman in the wrong division.
+    assert.equal(SPECIALITIES.communications_officer.division, 'operations');
+    assert.equal(SPECIALITIES.yeoman.division, 'operations');
+    assert.equal(SPECIALITIES.engineer.division, 'operations');
+    assert.equal(SPECIALITIES.navigator.division, 'command');
+    assert.equal(SPECIALITIES.surgeon.division, 'sciences');
+    for (const division of DIVISIONS) {
+      assert.ok(specialitiesIn(division).length >= 3,
+        `${division} has only ${specialitiesIn(division).length} specialities`);
+    }
+  });
+
+  test('the roster is sized from the hull, not from a constant', () => {
+    // A runabout does not carry a xenobiologist and a cartographer and a yeoman.
+    const big = rosterSizeFor(430);
+    const small = rosterSizeFor(4);
+    assert.ok(big > small, `${big} aboard a Constitution against ${small} aboard a runabout`);
+    assert.ok(small >= 2, 'the smallest hull has nobody at all');
+    assert.ok(big <= 14, `${big} named specialists is a spreadsheet`);
+  });
+
+  test('the same seed gives the same people, forever', () => {
+    // They are saved, and a save has to load into the ship it was written from.
+    const a = gameWith({ seed: 31337n });
+    const b = gameWith({ seed: 31337n });
+    assert.deepEqual(a.dutyRoster.map((p) => `${p.name}/${p.speciality}`),
+      b.dutyRoster.map((p) => `${p.name}/${p.speciality}`));
+    const other = gameWith({ seed: 31338n });
+    assert.notDeepEqual(a.dutyRoster.map((p) => p.name), other.dutyRoster.map((p) => p.name));
+  });
+
+  test('building the roster does not disturb anything else the seed decides', () => {
+    // Drawing a dozen names out of the main RNG shifts every random number the
+    // game makes afterwards, which silently re-rolls the whole campaign. The
+    // roster has its own stream derived from the seed; this is the guard on
+    // somebody simplifying that away.
+    // Two hulls with very different complements get very differently sized
+    // rosters. If those names came out of the main stream, the two games would
+    // be at different points in it — so the main stream matching proves the
+    // roster is drawn from somewhere else.
+    const big = gameWith({ seed: 777n, shipClass: 'constitution' });
+    const small = gameWith({ seed: 777n, shipClass: 'runabout' });
+    assert.notEqual(big.dutyRoster.length, small.dutyRoster.length,
+      'both hulls got the same size roster, so this proves nothing');
+    assert.deepEqual(
+      [big.rng.float(), big.rng.float(), big.rng.float()],
+      [small.rng.float(), small.rng.float(), small.rng.float()],
+      'the roster ate draws out of the main stream',
+    );
+  });
+
+  test('a detail goes out, takes time, and comes back with something', () => {
+    const g = gameWith({ seed: 2024n });
+    const cart = g.dutyRoster.find((p) => p.speciality === 'cartographer')
+      ?? g.dutyRoster.find((p) => p.available);
+    const xpBefore = g.progress.xp;
+
+    const sent = beginAssignment(g, 'survey_detail', [cart.id]);
+    assert.equal(sent.ok, true, sent.reason);
+    assert.equal(cart.state, 'assigned', 'the specialist is still standing about');
+    assert.equal(g.assignments.length, 1);
+
+    // Not back yet.
+    advanceAssignments(g, 4, g.rng);
+    assert.equal(g.assignments.length, 1, 'a survey came back in four hours');
+
+    advanceAssignments(g, 40, g.rng);
+    assert.equal(g.assignments.length, 0, 'the detail never came back');
+    assert.notEqual(cart.state, 'assigned', 'the specialist is still marked as out');
+    assert.ok(g.progress.xp > xpBefore, 'the detail brought back nothing at all');
+  });
+
+  test('who you send changes what they bring back', () => {
+    // The whole point of a roster: a matched speciality is worth something
+    // measurable, or naming people is decoration.
+    const suited = gameWith({ seed: 8080n });
+    const wrong = gameWith({ seed: 8080n });
+    const right = suited.dutyRoster.find((p) => p.speciality === 'cartographer');
+    const other = wrong.dutyRoster.find((p) => p.speciality !== 'cartographer');
+    if (!right) return;   // this hull's roster has no cartographer aboard
+
+    for (const [g, who] of [[suited, right], [wrong, other]]) {
+      beginAssignment(g, 'survey_detail', [who.id]);
+      advanceAssignments(g, 40, g.rng);
+    }
+    assert.ok(suited.progress.xp > wrong.progress.xp,
+      `the cartographer brought back ${suited.progress.xp} and the ${other.label} ${wrong.progress.xp}`);
+  });
+
+  test('a fight refuses to let you send a working party out', () => {
+    const g = gameWith();
+    g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Test' })]);
+    const sent = beginAssignment(g, 'survey_detail', [g.dutyRoster[0].id]);
+    assert.equal(sent.ok, false, 'a survey party was sent out during a firefight');
+    assert.match(sent.reason, /under fire/i);
+  });
+
+  test('the ship can only spare so many details at once', () => {
+    const g = gameWith();
+    const slots = dutySlots(g);
+    assert.ok(slots >= 1 && slots <= 4, `${slots} details at once`);
+
+    // And the number falls as people are lost — that is the cost of a casualty
+    // beyond the person.
+    for (const p of g.dutyRoster.slice(0, Math.max(0, g.dutyRoster.length - 2))) p.state = 'lost';
+    assert.ok(dutySlots(g) <= slots, 'losing the roster cost the ship nothing');
+  });
+
+  test('a specialist aboard makes a station better, and stops when they leave', () => {
+    // Assert the effect. A specialist who changes no number is a name on a list.
+    const g = gameWith({ seed: 5150n });
+    const analyst = g.dutyRoster.find((p) => p.station === 'science');
+    if (!analyst) return;
+
+    const withThem = specialistBonusFor(g, 'science');
+    assert.ok(withThem > 1, 'a specialist at the station is worth nothing');
+
+    // Everyone at that station out on details. The bonus is capped, so moving
+    // one of three changes nothing — the honest test is that the support goes
+    // away entirely when the people do.
+    const atStation = g.dutyRoster.filter((p) => p.station === 'science');
+    for (const p of atStation) p.state = 'assigned';
+    assert.equal(specialistBonusFor(g, 'science'), 1,
+      'specialists out on details are still helping from orbit');
+
+    for (const p of atStation) p.state = 'lost';
+    assert.equal(specialistBonusFor(g, 'science'), 1, 'the dead are still helping');
+
+    // And back aboard, it comes back.
+    for (const p of atStation) p.state = 'aboard';
+    assert.equal(specialistBonusFor(g, 'science'), withThem);
+    void analyst;
+  });
+
+  test('the roster survives a save and remembers what happened to it', () => {
+    const g = gameWith({ seed: 606n });
+    g.dutyRoster[0].state = 'lost';
+    g.dutyRoster[1].state = 'recovering';
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+
+    assert.deepEqual(back.dutyRoster.map((p) => p.name), g.dutyRoster.map((p) => p.name));
+    assert.equal(back.dutyRoster[0].state, 'lost', 'the dead came back');
+    assert.equal(back.dutyRoster[1].state, 'recovering');
+  });
+
+  test('the checker objects to a detail crewed by ghosts', () => {
+    const g = gameWith();
+    assert.deepEqual(checkAll(g, { arenaRadius: 3000 }), []);
+
+    g.assignments = [{ assignmentId: 'survey_detail', team: ['nobody_at_all'], hoursRemaining: 4 }];
+    const said = checkAll(g, { arenaRadius: 3000 }).map((v) => v.code);
+    assert.ok(said.includes('duty.assignment.ghost'), JSON.stringify(said));
+
+    // And to somebody marked as out who is on no detail at all — a leak that
+    // takes a person off the roster permanently.
+    g.assignments = [];
+    g.dutyRoster[0].state = 'assigned';
+    assert.ok(checkAll(g, { arenaRadius: 3000 }).some((v) => v.code === 'duty.stranded'));
   });
 });

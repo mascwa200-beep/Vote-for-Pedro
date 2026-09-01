@@ -881,6 +881,60 @@ in the reference material rather than quoted from it.
 
 ---
 
+## 18. The other four hundred and twenty people
+
+§1 records the Constitution's complement as 430 and the build uses it. What that
+number is made of is published too, and it is more useful than the total.
+
+**Forty-three officers and three hundred and eighty-seven enlisted.** The split
+comes from a display graphic seen on screen, and it is the figure to build on:
+the bridge has about ten people at stations, so roughly thirty more officers are
+aboard doing something, and the enlisted are the ship's body. A duty roster
+should be drawn from the officers, because those are the people a captain would
+know by name, and it should be well short of thirty — a captain knows the ones
+who matter to them.
+
+The 203 figure from the original pitch and the 430 from Roddenberry's 1967
+revision of *The Star Trek Guide* are already reconciled in §1 in favour of 430;
+nothing here changes that.
+
+**Three divisions, and the game is already wearing their colours.** In the
+2260s Starfleet organised into command, operations and sciences, and the bridge
+this game draws already puts officers in the right shirts:
+
+| Division | Colour | What it covers |
+|---|---|---|
+| Command | Gold | Captains, executive officers, adjutants, and the pilots — helmsmen and navigators |
+| Operations | Red | Security, engineering, maintenance, communications, yeomen, staff officers |
+| Sciences | Blue | Sensors, research, theoretical and physical laboratory work, biological studies, technicians, medics, surgeons |
+
+**The one that catches people out is communications.** Uhura wears operations
+red, not command gold — communications is an operations speciality. So does
+Scott, and so does Yeoman Rand. The division a job belongs to is not always the
+one its bridge station suggests, and a speciality table built from the stations
+alone would get comms and the yeoman wrong.
+
+**What the build takes from this.** The three divisions and the specialities
+named inside them become the duty-officer speciality table, so a specialist is a
+job the show actually named rather than one invented to fill a grid. The 43/387
+split sets the size of the roster: a handful of named specialists out of the
+forty-three, scaled to the hull, and not one row per crewman — the other three
+hundred and eighty-seven stay the number they have always been, which is what
+the casualty count has always counted.
+
+What it does not take is a rank structure for them. `Officer` already carries
+rank, station and four scores, and a duty officer is a lighter record of the
+same shape; inventing a parallel hierarchy would be a second system that means
+the same thing.
+
+Sources: [Memory Alpha — USS Enterprise (NCC-1701)](https://memory-alpha.fandom.com/wiki/USS_Enterprise_(NCC-1701)),
+[Memory Alpha — Command division](https://memory-alpha.fandom.com/wiki/Command_division),
+[Memory Alpha — Operations division](https://memory-alpha.fandom.com/wiki/Operations_division),
+[Memory Alpha — Sciences division](https://memory-alpha.fandom.com/wiki/Sciences_division),
+[Memory Alpha — USS Enterprise (NCC-1701) personnel](https://memory-alpha.fandom.com/wiki/USS_Enterprise_(NCC-1701)_personnel)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
