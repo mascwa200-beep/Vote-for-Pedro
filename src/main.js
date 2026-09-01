@@ -1743,30 +1743,18 @@ class App {
     ], [button('Cancel', () => this.closeModal(), { color: 'ghost' })]);
   }
 
-  /** Apply what a completed reputation project actually gives you. */
-  applyReputationGrant(trackId, project) {
-    const g = this.game;
-    const grant = project.grant ?? {};
-
-    if (grant.console) {
-      g.loadout.acquire(grant.console);
-      g.pushLog(`${CONSOLES[grant.console]?.name ?? grant.console} received from ${trackId}.`, 'engineering');
-    }
-    if (grant.torpedoes) {
-      g.ship.torpedoes = Math.min(g.ship.maxTorpedoes, g.ship.torpedoes + grant.torpedoes);
-    }
-    if (grant.antimatter) {
-      g.ship.antimatter = Math.min(100, g.ship.antimatter + grant.antimatter);
-    }
-    if (grant.perk === 'cloak') {
-      g.ship.cloakCapable = true;
-      g.pushLog('A cloaking device has been installed. Nobody has signed for it.', 'engineering');
-    }
-    if (grant.title) {
-      g.pushLog(`You are now styled "${grant.title}".`, 'captain');
-    }
-    g.applyAllMods();
-    this.showMessage(project.name, [project.text]);
+  /**
+   * Buy a reputation project and say what arrived.
+   *
+   * What the project GIVES is in `Game.buyProject`, so it happens whether or
+   * not anybody is looking at it. This is the announcement.
+   */
+  buyProject(trackId, projectId) {
+    const r = this.game.buyProject(trackId, projectId);
+    if (!r.ok) { audio.play('ui_deny'); return false; }
+    audio.play('ui_confirm');
+    this.showMessage(r.project.name, [r.project.text, ...r.lines]);
+    return true;
   }
 
   // ------------------------------------------------------------ persistence

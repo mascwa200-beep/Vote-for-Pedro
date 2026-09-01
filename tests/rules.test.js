@@ -718,3 +718,87 @@ describe('continuous outcome resolution', () => {
     assert.ok(!/rules\/dice\.js/.test(combat), 'combat still imports the dice');
   });
 });
+
+// ------------------------------------- reputation projects deliver what they say
+
+// `reputation.buy` deducts the marks and records the perk. Everything a
+// project actually GIVES — the torpedoes, the antimatter, the console, the
+// cloaking device nobody signed for — was applied inside src/main.js, so a
+// project bought without a screen attached took the payment and handed over
+// nothing. The same shape of bug as the whole power tray living in the UI.
+
+/** A captain with enough standing in one track to buy anything in it. */
+function flush(trackId, tier = 5) {
+  const g = new Game({ seed: 606n, crewMode: 'original' });
+  const t = g.reputation.track(trackId);
+  t.tier = tier;
+  t.marks = 5000;
+  return g;
+}
+
+test('a reputation project hands over what it promised', () => {
+  // Torpedoes, from an empty magazine.
+  {
+    const g = flush('federation', 1);
+    g.ship.torpedoes = 0;
+    const r = g.buyProject('federation', 'fed_t1_torpedoes');
+    assert.ok(r.ok, r.reason);
+    assert.ok(g.ship.torpedoes > 0, 'the magazine is still empty');
+    assert.ok(r.lines.length > 0, 'nothing was said about it');
+  }
+  // A console, into stores. It arrives in inventory rather than fitted: what
+  // hangs in which slot is the captain's decision, not the quartermaster's.
+  {
+    const g = flush('federation', 1);
+    const before = g.loadout.inventory.length;
+    assert.ok(g.buyProject('federation', 'fed_t1_console').ok);
+    assert.ok(g.loadout.inventory.length > before, 'the console never arrived');
+    assert.ok(g.loadout.inventory.includes('shield_emitters'));
+  }
+  // The Romulan cloak, which is a capability the ship did not have.
+  {
+    const g = flush('romulan', 3);
+    assert.equal(g.ship.cloakCapable, false, 'a Constitution came with a cloak');
+    assert.ok(g.buyProject('romulan', 'rom_t3_cloak').ok);
+    assert.equal(g.ship.cloakCapable, true, 'the cloaking device was never installed');
+    assert.ok(g.reputation.has('cloak'));
+  }
+  // And a title is recorded on the track.
+  {
+    const g = flush('klingon', 5);
+    assert.ok(g.buyProject('klingon', 'kdf_t5_ally').ok);
+    assert.ok(g.reputation.allTitles.includes('Friend of the Empire'));
+  }
+});
+
+test('a project cannot be bought twice, or without the marks', () => {
+  const g = flush('federation', 1);
+  assert.ok(g.buyProject('federation', 'fed_t1_torpedoes').ok);
+  assert.equal(g.buyProject('federation', 'fed_t1_torpedoes').ok, false, 'bought twice');
+
+  const poor = new Game({ seed: 607n, crewMode: 'original' });
+  poor.reputation.track('federation').tier = 1;
+  poor.reputation.track('federation').marks = 0;
+  assert.equal(poor.buyProject('federation', 'fed_t1_torpedoes').ok, false, 'bought on credit');
+
+  assert.equal(g.buyProject('federation', 'no_such_project').ok, false);
+  assert.equal(g.buyProject('no_such_track', 'fed_t1_torpedoes').ok, false);
+});
+
+test('every project in every track can be bought and pays out', () => {
+  // The whole table, so a grant shape nobody handles cannot be added quietly.
+  for (const [trackId, track] of Object.entries(REP_TRACKS)) {
+    for (const p of track.projects ?? []) {
+      const g = flush(trackId);
+      const r = g.buyProject(trackId, p.id);
+      assert.ok(r.ok, `${trackId}/${p.id}: ${r.reason}`);
+      // A perk-only project has nothing to announce, and that is fine — the
+      // perk itself is the payload and the set is what reads it.
+      if (p.grant?.perk) assert.ok(g.reputation.has(p.grant.perk), `${p.id} granted no perk`);
+      if (p.grant?.title) assert.ok(g.reputation.allTitles.includes(p.grant.title));
+      if (p.grant?.console || p.grant?.torpedoes || p.grant?.antimatter || p.grant?.title) {
+        assert.ok(r.lines.length > 0, `${p.id} delivered silently`);
+      }
+    }
+  }
+});

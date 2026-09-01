@@ -24903,7 +24903,7 @@ const { emit } = __require("src/core/events.js");
 const { Ship } = __require("src/sim/ship.js");
 const { Crew, Officer } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP } = __require("src/sim/skills.js");
-const { Loadout, startingLoadout } = __require("src/sim/loadout.js");
+const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
 const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
 const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
@@ -25152,6 +25152,47 @@ class Game {
       );
       emit('reputation:tier', up);
     }
+  }
+
+  /**
+   * Spend marks on a reputation project, and receive what it grants.
+   *
+   * `reputation.buy` deducts the cost and records the perk. What the project
+   * actually GIVES you — the torpedoes, the antimatter, the console, the
+   * cloaking device nobody signed for — was applied in src/main.js, so a
+   * project bought without a screen attached took the marks and delivered
+   * nothing. Same shape as the power tray, and the same fix.
+   */
+  buyProject(trackId, projectId) {
+    const project = this.reputation?.buy(trackId, projectId);
+    if (!project) return { ok: false, reason: 'Not available, Captain.' };
+
+    const grant = project.grant ?? {};
+    const lines = [];
+    if (grant.console) {
+      this.loadout.acquire(grant.console);
+      const name = CONSOLES[grant.console]?.name ?? grant.console;
+      lines.push(`${name} received from ${trackId}.`);
+    }
+    if (grant.torpedoes) {
+      const before = this.ship.torpedoes;
+      this.ship.torpedoes = Math.min(this.ship.maxTorpedoes, before + grant.torpedoes);
+      lines.push(`Magazine restocked: ${this.ship.torpedoes - before} torpedoes aboard.`);
+    }
+    if (grant.antimatter) {
+      this.ship.antimatter = Math.min(100, this.ship.antimatter + grant.antimatter);
+      lines.push(`Antimatter topped up to ${Math.round(this.ship.antimatter)}%.`);
+    }
+    if (grant.perk === 'cloak') {
+      this.ship.cloakCapable = true;
+      lines.push('A cloaking device has been installed. Nobody has signed for it.');
+    }
+    if (grant.title) lines.push(`You are now styled "${grant.title}".`);
+
+    for (const line of lines) this.pushLog(line, 'engineering');
+    this.applyAllMods();
+    emit('reputation:project', { trackId, project });
+    return { ok: true, project, lines };
   }
 
   get location() { return this.galaxy.get(this.locationId); }
@@ -29722,11 +29763,7 @@ function reputationScreen(app) {
     for (const p of available) {
       const afford = t.canAfford(p);
       nodes.push(button(p.name, afford ? tap(() => {
-        const bought = g.reputation.buy(track.id, p.id);
-        if (bought) {
-          app.applyReputationGrant(track.id, bought);
-          audio.play('ui_confirm');
-        }
+        app.buyProject(track.id, p.id);
         app.render();
       }, 'ui_confirm') : null, {
         color: afford ? 'amber' : 'ghost',
@@ -31510,30 +31547,18 @@ class App {
     ], [button('Cancel', () => this.closeModal(), { color: 'ghost' })]);
   }
 
-  /** Apply what a completed reputation project actually gives you. */
-  applyReputationGrant(trackId, project) {
-    const g = this.game;
-    const grant = project.grant ?? {};
-
-    if (grant.console) {
-      g.loadout.acquire(grant.console);
-      g.pushLog(`${CONSOLES[grant.console]?.name ?? grant.console} received from ${trackId}.`, 'engineering');
-    }
-    if (grant.torpedoes) {
-      g.ship.torpedoes = Math.min(g.ship.maxTorpedoes, g.ship.torpedoes + grant.torpedoes);
-    }
-    if (grant.antimatter) {
-      g.ship.antimatter = Math.min(100, g.ship.antimatter + grant.antimatter);
-    }
-    if (grant.perk === 'cloak') {
-      g.ship.cloakCapable = true;
-      g.pushLog('A cloaking device has been installed. Nobody has signed for it.', 'engineering');
-    }
-    if (grant.title) {
-      g.pushLog(`You are now styled "${grant.title}".`, 'captain');
-    }
-    g.applyAllMods();
-    this.showMessage(project.name, [project.text]);
+  /**
+   * Buy a reputation project and say what arrived.
+   *
+   * What the project GIVES is in `Game.buyProject`, so it happens whether or
+   * not anybody is looking at it. This is the announcement.
+   */
+  buyProject(trackId, projectId) {
+    const r = this.game.buyProject(trackId, projectId);
+    if (!r.ok) { audio.play('ui_deny'); return false; }
+    audio.play('ui_confirm');
+    this.showMessage(r.project.name, [r.project.text, ...r.lines]);
+    return true;
   }
 
   // ------------------------------------------------------------ persistence

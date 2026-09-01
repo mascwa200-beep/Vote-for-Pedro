@@ -517,11 +517,7 @@ export function reputationScreen(app) {
     for (const p of available) {
       const afford = t.canAfford(p);
       nodes.push(button(p.name, afford ? tap(() => {
-        const bought = g.reputation.buy(track.id, p.id);
-        if (bought) {
-          app.applyReputationGrant(track.id, bought);
-          audio.play('ui_confirm');
-        }
+        app.buyProject(track.id, p.id);
         app.render();
       }, 'ui_confirm') : null, {
         color: afford ? 'amber' : 'ghost',

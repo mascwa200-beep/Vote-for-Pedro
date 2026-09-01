@@ -8,7 +8,7 @@ import { emit } from './events.js';
 import { Ship } from '../sim/ship.js';
 import { Crew, Officer } from '../sim/officers.js';
 import { CaptainProgress, combatXP } from '../sim/skills.js';
-import { Loadout, startingLoadout } from '../sim/loadout.js';
+import { Loadout, startingLoadout, CONSOLES } from '../sim/loadout.js';
 import { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } from '../sim/combat.js';
 import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } from '../sim/away.js';
 import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
@@ -261,6 +261,47 @@ export class Game {
       );
       emit('reputation:tier', up);
     }
+  }
+
+  /**
+   * Spend marks on a reputation project, and receive what it grants.
+   *
+   * `reputation.buy` deducts the cost and records the perk. What the project
+   * actually GIVES you — the torpedoes, the antimatter, the console, the
+   * cloaking device nobody signed for — was applied in src/main.js, so a
+   * project bought without a screen attached took the marks and delivered
+   * nothing. Same shape as the power tray, and the same fix.
+   */
+  buyProject(trackId, projectId) {
+    const project = this.reputation?.buy(trackId, projectId);
+    if (!project) return { ok: false, reason: 'Not available, Captain.' };
+
+    const grant = project.grant ?? {};
+    const lines = [];
+    if (grant.console) {
+      this.loadout.acquire(grant.console);
+      const name = CONSOLES[grant.console]?.name ?? grant.console;
+      lines.push(`${name} received from ${trackId}.`);
+    }
+    if (grant.torpedoes) {
+      const before = this.ship.torpedoes;
+      this.ship.torpedoes = Math.min(this.ship.maxTorpedoes, before + grant.torpedoes);
+      lines.push(`Magazine restocked: ${this.ship.torpedoes - before} torpedoes aboard.`);
+    }
+    if (grant.antimatter) {
+      this.ship.antimatter = Math.min(100, this.ship.antimatter + grant.antimatter);
+      lines.push(`Antimatter topped up to ${Math.round(this.ship.antimatter)}%.`);
+    }
+    if (grant.perk === 'cloak') {
+      this.ship.cloakCapable = true;
+      lines.push('A cloaking device has been installed. Nobody has signed for it.');
+    }
+    if (grant.title) lines.push(`You are now styled "${grant.title}".`);
+
+    for (const line of lines) this.pushLog(line, 'engineering');
+    this.applyAllMods();
+    emit('reputation:project', { trackId, project });
+    return { ok: true, project, lines };
   }
 
   get location() { return this.galaxy.get(this.locationId); }
