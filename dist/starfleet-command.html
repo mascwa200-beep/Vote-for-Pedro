@@ -13823,12 +13823,6 @@ const ABILITIES = {
     mods: { repairRate: 4.0 }, special: 'extinguish',
     say: 'Damage control parties away.',
   },
-  ramming_speed: {
-    id: 'ramming_speed', dept: 'engineering', rank: 3, name: 'Overload Impulse',
-    order: 'All available power to engines', cooldown: 60, duration: 15,
-    mods: { impulse: 1.6, turn: 1.3 },
-    say: 'She’ll take it — for fifteen seconds.',
-  },
   eject_core: {
     id: 'eject_core', dept: 'engineering', rank: 3, name: 'Eject Warp Core',
     order: 'Eject the core', cooldown: 0, duration: 0, special: 'eject',
@@ -13883,13 +13877,86 @@ const ABILITIES = {
     mods: { damage: 1.15, repairRate: 1.5, accuracy: 1.1 },
     say: 'You heard the captain!',
   },
+  hold_formation: {
+    // The only power in the game that speaks to an ally. Allies arrive on a
+    // distress call and there has never been anything to say to them.
+    id: 'hold_formation', dept: 'command', rank: 2, name: 'Hold Formation',
+    order: 'Hold formation', cooldown: 50, duration: 20,
+    mods: { defense: 1.15, accuracy: 1.1 }, special: 'formation',
+    say: 'Signalling them to hold station on us.',
+  },
+
+  // --- Medical ---
+  //
+  // The first abilities in the game whose payoff is crew and casualties rather
+  // than hull and shields, which is the test of whether the department was
+  // worth having. See docs/RESEARCH.md §17.
+  casualty_teams: {
+    id: 'casualty_teams', dept: 'medical', rank: 1, name: 'Casualty Teams',
+    order: 'Casualty teams to the decks', cooldown: 45, duration: 30,
+    mods: { crewProtect: 0.35 },
+    say: 'Casualty teams to every deck.',
+  },
+  stimulants: {
+    id: 'stimulants', dept: 'medical', rank: 2, name: 'Stimulants',
+    order: 'Break out the stimulants', cooldown: 60, duration: 20,
+    mods: { repairRate: 1.4, accuracy: 1.08 },
+    say: 'They will feel this tomorrow. Not today.',
+  },
+  back_to_duty: {
+    id: 'back_to_duty', dept: 'medical', rank: 2, name: 'Back to Duty',
+    order: 'Clear someone for duty', cooldown: 90, duration: 0,
+    special: 'return_officer',
+    say: 'I can give you one of them back. One.',
+  },
+  surgical_bay: {
+    id: 'surgical_bay', dept: 'medical', rank: 3, name: 'Surgical Bay',
+    order: 'Open the surgical bay', cooldown: 120, duration: 40,
+    mods: { crewProtect: 0.5 }, special: 'treat_wounded',
+    say: 'Surgical bay open. Send them down.',
+  },
+
+  // --- Operations: the helm and communications ---
+  attack_pattern_delta: {
+    id: 'attack_pattern_delta', dept: 'operations', rank: 1, name: 'Attack Pattern Delta',
+    order: 'Attack pattern delta', cooldown: 35, duration: 15,
+    mods: { defense: 1.4, turn: 1.2 },
+    say: 'Pattern delta, aye.',
+  },
+  traffic_analysis: {
+    id: 'traffic_analysis', dept: 'operations', rank: 2, name: 'Traffic Analysis',
+    order: 'Read their signal traffic', cooldown: 50, duration: 0,
+    special: 'read_intent',
+    say: 'Reading their signal traffic now.',
+  },
+  false_signal: {
+    id: 'false_signal', dept: 'operations', rank: 2, name: 'False Signal',
+    order: 'Put a false signal out', cooldown: 55, duration: 12,
+    special: 'false_signal',
+    say: 'Broadcasting a ship that is not there.',
+  },
+  ramming_speed: {
+    // Moved here from engineering. When it is ordered, it is ordered to the
+    // helm — it sat in the engineering table because that is where the power
+    // it draws comes from, which is not the same thing as who flies it.
+    id: 'ramming_speed', dept: 'operations', rank: 3, name: 'Overload Impulse',
+    order: 'All available power to engines', cooldown: 60, duration: 15,
+    mods: { impulse: 1.6, turn: 1.3 },
+    say: 'She’ll take it — for fifteen seconds.',
+  },
 };
 const ABILITY_LIST = Object.values(ABILITIES);
 
-/** Abilities an officer at a station could ever learn. */
+/**
+ * Abilities an officer at a station could ever learn.
+ *
+ * This used to remap `operations` and `medical` onto `command`, because
+ * neither department had a single ability of its own — so the doctor and the
+ * helmsman called attack patterns, and four of the seven officers on a bridge
+ * held an identical tray. Every department has its own table now.
+ */
 function abilityPool(dept) {
-  const d = dept === 'operations' || dept === 'medical' ? 'command' : dept;
-  return ABILITY_LIST.filter((a) => a.dept === d);
+  return ABILITY_LIST.filter((a) => a.dept === dept);
 }
 class Officer {
   constructor(data) {
@@ -13922,10 +13989,24 @@ class Officer {
     return this.alive && !this.injured;
   }
 
+  /**
+   * What an officer comes aboard already knowing.
+   *
+   * A rule, not a truncation. This used to take `pool.slice(0, 3)` — the first
+   * three entries of the department table, in whatever order they happened to
+   * be written in — which made every officer of a department identical to every
+   * other and left six of the abilities in the game held by nobody at all.
+   *
+   * Ranks one and two are the working repertoire of the station; rank three is
+   * what training opens up, and the captain's own rank is what gates that. A
+   * green officer arrives with the rank-one set only, which is the difference
+   * between an experienced bridge and a fresh one.
+   */
   learnStartingAbilities() {
-    const pool = abilityPool(this.dept)
-      .filter((a) => a.rank <= 1 + Math.floor(this.expertise / 40));
-    this.abilities = pool.slice(0, 3).map((a) => a.id);
+    const gate = this.expertise >= 70 ? 2 : 1;
+    this.abilities = abilityPool(this.dept)
+      .filter((a) => a.rank <= gate)
+      .map((a) => a.id);
   }
 
   learn(abilityId) {
@@ -22299,6 +22380,19 @@ function weakestFacing(ship) {
 function applyAbility(game, officer, ability) {
   const a = typeof ability === 'string' ? ABILITIES[ability] : ability;
   if (!game || !officer || !a) return { ok: false, reason: 'no such ability' };
+  // Three different noes, and they used to be one. When every officer of a
+  // department held an identical tray, "not ready" could only ever mean a
+  // cooldown; now that the six departments differ, "the helm is not trained
+  // for that" is a thing a captain needs to be told, and so is "she is in
+  // sickbay" — because the answer to those two is training and a doctor, not
+  // waiting thirty seconds.
+  if (!officer.abilities.includes(a.id)) {
+    return { ok: false, reason: `${officer.name} is not trained for that, Captain.`, ability: a, officer };
+  }
+  if (!officer.available) {
+    const why = officer.alive ? 'is in sickbay' : 'is gone';
+    return { ok: false, reason: `${officer.name} ${why}, Captain.`, ability: a, officer };
+  }
   if (!officer.ready(a.id)) return { ok: false, reason: 'on cooldown', ability: a, officer };
 
   const eng = game.engagement && !game.engagement.over ? game.engagement : null;
@@ -22364,6 +22458,101 @@ function applyAbility(game, officer, ability) {
           w.cooldown = 0;
           eng.fireWeapon(game.ship, w, target);
         }
+      }
+      break;
+    }
+
+    // ---- Command ----
+    case 'formation': {
+      // The only power that speaks to an ally. Allies have existed in
+      // `Engagement` since it was written and arrive on a distress call, and
+      // until now there was nothing to say to them: they flew their own fight
+      // beside yours. They take the same order the ship just took, and they
+      // come round onto your heading to take it.
+      const live = (eng?.allies ?? []).filter((s) => !s.destroyed);
+      for (const s of live) {
+        s.addBuff({ id: a.id, label: a.name, until: a.duration || 20, mods: a.mods });
+        s.desiredHeading = game.ship.heading;
+      }
+      report = {
+        kind: 'formation',
+        title: a.name,
+        lines: live.length
+          ? [`${live.length} ship${live.length === 1 ? '' : 's'} holding station on us.`]
+          : ['Nobody out there to hold station on us, Captain. The ship tightens up regardless.'],
+        allies: live.length,
+      };
+      break;
+    }
+
+    // ---- Medical ----
+    case 'return_officer': {
+      // One officer out of sickbay and back on a post. A station standing
+      // empty is a capability the ship has lost, so this is worth more than
+      // the number of people it moves.
+      const wounded = game.crew.officers.find((o) => o.alive && o.injured);
+      if (wounded) {
+        wounded.heal();
+        report = {
+          kind: 'duty', title: a.name,
+          lines: [`${wounded.name} is cleared for duty and back at ${wounded.station}.`],
+          officer: wounded.name,
+        };
+      } else {
+        report = { kind: 'duty', title: a.name, lines: ['Nobody in sickbay, Captain.'], officer: null };
+      }
+      break;
+    }
+    case 'treat_wounded': {
+      // The wounded are a running total that only ever went up: `injured`
+      // climbs with every hull hit and nothing in a fight ever brought it
+      // down. This is the one thing that does.
+      const before = game.ship.injured ?? 0;
+      game.ship.injured = Math.max(0, Math.round(before * 0.4));
+      report = {
+        kind: 'sickbay', title: a.name,
+        lines: [`${before - game.ship.injured} treated and out of danger. ${game.ship.injured} still in sickbay.`],
+        treated: before - game.ship.injured,
+      };
+      break;
+    }
+
+    // ---- Operations ----
+    case 'read_intent': {
+      // Information, and nothing else. `scan` reads one ship; this reads the
+      // board — who is out there, what state they are in, and who each of them
+      // is shooting at, which is the one thing a captain cannot otherwise see.
+      const board = (eng?.liveHostiles ?? []).map((s) => {
+        const at = s.aiTarget === game.ship ? 'us'
+          : s.aiTarget ? s.aiTarget.name
+            : 'nobody yet';
+        const state = s.fleeing ? 'breaking off' : s.cloaked ? 'cloaked' : 'engaged';
+        return `${s.name}: hull ${Math.round(s.hullPct * 100)}%, shields ${Math.round(s.shieldPct * 100)}%, ${state}, firing on ${at}.`;
+      });
+      report = {
+        kind: 'traffic', title: a.name,
+        lines: board.length ? board : ['Nothing on any frequency, Captain.'],
+        count: board.length,
+      };
+      break;
+    }
+    case 'false_signal': {
+      // A ship that is not there. Every targeting solution out there was
+      // computed against it, so every one of them has to be thrown out and
+      // taken again.
+      //
+      // This is deliberately the small, repeatable version of what the
+      // Intelligence captain's signature does once per engagement: their
+      // weapons go back on cooldown and they shoot worse while they reacquire,
+      // but the signature also decloaks the room and lasts longer. A bridge
+      // officer power should be the lesser of the two.
+      for (const s of eng?.liveHostiles ?? []) {
+        for (const w of s.weapons) w.cooldown = Math.max(w.cooldown, (a.duration || 12) * 0.4);
+        s.aiTarget = null;
+        s.addBuff({
+          id: 'reacquiring', label: 'Reacquiring', until: a.duration || 12,
+          mods: { accuracy: 0.75 },
+        });
       }
       break;
     }
@@ -24996,7 +25185,7 @@ const { Ledger } = __require("src/core/ledger.js");
 const { emit } = __require("src/core/events.js");
 
 const { Ship } = __require("src/sim/ship.js");
-const { Crew, Officer } = __require("src/sim/officers.js");
+const { Crew, Officer, ABILITIES, ABILITY_LIST } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP, SKILLS } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
 const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
@@ -27431,6 +27620,55 @@ class Game {
     return this.crew.readyAbilities();
   }
 
+  /**
+   * Teach an officer something new. A day of ship's time.
+   *
+   * `officer.learn` records it. The day, the log line, the recomputed ship
+   * modifiers and every refusal were in the officer detail modal in
+   * `src/ui/screens.js` — so training was one more thing that only existed
+   * when a screen was attached, and it was the only route to the six
+   * abilities nobody held at commission.
+   */
+  trainOfficer(who, abilityId) {
+    const officer = (typeof who === 'object' && typeof who?.learn === 'function')
+      ? who
+      : this.crew.at(who);
+    if (!officer) return { ok: false, reason: 'Nobody at that station, Captain.' };
+    if (!officer.alive) return { ok: false, reason: `${officer.name} is gone, Captain.` };
+    if (officer.injured) return { ok: false, reason: `${officer.name} is in sickbay, Captain.` };
+
+    const ability = ABILITIES[abilityId];
+    if (!ability) return { ok: false, reason: 'No such training, Captain.' };
+    if (ability.dept !== officer.dept) {
+      return { ok: false, reason: `That is not ${officer.name}'s department, Captain.` };
+    }
+    if (officer.abilities.includes(abilityId)) {
+      return { ok: false, reason: `${officer.name} already knows that one, Captain.` };
+    }
+    // Gated on the CAPTAIN's rank, not the officer's: what a crew is allowed to
+    // train for is a function of the ship's standing orders.
+    if (ability.rank > this.progress.rank.tier) {
+      return { ok: false, reason: 'We are not cleared for that yet, Captain.' };
+    }
+
+    if (!officer.learn(abilityId)) return { ok: false, reason: 'Training did not take, Captain.' };
+    this.clock.advanceStardate(1);
+    this.applyAllMods();
+    this.pushLog(`${officer.name} completed training in ${ability.name}.`, 'captain');
+    return { ok: true, officer, ability };
+  }
+
+  /** What each officer could still be taught, given the captain's rank. */
+  trainableFor(who) {
+    const officer = (typeof who === 'object' && typeof who?.learn === 'function')
+      ? who
+      : this.crew.at(who);
+    if (!officer?.alive) return [];
+    return ABILITY_LIST.filter((a) => a.dept === officer.dept
+      && !officer.abilities.includes(a.id)
+      && a.rank <= this.progress.rank.tier);
+  }
+
   /** The career signature: one large effect, once per engagement. */
   useSignature() {
     return applySignature(this);
@@ -28470,14 +28708,55 @@ function powerPanel(app) {
   ]);
 }
 
+/** The order the bridge is read in, forward to aft. */
+const DEPT_ORDER = ['command', 'tactical', 'operations', 'engineering', 'science', 'medical'];
+const DEPT_LABEL = {
+  command: 'Command', tactical: 'Tactical', operations: 'Helm and Communications',
+  engineering: 'Engineering', science: 'Science', medical: 'Medical',
+};
+
 function abilitiesPanel(app) {
   const g = app.game;
-  const ready = g.crew.readyAbilities();
-  const nodes = ready.slice(0, 8).map(({ officer, ability }) =>
-    button(ability.name, tap(() => {
-      app.useAbility(officer, ability);
-      app.render();
-    }, 'computer_ack'), { color: 'lilac', sub: `${officer.name} — ${ability.order}` }));
+
+  // Grouped by department, and one button per ABILITY rather than one per
+  // officer holding it. Two officers share a department — the helm and comms
+  // are both operations — so the same power appeared twice with no way to tell
+  // the buttons apart. It is still worth having twice, because it is two
+  // independent cooldowns, so the second holder is named on the button.
+  //
+  // And the list is not truncated. It used to be `ready.slice(0, 8)`, which was
+  // harmless when four of the seven officers held an identical tray and a
+  // third of the list was duplicates. With six departments there are twenty-odd
+  // powers ready at once and eight of them were shown, silently, in roster
+  // order.
+  const byAbility = new Map();
+  for (const { officer, ability } of g.crew.readyAbilities()) {
+    if (!byAbility.has(ability.id)) byAbility.set(ability.id, { ability, officers: [] });
+    byAbility.get(ability.id).officers.push(officer);
+  }
+
+  const nodes = [];
+  for (const dept of DEPT_ORDER) {
+    const inDept = [...byAbility.values()]
+      .filter(({ ability }) => ability.dept === dept)
+      .sort((a, b) => a.ability.rank - b.ability.rank);
+    if (!inDept.length) continue;
+    nodes.push(el('h3', { text: DEPT_LABEL[dept] ?? dept }));
+    for (const { ability, officers } of inDept) {
+      const who = officers[0];
+      const also = officers.length > 1 ? ` (+${officers.length - 1} ready)` : '';
+      // Every button prints the phrase that fires it — but for most of these
+      // the phrase IS the title, and printing it twice on a phone is two lines
+      // saying one thing. The phrase only goes underneath when it differs.
+      const said = ability.order.toLowerCase() === ability.name.toLowerCase()
+        ? `${who.name}${also}`
+        : `${who.name}${also} — ${ability.order}`;
+      nodes.push(button(ability.name, tap(() => {
+        app.useAbility(who, ability);
+        app.render();
+      }, 'computer_ack'), { color: 'lilac', sub: said }));
+    }
+  }
 
   const cooling = [];
   for (const o of g.crew.available) {
@@ -28647,17 +28926,15 @@ function officerDetail(app, officer) {
     nodes.push(el('p', { class: 'muted', text: 'Currently in sickbay and unavailable for duty.' }));
   }
 
-  // Officers you can teach something new.
+  // Officers you can teach something new. What training COSTS and what it
+  // changes is `Game.trainOfficer`; this is the list and the button.
   const g = app.game;
-  const learnable = Object.values(ABILITIES).filter((a) =>
-    a.dept === officer.dept && !officer.abilities.includes(a.id) && a.rank <= g.progress.rank.tier);
+  const learnable = g.trainableFor(officer);
   if (learnable.length && officer.alive) {
     nodes.push(el('h3', { text: 'Training' }));
-    for (const a of learnable.slice(0, 4)) {
+    for (const a of learnable) {
       nodes.push(button(`Train: ${a.name}`, tap(() => {
-        officer.learn(a.id);
-        g.clock.advanceStardate(1);
-        g.pushLog(`${officer.name} completed training in ${a.name}.`, 'captain');
+        g.trainOfficer(officer, a.id);
         app.closeModal();
         app.render();
       }, 'ui_confirm'), { color: 'blue', sub: `“${a.order}” · one day` }));
@@ -30510,6 +30787,21 @@ class App {
     // A MISSION still takes the screen, because a mission stage IS text.
 
     const old = this.screenEl;
+
+    // Scroll positions have to survive the swap below.
+    //
+    // `replaceWith` throws the old DOM away, and in combat `render` runs about
+    // four times a second — so a captain who scrolled down to the bridge
+    // officer tray, which lives under the plot and the target panel, was
+    // thrown back to the top of the page before they could reach one. On a
+    // phone that made the whole tray unusable in the one situation it exists
+    // for. Carried across only when the same screen is being redrawn: moving
+    // to a different screen should start at the top, and does.
+    const sameScreen = screen === this.renderedScreen;
+    const heldScroll = sameScreen
+      ? [old, ...old.querySelectorAll('.scroll')].map((n) => n.scrollTop)
+      : null;
+
     let node;
     switch (screen) {
       case 'tactical': node = screens.tacticalScreen(this); break;
@@ -30534,6 +30826,13 @@ class App {
 
     old.replaceWith(node);
     this.screenEl = node;
+    this.renderedScreen = screen;
+    if (heldScroll) {
+      const now = [node, ...node.querySelectorAll('.scroll')];
+      for (let i = 0; i < now.length && i < heldScroll.length; i++) {
+        if (heldScroll[i] > 0) now[i].scrollTop = heldScroll[i];
+      }
+    }
 
     // The first-person bridge shares the one GL canvas with the tactical plot.
     // Two contexts on one element is a bug this project has already fixed, and

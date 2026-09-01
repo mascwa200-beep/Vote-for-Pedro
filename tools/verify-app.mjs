@@ -1827,6 +1827,85 @@ try {
   }
   await page.screenshot({ path: join(SHOTS, '05-combat.png') });
 
+  // ---- The bridge officer tray ----
+  //
+  // Four of the seven officers used to hold an identical tray, because Medical
+  // and Operations had no abilities of their own and borrowed Command's. The
+  // panel then showed `ready.slice(0, 8)` of a list that was largely
+  // duplicates, so the truncation never showed. It would now.
+  const tray = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    const panels = [...document.querySelectorAll('.panel')];
+    const el = panels.find((p) => /Bridge Officers/i.test(p.querySelector('h2')?.textContent ?? ''));
+    const buttons = el ? [...el.querySelectorAll('.btn')] : [];
+    const depts = el ? [...el.querySelectorAll('h3')].map((h) => h.textContent) : [];
+    // What the simulation says is ready, against what the screen offers.
+    const ready = new Set(g.readyAbilities().map((r) => r.ability.id));
+    return {
+      buttons: buttons.length,
+      depts: depts.length,
+      ready: ready.size,
+      // Every button prints the phrase that fires it — as its title when the
+      // title IS the phrase, and underneath when it is not.
+      spoken: buttons.every((b) => {
+        const said = (b.textContent ?? '').toLowerCase().replace(/\s+/g, ' ');
+        const id = [...g.readyAbilities()].find((r) =>
+          said.includes(r.ability.name.toLowerCase()));
+        return !!id && said.includes(id.ability.order.toLowerCase());
+      }),
+      // Nothing on screen twice.
+      unique: new Set(buttons.map((b) => b.querySelector('.btn-label')?.textContent
+        ?? b.textContent.split('\n')[0])).size === buttons.length,
+      // How many departments the tray can offer from at all, which is the
+      // thing the six tables were added for. Counted over the whole roster
+      // rather than the ready list, because half the tray is on cooldown in
+      // the middle of a fight — and over every station rather than the living
+      // ones, because by this point in the harness somebody may have died and
+      // a dead officer's station is still a station on the bridge.
+      onRoster: new Set(g.crew.officers.map((o) => o.dept)).size,
+      distinctTrays: new Set(g.crew.officers.map((o) => o.abilities.join(','))).size,
+    };
+  });
+  check('the bridge officer tray offers every power that is ready, and no more',
+    tray.buttons === tray.ready && tray.ready > 6, JSON.stringify(tray));
+  check('and groups them rather than truncating the list',
+    tray.depts >= 2 && tray.unique === true, JSON.stringify(tray));
+  check('and a full bridge has six departments to offer from',
+    tray.onRoster >= 6 && tray.distinctTrays >= 5, JSON.stringify(tray));
+  check('and every one of them prints the phrase that says it',
+    tray.spoken === true, JSON.stringify(tray));
+  // Scrolled to, because the tray lives below the plot and the target panel
+  // and a screenshot of the top of the screen says nothing about it.
+  const scrolled = await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.panel')];
+    const el = panels.find((p) => /Bridge Officers/i.test(p.querySelector('h2')?.textContent ?? ''));
+    if (!el) return { found: false };
+    // Walk up to whatever actually scrolls. `scrollIntoView` on its own moved
+    // nothing: the screen scrolls inside a container, not the window.
+    let box = el.parentElement;
+    while (box && box.scrollHeight <= box.clientHeight + 4) box = box.parentElement;
+    if (box) box.scrollTop = el.offsetTop - (box.offsetTop ?? 0) - 8;
+    return { found: true, box: box?.className ?? null, top: box?.scrollTop ?? -1 };
+  });
+  await page.waitForTimeout(250);
+  check('and the tray can be scrolled to on a phone-sized screen',
+    scrolled.found === true && scrolled.top > 0, JSON.stringify(scrolled));
+  // And it STAYS scrolled to. The whole screen is rebuilt and swapped on every
+  // render, and in combat that happens about four times a second — so a
+  // captain who scrolled down to their bridge officers was thrown back to the
+  // top of the page before they could reach one.
+  await page.waitForTimeout(900);
+  const held = await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.panel')];
+    const el = panels.find((p) => /Bridge Officers/i.test(p.querySelector('h2')?.textContent ?? ''));
+    let box = el?.parentElement;
+    while (box && box.scrollHeight <= box.clientHeight + 4) box = box.parentElement;
+    return { top: box?.scrollTop ?? -1 };
+  });
+  check('and a combat re-render does not throw the captain back to the top',
+    held.top > 0, JSON.stringify({ scrolled, held }));
+  await page.screenshot({ path: join(SHOTS, '20-bridge-officers.png') });
+
   // ---- The helm's eight warp switches ----
   //
   // Driven through the DOM rather than the model, because the point of the

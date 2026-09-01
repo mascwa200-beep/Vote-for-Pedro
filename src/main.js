@@ -469,6 +469,21 @@ class App {
     // A MISSION still takes the screen, because a mission stage IS text.
 
     const old = this.screenEl;
+
+    // Scroll positions have to survive the swap below.
+    //
+    // `replaceWith` throws the old DOM away, and in combat `render` runs about
+    // four times a second — so a captain who scrolled down to the bridge
+    // officer tray, which lives under the plot and the target panel, was
+    // thrown back to the top of the page before they could reach one. On a
+    // phone that made the whole tray unusable in the one situation it exists
+    // for. Carried across only when the same screen is being redrawn: moving
+    // to a different screen should start at the top, and does.
+    const sameScreen = screen === this.renderedScreen;
+    const heldScroll = sameScreen
+      ? [old, ...old.querySelectorAll('.scroll')].map((n) => n.scrollTop)
+      : null;
+
     let node;
     switch (screen) {
       case 'tactical': node = screens.tacticalScreen(this); break;
@@ -493,6 +508,13 @@ class App {
 
     old.replaceWith(node);
     this.screenEl = node;
+    this.renderedScreen = screen;
+    if (heldScroll) {
+      const now = [node, ...node.querySelectorAll('.scroll')];
+      for (let i = 0; i < now.length && i < heldScroll.length; i++) {
+        if (heldScroll[i] > 0) now[i].scrollTop = heldScroll[i];
+      }
+    }
 
     // The first-person bridge shares the one GL canvas with the tactical plot.
     // Two contexts on one element is a bug this project has already fixed, and

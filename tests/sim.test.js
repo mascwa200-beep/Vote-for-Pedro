@@ -23,7 +23,7 @@ import { getShipClass, SHIP_LIST } from '../src/world/ships.data.js';
 import { SYSTEMS, SYSTEM_BY_ID } from '../src/world/systems.data.js';
 import { buildRoster, STATIONS } from '../src/world/crews.data.js';
 import { resolveHail } from '../src/sim/diplomacy.js';
-import { ABILITIES } from '../src/sim/officers.js';
+import { ABILITIES, ABILITY_LIST, abilityPool, Officer } from '../src/sim/officers.js';
 import { CAREERS, Character } from '../src/rules/character.js';
 import { checkAll } from '../src/sim/invariants.js';
 
@@ -1777,5 +1777,224 @@ test('breaking off leaves the game in a state the checker accepts', () => {
     for (let i = 0; i < 120; i++) g.update(1 / 30);
     assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS }), [],
       `breaking off at tick ${at} left the game broken`);
+  }
+});
+
+// ------------------------------------ every station is a different station
+
+// Medical and Operations had no abilities of their own, and `abilityPool`
+// pointed them at Command's — so the doctor and the helmsman called attack
+// patterns and four of the seven officers on a bridge held an identical tray.
+// `learnStartingAbilities` then took `pool.slice(0, 3)`, a truncation rather
+// than a rule, which made every officer of a department identical to every
+// other and left six abilities held by nobody at all.
+
+const DEPTS = ['command', 'tactical', 'operations', 'engineering', 'science', 'medical'];
+
+test('every department has abilities of its own, and borrows none', () => {
+  const seen = new Map();
+  for (const dept of DEPTS) {
+    const pool = abilityPool(dept);
+    assert.ok(pool.length >= 3, `${dept} has ${pool.length} abilities of its own`);
+    for (const a of pool) {
+      assert.equal(a.dept, dept, `${a.id} is in ${dept}'s pool but belongs to ${a.dept}`);
+      assert.equal(seen.has(a.id), false, `${a.id} is in both ${seen.get(a.id)} and ${dept}`);
+      seen.set(a.id, dept);
+    }
+  }
+  assert.equal(seen.size, Object.keys(ABILITIES).length, 'an ability belongs to no department');
+});
+
+test('nothing in the table is held by nobody', () => {
+  // The test that would have failed for the whole life of this table.
+  //
+  // The rule it encodes is the one that replaced `pool.slice(0, 3)`: ranks one
+  // and two are the working repertoire a bridge arrives with, and rank three
+  // is what training opens up. So the only acceptable reason for an ability to
+  // be unheld at commission is that it is rank three — and every rank three
+  // must be trainable by somebody, or it is decoration.
+  const g = new Game({ seed: 3131n, crewMode: 'canon', crew: 'tos' });
+  const held = new Set(g.crew.officers.flatMap((o) => o.abilities));
+  const trainable = new Set(g.crew.officers.flatMap((o) => g.trainableFor(o).map((a) => a.id)));
+
+  const missing = ABILITY_LIST.filter((a) => a.rank <= 2 && !held.has(a.id)).map((a) => a.id);
+  assert.deepEqual(missing, [], 'a working ability nobody on the bridge holds');
+
+  const unteachable = ABILITY_LIST
+    .filter((a) => a.rank >= 3 && !held.has(a.id) && !trainable.has(a.id))
+    .map((a) => a.id);
+  assert.deepEqual(unteachable, [], 'abilities nobody aboard can ever reach');
+});
+
+test('two officers on the same bridge are not the same officer', () => {
+  const g = new Game({ seed: 3132n, crewMode: 'canon', crew: 'tos' });
+  const trays = g.crew.officers.map((o) => o.abilities.join(','));
+
+  // The helm and comms share a department, so some trays repeat; what must not
+  // happen is one tray repeated across most of the bridge.
+  const distinct = new Set(trays);
+  assert.ok(distinct.size >= 5, `only ${distinct.size} distinct trays on seven stations`);
+
+  // And the doctor does not fly the ship.
+  const doc = g.crew.at('medical');
+  assert.ok(doc.abilities.length > 0, 'the doctor has nothing to do');
+  for (const id of doc.abilities) {
+    assert.equal(ABILITIES[id].dept, 'medical', `the doctor knows ${id}, which is not medicine`);
+  }
+});
+
+test('a green officer arrives with less than a veteran', () => {
+  const green = new Officer({ station: 'tactical', name: 'Green', expertise: 40 });
+  const veteran = new Officer({ station: 'tactical', name: 'Veteran', expertise: 95 });
+  assert.ok(veteran.abilities.length > green.abilities.length,
+    `green ${green.abilities.length}, veteran ${veteran.abilities.length}`);
+  // Rank three is training's job on both of them.
+  for (const o of [green, veteran]) {
+    for (const id of o.abilities) {
+      assert.ok(ABILITIES[id].rank <= 2, `${o.name} arrived knowing ${id}, which is rank three`);
+    }
+  }
+});
+
+test('every ability can be spoken, and none of them took an order that existed', () => {
+  const g = new Game({ seed: 3133n, crewMode: 'original' });
+  for (const a of Object.values(ABILITIES)) {
+    const o = parseOrder(a.order, g);
+    assert.equal(o?.action, 'ability', `"${a.order}" is not an ability order`);
+    assert.equal(o.ability, a.id, `"${a.order}" reaches ${o.ability}, not ${a.id}`);
+  }
+  // The orders most at risk from the new phrasing: the career signatures own
+  // "triage" and "look alive", and "battle stations" has always been an alert.
+  for (const [said, action] of [
+    ['triage', 'signature'], ['look alive', 'signature'], ['work a miracle', 'signature'],
+    ['battle stations', 'alert'], ['take the conn', 'hand_over_con'],
+    ['weapons battery', 'device'], ['all stop', 'throttle'],
+  ]) {
+    assert.equal(parseOrder(said, g).action, action, `"${said}"`);
+  }
+});
+
+test('training an officer costs a day and only works when it should', () => {
+  const g = new Game({ seed: 3134n, crewMode: 'canon', crew: 'tos' });
+  const doc = g.crew.at('medical');
+  const before = g.clock.stardate;
+  const known = doc.abilities.length;
+
+  const r = g.trainOfficer('medical', 'surgical_bay');
+  assert.ok(r.ok, r.reason);
+  assert.equal(doc.abilities.length, known + 1);
+  assert.ok(doc.abilities.includes('surgical_bay'));
+  assert.ok(g.clock.stardate > before, 'the training took no time at all');
+  assert.ok(g.log.some((l) => /training/i.test(l.text)), 'nobody logged it');
+
+  assert.equal(g.trainOfficer('medical', 'surgical_bay').ok, false, 'trained twice');
+  assert.equal(g.trainOfficer('medical', 'high_yield').ok, false, 'the doctor trained as a gunner');
+  assert.equal(g.trainOfficer('nowhere', 'high_yield').ok, false);
+  assert.equal(g.trainOfficer('medical', 'not_an_ability').ok, false);
+
+  // In sickbay, or gone, and the answer is no.
+  doc.injure(0.5);
+  assert.equal(g.trainOfficer('medical', 'surgical_bay').ok, false, 'trained from a biobed');
+
+  // And it survives a save, which is the point of teaching somebody anything.
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.ok(back.crew.at('medical').abilities.includes('surgical_bay'));
+});
+
+test('training is gated on the captain, not the officer', () => {
+  const g = new Game({ seed: 3135n, crewMode: 'canon', crew: 'tos' });
+  g.progress.rankIndex = 0;   // Ensign: cleared for very little
+  const low = g.trainableFor(g.crew.at('science'));
+  g.progress.rankIndex = 8;   // and much later
+  const high = g.trainableFor(g.crew.at('science'));
+  assert.ok(high.length > low.length,
+    `an ensign could train ${low.length} things, a flag officer ${high.length}`);
+});
+
+/** An officer holding a named ability, trained for it if they were not. */
+function trained(g, station, abilityId) {
+  const officer = g.crew.at(station);
+  if (!officer.abilities.includes(abilityId)) {
+    const r = g.trainOfficer(officer, abilityId);
+    assert.ok(r.ok, `could not train ${station} in ${abilityId}: ${r.reason}`);
+  }
+  return officer;
+}
+
+test('the abilities that reach past the ship do reach past it', () => {
+  // Hold Formation is the only power that speaks to an ally, and allies have
+  // existed in `Engagement` since it was written with nothing to say to them.
+  {
+    const g = new Game({ seed: 3136n, crewMode: 'original' });
+    const friend = new Ship('miranda', { faction: 'federation', name: 'USS Friend' });
+    g.startCombat([new Ship('d7', { name: 'Target' })], { allies: [friend], relentless: true });
+    const officer = trained(g, 'first_officer', 'hold_formation');
+    const r = g.useAbility(officer, 'hold_formation');
+    assert.ok(r.ok, r.reason);
+    assert.ok((friend.buffs ?? []).some((b) => b.id === 'hold_formation'), 'the ally got nothing');
+    assert.equal(r.report.allies, 1);
+  }
+  // A false signal throws out everybody's targeting solution.
+  {
+    const g = new Game({ seed: 3137n, crewMode: 'original' });
+    g.startCombat([new Ship('d7', { name: 'A' }), new Ship('d7', { name: 'B' })], { relentless: true });
+    for (const s of g.engagement.liveHostiles) { s.aiTarget = g.ship; for (const w of s.weapons) w.cooldown = 0; }
+    const officer = trained(g, 'helm', 'false_signal');
+    assert.ok(g.useAbility(officer, 'false_signal').ok);
+    for (const s of g.engagement.liveHostiles) {
+      assert.equal(s.aiTarget, null, `${s.name} kept its lock`);
+      assert.ok(s.weapons.every((w) => w.cooldown > 0), `${s.name} could still shoot`);
+      assert.ok((s.buffs ?? []).some((b) => b.id === 'reacquiring'));
+    }
+  }
+  // Traffic analysis reads the whole board, which nothing else does.
+  {
+    const g = new Game({ seed: 3138n, crewMode: 'original' });
+    g.startCombat([new Ship('d7', { name: 'A' }), new Ship('vorcha', { name: 'B' })], { relentless: true });
+    const r = g.useAbility(trained(g, 'comms', 'traffic_analysis'), 'traffic_analysis');
+    assert.ok(r.ok, r.reason);
+    assert.equal(r.report.count, 2, 'the sweep missed a ship');
+    assert.ok(r.report.lines.every((l) => /hull \d+%/.test(l)));
+  }
+});
+
+test('the medical abilities are worth having, and act on people', () => {
+  // Sickbay treats the wounded, and nothing else in a fight ever did: the
+  // injured total climbs with every hull hit and only ever went up.
+  {
+    const g = new Game({ seed: 3139n, crewMode: 'canon', crew: 'tos' });
+    g.startCombat([new Ship('d7', { name: 'Target' })], { relentless: true });
+    g.trainOfficer('medical', 'surgical_bay');
+    g.ship.injured = 200;
+    const r = g.useAbility(g.crew.at('medical'), 'surgical_bay');
+    assert.ok(r.ok, r.reason);
+    assert.ok(g.ship.injured < 200, 'nobody was treated');
+    assert.ok(r.report.treated > 0);
+  }
+  // And one officer is cleared for duty.
+  {
+    const g = new Game({ seed: 3140n, crewMode: 'canon', crew: 'tos' });
+    g.startCombat([new Ship('d7', { name: 'Target' })], { relentless: true });
+    g.crew.at('science').injure(0.5);
+    assert.ok(g.crew.officers.some((o) => o.alive && o.injured));
+    const r = g.useAbility(trained(g, 'medical', 'back_to_duty'), 'back_to_duty');
+    assert.ok(r.ok, r.reason);
+    assert.equal(g.crew.officers.some((o) => o.alive && o.injured), false, 'still in sickbay');
+    assert.ok(r.report.officer, 'nobody was named');
+  }
+  // Casualty teams reduce what a hull hit costs in people.
+  {
+    const cost = (withTeams) => {
+      const g = new Game({ seed: 3141n, crewMode: 'canon', crew: 'tos' });
+      g.startCombat([new Ship('d7', { name: 'Target' })], { relentless: true });
+      if (withTeams) {
+        const r = g.useAbility(trained(g, 'medical', 'casualty_teams'), 'casualty_teams');
+        assert.ok(r.ok, r.reason);
+      }
+      const before = g.ship.crew;
+      g.ship.takeDamage(g.ship.maxHull * 0.3, { bypassShields: true });
+      return before - g.ship.crew;
+    };
+    assert.ok(cost(true) < cost(false), 'casualty teams saved nobody');
   }
 });

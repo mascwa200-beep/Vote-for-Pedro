@@ -840,14 +840,55 @@ export function powerPanel(app) {
   ]);
 }
 
+/** The order the bridge is read in, forward to aft. */
+const DEPT_ORDER = ['command', 'tactical', 'operations', 'engineering', 'science', 'medical'];
+const DEPT_LABEL = {
+  command: 'Command', tactical: 'Tactical', operations: 'Helm and Communications',
+  engineering: 'Engineering', science: 'Science', medical: 'Medical',
+};
+
 function abilitiesPanel(app) {
   const g = app.game;
-  const ready = g.crew.readyAbilities();
-  const nodes = ready.slice(0, 8).map(({ officer, ability }) =>
-    button(ability.name, tap(() => {
-      app.useAbility(officer, ability);
-      app.render();
-    }, 'computer_ack'), { color: 'lilac', sub: `${officer.name} — ${ability.order}` }));
+
+  // Grouped by department, and one button per ABILITY rather than one per
+  // officer holding it. Two officers share a department — the helm and comms
+  // are both operations — so the same power appeared twice with no way to tell
+  // the buttons apart. It is still worth having twice, because it is two
+  // independent cooldowns, so the second holder is named on the button.
+  //
+  // And the list is not truncated. It used to be `ready.slice(0, 8)`, which was
+  // harmless when four of the seven officers held an identical tray and a
+  // third of the list was duplicates. With six departments there are twenty-odd
+  // powers ready at once and eight of them were shown, silently, in roster
+  // order.
+  const byAbility = new Map();
+  for (const { officer, ability } of g.crew.readyAbilities()) {
+    if (!byAbility.has(ability.id)) byAbility.set(ability.id, { ability, officers: [] });
+    byAbility.get(ability.id).officers.push(officer);
+  }
+
+  const nodes = [];
+  for (const dept of DEPT_ORDER) {
+    const inDept = [...byAbility.values()]
+      .filter(({ ability }) => ability.dept === dept)
+      .sort((a, b) => a.ability.rank - b.ability.rank);
+    if (!inDept.length) continue;
+    nodes.push(el('h3', { text: DEPT_LABEL[dept] ?? dept }));
+    for (const { ability, officers } of inDept) {
+      const who = officers[0];
+      const also = officers.length > 1 ? ` (+${officers.length - 1} ready)` : '';
+      // Every button prints the phrase that fires it — but for most of these
+      // the phrase IS the title, and printing it twice on a phone is two lines
+      // saying one thing. The phrase only goes underneath when it differs.
+      const said = ability.order.toLowerCase() === ability.name.toLowerCase()
+        ? `${who.name}${also}`
+        : `${who.name}${also} — ${ability.order}`;
+      nodes.push(button(ability.name, tap(() => {
+        app.useAbility(who, ability);
+        app.render();
+      }, 'computer_ack'), { color: 'lilac', sub: said }));
+    }
+  }
 
   const cooling = [];
   for (const o of g.crew.available) {
@@ -1021,17 +1062,15 @@ export function officerDetail(app, officer) {
     nodes.push(el('p', { class: 'muted', text: 'Currently in sickbay and unavailable for duty.' }));
   }
 
-  // Officers you can teach something new.
+  // Officers you can teach something new. What training COSTS and what it
+  // changes is `Game.trainOfficer`; this is the list and the button.
   const g = app.game;
-  const learnable = Object.values(ABILITIES).filter((a) =>
-    a.dept === officer.dept && !officer.abilities.includes(a.id) && a.rank <= g.progress.rank.tier);
+  const learnable = g.trainableFor(officer);
   if (learnable.length && officer.alive) {
     nodes.push(el('h3', { text: 'Training' }));
-    for (const a of learnable.slice(0, 4)) {
+    for (const a of learnable) {
       nodes.push(button(`Train: ${a.name}`, tap(() => {
-        officer.learn(a.id);
-        g.clock.advanceStardate(1);
-        g.pushLog(`${officer.name} completed training in ${a.name}.`, 'captain');
+        g.trainOfficer(officer, a.id);
         app.closeModal();
         app.render();
       }, 'ui_confirm'), { color: 'blue', sub: `“${a.order}” · one day` }));

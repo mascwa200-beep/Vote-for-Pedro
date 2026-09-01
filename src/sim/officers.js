@@ -61,12 +61,6 @@ export const ABILITIES = {
     mods: { repairRate: 4.0 }, special: 'extinguish',
     say: 'Damage control parties away.',
   },
-  ramming_speed: {
-    id: 'ramming_speed', dept: 'engineering', rank: 3, name: 'Overload Impulse',
-    order: 'All available power to engines', cooldown: 60, duration: 15,
-    mods: { impulse: 1.6, turn: 1.3 },
-    say: 'She’ll take it — for fifteen seconds.',
-  },
   eject_core: {
     id: 'eject_core', dept: 'engineering', rank: 3, name: 'Eject Warp Core',
     order: 'Eject the core', cooldown: 0, duration: 0, special: 'eject',
@@ -121,14 +115,87 @@ export const ABILITIES = {
     mods: { damage: 1.15, repairRate: 1.5, accuracy: 1.1 },
     say: 'You heard the captain!',
   },
+  hold_formation: {
+    // The only power in the game that speaks to an ally. Allies arrive on a
+    // distress call and there has never been anything to say to them.
+    id: 'hold_formation', dept: 'command', rank: 2, name: 'Hold Formation',
+    order: 'Hold formation', cooldown: 50, duration: 20,
+    mods: { defense: 1.15, accuracy: 1.1 }, special: 'formation',
+    say: 'Signalling them to hold station on us.',
+  },
+
+  // --- Medical ---
+  //
+  // The first abilities in the game whose payoff is crew and casualties rather
+  // than hull and shields, which is the test of whether the department was
+  // worth having. See docs/RESEARCH.md §17.
+  casualty_teams: {
+    id: 'casualty_teams', dept: 'medical', rank: 1, name: 'Casualty Teams',
+    order: 'Casualty teams to the decks', cooldown: 45, duration: 30,
+    mods: { crewProtect: 0.35 },
+    say: 'Casualty teams to every deck.',
+  },
+  stimulants: {
+    id: 'stimulants', dept: 'medical', rank: 2, name: 'Stimulants',
+    order: 'Break out the stimulants', cooldown: 60, duration: 20,
+    mods: { repairRate: 1.4, accuracy: 1.08 },
+    say: 'They will feel this tomorrow. Not today.',
+  },
+  back_to_duty: {
+    id: 'back_to_duty', dept: 'medical', rank: 2, name: 'Back to Duty',
+    order: 'Clear someone for duty', cooldown: 90, duration: 0,
+    special: 'return_officer',
+    say: 'I can give you one of them back. One.',
+  },
+  surgical_bay: {
+    id: 'surgical_bay', dept: 'medical', rank: 3, name: 'Surgical Bay',
+    order: 'Open the surgical bay', cooldown: 120, duration: 40,
+    mods: { crewProtect: 0.5 }, special: 'treat_wounded',
+    say: 'Surgical bay open. Send them down.',
+  },
+
+  // --- Operations: the helm and communications ---
+  attack_pattern_delta: {
+    id: 'attack_pattern_delta', dept: 'operations', rank: 1, name: 'Attack Pattern Delta',
+    order: 'Attack pattern delta', cooldown: 35, duration: 15,
+    mods: { defense: 1.4, turn: 1.2 },
+    say: 'Pattern delta, aye.',
+  },
+  traffic_analysis: {
+    id: 'traffic_analysis', dept: 'operations', rank: 2, name: 'Traffic Analysis',
+    order: 'Read their signal traffic', cooldown: 50, duration: 0,
+    special: 'read_intent',
+    say: 'Reading their signal traffic now.',
+  },
+  false_signal: {
+    id: 'false_signal', dept: 'operations', rank: 2, name: 'False Signal',
+    order: 'Put a false signal out', cooldown: 55, duration: 12,
+    special: 'false_signal',
+    say: 'Broadcasting a ship that is not there.',
+  },
+  ramming_speed: {
+    // Moved here from engineering. When it is ordered, it is ordered to the
+    // helm — it sat in the engineering table because that is where the power
+    // it draws comes from, which is not the same thing as who flies it.
+    id: 'ramming_speed', dept: 'operations', rank: 3, name: 'Overload Impulse',
+    order: 'All available power to engines', cooldown: 60, duration: 15,
+    mods: { impulse: 1.6, turn: 1.3 },
+    say: 'She’ll take it — for fifteen seconds.',
+  },
 };
 
 export const ABILITY_LIST = Object.values(ABILITIES);
 
-/** Abilities an officer at a station could ever learn. */
+/**
+ * Abilities an officer at a station could ever learn.
+ *
+ * This used to remap `operations` and `medical` onto `command`, because
+ * neither department had a single ability of its own — so the doctor and the
+ * helmsman called attack patterns, and four of the seven officers on a bridge
+ * held an identical tray. Every department has its own table now.
+ */
 export function abilityPool(dept) {
-  const d = dept === 'operations' || dept === 'medical' ? 'command' : dept;
-  return ABILITY_LIST.filter((a) => a.dept === d);
+  return ABILITY_LIST.filter((a) => a.dept === dept);
 }
 
 export class Officer {
@@ -162,10 +229,24 @@ export class Officer {
     return this.alive && !this.injured;
   }
 
+  /**
+   * What an officer comes aboard already knowing.
+   *
+   * A rule, not a truncation. This used to take `pool.slice(0, 3)` — the first
+   * three entries of the department table, in whatever order they happened to
+   * be written in — which made every officer of a department identical to every
+   * other and left six of the abilities in the game held by nobody at all.
+   *
+   * Ranks one and two are the working repertoire of the station; rank three is
+   * what training opens up, and the captain's own rank is what gates that. A
+   * green officer arrives with the rank-one set only, which is the difference
+   * between an experienced bridge and a fresh one.
+   */
   learnStartingAbilities() {
-    const pool = abilityPool(this.dept)
-      .filter((a) => a.rank <= 1 + Math.floor(this.expertise / 40));
-    this.abilities = pool.slice(0, 3).map((a) => a.id);
+    const gate = this.expertise >= 70 ? 2 : 1;
+    this.abilities = abilityPool(this.dept)
+      .filter((a) => a.rank <= gate)
+      .map((a) => a.id);
   }
 
   learn(abilityId) {
