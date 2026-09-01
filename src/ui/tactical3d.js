@@ -254,7 +254,13 @@ export class TacticalView3D {
     }
     cx /= ships.length; cy /= ships.length; cz /= ships.length;
     for (const s of ships) {
-      span = Math.max(span, Math.hypot(s.x - cx, (s.z ?? 0) - cy, s.y - cz) * 2.4);
+      // The hull's own extent counts, not only where its centre is. Framing on
+      // positions alone was fine when every ship was about a hundred units
+      // across; at true scale a Borg cube is 869 units of solid object and a
+      // camera framed on its centre point has most of it off the screen.
+      const reach = Math.hypot(s.x - cx, (s.z ?? 0) - cy, s.y - cz)
+        + hullScale(s.classId) * 0.6;
+      span = Math.max(span, reach * 2.4);
     }
 
     this.cam.focus[0] += (cx - this.cam.focus[0]) * 0.06;
@@ -343,7 +349,10 @@ export class TacticalView3D {
   forwardEye(out = vec3()) {
     const ship = this.playerShip;
     const nose = noseOf(ship, this._nose);
-    const lead = (this.hullReach ?? 90) * 1.35;
+    // A floor as well as a fraction. At true scale the fleet spans 130:1 — a
+    // seven-unit runabout to an 869-unit Borg cube — and a lead that is purely
+    // proportional puts the camera inside a small ship's own hull.
+    const lead = Math.max(46, (this.hullReach ?? 90) * 1.35);
     out[0] = (ship?.x ?? 0) + nose[0] * lead;
     out[1] = (ship?.z ?? 0) + nose[1] * lead + 12;
     out[2] = (ship?.y ?? 0) + nose[2] * lead;

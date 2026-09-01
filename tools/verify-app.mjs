@@ -682,6 +682,99 @@ try {
     broken.orbit === false && broken.drawing === true, JSON.stringify(broken));
   await dismissModals(page);
 
+  // ---- A big ship looks big ----
+  //
+  // The screenshot is the check. "Does a Galaxy dwarf a Constitution" is a
+  // question only a picture answers, and for the whole life of this project
+  // the answer was no: a 641 m Galaxy drew at 1.10x a 289 m Constitution.
+  const sizes = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    const { hullScale } = await import('./src/gfx/blueprint.js');
+
+    const big = new Ship('galaxy', { faction: 'federation', name: 'USS Yardstick' });
+    const small = new Ship('runabout', { faction: 'federation', name: 'Rio Grande' });
+    g.startCombat([big, small], { name: 'Scale check', relentless: true });
+    // Line them up abeam of the player so both are on the plot. The sim is
+    // never stepped here: this is a photograph, and a fight the player cannot
+    // win would end the commission and take every later check with it.
+    big.x = 500; big.y = -260; big.z = 0;
+    small.x = 500; small.y = 260; small.z = 0;
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    g.ship.heading = 0; g.ship.desiredHeading = 0;
+    app.go('tactical');
+    app.render();
+
+    return {
+      galaxy: hullScale('galaxy'),
+      connie: hullScale('constitution'),
+      runabout: hullScale('runabout'),
+      cube: hullScale('borg_cube'),
+      drawing: !!app.tactical,
+    };
+  });
+  check('a Galaxy is drawn 2.2x a Constitution, as published',
+    Math.abs(sizes.galaxy / sizes.connie - 641 / 289) < 1e-6, JSON.stringify(sizes));
+  check('and a Borg cube is drawn ten times one',
+    Math.abs(sizes.cube / sizes.connie - 3040 / 289) < 1e-6, JSON.stringify(sizes));
+  check('while a runabout is a twelfth of one',
+    sizes.runabout / sizes.connie < 0.1, JSON.stringify(sizes));
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: join(SHOTS, '16-hull-scale.png') });
+
+  // Put the biggest thing in the game on the plot and check the camera copes.
+  const framed = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    for (let i = 0; i < 5; i++) g.update(1 / 30);
+    g.startCombat([new Ship('borg_cube', { faction: 'borg', name: 'Cube' })],
+      { name: 'Framing check', relentless: true });
+    g.engagement.hostiles[0].x = 900;
+    g.engagement.hostiles[0].y = 0;
+    app.go('tactical');
+    // Rendered, not simulated — the camera settles on render. Stepping a fight
+    // with a Borg cube in it destroys the ship and ends the commission.
+    for (let i = 0; i < 40; i++) app.tactical?.render(g.engagement, 0, 1 / 60);
+    const t = app.tactical;
+    return {
+      distance: t?.cam?.distance ?? -1,
+      draws: t?.stats?.drawCalls ?? -1,
+      tris: t?.stats?.triangles ?? -1,
+    };
+  });
+  check('the camera pulls back to frame a three-kilometre object',
+    framed.distance > 900, JSON.stringify(framed));
+  check('and the frame budget still holds with it on screen',
+    framed.draws >= 0 && framed.draws <= 60 && framed.tris <= 8000, JSON.stringify(framed));
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const app = globalThis.__app;
+    for (let i = 0; i < 10; i++) app.tactical?.render(app.game.engagement, 0, 1 / 60);
+  });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: join(SHOTS, '16b-borg-cube.png') });
+
+  const leftAsFound = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    for (let i = 0; i < 5; i++) g.update(1 / 30);
+    // Put the ship back exactly as it was found. Everything after this was
+    // written against a healthy Enterprise on a live commission.
+    g.ship.restore();
+    g.ship.crew = g.ship.maxCrew;
+    g.wreck = null;
+    g.over = false;
+    globalThis.__app.go('bridge');
+    return { over: g.over, hull: g.ship.hullPct, engagement: !!g.engagement };
+  });
+  check('and the scale checks left the ship as they found it',
+    leftAsFound.over === false && leftAsFound.hull === 1 && leftAsFound.engagement === false,
+    JSON.stringify(leftAsFound));
+  await dismissModals(page);
+
   // ---- The chart has a third axis ----
   //
   // Driven through the order bar, and the screenshots are the point: a tilted

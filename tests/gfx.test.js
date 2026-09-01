@@ -19,7 +19,10 @@ import {
   mat4, identity, multiply, perspective, lookAt, compose, normalMatrix, project,
 } from '../src/gfx/math.js';
 import { MeshBuilder, saucer, tube, box, sphere, mirrored } from '../src/gfx/mesh.js';
-import { BLUEPRINTS, hullMesh, hullScale, paletteFor } from '../src/gfx/blueprint.js';
+import {
+  BLUEPRINTS, DIMENSIONS, hullMesh, hullScale, paletteFor, UNITS_PER_METRE,
+} from '../src/gfx/blueprint.js';
+import { SHIP_LIST } from '../src/world/ships.data.js';
 import {
   sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, worldMesh, limbMesh,
   WARP_LENGTH, VOLUME,
@@ -286,13 +289,31 @@ describe('the fleet has hulls', () => {
     assert.ok(total < 20000, `${total} triangles across the fleet`);
   });
 
-  test('scale compresses a 130:1 length range into something viewable', () => {
-    // 23 m runabout to a 3,040 m cube. Linear scaling makes one of them a pixel.
-    const runabout = hullScale('runabout');
-    const connie = hullScale('constitution');
-    const cube = hullScale('borg_cube');
-    assert.ok(runabout < connie && connie < cube, `${runabout} ${connie} ${cube}`);
-    assert.ok(cube / runabout < 4, `cube is ${(cube / runabout).toFixed(1)}× the runabout on screen`);
+  test('on-screen size is in the published ratio, for every pair of hulls', () => {
+    // This test used to assert the opposite, and the opposite was the bug: it
+    // required a Borg cube to draw less than 4x a runabout, and what that
+    // actually produced was a fleet in which every ship is the same size. A
+    // 641 m Galaxy drew at 1.10x a 289 m Constitution, and a three-kilometre
+    // cube at 1.31x. The lengths were right; the scale function threw them away.
+    const ids = Object.keys(DIMENSIONS);
+    for (const a of ids) {
+      for (const b of ids) {
+        const onScreen = hullScale(a) / hullScale(b);
+        const published = DIMENSIONS[a].length / DIMENSIONS[b].length;
+        assert.ok(Math.abs(onScreen - published) < 1e-9,
+          `${a} vs ${b}: drawn at ${onScreen.toFixed(3)}x, published ratio ${published.toFixed(3)}x`);
+      }
+    }
+    // And the headline case, in words.
+    assert.ok(Math.abs(hullScale('borg_cube') / hullScale('constitution') - 3040 / 289) < 1e-9);
+  });
+
+  test('a Constitution still reads at about the size it always did', () => {
+    // The change is to RELATIVE size. Every weapon arc, range and camera
+    // distance in this game was tuned against a hull about this big.
+    assert.ok(Math.abs(hullScale('constitution') - 83) < 6,
+      `a Constitution now draws at ${hullScale('constitution').toFixed(0)} units`);
+    assert.ok(UNITS_PER_METRE > 0 && Number.isFinite(UNITS_PER_METRE));
   });
 
   test('every faction has a palette and an unknown one still renders', () => {
@@ -1520,5 +1541,107 @@ describe('a hit you can see and feel', () => {
     // Both brighten: a flash is a flash.
     assert.ok(hull[0] > 1 && shield[2] > 1);
     assert.deepEqual(joltTint(0), [1, 1, 1], 'the picture stays tinted after the hit');
+  });
+});
+
+// ==================================================== the published numbers
+
+describe('every hull has its numbers, and they are the right shape', () => {
+  test('no class is missing a dimension', () => {
+    for (const cls of SHIP_LIST) {
+      const d = DIMENSIONS[cls.id];
+      assert.ok(d, `${cls.id} has no published dimensions`);
+      for (const k of ['length', 'beam', 'height', 'decks', 'crew']) {
+        assert.ok(Number.isFinite(d[k]) && d[k] >= 0, `${cls.id}.${k} is ${d[k]}`);
+      }
+      assert.ok(d.length > 0 && d.beam > 0 && d.height > 0,
+        `${cls.id} has a zero dimension`);
+    }
+  });
+
+  test('and nothing is in the table that is not in the game', () => {
+    for (const id of Object.keys(DIMENSIONS)) {
+      assert.ok(SHIP_LIST.some((c) => c.id === id), `${id} is not a ship class`);
+    }
+  });
+
+  test('the two length tables cannot drift apart', () => {
+    // BLUEPRINTS carries `length` in metres as well, and duplicated numbers
+    // are numbers that disagree eventually.
+    for (const [id, d] of Object.entries(DIMENSIONS)) {
+      assert.equal(BLUEPRINTS[id]?.length, d.length,
+        `${id}: blueprint says ${BLUEPRINTS[id]?.length} m, dimensions say ${d.length} m`);
+    }
+  });
+
+  test('complement agrees with the class table', () => {
+    for (const cls of SHIP_LIST) {
+      assert.equal(DIMENSIONS[cls.id].crew, cls.crew,
+        `${cls.id}: ${DIMENSIONS[cls.id].crew} here, ${cls.crew} in ships.data.js`);
+    }
+  });
+
+  test('the proportions are physically sane, and the exceptions are real ones', () => {
+    // A Bird-of-Prey is wider than it is long — 182 m across the wings against
+    // 158 nose to tail — and a Borg cube is a cube. Both are correct, and a
+    // check that does not know about them is quietly wrong for the one ship
+    // whose shape is its entire identity.
+    const WIDER_THAN_LONG = new Set(['bird_of_prey']);
+    const CUBES = new Set(['borg_cube']);
+    for (const [id, d] of Object.entries(DIMENSIONS)) {
+      if (CUBES.has(id)) {
+        assert.equal(d.beam, d.length, `${id} is supposed to be a cube`);
+        assert.equal(d.height, d.length, `${id} is supposed to be a cube`);
+        continue;
+      }
+      if (WIDER_THAN_LONG.has(id)) {
+        assert.ok(d.beam > d.length, `${id} is supposed to be wider than it is long`);
+      } else {
+        assert.ok(d.beam < d.length, `${id}: beam ${d.beam} is not less than length ${d.length}`);
+      }
+      assert.ok(d.height < d.length, `${id}: height ${d.height} exceeds its length`);
+    }
+  });
+});
+
+describe('the hulls are built in unit space, not in metres', () => {
+  /** Nose-to-tail extent of a built mesh, in the space it was built in. */
+  function unitLength(id) {
+    const m = hullMesh(id, 'independent');
+    const floats = m.stride / 4;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < m.vertexCount; i++) {
+      const x = m.data[i * floats];
+      lo = Math.min(lo, x);
+      hi = Math.max(hi, x);
+    }
+    return hi - lo;
+  }
+
+  test('no hull is built at its metre length by mistake', () => {
+    // The `wedge` and `hauler` builders read `b.length` for their unit-space
+    // size, and `length` is METRES everywhere else in that file. Every
+    // Cardassian, Dominion, Tholian and civilian hull was therefore built
+    // between 80 and 500 times too big and then multiplied by the on-screen
+    // scale on top: a Jem'Hadar battleship came out 75,046 units long inside a
+    // 2,600-unit engagement volume. Somebody hit this before and invented the
+    // `length_` name for the unit-space value; four blueprints carried the
+    // right number and no builder ever read it.
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const l = unitLength(id);
+      assert.ok(l > 0.4 && l < 3,
+        `${id} is ${l.toFixed(1)} units long in unit space — it is being built in metres`);
+    }
+  });
+
+  test('drawn size stays inside the engagement volume', () => {
+    // ARENA_RADIUS is 2,600. A hull wider than the arena cannot be framed,
+    // cannot be flown around, and is the shape this bug took on screen.
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const drawn = unitLength(id) * hullScale(id);
+      assert.ok(drawn < 2600,
+        `${id} draws ${drawn.toFixed(0)} units long, larger than the whole arena`);
+    }
   });
 });

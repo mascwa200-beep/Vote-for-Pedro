@@ -323,11 +323,22 @@ const FORMS = {
     sphere(mb, { origin: vec3(0.62, 0, 0), radius: 0.11, segments: 10, rings: 6, color: p.glow });
   },
 
-  /** A blunt armoured wedge — Cardassian and Dominion hulls. */
+  /**
+   * A blunt armoured wedge — Cardassian and Dominion hulls.
+   *
+   * `length_`, not `length`. `length` is METRES and is read by `hullScale`;
+   * this is the hull's proportion in unit space, where everything else in this
+   * file lives between about 0.8 and 1.9. Reading the wrong one built a Galor
+   * 372 units long instead of 1.25, and then multiplied it by the on-screen
+   * scale on top: 31,836 units of Cardassian cruiser inside a 2,600-unit
+   * engagement volume. Somebody hit this before and invented the `length_`
+   * name for it — four blueprints have carried the correct value ever since,
+   * and no builder has ever read it.
+   */
   wedge(mb, p, b) {
     box(mb, {
       center: vec3(0, 0, 0),
-      size: vec3(b.length ?? 1.3, b.height ?? 0.16, b.width ?? 0.34),
+      size: vec3(b.length_ ?? 1.3, b.height ?? 0.16, b.width ?? 0.34),
       sweep: b.sweep ?? 0.3,
       color: p.hull,
     });
@@ -364,11 +375,11 @@ const FORMS = {
     }
   },
 
-  /** A working hull: cylinder, bridge block, cargo spine. */
+  /** A working hull: cylinder, bridge block, cargo spine. `length_` — see wedge. */
   hauler(mb, p, b) {
     tube(mb, {
       origin: vec3(-0.5, 0, 0),
-      length: b.length ?? 1.0,
+      length: b.length_ ?? 1.0,
       r0: b.r0 ?? 0.16,
       r1: b.r1 ?? 0.13,
       segments: 10,
@@ -382,8 +393,74 @@ const FORMS = {
 };
 
 /**
+ * Every hull, to its published numbers. Metres, then decks, then complement.
+ *
+ * See docs/RESEARCH.md §13, which records where each figure comes from and
+ * marks the ones the source material never gave — those are the game's own,
+ * read off the screen, and are flagged there rather than passed off as
+ * measurements.
+ *
+ * `length` is the only field the renderer reads today; beam, height and decks
+ * are recorded so that giving each class its own silhouette has real numbers to
+ * work from instead of hand-tuned ratios.
+ *
+ * Two entries break rules that look universal, and both are correct:
+ *
+ *   A Bird-of-Prey is WIDER THAN IT IS LONG — 182 metres across the wings
+ *   against 158 nose to tail. It is the reason the `wings` primitive exists.
+ *
+ *   A Borg cube is a cube. Length, beam and height are the same number and it
+ *   has no decks in any sense the word applies to.
+ */
+export const DIMENSIONS = {
+  // ---- Starfleet ----
+  constitution: { length: 289, beam: 132, height: 73, decks: 23, crew: 430 },
+  constitution_refit: { length: 305, beam: 132, height: 71, decks: 23, crew: 430 },
+  miranda: { length: 278, beam: 141, height: 62, decks: 12, crew: 220 },
+  oberth: { length: 120, beam: 66, height: 35, decks: 8, crew: 80 },
+  excelsior: { length: 467, beam: 186, height: 78, decks: 34, crew: 750 },
+  constellation: { length: 260, beam: 160, height: 60, decks: 14, crew: 535 },
+  ambassador: { length: 526, beam: 326, height: 130, decks: 36, crew: 700 },
+  galaxy: { length: 641, beam: 464, height: 195, decks: 42, crew: 1014 },
+  nebula: { length: 442, beam: 318, height: 130, decks: 30, crew: 750 },
+  intrepid: { length: 345, beam: 132, height: 66, decks: 15, crew: 150 },
+  defiant: { length: 171, beam: 134, height: 30, decks: 4, crew: 50 },
+  sovereign: { length: 685, beam: 251, height: 88, decks: 24, crew: 855 },
+  runabout: { length: 23, beam: 14, height: 5, decks: 1, crew: 4 },
+
+  // ---- Klingon ----
+  bird_of_prey: { length: 158, beam: 182, height: 98, decks: 3, crew: 36 },
+  d7: { length: 228, beam: 152, height: 60, decks: 18, crew: 400 },
+  ktinga: { length: 235, beam: 152, height: 60, decks: 18, crew: 440 },
+  vorcha: { length: 481, beam: 342, height: 107, decks: 28, crew: 1900 },
+  neghvar: { length: 682, beam: 470, height: 137, decks: 35, crew: 2500 },
+
+  // ---- Romulan ----
+  warbird: { length: 1041, beam: 774, height: 307, decks: 60, crew: 1500 },
+  scoutship: { length: 68, beam: 44, height: 18, decks: 3, crew: 24 },
+
+  // ---- Cardassian ----
+  galor: { length: 372, beam: 192, height: 59, decks: 16, crew: 300 },
+  keldon: { length: 400, beam: 208, height: 64, decks: 18, crew: 400 },
+
+  // ---- Everyone else ----
+  marauder: { length: 366, beam: 234, height: 103, decks: 20, crew: 450 },
+  orion_raider: { length: 110, beam: 64, height: 30, decks: 5, crew: 60 },
+  tholian_web_spinner: { length: 130, beam: 96, height: 26, decks: 4, crew: 12 },
+  jem_hadar_attack: { length: 178, beam: 130, height: 26, decks: 3, crew: 50 },
+  jem_hadar_battleship: { length: 800, beam: 420, height: 150, decks: 40, crew: 900 },
+  borg_cube: { length: 3040, beam: 3040, height: 3040, decks: 0, crew: 64000 },
+  bioship: { length: 600, beam: 420, height: 200, decks: 0, crew: 1 },
+  transport: { length: 120, beam: 58, height: 34, decks: 6, crew: 1400 },
+  freighter: { length: 220, beam: 92, height: 58, decks: 10, crew: 14 },
+};
+
+/**
  * The fleet. `form` picks an archetype; everything else tunes it.
- * `length` is metres and is used only for relative scale between hulls.
+ *
+ * `length` here is METRES and duplicates DIMENSIONS — a test holds the two
+ * together so they cannot drift. `length_` is the hull's proportion in UNIT
+ * space, which is a different thing entirely and is what the builders read.
  */
 export const BLUEPRINTS = {
   // ---- Starfleet ----
@@ -414,17 +491,17 @@ export const BLUEPRINTS = {
 
   // ---- Cardassian ----
   galor: { form: 'wedge', length: 372, length_: 1.25, width: 0.36, sweep: 0.34 },
-  keldon: { form: 'wedge', length: 400, width: 0.4, height: 0.18, sweep: 0.36 },
+  keldon: { form: 'wedge', length: 400, length_: 1.3, width: 0.4, height: 0.18, sweep: 0.36 },
 
   // ---- Everyone else ----
   marauder: { form: 'warbird', length: 366, wingSpan: 0.5 },
   orion_raider: { form: 'raptor', length: 110, wingSpan: 0.54, wingSweep: 0.24, bodyLength: 0.5 },
   tholian_web_spinner: { form: 'wedge', length: 130, length_: 0.8, width: 0.44, height: 0.1, sweep: 0.1 },
   jem_hadar_attack: { form: 'wedge', length: 178, length_: 0.9, width: 0.42, height: 0.12, sweep: 0.4 },
-  jem_hadar_battleship: { form: 'wedge', length: 800, width: 0.5, height: 0.2, sweep: 0.44 },
+  jem_hadar_battleship: { form: 'wedge', length: 800, length_: 1.4, width: 0.5, height: 0.2, sweep: 0.44 },
   borg_cube: { form: 'cube', length: 3040, size: 1.15 },
   bioship: { form: 'cube', length: 600, size: 0.85 },
-  transport: { form: 'hauler', length: 120 },
+  transport: { form: 'hauler', length: 120, length_: 1.0 },
   freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.2 },
 };
 
@@ -453,24 +530,33 @@ export function hullMesh(classId, faction = 'independent') {
 }
 
 /**
- * On-screen size for a hull, in world units.
+ * World units per metre of hull.
  *
- * Two compressions, both deliberate, because this is a tactical display and not
- * a photograph.
+ * Hulls are drawn far larger than scale against the distances between them,
+ * and that compression is deliberate: engagements run at 300–1,200 units and a
+ * truthfully scaled Constitution would be a speck you could not target, let
+ * alone identify. This number is chosen so a Constitution reads at about the
+ * size it always has, which makes the change below one of RELATIVE size only —
+ * every weapon arc, range and camera distance in the game stays meaningful.
+ */
+export const UNITS_PER_METRE = 0.286;
+
+/**
+ * On-screen size for a hull, in world units. Length in metres, times one
+ * constant, and nothing else.
  *
- * The fleet spans 23 m to 3,040 m — a runabout to a Borg cube — and linear
- * scaling would make the runabout a single pixel beside the cube. So the ratio
- * is compressed logarithmically: a cube still towers over a Constitution, and
- * the Constitution is still visibly a ship.
+ * This used to compress the range logarithmically as well, on the reasoning
+ * that a runabout beside a Borg cube would be a single pixel. What it actually
+ * produced was a fleet in which every ship is the same size: measured against
+ * a Constitution, a 641-metre Galaxy drew at 1.10x, a 1,042-metre warbird at
+ * 1.17x, and a three-kilometre Borg cube at 1.31x — while a twenty-three-metre
+ * runabout drew at 0.67x, two-thirds the size of a heavy cruiser. The lengths
+ * were right the whole time; this function threw them away.
  *
- * And hulls are drawn far larger than scale against the distances between them.
- * Engagements run at 300–1,200 units and a truthfully scaled Constitution would
- * be a speck you could not target, let alone identify. These numbers are chosen
- * so a hull reads at roughly a tenth of the distance to the next one.
+ * A runabout beside a Borg cube IS a speck. That is what those two things are.
  */
 export function hullScale(classId) {
-  const metres = BLUEPRINTS[classId]?.length ?? 200;
-  return 108 * (0.5 + 0.5 * Math.log10(metres / 20) / Math.log10(150));
+  return (DIMENSIONS[classId]?.length ?? 200) * UNITS_PER_METRE;
 }
 
 export { FORMS };
