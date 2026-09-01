@@ -404,6 +404,21 @@ export function checkGame(game) {
         `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
     }
 
+    // An episode waiting for a fight that is not coming.
+    //
+    // A mission choice that orders a battle now holds its reward until the
+    // battle is decided, and stays on its stage until then. That is right, and
+    // it introduces a soft-lock: if the engagement is never started or is
+    // dropped, the episode waits on a stage it can never leave and the captain
+    // has no way to know why. The episode-graph walker found this the moment
+    // the hold was written, which is exactly what it is for.
+    const pendingMission = game.missions?.active?.pending;
+    if (pendingMission) {
+      const fightComing = (!!eng && !eng.over) || !!game.pendingCombat;
+      r.must(fightComing, 'mission.awaiting-ghost', 'error',
+        'an episode is waiting on a battle that is neither running nor queued');
+    }
+
     // The duty roster, and the details that are out on it.
     //
     // These are people, and a fight can hurt them: somebody counted as both

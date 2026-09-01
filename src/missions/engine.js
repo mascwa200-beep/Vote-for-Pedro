@@ -90,7 +90,16 @@ export class Mission {
     if (!choice || choice.locked) return null;
 
     this.history.push({ stageId: this.stageId, choiceId });
-    const applied = this.applyEffects(choice.effects ?? {});
+    // A choice that starts a fight does not get to pay for it yet.
+    //
+    // `applyEffects` ran the experience, the standing and the ledger record
+    // before the shooting started, and a terminal choice then called `finish`
+    // in the same breath — so "Hold position" at Organia banked the reward for
+    // holding, and "Fight it" paid out for beating a Borg cube, before either
+    // fight had begun. You could take the money and run, and the episode was
+    // already recorded as won.
+    const startsFight = !!choice.effects?.combat;
+    const applied = this.applyEffects(choice.effects ?? {}, { hold: startsFight });
 
     // A choice can branch on a resolved check.
     let nextId = choice.next;
@@ -101,8 +110,22 @@ export class Mission {
 
     emit('mission:choice', { mission: this, choice, applied });
 
-    if (!nextId || !this.def.stages[nextId]) {
+    if (startsFight) {
+      // Settled by `settleCombat` when the engagement resolves.
+      this.pending = {
+        held: applied.held ?? {},
+        outcome: choice.outcome ?? applied.outcome ?? 'complete',
+        terminal: !nextId || !this.def.stages[nextId],
+      };
+    }
+
+    if (!startsFight && (!nextId || !this.def.stages[nextId])) {
       return this.finish(choice.outcome ?? applied.outcome ?? 'complete', applied);
+    }
+
+    if (!nextId || !this.def.stages[nextId]) {
+      // A terminal fight: stay on this stage until it is decided.
+      return { stage: this.stage, effects: applied, awaiting: 'combat' };
     }
 
     this.stageId = nextId;
@@ -110,10 +133,23 @@ export class Mission {
     return { stage: this.stage, effects: applied };
   }
 
-  /** Apply a choice's declared effects to the world. */
-  applyEffects(effects) {
+  /**
+   * Apply a choice's declared effects to the world.
+   *
+   * `hold` keeps back the parts that are a REWARD for what happens next —
+   * experience, standing, ledger records, flags — and returns them instead of
+   * applying them. It is set when the choice queues a fight: see `choose`.
+   * The rest still applies, because damage and lost time are the price of
+   * getting into the fight rather than the prize for winning it.
+   */
+  applyEffects(effects, { hold = false } = {}) {
     const g = this.ctx.game;
     const out = { messages: [] };
+    if (hold) {
+      const { standing, record, flag, xp, ...rest } = effects;
+      out.held = { standing, record, flag, xp };
+      effects = rest;
+    }
 
     if (effects.setVar) Object.assign(this.vars, effects.setVar);
 
@@ -195,6 +231,29 @@ export class Mission {
     return out;
   }
 
+  /**
+   * The fight this episode ordered is over.
+   *
+   * Won means the declared outcome and the reward held back for it. Anything
+   * else — broken off, talked out of, lost — means the episode ends without
+   * it: you did not do the thing the ending says you did.
+   */
+  settleCombat(combatOutcome) {
+    const pending = this.pending;
+    if (!pending) return null;
+    this.pending = null;
+
+    const won = combatOutcome === 'victory' || combatOutcome === 'routed';
+    if (!won) {
+      return pending.terminal
+        ? this.finish('broke_off', { messages: ['The engagement ended before it was settled.'] })
+        : null;
+    }
+
+    const applied = this.applyEffects(pending.held ?? {});
+    return pending.terminal ? this.finish(pending.outcome, applied) : { effects: applied };
+  }
+
   finish(outcome, applied = {}) {
     this.complete = true;
     this.outcome = outcome;
@@ -216,6 +275,14 @@ export class Mission {
         text: `${this.def.title}: ${ending.label ?? outcome}`,
         mission: this.id, outcome, stardate: g.clock.stardate,
       });
+    } else {
+      // An episode that ends on an outcome it never declared still ended, and
+      // the record is the whole point of the ledger. `broke_off` is the one
+      // that gets here: no episode writes an ending for the captain leaving.
+      this.ctx.game.ledger.record('mission_complete', {
+        text: `${this.def.title}: ${outcome.replace(/_/g, ' ')}`,
+        mission: this.id, outcome, stardate: this.ctx.game.clock.stardate,
+      });
     }
     emit('mission:complete', { mission: this, outcome, ending, applied });
     return { complete: true, outcome, ending, effects: applied };
@@ -225,6 +292,7 @@ export class Mission {
     return {
       id: this.id, stageId: this.stageId, history: this.history,
       vars: this.vars, complete: this.complete, outcome: this.outcome,
+      pending: this.pending ?? null,
     };
   }
 }
@@ -288,6 +356,9 @@ export class MissionBook {
       m.vars = data.active.vars ?? {};
       m.complete = data.active.complete ?? false;
       m.outcome = data.active.outcome ?? null;
+      // A reward being held for a fight that has not finished yet. Dropping it
+      // on load would strand the episode on a stage it can never leave.
+      m.pending = data.active.pending ?? null;
       this.active = m;
     }
   }

@@ -1635,6 +1635,16 @@ export class Game {
     // was made to fix, one line apart from the fix. It has to happen first.
     if (outcome === 'escaped' && !simulated) this.escapeToWarp();
 
+    // An episode that ordered this fight has been waiting on it. Won means the
+    // ending it declared and the reward held back for it; anything else means
+    // the episode ends without them, because you did not do the thing the
+    // ending says you did.
+    const settled = this.missions?.active?.settleCombat?.(outcome);
+    if (settled?.complete) {
+      this.missions.finishActive();
+      this.pushLog(`${settled.ending?.label ?? 'The episode ends.'}`, 'captain');
+    }
+
     emit('combat:resolved', { outcome, killed });
 
     // The Kobayashi Maru is a simulator, and it is unwinnable by design. Taking

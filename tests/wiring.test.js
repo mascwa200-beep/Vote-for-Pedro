@@ -920,7 +920,11 @@ describe('every episode graph is sound', () => {
           if (!open.length) break;
           const pick = open[(trial * 7 + steps * 13) % open.length];
           path.push(`${m.stageId}:${pick.id}`);
-          m.choose(pick.id);
+          const took = m.choose(pick.id);
+          // A choice that orders a fight now waits for it. This walker does not
+          // simulate battles, so it settles the fight the way winning one does
+          // — which is also the assertion that the episode CAN get past it.
+          if (took?.awaiting === 'combat' || m.pending) m.settleCombat('victory');
         }
         if (!m.complete) {
           failures.push(`${ep.id} @ trial ${trial} after ${steps} steps: ${path.slice(-6).join(' -> ')}`);
@@ -928,6 +932,89 @@ describe('every episode graph is sound', () => {
       }
     }
     assert.deepEqual(failures, [], 'episodes that stranded the player');
+  });
+
+  test('a mission that orders a fight does not pay before the fight', () => {
+    // Four episodes have a stage where choosing to fight both starts a battle
+    // AND ends the episode: Organia's "Hold position", Donatu's "Engage", the
+    // Tholian web's "Break the lattice", and "Fight it" against a Borg cube.
+    // `applyEffects` ran the experience, the standing and the ledger record and
+    // then `finish` recorded the ending — all before a shot was fired. You
+    // could bank the reward for holding Organia and then run.
+    const terminal = [];
+    for (const ep of EPISODES) {
+      for (const [stageId, stage] of Object.entries(ep.stages ?? {})) {
+        for (const choice of stage.choices ?? []) {
+          if (!choice.effects?.combat) continue;
+          if (choice.next && ep.stages[choice.next]) continue;
+          terminal.push({ ep, stageId, choice });
+        }
+      }
+    }
+    assert.ok(terminal.length >= 3,
+      `only ${terminal.length} terminal combat stages found; has the content changed?`);
+
+    for (const { ep, stageId, choice } of terminal) {
+      const g = gameWith({ seed: 4242n });
+      g.progress.addXP(200000, { ledger: g.ledger });
+      const m = g.missions.start(ep.id, g);
+      m.stageId = stageId;
+
+      const xpBefore = g.progress.xp;
+      const took = m.choose(choice.id);
+      assert.equal(m.complete, false,
+        `${ep.id}/${choice.id}: the episode finished before the fight did`);
+      assert.equal(g.progress.xp, xpBefore,
+        `${ep.id}/${choice.id}: paid ${g.progress.xp - xpBefore} experience before the fight`);
+      assert.ok(took?.effects?.combat, `${ep.id}/${choice.id}: no fight was queued`);
+
+      // Run from it and the episode ends without the reward it was for.
+      m.settleCombat('escaped');
+      assert.equal(m.complete, true, `${ep.id}/${choice.id}: never finished`);
+      assert.equal(m.outcome, 'broke_off',
+        `${ep.id}/${choice.id}: running paid out "${m.outcome}"`);
+      assert.equal(g.progress.xp, xpBefore,
+        `${ep.id}/${choice.id}: running still paid ${g.progress.xp - xpBefore}`);
+    }
+  });
+
+  test('and winning it pays exactly what the choice promised', () => {
+    const ep = EPISODES.find((e) => e.stages?.inside?.choices
+      ?.some((c) => c.effects?.combat && !e.stages[c.next]));
+    if (!ep) return;
+    const choice = ep.stages.inside.choices.find((c) => c.effects?.combat);
+
+    const g = gameWith({ seed: 4242n });
+    g.progress.addXP(200000, { ledger: g.ledger });
+    const m = g.missions.start(ep.id, g);
+    m.stageId = 'inside';
+    const xpBefore = g.progress.xp;
+
+    m.choose(choice.id);
+    m.settleCombat('victory');
+    assert.equal(m.complete, true);
+    assert.equal(m.outcome, choice.outcome, `won and got "${m.outcome}"`);
+    assert.equal(Math.round(g.progress.xp - xpBefore), choice.effects.xp,
+      'winning paid something other than what the choice promised');
+  });
+
+  test('an episode waiting on a battle that is not coming is a rule violation', () => {
+    // Holding the reward means holding the stage, and that is a soft-lock if
+    // the fight never starts. The episode walker found it the moment the hold
+    // was written; this is the guard that keeps finding it.
+    const g = gameWith({ seed: 11n });
+    const ep = EPISODES.find((e) => Object.values(e.stages ?? {})
+      .some((st) => (st.choices ?? []).some((c) => c.effects?.combat)));
+    const m = g.missions.start(ep.id, g);
+    m.pending = { held: {}, outcome: 'won', terminal: true };
+
+    g.pendingCombat = null;
+    assert.ok(checkAll(g, { arenaRadius: 3000 }).some((v) => v.code === 'mission.awaiting-ghost'),
+      'a stranded episode broke no rule');
+
+    // With the fight actually queued, it is simply waiting, which is fine.
+    g.pendingCombat = { ships: [] };
+    assert.ok(!checkAll(g, { arenaRadius: 3000 }).some((v) => v.code === 'mission.awaiting-ghost'));
   });
 });
 
