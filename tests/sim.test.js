@@ -25,6 +25,7 @@ import { buildRoster, STATIONS } from '../src/world/crews.data.js';
 import { resolveHail } from '../src/sim/diplomacy.js';
 import { ABILITIES } from '../src/sim/officers.js';
 import { CAREERS, Character } from '../src/rules/character.js';
+import { checkAll } from '../src/sim/invariants.js';
 
 // ---------------------------------------------------------------- RNG
 
@@ -1725,4 +1726,56 @@ test('devices are spent, and spending one does something', () => {
     assert.equal(g.useDevice(id).ok, false, `${id} was used twice from one charge`);
   }
   assert.ok(tried >= 3, `only ${tried} devices could be used at all`);
+});
+
+// --------------------------------------------- breaking off a course under way
+
+// "Drop out of warp" was a button in the Under Way panel and nothing else: it
+// moved the ship, advanced the calendar, cleared the transit and set the mode,
+// all inside src/ui/screens.js. So there was no way to abort a course without
+// a screen, the system you stopped at was never marked visited, nothing was
+// ever waiting there when you arrived — and the phrase printed on the button
+// said "all stop", which at warp did something else entirely.
+
+test('a course can be broken off, and it puts the ship somewhere real', () => {
+  const g = new Game({ seed: 4801n, crewMode: 'original' });
+  const from = g.locationId;
+  const elsewhere = g.galaxy.systems.find((s) => s.id !== from).id;
+  assert.ok(g.setCourse(elsewhere, 6).ok);
+  const stardate = g.clock.stardate;
+
+  // Part way there, so the nearest system is a real choice.
+  for (let i = 0; i < 600 && g.transit; i++) g.update(1 / 30);
+  assert.ok(g.transit, 'the transit finished before it could be broken off');
+
+  const r = g.dropOutOfWarp();
+  assert.ok(r.ok, r.error);
+  assert.equal(g.transit, null, 'the ship is still under way');
+  assert.ok(['bridge', 'encounter'].includes(g.mode), `left the game in ${g.mode}`);
+  assert.equal(g.locationId, r.system.id);
+  assert.ok(g.galaxy.visited.has(g.locationId), 'the ship stopped somewhere it has never been');
+  assert.ok(g.clock.stardate > stardate, 'the flight took no time at all');
+  assert.ok(g.log.some((l) => /impulse/i.test(l.text)), 'nobody said anything about it');
+});
+
+test('and it is refused when the ship is not going anywhere', () => {
+  const g = new Game({ seed: 4802n, crewMode: 'original' });
+  const r = g.dropOutOfWarp();
+  assert.ok(!r.ok);
+  assert.match(r.error, /under way/i);
+});
+
+test('breaking off leaves the game in a state the checker accepts', () => {
+  // Twenty stops, at every point along a flight, checked against every rule.
+  for (let at = 30; at <= 900; at += 90) {
+    const g = new Game({ seed: BigInt(4900 + at), crewMode: 'original' });
+    const elsewhere = g.galaxy.systems.find((s) => s.id !== g.locationId).id;
+    if (!g.setCourse(elsewhere, 6).ok) continue;
+    for (let i = 0; i < at && g.transit; i++) g.update(1 / 30);
+    if (!g.transit) continue;
+    assert.ok(g.dropOutOfWarp().ok);
+    for (let i = 0; i < 120; i++) g.update(1 / 30);
+    assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS }), [],
+      `breaking off at tick ${at} left the game broken`);
+  }
 });

@@ -1058,6 +1058,25 @@ export const INTENTS = [
     keywords: { salvage: 3, scavenge: 3, wreck: 2, hulk: 2 },
     build: () => ({ action: 'salvage' }),
   },
+  {
+    // Breaking off a course under way. "All stop" also means this while the
+    // ship is at warp, and that is decided where the order is carried out
+    // rather than here, because the same words mean the throttle at impulse.
+    id: 'drop_warp',
+    help: 'Drop out of warp / break off the course',
+    phrases: [
+      'drop out of warp', 'drop us out of warp', 'come out of warp',
+      'drop to impulse', 'take us out of warp', 'break off the course',
+      'abort the course', 'cancel the course', 'belay that course',
+      'we are not going', 'stop the ship here',
+    ],
+    keywords: { warp: 1.4, abort: 2.4, impulse: 1.4 },
+    // The order that SETS a course shares almost every word with the order
+    // that abandons one, and a destination is the thing that tells them apart.
+    veto: ['set course', 'lay in', 'plot', 'engage'],
+    vetoSlots: ['place'],
+    build: () => ({ action: 'drop_warp' }),
+  },
   // ------------------------------------------------------------------
   // What the captain spends: the career signature and the locker.
   //

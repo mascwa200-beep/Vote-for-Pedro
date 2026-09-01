@@ -940,6 +940,39 @@ export class Game {
     return { ok: true, transit: this.transit, hours: plan.hours, fuel: plan.fuel };
   }
 
+  /**
+   * Break off a course under way, and coast in to whatever is nearest.
+   *
+   * This was implemented inside the Under Way panel in src/ui/screens.js: a
+   * button that moved the ship to a system, advanced the calendar, cleared the
+   * transit and set the mode, with none of it reachable from anywhere else.
+   * So there was no way to abort a course without a screen, the system you
+   * stopped at was never marked visited, nothing was ever waiting there when
+   * you got there — and the phrase printed on the button did something else
+   * entirely, which is the one thing this project does not allow a button
+   * to do.
+   */
+  dropOutOfWarp() {
+    const t = this.transit;
+    if (!t) return { ok: false, error: 'We are not under way, Captain.' };
+
+    const near = t.nearestSystem(this.galaxy);
+    this.locationId = near.id;
+    this.clock.advanceStardate(t.totalHours * t.progress / 24);
+    this.transit = null;
+    this.orbit = null;
+    this.mode = MODES.BRIDGE;
+
+    const isNew = this.galaxy.markVisited(this.locationId);
+    this.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
+    emit('arrived', { system: near, isNew, aborted: true });
+
+    // Stopping in the middle of nowhere is exactly when something finds you.
+    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger });
+    if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
+    return { ok: true, system: near, isNew };
+  }
+
   /** Arrive: advance the calendar, roll for what is waiting. */
   arrive() {
     const t = this.transit;

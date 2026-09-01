@@ -420,15 +420,11 @@ export function transitPanel(app) {
 
   wrap.append(panel('Helm', [
     button('Drop out of warp', tap(() => {
-      const near = t.nearestSystem(g.galaxy);
-      g.locationId = near.id;
-      g.clock.advanceStardate(t.totalHours * t.progress / 24);
-      g.transit = null;
-      g.mode = MODES.BRIDGE;
-      audio.play('warp_drop');
-      g.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
+      // What this DOES is `Game.dropOutOfWarp`, so the typed order and the
+      // button are the same action rather than two that look alike.
+      if (g.dropOutOfWarp().ok) audio.play('warp_drop');
       app.render();
-    }, 'ui_back'), { say: 'all stop', color: 'ghost' }),
+    }, 'ui_back'), { say: 'drop out of warp', color: 'ghost' }),
   ]));
 
   return wrap;

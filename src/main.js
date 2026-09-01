@@ -1203,11 +1203,22 @@ class App {
         break;
       }
       case 'throttle': {
+        // "All stop" while the ship is at warp is not the impulse throttle: it
+        // is the order to come out of warp, and it is what a captain says.
+        if (order.value === 0 && g.transit) { this.executeOrder({ action: 'drop_warp' }, raw); return; }
         // Engines answering an order is a sound the game had and never made.
         const opening = order.value > g.ship.throttle + 0.15;
         g.ship.throttle = order.value;
         if (opening) audio.play('impulse_burn', { throttle: 400 });
         ack('helm', order.value === 0 ? 'All stop.' : `Ahead ${Math.round(order.value * 100)} percent.`);
+        break;
+      }
+
+      case 'drop_warp': {
+        const r = g.dropOutOfWarp();
+        if (!r.ok) { audio.play('ui_deny'); ack('helm', r.error); break; }
+        audio.play('warp_drop');
+        ack('helm', `Dropping to impulse at ${r.system.name}, Captain.`);
         break;
       }
       case 'heading':
