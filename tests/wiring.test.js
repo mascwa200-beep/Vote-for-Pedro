@@ -1083,4 +1083,38 @@ describe('the sector map is a volume', () => {
       }
     }
   });
+
+  test('a ship in transit flies along the lane, not along the floor', () => {
+    // The map projects the ship's interpolated position with `pos.z ?? 0`, and
+    // `positionIn` returned only x and y — so the marker travelled on the plane
+    // while both stars it was travelling between sat off it. Lay the chart over
+    // and the ship visibly leaves its own lane.
+    // Drive the real transit the game builds, not a stand-in for one.
+    const g = new Game({ seed: 4077n });
+    g.setCourse('vulcan', 6);
+    assert.ok(g.transit, 'no transit started');
+    assert.ok(g.transit.route?.path?.length >= 2, 'no route from Sol to Vulcan');
+
+    const ends = g.transit.route.path;
+    const seen = [];
+    for (const frac of [0, 0.25, 0.5, 0.75, 1]) {
+      Object.defineProperty(g.transit, 'progress', { value: frac, configurable: true });
+      const p = g.transit.positionIn(g.galaxy);
+      assert.ok(Number.isFinite(p.z), `no depth at ${frac} of the way`);
+      seen.push(p.z);
+
+      // On the lane: the depth is the straight-line blend of the two stars it
+      // is between, which is what "along the lane" means.
+      const t = frac * (ends.length - 1);
+      const i = Math.min(ends.length - 2, Math.floor(t));
+      const az = systemDepth(ends[i]);
+      const bz = systemDepth(ends[i + 1]);
+      const want = az + (bz - az) * (t - i);
+      assert.ok(Math.abs(p.z - want) < 1e-9,
+        `at ${frac}: depth ${p.z.toFixed(3)}, lane is at ${want.toFixed(3)}`);
+    }
+    // And the lane is actually off the plane, or this proves nothing.
+    assert.ok(seen.some((z) => Math.abs(z) > 0.5),
+      `Sol to Vulcan is flat: ${seen.map((z) => z.toFixed(2)).join(', ')}`);
+  });
 });

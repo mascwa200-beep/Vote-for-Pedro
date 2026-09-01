@@ -3,7 +3,7 @@
 // Travel is not a menu jump. A course is plotted through charted lanes, it
 // takes stardate time and antimatter, and it can be interrupted en route.
 
-import { SYSTEMS, SYSTEM_BY_ID, distanceLy } from './systems.data.js';
+import { SYSTEMS, SYSTEM_BY_ID, distanceLy, systemDepth } from './systems.data.js';
 import { emit } from '../core/events.js';
 import { clamp } from '../core/num.js';
 
@@ -187,7 +187,20 @@ export class Transit {
     return Math.max(0, Math.min(1, this.elapsedReal / this.realSeconds));
   }
 
-  /** Current position along the route, for the map. */
+  /**
+   * Current position along the route, for the map.
+   *
+   * The third axis is interpolated with the other two. It has to be: the chart
+   * lifts every star off the plane by `systemDepth`, and this returned only x
+   * and y — so the map, which projects `pos.z ?? 0`, drew the ship travelling
+   * along the flat while the two stars it was travelling between sat above and
+   * below it. Lay the chart over and the marker leaves its own lane.
+   *
+   * This is presentation only. `distanceLy` stays planar on purpose — folding
+   * depth into it would change every lane length, every transit time and the
+   * balance of the whole campaign to buy an accuracy nobody can see. There is a
+   * test that guards exactly that.
+   */
   positionIn(galaxy) {
     const path = this.route.path;
     const t = this.progress * (path.length - 1);
@@ -195,7 +208,13 @@ export class Transit {
     const frac = t - i;
     const a = galaxy.get(path[i]);
     const b = galaxy.get(path[i + 1]) ?? a;
-    return { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac };
+    const az = systemDepth(a);
+    const bz = systemDepth(b);
+    return {
+      x: a.x + (b.x - a.x) * frac,
+      y: a.y + (b.y - a.y) * frac,
+      z: az + (bz - az) * frac,
+    };
   }
 
   /** @returns {'travelling'|'arrived'} */

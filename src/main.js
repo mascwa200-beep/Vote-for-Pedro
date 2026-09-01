@@ -925,7 +925,14 @@ class App {
       parley: ['They are standing off. Nobody fired.', 'Rescue operations may proceed.'],
     }[outcome] ?? ['The engagement has ended.'];
     if (outcome !== 'destroyed') {
-      const lost = g.ship.maxCrew - g.ship.crew;
+      // From the after-action record, which counts the dead of THIS fight.
+      //
+      // This used to be `maxCrew - crew`, which is the standing deficit for the
+      // whole commission — the exact bug `finishCombat` was fixed for, left
+      // behind in the panel the player actually reads. Eleven people lost in
+      // the first engagement were reported again after every quiet battle for
+      // the rest of the five years, next to a ledger entry that had it right.
+      const lost = g.lastCombat?.crewLost ?? 0;
       if (lost > 0) lines.push(`${lost} crew did not survive it.`);
       lines.push(`Hull at ${Math.round(g.ship.hullPct * 100)}%.`);
     }

@@ -46,6 +46,16 @@ export const LIMITS = {
   combatSeconds: 60 * 60,
 };
 
+/**
+ * The modes the game is allowed to be in.
+ *
+ * Spelled out here rather than imported from `core/state.js`, because that
+ * module imports this one and a cycle between the simulation and the thing that
+ * checks the simulation is a bad trade for five strings. A test asserts this
+ * set and `MODES` are the same set, so they cannot drift apart quietly.
+ */
+export const LEGAL_MODES = new Set(['bridge', 'transit', 'combat', 'mission', 'encounter']);
+
 const SEVERITY = { fatal: 0, error: 1, warn: 2 };
 
 /** Sort worst-first. Exported so callers report the same order the fuzzer does. */
@@ -348,6 +358,47 @@ export function checkGame(game) {
     if (game.conStation) {
       r.must(!!game.crew?.at?.(game.conStation), 'game.con.ghost', 'error',
         `the con is held by ${game.conStation}, and nobody alive is at that post`);
+    }
+
+    // The mode itself.
+    //
+    // Every rule above asks whether the mode is the RIGHT one and none of them
+    // ever asked whether it is a mode at all. A garbage value out of an old or
+    // hand-edited save routes to no screen: the game boots to a blank panel
+    // that takes no orders, and nothing anywhere says why.
+    r.must(LEGAL_MODES.has(game.mode), 'game.mode.unknown', 'fatal',
+      `the game is in "${game.mode}" mode, which is not a mode`);
+
+    // The hulk left after a battle.
+    //
+    // A wreck is the one thing a finished fight leaves lying in the world, and
+    // nothing has ever checked it. It is read back by `stripWreck`, which
+    // compares its system to where the ship is now, and by the machine shop,
+    // which multiplies its tier into a materials yield — so a wreck naming a
+    // system that does not exist is salvage you can never reach, and a
+    // non-finite tier is a hold full of NaN duranium.
+    if (game.wreck) {
+      r.must(ok(game.wreck.hulls) && game.wreck.hulls >= 1, 'game.wreck.hulls', 'error',
+        `a hulk of ${game.wreck.hulls} ships is adrift`);
+      r.must(ok(game.wreck.tier) && game.wreck.tier >= 0, 'game.wreck.tier', 'error',
+        `the hulk's tier is ${game.wreck.tier}`);
+      r.must(!!game.wreck.systemId, 'game.wreck.nowhere', 'error',
+        'a hulk is adrift in no system at all');
+    }
+
+    // The after-action record.
+    //
+    // `lastCombat` outlives the engagement it describes and is what the panel
+    // after a fight reads — the panel used to do its own arithmetic and got the
+    // casualty count wrong for the life of the game, reporting every death the
+    // commission had ever suffered after every quiet battle. Now that it reads
+    // this instead, this is worth guarding: a count larger than the crew is not
+    // a number anybody should be shown.
+    if (game.lastCombat) {
+      const lost = game.lastCombat.crewLost;
+      r.must(ok(lost) && lost >= 0 && lost <= (game.ship?.maxCrew ?? Infinity),
+        'game.lastCombat.crew', 'error',
+        `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
     }
 
     r.must(ok(game.latinum) && game.latinum >= 0, 'game.latinum', 'error',

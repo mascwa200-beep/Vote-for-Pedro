@@ -2538,6 +2538,106 @@ try {
       `${combatViewer.tris} triangles in ${combatViewer.draws} draws`);
   }
 
+  // ---- A fight that ends on its own, with the app listening ----
+  //
+  // Every fight the order monkey starts is killed by hand at the next phase
+  // boundary (`engagement.end('routed')`), and every other combat check here
+  // either forces an ending or reads the simulation directly. So the path from
+  // a battle finishing BY ITSELF, through `combat:resolved`, into the panel the
+  // player reads and back to the bridge, had never once been driven.
+  const natural = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    if (g.engagement && !g.engagement.over) g.engagement.end('victory');
+    g.update(1 / 30);
+    g.ship.restore();
+    g.ship.crew = g.ship.maxCrew;
+    g.wreck = null;
+    g.lastCombat = null;
+
+    // One outmatched hostile, close aboard, and no help for it.
+    g.startCombat([new Ship('orion_raider', { faction: 'orion', name: 'Free Trader Kaz' })],
+      { name: 'Natural ending' });
+    const eng = g.engagement;
+    for (const h of eng.hostiles) { h.x = 200; h.y = 0; h.z = 0; }
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0; g.ship.heading = 0;
+
+    let ticks = 0;
+    // Bounded: a fight that will not end is a failure, not a hang.
+    while (!g.lastCombat && ticks < 30 * 240) {
+      eng.fireAll();
+      g.update(1 / 30);
+      ticks++;
+    }
+    const text = [...document.querySelectorAll('.modal')].map((m) => m.textContent).join(' ');
+    return {
+      ticks,
+      ended: !!g.lastCombat,
+      outcome: g.lastCombat?.outcome ?? null,
+      crewLost: g.lastCombat?.crewLost ?? null,
+      engagement: g.engagement,
+      mode: g.mode,
+      screen: app.screen,
+      alert: g.alert,
+      panel: text,
+      violations: (await import('./src/sim/invariants.js')).checkAll(g, { arenaRadius: 3000 }),
+    };
+  });
+  check('a fight left alone finishes by itself', natural.ended,
+    `${natural.ticks} ticks and still going`);
+  check('and it settles the game rather than leaving it in the battle',
+    natural.engagement === null && natural.mode === 'bridge' && natural.alert !== 'red',
+    JSON.stringify({ engagement: natural.engagement, mode: natural.mode, alert: natural.alert }));
+  check('and the app noticed, and said so',
+    /Engagement Concluded/i.test(natural.panel), natural.panel.slice(0, 200));
+  check('and the simulation broke no rule doing it',
+    (natural.violations ?? []).length === 0, JSON.stringify(natural.violations));
+  await dismissModals(page);
+
+  // ---- The panel you read after a fight ----
+  //
+  // `finishCombat` was fixed long ago to count the dead of THIS battle rather
+  // than the standing deficit for the whole commission — crew losses are
+  // permanent, so the deficit re-reports every death that has ever happened.
+  // The panel the player actually reads kept its own copy of the old
+  // arithmetic, and no check had ever read its text: a quiet engagement on a
+  // ship that lost eleven people in its first fight announced eleven more.
+  const panel = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    // A commission with losses already on the books, and a battle in which
+    // nobody was hurt. The panel must talk about the battle.
+    g.ship.crew = g.ship.maxCrew - 11;
+    g.lastCombat = {
+      outcome: 'routed', name: 'Quiet one', killed: 1, hostiles: 1,
+      hullLeft: g.ship.hullPct, crewLost: 0, seconds: 30,
+      systemId: g.locationId, stardate: g.clock.stardate,
+    };
+    app.showCombatResult('routed');
+    const text = [...document.querySelectorAll('.modal')].map((m) => m.textContent).join(' ');
+    for (const b of document.querySelectorAll('.modal .btn')) b.click();
+    return { text, deficit: g.ship.maxCrew - g.ship.crew };
+  });
+  check('the fight report counts this battle’s dead, not the commission’s',
+    !/\d+\s+crew did not survive/.test(panel.text),
+    `standing deficit ${panel.deficit}, panel said: ${panel.text.slice(0, 160)}`);
+
+  // And when there ARE casualties it still says so — a check that only proves
+  // the line can be suppressed is a check that would pass on a deleted line.
+  const panel2 = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    g.lastCombat = { ...g.lastCombat, crewLost: 4 };
+    app.showCombatResult('routed');
+    const text = [...document.querySelectorAll('.modal')].map((m) => m.textContent).join(' ');
+    for (const b of document.querySelectorAll('.modal .btn')) b.click();
+    return text;
+  });
+  check('and it still reports the dead when there are any',
+    /\b4 crew did not survive/.test(panel2), panel2.slice(0, 160));
+  await dismissModals(page);
+
   // Leave it as it was found; everything after this assumes a quiet ship.
   await page.evaluate(() => {
     const g = globalThis.__app.game;

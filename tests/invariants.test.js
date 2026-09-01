@@ -25,9 +25,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  checkCombat, checkGame, checkAll, Watchdog, LIMITS, bySeverity,
+  checkCombat, checkGame, checkAll, Watchdog, LIMITS, bySeverity, LEGAL_MODES,
 } from '../src/sim/invariants.js';
-import { Game } from '../src/core/state.js';
+import { Game, MODES } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
 import {
   ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES, OUTCOMES,
@@ -1377,6 +1377,58 @@ describe('somebody answers the distress call', () => {
     g.engagement.end('victory');
     g.helpInbound = { classId: 'miranda', name: 'USS Nowhere', eta: 5 };
     assert.ok(checkAll(g, OPTS).some((v) => v.code === 'game.help.orphan'),
+      JSON.stringify(checkAll(g, OPTS)));
+  });
+
+  test('the checker knows what a mode is', () => {
+    // Every rule about the mode asked whether it was the RIGHT one. None asked
+    // whether it was a mode at all, so a garbage value out of an old save
+    // routed to no screen: a blank panel that takes no orders and says nothing.
+    const g = fight('d7');
+    g.engagement.end('victory');
+    g.update(STEP);
+    assert.deepEqual(checkAll(g, OPTS), []);
+
+    g.mode = 'tactical';   // a screen, once; never a mode
+    assert.ok(checkAll(g, OPTS).some((v) => v.code === 'game.mode.unknown'),
+      JSON.stringify(checkAll(g, OPTS)));
+  });
+
+  test('the set of legal modes is the set of modes', () => {
+    // Spelled out in the invariants file so it does not import the module that
+    // imports it. This is the guard on the two drifting apart.
+    assert.deepEqual([...LEGAL_MODES].sort(), Object.values(MODES).sort());
+  });
+
+  test('the checker objects to a hulk adrift in nowhere', () => {
+    const g = fight('d7');
+    g.engagement.end('victory');
+    g.update(STEP);
+
+    // Salvage compares the hulk's system to where the ship is now, and the
+    // machine shop multiplies its tier into a yield. Neither survives nonsense.
+    g.wreck = { tier: 2, systemId: null, hulls: 1, name: 'IKS Nowhere' };
+    assert.ok(checkAll(g, OPTS).some((v) => v.code === 'game.wreck.nowhere'));
+
+    g.wreck = { tier: NaN, systemId: 'sol', hulls: 1, name: 'IKS Nowhere' };
+    assert.ok(checkAll(g, OPTS).some((v) => v.code === 'game.wreck.tier'));
+
+    g.wreck = { tier: 2, systemId: 'sol', hulls: 0, name: 'IKS Nowhere' };
+    assert.ok(checkAll(g, OPTS).some((v) => v.code === 'game.wreck.hulls'));
+  });
+
+  test('the after-action record cannot claim more dead than the ship carries', () => {
+    // The panel after a fight now reads `lastCombat.crewLost` rather than doing
+    // its own arithmetic, which is what made it report every death the
+    // commission had ever suffered. This guards the field it reads.
+    const g = fight('d7');
+    g.engagement.end('victory');
+    g.update(STEP);
+    assert.ok(g.lastCombat, 'no after-action record');
+    assert.deepEqual(checkAll(g, OPTS), []);
+
+    g.lastCombat.crewLost = g.ship.maxCrew + 1;
+    assert.ok(checkAll(g, OPTS).some((v) => v.code === 'game.lastCombat.crew'),
       JSON.stringify(checkAll(g, OPTS)));
   });
 
