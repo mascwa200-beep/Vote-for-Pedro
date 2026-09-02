@@ -3523,6 +3523,103 @@ try {
     app.render();
   });
 
+  // ----------------------------------------------- somebody else's boarding party
+  //
+  // `ship.boarders` was a counter the game could only decrement: the defence
+  // in `Ship.update` was written in full — defenders drawn from the crew,
+  // losses both ways, a subsystem wrecked every second or so — and nothing
+  // anywhere had ever put one intruder aboard anything. The `intruder_alert`
+  // cue sat synthesised and reserved. Driven from the screen because the
+  // reporting is the half a player meets: the alert, the readout, and an order
+  // that answers it.
+  await dismissModals(page);
+  const intruders = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    g.missions.abandon?.(g);
+    if (!g.engagement || g.engagement.over) {
+      g.startCombat([new Ship('d7', { name: 'IKS Boarder' })], { relentless: true });
+    }
+    const foe = g.engagement.hostiles[0];
+    const alertBefore = g.alert;
+    g.ship.receiveBoarders(80, foe);
+    // The TACTICAL view explicitly, not whatever screen the render happens to
+    // be showing. A boarded captain is looking at the plot, and the first
+    // version of this check read `document.body` after a render that was still
+    // on the bridge — where the Ship Status readout lives — and reported the
+    // panel missing when the question was really "which screen is this".
+    app.go('tactical');
+    app.render();
+    const text = document.body.textContent ?? '';
+    return {
+      aboard: Math.round(g.ship.boarders),
+      alert: g.alert,
+      alertBefore,
+      // The bridge says so, and says which words answer it.
+      screen: app.screen,
+      onScreen: /Intruder Alert/i.test(text) && /aboard/i.test(text),
+      printsThePhrase: /repel boarders/i.test(text),
+      said: g.log.slice(-6).some((l) => /Intruder alert/i.test(l.text ?? '')),
+    };
+  });
+  check('a boarding party can be put aboard, which nothing could ever do',
+    intruders.aboard > 0, JSON.stringify(intruders));
+  check('and the ship goes to red alert and says so',
+    intruders.alert === 'red' && intruders.said, JSON.stringify(intruders));
+  check('and the bridge reports them, with the phrase that answers it',
+    intruders.onScreen && intruders.printsThePhrase, JSON.stringify(intruders));
+
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel h2')]
+      .find((x) => /Ship Status/i.test(x.textContent ?? ''));
+    head?.closest('.panel')?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(SHOTS, '06k-intruder-alert.png') });
+
+  // Answered by SAYING it. The order line is not fillable while the tactical
+  // view is up, so this goes through `executeOrder` like every other in-combat
+  // order in this harness.
+  const repelled = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const { parseOrder } = await import('./src/ui/orders.js');
+    const order = parseOrder('repel boarders');
+    app.executeOrder(order, 'repel boarders');
+    const held = g.ship.buffs?.some((b) => b.id === 'repel_boarders') ?? false;
+    // Run it out and see them off.
+    let t = 0;
+    while (g.ship.boarders > 0 && t < 30 * 300) { g.update(1 / 30); t++; }
+    return {
+      action: order.action,
+      held,
+      seconds: t / 30,
+      clear: g.ship.boarders === 0,
+      saidClear: g.log.slice(-8).some((l) => /off my ship|decks are clear/i.test(l.text ?? '')),
+    };
+  });
+  check('"repel boarders" is an order the game understands',
+    repelled.action === 'repel_boarders' && repelled.held, JSON.stringify(repelled));
+  check('and the fight for the ship ends, and is said to have ended',
+    repelled.clear && repelled.seconds < 60 && repelled.saidClear, JSON.stringify(repelled));
+
+  // Put the bridge back: an engagement, a red alert and a beaten hull are not
+  // what the checks below expect to inherit.
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    if (g.engagement) g.engagement.end('routed');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.ship.buffs = [];
+    g.setAlert('green');
+    g.mode = 'bridge';
+    app.go('bridge');
+    app.render();
+  });
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {

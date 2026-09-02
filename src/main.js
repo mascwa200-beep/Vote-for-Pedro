@@ -27,7 +27,7 @@ import {
 
 import { ABILITIES } from './sim/officers.js';
 import { WATCHES } from './sim/watch.js';
-import { Ship, FACINGS } from './sim/ship.js';
+import { Ship, FACINGS, REPEL_STRENGTH, REPEL_DURATION } from './sim/ship.js';
 import { answeringFor } from './sim/address.js';
 import { parseOrder } from './ui/orders.js';
 import { SKILLS } from './sim/skills.js';
@@ -276,6 +276,29 @@ class App {
         `Warp core breach in ${Math.round(seconds)} seconds. Eject the core or we lose her.`,
         'engineering',
       );
+      this.needsRender = true;
+    });
+
+    // Somebody is aboard. The cue was synthesised, routed to the alert bus and
+    // reserved for a mechanic the game did not have; this is where it finally
+    // gets played, and the captain is told in the same breath which order
+    // answers it.
+    on('ship:boarded', ({ ship, count, from }) => {
+      if (!ship.isPlayer) return;
+      audio.play('intruder_alert');
+      haptic('alert');
+      this.game?.setAlert('red');
+      this.game?.officerSays('security',
+        `Intruder alert. ${count} of them, beamed aboard from ${from?.name ?? 'the hostile'}. `
+        + 'Say the word and I will turn out the guard.',
+        'report');
+      this.needsRender = true;
+    });
+
+    on('ship:boarders-repelled', ({ ship }) => {
+      if (!ship.isPlayer) return;
+      audio.play('computer_ack');
+      this.game?.officerSays('security', 'Decks are clear, Captain. They are off my ship.', 'report');
       this.needsRender = true;
     });
 
@@ -1672,6 +1695,32 @@ class App {
             `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
             'report');
         }
+        break;
+      }
+      case 'repel_boarders': {
+        // Turning out the guard. The defence in `Ship.update` draws its
+        // defenders from the crew and reads `repelBoarders`, so what this
+        // order does is put more people into the corridor for a while — and
+        // there was no way to order it, because until the trigger was written
+        // nothing could ever be aboard to repel.
+        if (!(g.ship.boarders > 0)) {
+          audio.play('ui_deny');
+          ack('security', 'There is nobody aboard who should not be, Captain.');
+          break;
+        }
+        const already = g.ship.buffs?.some((b) => b.id === 'repel_boarders');
+        if (already) {
+          audio.play('ui_deny');
+          ack('security', 'Every hand I have is already down there, Captain.');
+          break;
+        }
+        g.ship.addBuff({
+          id: 'repel_boarders', label: 'Security to all decks',
+          until: REPEL_DURATION, mods: { repelBoarders: REPEL_STRENGTH },
+        });
+        audio.play('intruder_alert');
+        haptic('confirm');
+        ack('security', `Security teams to all decks. ${Math.round(g.ship.boarders)} aboard, Captain.`);
         break;
       }
       case 'take_mission': {

@@ -14,6 +14,7 @@ import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } from '../sim/away.js';
 import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { checkAll, Watchdog } from '../sim/invariants.js';
+import { boardableState, BOARDING_RANGE } from '../sim/ai.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import {
   buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer, replaceLosses,
@@ -2399,11 +2400,19 @@ export class Game {
     // Taking a bridge. The ship has to be beaten first — a boarding party does
     // not go through raised shields — and this is what makes crippling a
     // hostile a real alternative to killing it.
+    //
+    // `boardableState` rather than the condition that used to be written out
+    // here, because the same rule now governs somebody boarding US and one
+    // rule should have one definition. The old one read `s.shieldPct <= 0.05`
+    // — the MEAN of six facings — which combat cannot produce: fire lands on
+    // one facing while the other five regenerate, and across forty ordinary
+    // engagements the lowest mean a hostile ever reached was 0.497. So this
+    // was never offered in a fight, and every test that exercised it flattened
+    // all six facings by hand.
     const boardable = eng && !eng.over
       ? eng.liveHostiles.find((s) => !s.cloaked
-        && s.shieldPct <= 0.05
-        && (s.hullPct <= 0.35 || s.subsystems.engines <= 0.15)
-        && this.ship.distanceTo(s) < 900)
+        && boardableState(s, this.ship)
+        && this.ship.distanceTo(s) < BOARDING_RANGE)
       : null;
     if (boardable) out.push({ ...AWAY_TEMPLATES.boarding_action, target: boardable });
 

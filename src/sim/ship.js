@@ -84,6 +84,50 @@ export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'wa
 export const DAMAGE_CONTROL_OFF_ACTION = 8;
 
 /**
+ * The share of the crew that turns out to fight an intruder.
+ *
+ * Not everyone: the ship is still being flown and still being shot at, so the
+ * people who meet a boarding party are the security detail and whoever is on
+ * that deck. Five per cent of a Constitution's complement is about twenty
+ * people, which is the right order for a corridor fight.
+ */
+export const REPEL_DEFENDER_SHARE = 0.05;
+
+/**
+ * Fewer than one intruder is nobody, and the fight is over.
+ *
+ * The repel loop takes `Math.min(boarders, killed)` per tick, so once the
+ * party is smaller than what the defenders can kill in a second it decays
+ * geometrically and never reaches zero: after ten minutes a boarded ship still
+ * had 1e-264 Klingons aboard, `boarders > 0` was still true, and the block went
+ * on damaging a subsystem roughly every second and drawing from the RNG every
+ * tick for the rest of the commission. Nothing had ever set `boarders` above
+ * zero, so it had never once run.
+ */
+export const BOARDERS_REPELLED_AT = 1;
+
+/**
+ * Turning out the guard: how much more of the crew meets them, and for how long.
+ *
+ * `REPEL_DEFENDER_SHARE` is the watch that turns out on its own — the security
+ * detail and whoever is on that deck. This is the captain ordering the rest of
+ * the ship into the corridor, which roughly triples the defence and cannot be
+ * kept up: the people doing it have other stations, and the ship is still
+ * being flown.
+ */
+export const REPEL_STRENGTH = 3;
+export const REPEL_DURATION = 20;
+
+/**
+ * What killing one intruder costs in your own people, at the ordinary defence.
+ *
+ * Divided by the root of `repelBoarders`, so a captain who turns out the guard
+ * buys a better exchange as well as a shorter fight — at REPEL_STRENGTH that
+ * is about 0.46 of ours for each of theirs instead of 0.8.
+ */
+export const REPEL_COST_PER_INTRUDER = 0.8;
+
+/**
  * Which shield facing covers a direction, given in ship-local coordinates.
  *
  * The dominant axis wins. This is the six-sided generalisation of the old
@@ -202,7 +246,7 @@ export class Ship {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1, crewProtect: 0,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0, repelBoarders: 1,
     };
     this.buffs = [];               // { id, label, until, mods }
 
@@ -497,11 +541,37 @@ export class Ship {
 
     // Boarders fight the crew.
     if (this.boarders > 0 && rng) {
-      const defenders = Math.max(1, this.crew * 0.05);
+      const defenders = Math.max(1, this.crew * REPEL_DEFENDER_SHARE) * this.mod('repelBoarders');
       const losses = Math.min(this.boarders, Math.max(0, rng.normal(defenders * 0.4, 2))) * dt;
       this.boarders = Math.max(0, this.boarders - losses);
-      this.crew = Math.max(0, this.crew - losses * 0.8);
+      // Whole people. Everything else that kills crew floors it — `takeDamage`
+      // uses Math.floor, a fire takes one at a time — and this loop was the
+      // only fractional writer of `crew` in the game, which nobody had ever
+      // seen because nothing had ever put a boarding party aboard anything.
+      // The tactical overlay printed the result straight: `Crew
+      // 426.1326943672293`, on a bridge display, in a fight. Carried rather
+      // than rounded, so losses smaller than one person a tick still add up to
+      // somebody instead of vanishing.
+      //
+      // And the exchange rate improves with numbers, which is why turning out
+      // the guard is worth ordering: twenty people meeting eighty is a running
+      // fight down a corridor, a hundred meeting eighty is a rout. Without
+      // this the order made the fight shorter and cost exactly the same — the
+      // same intruders had to be killed and each cost the same — so the button
+      // saying "it will cost fewer of ours" was saying something untrue.
+      const exchange = REPEL_COST_PER_INTRUDER / Math.sqrt(this.mod('repelBoarders'));
+      this.crewLossCarry = (this.crewLossCarry ?? 0) + losses * exchange;
+      if (this.crewLossCarry >= 1) {
+        const dead = Math.floor(this.crewLossCarry);
+        this.crewLossCarry -= dead;
+        this.crew = Math.max(0, this.crew - dead);
+      }
       if (rng.chance(0.5 * dt)) this.damageSubsystem(rng.pick(SUBSYSTEM_KEYS), 0.05);
+      // And an end to it — see BOARDERS_REPELLED_AT.
+      if (this.boarders < BOARDERS_REPELLED_AT) {
+        this.boarders = 0;
+        emit('ship:boarders-repelled', { ship: this });
+      }
     }
 
     // Passive subsystem repair (only out of the red).
@@ -517,6 +587,22 @@ export class Ship {
     }
 
     if (this.crew <= 0 && !this.destroyed) this.destroy('total crew loss');
+  }
+
+  /**
+   * Somebody has beamed a party aboard.
+   *
+   * One entry point, because `boarders` was a counter the whole game could
+   * only ever decrement: `Ship.update` fought them, `restore()` cleared them,
+   * and nothing anywhere set one above zero. A defence with no attack is not
+   * a mechanic, it is a comment.
+   */
+  receiveBoarders(count, from = null) {
+    const n = Math.max(0, Math.round(count));
+    if (n <= 0 || this.destroyed) return 0;
+    this.boarders += n;
+    emit('ship:boarded', { ship: this, count: n, from });
+    return n;
   }
 
   // ---------------- damage ----------------
@@ -762,7 +848,10 @@ export class Ship {
       hull: this.hull, shields: this.shields, shieldsUp: this.shieldsUp,
       crew: this.crew, injured: this.injured,
       subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
-      fires: this.fires, coreEjected: this.coreEjected, mods: this.mods,
+      // `boarders` alongside `fires` for the same reason: it is a fight in
+      // progress, and a save taken during one used to come back with the
+      // intruders gone, the alert cleared and the crew no longer dying.
+      fires: this.fires, boarders: this.boarders, coreEjected: this.coreEjected, mods: this.mods,
       // A breach in progress is state, not decoration. Left out, a save taken
       // during the twenty seconds you have to eject the core came back as a
       // ship sitting at zero hull with no countdown running and no way to die
@@ -796,7 +885,8 @@ export class Ship {
       // a Constitution loaded from such a record flew Sol to Qo'noS at warp
       // nine, a 63.2% burn, on a tank the game could not read.
       antimatter: Number.isFinite(data.antimatter) ? clamp(data.antimatter, 0, 100) : 100,
-      fires: data.fires ?? 0, coreEjected: data.coreEjected ?? false,
+      fires: data.fires ?? 0, boarders: Math.max(0, Number(data.boarders) || 0),
+      coreEjected: data.coreEjected ?? false,
       breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
       destroyed: data.destroyed === true,
       destroyCause: data.destroyCause ?? null,

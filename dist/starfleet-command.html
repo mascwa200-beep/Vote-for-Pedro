@@ -4938,6 +4938,50 @@ const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore'
 const DAMAGE_CONTROL_OFF_ACTION = 8;
 
 /**
+ * The share of the crew that turns out to fight an intruder.
+ *
+ * Not everyone: the ship is still being flown and still being shot at, so the
+ * people who meet a boarding party are the security detail and whoever is on
+ * that deck. Five per cent of a Constitution's complement is about twenty
+ * people, which is the right order for a corridor fight.
+ */
+const REPEL_DEFENDER_SHARE = 0.05;
+
+/**
+ * Fewer than one intruder is nobody, and the fight is over.
+ *
+ * The repel loop takes `Math.min(boarders, killed)` per tick, so once the
+ * party is smaller than what the defenders can kill in a second it decays
+ * geometrically and never reaches zero: after ten minutes a boarded ship still
+ * had 1e-264 Klingons aboard, `boarders > 0` was still true, and the block went
+ * on damaging a subsystem roughly every second and drawing from the RNG every
+ * tick for the rest of the commission. Nothing had ever set `boarders` above
+ * zero, so it had never once run.
+ */
+const BOARDERS_REPELLED_AT = 1;
+
+/**
+ * Turning out the guard: how much more of the crew meets them, and for how long.
+ *
+ * `REPEL_DEFENDER_SHARE` is the watch that turns out on its own — the security
+ * detail and whoever is on that deck. This is the captain ordering the rest of
+ * the ship into the corridor, which roughly triples the defence and cannot be
+ * kept up: the people doing it have other stations, and the ship is still
+ * being flown.
+ */
+const REPEL_STRENGTH = 3;
+const REPEL_DURATION = 20;
+
+/**
+ * What killing one intruder costs in your own people, at the ordinary defence.
+ *
+ * Divided by the root of `repelBoarders`, so a captain who turns out the guard
+ * buys a better exchange as well as a shorter fight — at REPEL_STRENGTH that
+ * is about 0.46 of ours for each of theirs instead of 0.8.
+ */
+const REPEL_COST_PER_INTRUDER = 0.8;
+
+/**
  * Which shield facing covers a direction, given in ship-local coordinates.
  *
  * The dominant axis wins. This is the six-sided generalisation of the old
@@ -5055,7 +5099,7 @@ class Ship {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
       impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
       repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1, crewProtect: 0,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0, repelBoarders: 1,
     };
     this.buffs = [];               // { id, label, until, mods }
 
@@ -5350,11 +5394,37 @@ class Ship {
 
     // Boarders fight the crew.
     if (this.boarders > 0 && rng) {
-      const defenders = Math.max(1, this.crew * 0.05);
+      const defenders = Math.max(1, this.crew * REPEL_DEFENDER_SHARE) * this.mod('repelBoarders');
       const losses = Math.min(this.boarders, Math.max(0, rng.normal(defenders * 0.4, 2))) * dt;
       this.boarders = Math.max(0, this.boarders - losses);
-      this.crew = Math.max(0, this.crew - losses * 0.8);
+      // Whole people. Everything else that kills crew floors it — `takeDamage`
+      // uses Math.floor, a fire takes one at a time — and this loop was the
+      // only fractional writer of `crew` in the game, which nobody had ever
+      // seen because nothing had ever put a boarding party aboard anything.
+      // The tactical overlay printed the result straight: `Crew
+      // 426.1326943672293`, on a bridge display, in a fight. Carried rather
+      // than rounded, so losses smaller than one person a tick still add up to
+      // somebody instead of vanishing.
+      //
+      // And the exchange rate improves with numbers, which is why turning out
+      // the guard is worth ordering: twenty people meeting eighty is a running
+      // fight down a corridor, a hundred meeting eighty is a rout. Without
+      // this the order made the fight shorter and cost exactly the same — the
+      // same intruders had to be killed and each cost the same — so the button
+      // saying "it will cost fewer of ours" was saying something untrue.
+      const exchange = REPEL_COST_PER_INTRUDER / Math.sqrt(this.mod('repelBoarders'));
+      this.crewLossCarry = (this.crewLossCarry ?? 0) + losses * exchange;
+      if (this.crewLossCarry >= 1) {
+        const dead = Math.floor(this.crewLossCarry);
+        this.crewLossCarry -= dead;
+        this.crew = Math.max(0, this.crew - dead);
+      }
       if (rng.chance(0.5 * dt)) this.damageSubsystem(rng.pick(SUBSYSTEM_KEYS), 0.05);
+      // And an end to it — see BOARDERS_REPELLED_AT.
+      if (this.boarders < BOARDERS_REPELLED_AT) {
+        this.boarders = 0;
+        emit('ship:boarders-repelled', { ship: this });
+      }
     }
 
     // Passive subsystem repair (only out of the red).
@@ -5370,6 +5440,22 @@ class Ship {
     }
 
     if (this.crew <= 0 && !this.destroyed) this.destroy('total crew loss');
+  }
+
+  /**
+   * Somebody has beamed a party aboard.
+   *
+   * One entry point, because `boarders` was a counter the whole game could
+   * only ever decrement: `Ship.update` fought them, `restore()` cleared them,
+   * and nothing anywhere set one above zero. A defence with no attack is not
+   * a mechanic, it is a comment.
+   */
+  receiveBoarders(count, from = null) {
+    const n = Math.max(0, Math.round(count));
+    if (n <= 0 || this.destroyed) return 0;
+    this.boarders += n;
+    emit('ship:boarded', { ship: this, count: n, from });
+    return n;
   }
 
   // ---------------- damage ----------------
@@ -5615,7 +5701,10 @@ class Ship {
       hull: this.hull, shields: this.shields, shieldsUp: this.shieldsUp,
       crew: this.crew, injured: this.injured,
       subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
-      fires: this.fires, coreEjected: this.coreEjected, mods: this.mods,
+      // `boarders` alongside `fires` for the same reason: it is a fight in
+      // progress, and a save taken during one used to come back with the
+      // intruders gone, the alert cleared and the crew no longer dying.
+      fires: this.fires, boarders: this.boarders, coreEjected: this.coreEjected, mods: this.mods,
       // A breach in progress is state, not decoration. Left out, a save taken
       // during the twenty seconds you have to eject the core came back as a
       // ship sitting at zero hull with no countdown running and no way to die
@@ -5649,7 +5738,8 @@ class Ship {
       // a Constitution loaded from such a record flew Sol to Qo'noS at warp
       // nine, a 63.2% burn, on a tank the game could not read.
       antimatter: Number.isFinite(data.antimatter) ? clamp(data.antimatter, 0, 100) : 100,
-      fires: data.fires ?? 0, coreEjected: data.coreEjected ?? false,
+      fires: data.fires ?? 0, boarders: Math.max(0, Number(data.boarders) || 0),
+      coreEjected: data.coreEjected ?? false,
       breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
       destroyed: data.destroyed === true,
       destroyCause: data.destroyCause ?? null,
@@ -5699,6 +5789,11 @@ __exports.bearingToDirection = bearingToDirection;
 __exports.ADDITIVE_MODS = ADDITIVE_MODS;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
 __exports.DAMAGE_CONTROL_OFF_ACTION = DAMAGE_CONTROL_OFF_ACTION;
+__exports.REPEL_DEFENDER_SHARE = REPEL_DEFENDER_SHARE;
+__exports.BOARDERS_REPELLED_AT = BOARDERS_REPELLED_AT;
+__exports.REPEL_STRENGTH = REPEL_STRENGTH;
+__exports.REPEL_DURATION = REPEL_DURATION;
+__exports.REPEL_COST_PER_INTRUDER = REPEL_COST_PER_INTRUDER;
 __exports.facingForDirection = facingForDirection;
 __exports.facingForBearing = facingForBearing;
 __exports.inArc = inArc;
@@ -17606,6 +17701,26 @@ const INTENTS = [
     build: () => ({ action: 'take_mission' }),
   },
   {
+    // Meeting a boarding party. Nothing could board you until the trigger for
+    // it was written, so this is the order for a thing that used to be
+    // impossible — and "repel boarders" parsed as nothing at all.
+    //
+    // The duty-detail phrasing keeps its own words: "schedule a boarding
+    // drill" still rehearses it, which is a fortnight of ship's time and not
+    // a thing you do while they are in the corridor.
+    id: 'repel_boarders',
+    help: 'Turn the crew out against intruders already aboard',
+    phrases: [
+      'repel boarders', 'all hands repel boarders', 'repel the boarders',
+      'security to intercept', 'security teams to intercept',
+      'turn out the guard', 'get them off my ship', 'clear the intruders',
+      'intruders on board', 'get security down there',
+    ],
+    keywords: { repel: 3, boarders: 3, intruder: 2.6, intercept: 2.2, security: 1.6 },
+    veto: ['drill', 'rehearse', 'schedule', 'board them', 'boarding party'],
+    build: () => ({ action: 'repel_boarders' }),
+  },
+  {
     id: 'abandon_mission',
     help: 'Break off the episode you are in the middle of',
     phrases: [
@@ -18709,16 +18824,30 @@ function parseText(raw) {
   const confidence = confidenceOf(top.score, second);
 
   // Recognised, but we are missing something it cannot run without.
+  //
+  // The threshold decides whether to ASK for the slot or to give up on the
+  // reading — it must never decide whether to build. `build` is written on the
+  // promise that its required slots are there, so below PLAUSIBLE this fell
+  // through to `top.intent.build(ctx)` with the slot still null and threw:
+  // "security to all decks" and "all hands to all decks" both scored weakly as
+  // `go_to_room`, whose build reads `c.room.id`, and the order line raised a
+  // TypeError at a captain who had typed an ordinary English sentence. The
+  // harness's "no order throws" check fuzzes the phrasings the lexicon already
+  // knows, so nothing that reaches `build` by accident was ever covered.
   const missing = (top.intent.requires ?? []).find(
     (slot) => ctx[slot] === null || ctx[slot] === undefined,
   );
-  if (missing && confidence >= PLAUSIBLE) {
-    return {
-      error: SLOT_PROMPTS[missing] ?? 'Say again, Captain?',
-      intent: top.intent.id,
-      missing,
-      raw,
-    };
+  if (missing) {
+    if (confidence >= PLAUSIBLE) {
+      return {
+        error: SLOT_PROMPTS[missing] ?? 'Say again, Captain?',
+        intent: top.intent.id,
+        missing,
+        raw,
+      };
+    }
+    // Too weak a reading to ask about, and unbuildable either way.
+    return { unknown: true, raw, suggestions: ranked.slice(0, 3).map((r) => r.intent.help) };
   }
 
   const order = { ...top.intent.build(ctx), intent: top.intent.id, raw, confidence };
@@ -21337,8 +21466,99 @@ __define("src/sim/ai.js", function (__exports, __require) {
 
 const { FACTIONS } = __require("src/world/factions.data.js");
 const { WEAPON_RANGE, stillEngaged } = __require("src/sim/combat.js");
+const { facingForDirection } = __require("src/sim/ship.js");
 
 const DECISION_INTERVAL = 0.5; // seconds between re-evaluations
+
+/**
+ * Doctrines that take a ship rather than only sink one.
+ *
+ * The Borg assimilate, which is boarding by definition. Klingons take a
+ * bridge — the same act the player's own `boarding_action` models from the
+ * other side. Pirates want the hull intact, so an opportunist would far
+ * rather board than destroy. The Dominion does not weigh what it costs.
+ *
+ * Romulans are deliberately absent: their doctrine is to strike from cloak
+ * and leave, and a ship that decloaks alongside to send people across has
+ * given up the only advantage it was flying for. Tholians and the defensive
+ * factions do not board at all.
+ */
+const BOARDING_DOCTRINES = new Set(['assimilate', 'aggressive', 'opportunist', 'fanatic']);
+
+/**
+ * And how readily each of them takes the chance when it comes.
+ *
+ * A boarding party is a commitment: a fifth of the complement, off the ship,
+ * in somebody else's corridors. Not every captain who CAN will. Without this
+ * the window opens in most engagements where the player drops under a third
+ * of his hull, and something that happens every time is weather rather than
+ * an event.
+ *
+ * The Borg do not weigh it. Pirates want the hull more than the kill, so an
+ * opportunist takes it more often than a Klingon does — and the Dominion,
+ * which is perfectly willing to die shooting, is the least interested in
+ * taking anything alive.
+ */
+const BOARDING_RESOLVE = {
+  assimilate: 1, opportunist: 0.6, aggressive: 0.5, fanatic: 0.35,
+};
+
+/**
+ * Beaming range for a boarding party, and the state that allows it.
+ *
+ * The mirror of what the game already asks of the PLAYER before offering
+ * `boarding_action` (`Game.availableAwayMissions`): shields flat, the ship
+ * beaten or lamed, and close enough to beam across. Symmetric on purpose —
+ * the rule a captain learns by boarding somebody is the rule that gets used
+ * on him, and a rule you can learn is the difference between a mechanic and
+ * an ambush.
+ */
+const BOARDING_RANGE = 900;
+const BOARDING_SHIELD_MAX = 0.05;
+const BOARDING_HULL_MAX = 0.35;
+const BOARDING_ENGINES_MAX = 0.15;
+
+/** How much of her complement a ship will put aboard somebody else's. */
+const BOARDING_PARTY_SHARE = 0.18;
+
+/** Below this she has nobody to spare. */
+const BOARDING_MIN_CREW = 30;
+
+/**
+ * And she has to be winning.
+ *
+ * A captain sends his security detail onto somebody else's ship when he can
+ * afford to be without them, not when he is himself about to die. Without
+ * this the condition is met in essentially every engagement — the player's
+ * hull dips under a third at some point in almost all of them and a facing is
+ * almost always flat — and a boarding party that comes every time is weather
+ * rather than an event.
+ */
+const BOARDING_ATTACKER_HEALTH = 0.5;
+
+/**
+ * Is `ship` in a state `from` could board her?
+ *
+ * The shield test is on the facing TOWARD the boarder, not on the average of
+ * all six — and that distinction is the whole of it. `shieldPct` is the mean
+ * across the facings, and combat never drives that mean to five per cent
+ * because fire lands on one facing while the other five regenerate: across
+ * forty ordinary engagements the lowest mean a hostile ever reached was 0.497,
+ * ten times what the condition asked for. So `boarding_action` — three steps,
+ * extreme hazard, the alternative to killing a ship that the game is built
+ * around — was never once offered in a fight. Every test that exercised it
+ * zeroed all six facings by hand, which is a state the simulation does not
+ * produce.
+ *
+ * The facing toward the boarder is also simply what beaming through somebody's
+ * shields means. You go through the gap. On the same numbers it comes up in
+ * eleven fights in forty.
+ */
+function boardableState(ship, from) {
+  const facing = facingForDirection(ship.directionFrom(from));
+  return ship.shieldPctOf(facing) <= BOARDING_SHIELD_MAX
+    && (ship.hullPct <= BOARDING_HULL_MAX || ship.subsystems.engines <= BOARDING_ENGINES_MAX);
+}
 
 /** Preferred engagement distance for a ship's best weapon. */
 function preferredRange(ship) {
@@ -21456,6 +21676,39 @@ function chooseAction(ship, engagement, dt, opts = {}) {
     return;
   }
 
+  // ---- Boarding ----
+  //
+  // `ship.boarders` was a counter the whole game could only decrement: the
+  // defence in `Ship.update` was written in full — defenders drawn from the
+  // crew, losses on both sides, a subsystem wrecked every second or so — and
+  // nothing anywhere had ever put a single intruder aboard anything. The
+  // `intruder_alert` cue was synthesised and reserved, and the `boarding_drill`
+  // duty detail rehearsed repelling people who could not arrive.
+  //
+  // Once per ship: a captain who has sent his security detail across has sent
+  // it, and cannot send it again.
+  if (decide && !opts.allyOf && !ship.boardingDecided && !ship.cloaked
+    && BOARDING_DOCTRINES.has(doctrine)
+    && ship.crew > BOARDING_MIN_CREW
+    && ship.hullPct > BOARDING_ATTACKER_HEALTH
+    && distance < BOARDING_RANGE
+    && boardableState(target, ship)) {
+    // Decided the first time the window opens and not revisited: a captain
+    // who let the moment go has let it go, and one who took it has his people
+    // on somebody else's ship and cannot send them twice.
+    ship.boardingDecided = true;
+    if (rng.chance(BOARDING_RESOLVE[doctrine] ?? 0)) {
+      const party = Math.round(ship.crew * BOARDING_PARTY_SHARE);
+      if (target.receiveBoarders(party, ship) > 0) {
+        engagement.pushLog(
+          `${ship.name} has beamed a boarding party aboard. Intruder alert.`,
+          'tactical',
+        );
+        return;
+      }
+    }
+  }
+
   // ---- Cloak-and-strike ----
   if (doctrine === 'ambush' && ship.cloakCapable) {
     if (ship.cloaked) {
@@ -21547,6 +21800,8 @@ function chooseAction(ship, engagement, dt, opts = {}) {
   }
 }
 
+__exports.BOARDING_RANGE = BOARDING_RANGE;
+__exports.boardableState = boardableState;
 __exports.chooseAction = chooseAction;
 
 });
@@ -23361,6 +23616,15 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
     `${who}: crew ${s.crew} exceeds complement ${s.maxCrew}`, who);
   r.must(ok(s.fires) && num(s.fires) >= 0, 'ship.fires', 'error',
     `${who}: fires is ${s.fires}`, who);
+  r.must(ok(s.boarders) && num(s.boarders) >= 0, 'ship.boarders', 'error',
+    `${who}: boarders is ${s.boarders}`, who);
+  // Crew are people, and a fraction of a person is not one. Everything that
+  // kills crew floors it except the repel loop, which subtracted a continuous
+  // quantity — and since nothing had ever put a boarding party aboard, the
+  // tactical overlay had never had the chance to print `Crew 426.1326943672293`
+  // at a captain in the middle of a fight.
+  r.must(Number.isInteger(num(s.crew)), 'ship.crew.fractional', 'error',
+    `${who}: crew is ${s.crew}`, who);
   r.must(ok(s.torpedoes) && num(s.torpedoes) >= 0, 'ship.torpedoes', 'error',
     `${who}: torpedoes is ${s.torpedoes}`, who);
 
@@ -28029,6 +28293,7 @@ const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
+const { boardableState, BOARDING_RANGE } = __require("src/sim/ai.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer, replaceLosses } = __require("src/sim/duty.js");
 const { ShipMastery } = __require("src/sim/mastery.js");
@@ -30405,11 +30670,19 @@ class Game {
     // Taking a bridge. The ship has to be beaten first — a boarding party does
     // not go through raised shields — and this is what makes crippling a
     // hostile a real alternative to killing it.
+    //
+    // `boardableState` rather than the condition that used to be written out
+    // here, because the same rule now governs somebody boarding US and one
+    // rule should have one definition. The old one read `s.shieldPct <= 0.05`
+    // — the MEAN of six facings — which combat cannot produce: fire lands on
+    // one facing while the other five regenerate, and across forty ordinary
+    // engagements the lowest mean a hostile ever reached was 0.497. So this
+    // was never offered in a fight, and every test that exercised it flattened
+    // all six facings by hand.
     const boardable = eng && !eng.over
       ? eng.liveHostiles.find((s) => !s.cloaked
-        && s.shieldPct <= 0.05
-        && (s.hullPct <= 0.35 || s.subsystems.engines <= 0.15)
-        && this.ship.distanceTo(s) < 900)
+        && boardableState(s, this.ship)
+        && this.ship.distanceTo(s) < BOARDING_RANGE)
       : null;
     if (boardable) out.push({ ...AWAY_TEMPLATES.boarding_action, target: boardable });
 
@@ -32007,6 +32280,11 @@ function chairConsole(app) {
       ? readout('Torpedoes', g.ship.torpedoes / g.ship.maxTorpedoes, `${g.ship.torpedoes}`)
       : null,
     g.ship.fires > 0 ? el('p', { class: 'muted', text: `${g.ship.fires} fire${g.ship.fires > 1 ? 's' : ''} burning on the hull.` }) : null,
+    // Intruders, said on the same panel as the fires and for the same
+    // reason: it is a thing happening to the ship right now that the
+    // captain has an order for. Nothing anywhere used to report it, because
+    // nothing could ever put one aboard.
+    g.ship.boarders > 0 ? el('p', { class: 'muted', text: `${Math.ceil(g.ship.boarders)} intruder${Math.ceil(g.ship.boarders) > 1 ? 's' : ''} aboard. Say "repel boarders".` }) : null,
     g.ship.coreEjected ? el('p', { class: 'muted', text: 'Warp core ejected. Impulse only until we dock.' }) : null,
   ], g.ship.hullPct < 0.4 ? 'danger' : g.ship.hullPct < 0.8 ? 'warn' : ''));
 
@@ -32339,6 +32617,28 @@ function tacticalScreen(app) {
   if (!eng) {
     side.append(panel('Standing Down', [el('p', { text: 'No hostile contacts.' })]));
     return root;
+  }
+
+  // --- Intruders ---
+  //
+  // Above the target, because people in the corridors outrank the thing on the
+  // viewer. This is the panel a captain is actually looking at during a fight
+  // — the Ship Status readout lives on the BRIDGE screen, which is not where
+  // anybody is when they are being boarded — and a boarding party reported
+  // somewhere the player cannot see it is not reported.
+  if (g.ship.boarders > 0) {
+    const n = Math.ceil(g.ship.boarders);
+    side.append(panel('Intruder Alert', [
+      el('p', { text: `${n} aboard, and fighting their way forward.` }),
+      button('Repel boarders', tap(() => {
+        app.executeOrder({ action: 'repel_boarders' }, 'repel boarders');
+        app.render();
+      }), {
+        say: 'repel boarders',
+        color: 'red',
+        sub: 'Turn out the guard. They will be off the ship sooner and it will cost fewer of ours.',
+      }),
+    ], 'danger'));
   }
 
   // --- Target ---
@@ -34615,7 +34915,7 @@ const { saveGame, loadSave, hasSave, loadSettings, saveSettings: persistSettings
 
 const { ABILITIES } = __require("src/sim/officers.js");
 const { WATCHES } = __require("src/sim/watch.js");
-const { Ship, FACINGS } = __require("src/sim/ship.js");
+const { Ship, FACINGS, REPEL_STRENGTH, REPEL_DURATION } = __require("src/sim/ship.js");
 const { answeringFor } = __require("src/sim/address.js");
 const { parseOrder } = __require("src/ui/orders.js");
 const { SKILLS } = __require("src/sim/skills.js");
@@ -34864,6 +35164,29 @@ class App {
         `Warp core breach in ${Math.round(seconds)} seconds. Eject the core or we lose her.`,
         'engineering',
       );
+      this.needsRender = true;
+    });
+
+    // Somebody is aboard. The cue was synthesised, routed to the alert bus and
+    // reserved for a mechanic the game did not have; this is where it finally
+    // gets played, and the captain is told in the same breath which order
+    // answers it.
+    on('ship:boarded', ({ ship, count, from }) => {
+      if (!ship.isPlayer) return;
+      audio.play('intruder_alert');
+      haptic('alert');
+      this.game?.setAlert('red');
+      this.game?.officerSays('security',
+        `Intruder alert. ${count} of them, beamed aboard from ${from?.name ?? 'the hostile'}. `
+        + 'Say the word and I will turn out the guard.',
+        'report');
+      this.needsRender = true;
+    });
+
+    on('ship:boarders-repelled', ({ ship }) => {
+      if (!ship.isPlayer) return;
+      audio.play('computer_ack');
+      this.game?.officerSays('security', 'Decks are clear, Captain. They are off my ship.', 'report');
       this.needsRender = true;
     });
 
@@ -36260,6 +36583,32 @@ class App {
             `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
             'report');
         }
+        break;
+      }
+      case 'repel_boarders': {
+        // Turning out the guard. The defence in `Ship.update` draws its
+        // defenders from the crew and reads `repelBoarders`, so what this
+        // order does is put more people into the corridor for a while — and
+        // there was no way to order it, because until the trigger was written
+        // nothing could ever be aboard to repel.
+        if (!(g.ship.boarders > 0)) {
+          audio.play('ui_deny');
+          ack('security', 'There is nobody aboard who should not be, Captain.');
+          break;
+        }
+        const already = g.ship.buffs?.some((b) => b.id === 'repel_boarders');
+        if (already) {
+          audio.play('ui_deny');
+          ack('security', 'Every hand I have is already down there, Captain.');
+          break;
+        }
+        g.ship.addBuff({
+          id: 'repel_boarders', label: 'Security to all decks',
+          until: REPEL_DURATION, mods: { repelBoarders: REPEL_STRENGTH },
+        });
+        audio.play('intruder_alert');
+        haptic('confirm');
+        ack('security', `Security teams to all decks. ${Math.round(g.ship.boarders)} aboard, Captain.`);
         break;
       }
       case 'take_mission': {

@@ -272,6 +272,11 @@ export function chairConsole(app) {
       ? readout('Torpedoes', g.ship.torpedoes / g.ship.maxTorpedoes, `${g.ship.torpedoes}`)
       : null,
     g.ship.fires > 0 ? el('p', { class: 'muted', text: `${g.ship.fires} fire${g.ship.fires > 1 ? 's' : ''} burning on the hull.` }) : null,
+    // Intruders, said on the same panel as the fires and for the same
+    // reason: it is a thing happening to the ship right now that the
+    // captain has an order for. Nothing anywhere used to report it, because
+    // nothing could ever put one aboard.
+    g.ship.boarders > 0 ? el('p', { class: 'muted', text: `${Math.ceil(g.ship.boarders)} intruder${Math.ceil(g.ship.boarders) > 1 ? 's' : ''} aboard. Say "repel boarders".` }) : null,
     g.ship.coreEjected ? el('p', { class: 'muted', text: 'Warp core ejected. Impulse only until we dock.' }) : null,
   ], g.ship.hullPct < 0.4 ? 'danger' : g.ship.hullPct < 0.8 ? 'warn' : ''));
 
@@ -606,6 +611,28 @@ export function tacticalScreen(app) {
   if (!eng) {
     side.append(panel('Standing Down', [el('p', { text: 'No hostile contacts.' })]));
     return root;
+  }
+
+  // --- Intruders ---
+  //
+  // Above the target, because people in the corridors outrank the thing on the
+  // viewer. This is the panel a captain is actually looking at during a fight
+  // — the Ship Status readout lives on the BRIDGE screen, which is not where
+  // anybody is when they are being boarded — and a boarding party reported
+  // somewhere the player cannot see it is not reported.
+  if (g.ship.boarders > 0) {
+    const n = Math.ceil(g.ship.boarders);
+    side.append(panel('Intruder Alert', [
+      el('p', { text: `${n} aboard, and fighting their way forward.` }),
+      button('Repel boarders', tap(() => {
+        app.executeOrder({ action: 'repel_boarders' }, 'repel boarders');
+        app.render();
+      }), {
+        say: 'repel boarders',
+        color: 'red',
+        sub: 'Turn out the guard. They will be off the ship sooner and it will cost fewer of ours.',
+      }),
+    ], 'danger'));
   }
 
   // --- Target ---

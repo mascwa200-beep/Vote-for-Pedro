@@ -262,16 +262,30 @@ export function parseText(raw) {
   const confidence = confidenceOf(top.score, second);
 
   // Recognised, but we are missing something it cannot run without.
+  //
+  // The threshold decides whether to ASK for the slot or to give up on the
+  // reading — it must never decide whether to build. `build` is written on the
+  // promise that its required slots are there, so below PLAUSIBLE this fell
+  // through to `top.intent.build(ctx)` with the slot still null and threw:
+  // "security to all decks" and "all hands to all decks" both scored weakly as
+  // `go_to_room`, whose build reads `c.room.id`, and the order line raised a
+  // TypeError at a captain who had typed an ordinary English sentence. The
+  // harness's "no order throws" check fuzzes the phrasings the lexicon already
+  // knows, so nothing that reaches `build` by accident was ever covered.
   const missing = (top.intent.requires ?? []).find(
     (slot) => ctx[slot] === null || ctx[slot] === undefined,
   );
-  if (missing && confidence >= PLAUSIBLE) {
-    return {
-      error: SLOT_PROMPTS[missing] ?? 'Say again, Captain?',
-      intent: top.intent.id,
-      missing,
-      raw,
-    };
+  if (missing) {
+    if (confidence >= PLAUSIBLE) {
+      return {
+        error: SLOT_PROMPTS[missing] ?? 'Say again, Captain?',
+        intent: top.intent.id,
+        missing,
+        raw,
+      };
+    }
+    // Too weak a reading to ask about, and unbuildable either way.
+    return { unknown: true, raw, suggestions: ranked.slice(0, 3).map((r) => r.intent.help) };
   }
 
   const order = { ...top.intent.build(ctx), intent: top.intent.id, raw, confidence };

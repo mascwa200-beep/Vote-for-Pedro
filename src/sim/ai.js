@@ -6,8 +6,99 @@
 
 import { FACTIONS } from '../world/factions.data.js';
 import { WEAPON_RANGE, stillEngaged } from './combat.js';
+import { facingForDirection } from './ship.js';
 
 const DECISION_INTERVAL = 0.5; // seconds between re-evaluations
+
+/**
+ * Doctrines that take a ship rather than only sink one.
+ *
+ * The Borg assimilate, which is boarding by definition. Klingons take a
+ * bridge — the same act the player's own `boarding_action` models from the
+ * other side. Pirates want the hull intact, so an opportunist would far
+ * rather board than destroy. The Dominion does not weigh what it costs.
+ *
+ * Romulans are deliberately absent: their doctrine is to strike from cloak
+ * and leave, and a ship that decloaks alongside to send people across has
+ * given up the only advantage it was flying for. Tholians and the defensive
+ * factions do not board at all.
+ */
+const BOARDING_DOCTRINES = new Set(['assimilate', 'aggressive', 'opportunist', 'fanatic']);
+
+/**
+ * And how readily each of them takes the chance when it comes.
+ *
+ * A boarding party is a commitment: a fifth of the complement, off the ship,
+ * in somebody else's corridors. Not every captain who CAN will. Without this
+ * the window opens in most engagements where the player drops under a third
+ * of his hull, and something that happens every time is weather rather than
+ * an event.
+ *
+ * The Borg do not weigh it. Pirates want the hull more than the kill, so an
+ * opportunist takes it more often than a Klingon does — and the Dominion,
+ * which is perfectly willing to die shooting, is the least interested in
+ * taking anything alive.
+ */
+const BOARDING_RESOLVE = {
+  assimilate: 1, opportunist: 0.6, aggressive: 0.5, fanatic: 0.35,
+};
+
+/**
+ * Beaming range for a boarding party, and the state that allows it.
+ *
+ * The mirror of what the game already asks of the PLAYER before offering
+ * `boarding_action` (`Game.availableAwayMissions`): shields flat, the ship
+ * beaten or lamed, and close enough to beam across. Symmetric on purpose —
+ * the rule a captain learns by boarding somebody is the rule that gets used
+ * on him, and a rule you can learn is the difference between a mechanic and
+ * an ambush.
+ */
+export const BOARDING_RANGE = 900;
+const BOARDING_SHIELD_MAX = 0.05;
+const BOARDING_HULL_MAX = 0.35;
+const BOARDING_ENGINES_MAX = 0.15;
+
+/** How much of her complement a ship will put aboard somebody else's. */
+const BOARDING_PARTY_SHARE = 0.18;
+
+/** Below this she has nobody to spare. */
+const BOARDING_MIN_CREW = 30;
+
+/**
+ * And she has to be winning.
+ *
+ * A captain sends his security detail onto somebody else's ship when he can
+ * afford to be without them, not when he is himself about to die. Without
+ * this the condition is met in essentially every engagement — the player's
+ * hull dips under a third at some point in almost all of them and a facing is
+ * almost always flat — and a boarding party that comes every time is weather
+ * rather than an event.
+ */
+const BOARDING_ATTACKER_HEALTH = 0.5;
+
+/**
+ * Is `ship` in a state `from` could board her?
+ *
+ * The shield test is on the facing TOWARD the boarder, not on the average of
+ * all six — and that distinction is the whole of it. `shieldPct` is the mean
+ * across the facings, and combat never drives that mean to five per cent
+ * because fire lands on one facing while the other five regenerate: across
+ * forty ordinary engagements the lowest mean a hostile ever reached was 0.497,
+ * ten times what the condition asked for. So `boarding_action` — three steps,
+ * extreme hazard, the alternative to killing a ship that the game is built
+ * around — was never once offered in a fight. Every test that exercised it
+ * zeroed all six facings by hand, which is a state the simulation does not
+ * produce.
+ *
+ * The facing toward the boarder is also simply what beaming through somebody's
+ * shields means. You go through the gap. On the same numbers it comes up in
+ * eleven fights in forty.
+ */
+export function boardableState(ship, from) {
+  const facing = facingForDirection(ship.directionFrom(from));
+  return ship.shieldPctOf(facing) <= BOARDING_SHIELD_MAX
+    && (ship.hullPct <= BOARDING_HULL_MAX || ship.subsystems.engines <= BOARDING_ENGINES_MAX);
+}
 
 /** Preferred engagement distance for a ship's best weapon. */
 function preferredRange(ship) {
@@ -124,6 +215,39 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
       engagement.pushLog(`${ship.name} rammed us.`, 'tactical');
     }
     return;
+  }
+
+  // ---- Boarding ----
+  //
+  // `ship.boarders` was a counter the whole game could only decrement: the
+  // defence in `Ship.update` was written in full — defenders drawn from the
+  // crew, losses on both sides, a subsystem wrecked every second or so — and
+  // nothing anywhere had ever put a single intruder aboard anything. The
+  // `intruder_alert` cue was synthesised and reserved, and the `boarding_drill`
+  // duty detail rehearsed repelling people who could not arrive.
+  //
+  // Once per ship: a captain who has sent his security detail across has sent
+  // it, and cannot send it again.
+  if (decide && !opts.allyOf && !ship.boardingDecided && !ship.cloaked
+    && BOARDING_DOCTRINES.has(doctrine)
+    && ship.crew > BOARDING_MIN_CREW
+    && ship.hullPct > BOARDING_ATTACKER_HEALTH
+    && distance < BOARDING_RANGE
+    && boardableState(target, ship)) {
+    // Decided the first time the window opens and not revisited: a captain
+    // who let the moment go has let it go, and one who took it has his people
+    // on somebody else's ship and cannot send them twice.
+    ship.boardingDecided = true;
+    if (rng.chance(BOARDING_RESOLVE[doctrine] ?? 0)) {
+      const party = Math.round(ship.crew * BOARDING_PARTY_SHARE);
+      if (target.receiveBoarders(party, ship) > 0) {
+        engagement.pushLog(
+          `${ship.name} has beamed a boarding party aboard. Intruder alert.`,
+          'tactical',
+        );
+        return;
+      }
+    }
   }
 
   // ---- Cloak-and-strike ----
