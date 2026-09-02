@@ -3620,6 +3620,126 @@ try {
     app.render();
   });
 
+  // --------------------------------- the other line, and the paper for it
+  //
+  // RESEARCH.md §23 recorded that the Cardassian demilitarised zone was not in
+  // this galaxy's data at all — "no sector, no systems, no border" — and that
+  // giving the Cardassian track's tier-four project something to do by
+  // inventing the place it acts on would be building the world backwards. §25
+  // built the place. This is a captain flying into it.
+  await dismissModals(page);
+  const zone = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    g.missions.abandon?.(g);
+    if (g.engagement) g.engagement.end('routed');
+    g.update(1 / 30);
+    g.locationId = 'setlik';
+    g.reputation.perks.delete('dmz_passage');
+    app.go('galaxy');
+    app.render();
+
+    const dest = g.galaxy.get('dmz_volnar');
+    const warning = g.crossingWarningFor(dest);
+    const laid = g.setCourse('dmz_volnar');
+    for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(1 / 30);
+    app.render();
+    const text = document.body.textContent ?? '';
+    return {
+      sector: dest?.sector ?? null,
+      // The chart knows it is a place, and marks it as one.
+      contested: dest?.contested === true,
+      warned: /demilitarised/i.test(warning ?? ''),
+      laid: laid.ok === true,
+      at: g.locationId,
+      challenged: g.encounter?.challenge === true,
+      by: g.encounter?.factionId ?? null,
+      onScreen: /Challenged in the Cardassian Demilitarised Zone/i.test(text),
+      // And no line in the record: being there is not the violation.
+      charged: g.ledger.entries.some((e) => /demilitaris/i.test(e.text ?? '')),
+    };
+  });
+  check('the demilitarised zone is a place on the chart a course can be laid to',
+    zone.sector === 'dmz' && zone.laid && zone.at === 'dmz_volnar', JSON.stringify(zone));
+  check('and the captain is warned before he lays it in',
+    zone.warned, JSON.stringify(zone));
+  check('a warship arriving there is challenged, and the screen says by whom',
+    zone.challenged && zone.by === 'cardassian' && zone.onScreen, JSON.stringify(zone));
+  check('and being there is not itself written up as a violation',
+    zone.charged === false, JSON.stringify(zone));
+  // Two shots, because there are two things only the render can settle: that a
+  // new sector draws itself on the chart as a place, and that the challenge
+  // reads as a challenge. The first version of this took one, of the bridge,
+  // with the panel cut off at the bottom of the frame.
+  await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    // The chart, from inside the zone, so the new sector is on screen with the
+    // ship in it. The encounter is put back immediately after.
+    app.__heldEncounter = g.encounter;
+    g.encounter = null;
+    g.mode = 'bridge';
+    app.go('galaxy');
+    app.render();
+  });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(SHOTS, '06m-demilitarised-zone.png') });
+
+  await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    g.encounter = app.__heldEncounter;
+    delete app.__heldEncounter;
+    g.mode = 'encounter';
+    app.go('encounter');
+    app.render();
+    const head = [...document.querySelectorAll('.panel h2')]
+      .find((x) => /Challenged in/i.test(x.textContent ?? ''));
+    head?.closest('.panel')?.scrollIntoView({ block: 'start' });
+  });
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, '06n-zone-challenge.png') });
+
+  // The treaty rider is the paper you produce when somebody asks.
+  await dismissModals(page);
+  const rider = await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    g.encounter = null;
+    g.inTheDMZ = false;
+    g.locationId = 'setlik';
+    g.reputation.perks.add('dmz_passage');
+    const warning = g.crossingWarningFor(g.galaxy.get('dmz_volnar'));
+    g.setCourse('dmz_volnar');
+    for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(1 / 30);
+    app.render();
+    return {
+      at: g.locationId,
+      warned: warning !== null,
+      challenged: g.encounter?.challenge === true,
+      // Said out loud, because a perk nobody notices is a perk that does nothing.
+      said: g.log.some((l) => /waved through|treaty rider/i.test(l.text ?? '')),
+    };
+  });
+  check('the treaty rider clears the zone, and says so rather than being silent',
+    rider.at === 'dmz_volnar' && !rider.challenged && !rider.warned && rider.said,
+    JSON.stringify(rider));
+
+  // Home, and the rider handed back.
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    g.reputation.perks.delete('dmz_passage');
+    g.encounter = null;
+    g.inTheDMZ = false;
+    g.transit = null;
+    g.locationId = 'sol';
+    g.mode = 'bridge';
+    app.go('bridge');
+    app.render();
+  });
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {

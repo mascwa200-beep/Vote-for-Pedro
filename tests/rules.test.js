@@ -24,7 +24,7 @@ import {
 } from '../src/rules/difficulty.js';
 import { findingFor, sitsAt, venueFor } from '../src/rules/inquiry.js';
 import { parseOrder } from '../src/ui/orders.js';
-import { SYSTEMS } from '../src/world/systems.data.js';
+import { SYSTEMS, systemDepth } from '../src/world/systems.data.js';
 import { STANDING_EFFECTS } from '../src/sim/diplomacy.js';
 import { nextCommandFor, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { availableHails } from '../src/sim/diplomacy.js';
@@ -987,7 +987,13 @@ describe('a reputation project that grants nothing', () => {
 
   // The ledger of what is still dead. It shrinks as perks are wired up, and a
   // twenty-sixth dead perk fails this rather than joining the pile quietly.
-  const STILL_UNWIRED = ['dmz_passage'];
+  //
+  // It is empty. `dmz_passage` was the last of them and was deliberately left
+  // there — RESEARCH.md §23 recorded that the Cardassian demilitarised zone
+  // did not exist anywhere in the galaxy's data, and that giving a perk
+  // something to do by inventing the place it acts on is building the world
+  // backwards. §25 built the place; this is the perk finding it.
+  const STILL_UNWIRED = [];
 
   test('the perks nothing reads are exactly the ones we know about', () => {
     assert.deepEqual(unwired(), STILL_UNWIRED,
@@ -1879,5 +1885,110 @@ describe('the table of standing effects describes the game', () => {
     assert.equal(g.ledger.standingOf('federation'), 100);
     g.ledger.adjustStanding('federation', STANDING_EFFECTS.first_contact_peaceful, 'test');
     assert.equal(g.ledger.standingOf('federation'), 100);
+  });
+});
+
+// ================================================ the other line on the chart
+
+describe('the demilitarised zone is a different kind of line', () => {
+  // A feature rather than a defect fix, so these are characterisation and not
+  // proofs: on the old code the systems do not exist and every one of them
+  // fails for that uninteresting reason. The test that proves something is the
+  // perk ledger above — `dmz_passage` was its last entry, dead because
+  // RESEARCH.md §23 recorded that the place it acts on was not in the galaxy's
+  // data and that inventing one to give a perk something to do is building the
+  // world backwards. §25 built the place; the ledger is empty now.
+
+  const voyage = ({ perk = null, from = 'setlik', to = 'dmz_volnar', seed = 9n } = {}) => {
+    const g = new Game({ seed, crewMode: 'original' });
+    if (perk) g.reputation.perks.add(perk);
+    g.locationId = from;
+    const warning = g.crossingWarningFor(g.galaxy.get(to));
+    const r = g.setCourse(to);
+    assert.equal(r.ok, true, `no course to ${to}: ${r.error}`);
+    for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(1 / 30);
+    assert.equal(g.locationId, to, 'the course never arrived');
+    return { g, warning };
+  };
+
+  test('every system in it is reachable from Sol along charted lanes', () => {
+    const g = new Game({ seed: 1n, crewMode: 'original' });
+    const seen = new Set(['sol']);
+    const queue = ['sol'];
+    while (queue.length) {
+      for (const n of g.galaxy.neighbors(queue.pop())) {
+        if (!seen.has(n.id)) { seen.add(n.id); queue.push(n.id); }
+      }
+    }
+    const zone = SYSTEMS.filter((s) => Game.insideTheDMZ(s));
+    assert.ok(zone.length >= 3, `only ${zone.length} systems in the zone`);
+    for (const s of zone) assert.ok(seen.has(s.id), `${s.id} is not reachable from Sol`);
+  });
+
+  test('and sits off the plane like every other sector', () => {
+    // The failure this guards is a silent one: `systemDepth` falls back to 0
+    // for a sector with no SECTOR_DEPTH entry, so a new sector added without
+    // one lies flat and nothing says so.
+    for (const s of SYSTEMS.filter((x) => Game.insideTheDMZ(x))) {
+      assert.ok(Math.abs(systemDepth(s)) > 0.5, `${s.id} is on the plane`);
+    }
+  });
+
+  test('a warship arriving in it is challenged, by the government that drew it', () => {
+    const { g, warning } = voyage();
+    assert.ok(warning, 'no word before the course was laid in');
+    assert.match(warning, /demilitarised/i);
+    assert.ok(g.encounter, 'nobody came to ask anything');
+    assert.equal(g.encounter.challenge, true, `met a plain ${g.encounter.kind} instead`);
+    assert.equal(g.encounter.factionId, 'cardassian');
+  });
+
+  test('and the treaty rider is the paper that answers it', () => {
+    // The whole of what the perk buys, and it says so out loud — a perk that
+    // silently prevents a thing the captain never sees is indistinguishable
+    // from one that does nothing.
+    const { g, warning } = voyage({ perk: 'dmz_passage' });
+    assert.equal(warning, null, 'warned about a line we are cleared to cross');
+    assert.ok(!g.encounter?.challenge, 'challenged while holding the rider');
+    assert.ok(g.log.some((l) => /waved through|treaty rider/i.test(l.text ?? '')),
+      'the rider was used and nobody mentioned it');
+  });
+
+  test('but being there is not itself a violation, which is the whole difference', () => {
+    // The Neutral Zone charges -20 for the crossing. This charges nothing:
+    // people live in the demilitarised zone and freighters cross it. What is
+    // forbidden is militarising it, and the answer to that is somebody coming
+    // to ask, not a line in the ledger.
+    const { g } = voyage();
+    assert.equal(g.ledger.standingOf('cardassian'),
+      new Game({ seed: 9n, crewMode: 'original' }).ledger.standingOf('cardassian'),
+      'arriving in the demilitarised zone cost standing, like a border violation');
+    assert.equal(g.ledger.entries.some((e) => /demilitaris/i.test(e.text ?? '')), false,
+      'the arrival was written into the record as an act');
+  });
+
+  test('the challenge comes once per entry, and leaving arms it again', () => {
+    const { g } = voyage();
+    assert.equal(g.inTheDMZ, true);
+    assert.equal(g.enterTheDMZ(), null, 'challenged twice for one arrival');
+
+    // Out of the zone and back in.
+    g.locationId = 'setlik';
+    assert.equal(g.enterTheDMZ(), null);
+    assert.equal(g.inTheDMZ, false, 'still in the zone after leaving it');
+    g.locationId = 'dmz_hakton';
+    assert.equal(g.enterTheDMZ(), 'challenged', 'a second entry went unnoticed');
+  });
+
+  test('and a save taken inside it comes back inside it', () => {
+    const { g } = voyage();
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(back.inTheDMZ, true, 'reloading in the zone re-armed the challenge');
+    assert.equal(back.enterTheDMZ(), null);
+    // And a record written before the zone existed does not think it is in one.
+    const raw = JSON.parse(JSON.stringify(g.save()));
+    delete raw.inTheDMZ;
+    raw.locationId = 'sol';
+    assert.equal(Game.load(raw).inTheDMZ, false);
   });
 });

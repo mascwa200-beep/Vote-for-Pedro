@@ -1768,6 +1768,38 @@ describe('a pre-warp culture can be studied without being met', () => {
   });
 });
 
+test('a fight that drops you out of warp leaves nothing behind at the old system', () => {
+  // Found by the order monkey in tools/verify-app.mjs — a fuzz failure that
+  // took three sightings to pin down, because it needs an encounter, a course
+  // laid in over the top of it, and a fight starting mid-flight, in that
+  // order. Nothing anybody would think to write down.
+  //
+  // `startCombat` drops a ship out of warp and moves `locationId` to the
+  // nearest system. It was not clearing `this.encounter`, so what was
+  // happening at the system the course started from stayed live, pointing at a
+  // place the ship was no longer in. Invisible in play, because the encounter
+  // panel only draws in ENCOUNTER mode — but `hail` reads the encounter's
+  // faction before the engagement's, so hailing after the battle opened a
+  // channel to people in another star system.
+  const g = new Game({ seed: 3n, crewMode: 'original' });
+  g.locationId = 'alpha_centauri';
+  g.beginEncounter({
+    kind: 'patrol', system: g.location, hostile: false,
+    factionId: 'klingon', title: 'Patrol', text: 'Somebody is watching.',
+  });
+  assert.equal(g.encounter.system.id, 'alpha_centauri');
+
+  g.setCourse('sol');
+  for (let i = 0; i < 30 * 20; i++) g.update(STEP);
+  assert.ok(g.transit, 'the ship never got under way');
+
+  g.startCombat([new Ship('d7', { name: 'Ambusher' })]);
+  assert.notEqual(g.locationId, 'alpha_centauri', 'the ship never dropped out of warp');
+  assert.equal(g.encounter, null,
+    `an encounter at ${g.encounter?.system?.id} outlived the system it was in`);
+  assert.deepEqual(checkAll(g, OPTS), []);
+});
+
 test('reinforcing a shield is not an anomaly', () => {
   // Found by the order monkey in tools/verify-app.mjs on its first run, which
   // is the point of having one: `pilot()` in this file has never reinforced a

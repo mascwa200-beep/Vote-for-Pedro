@@ -250,6 +250,7 @@ export class Game {
     this.marauderHired = false;
     // Whether she is already over the line into the Neutral Zone.
     this.inTheZone = false;
+    this.inTheDMZ = false;
     // Explicitly false rather than undefined: `over` is read as a boolean all
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
@@ -391,6 +392,14 @@ export class Game {
       return `A word before we go, Captain: ${dest.name} is inside the Neutral Zone. `
         + 'Crossing is a treaty violation and the Romulans will log it.';
     }
+    // The other line, and a different warning, because it is a different rule:
+    // nobody is forbidden from being there. We are forbidden from being there
+    // in this. RESEARCH.md §25.
+    if (Game.insideTheDMZ(dest) && !this.perk('dmz_passage')) {
+      return `A word before we go, Captain: ${dest.name} is inside the demilitarised `
+        + 'zone. We are permitted to be there. A heavy cruiser is not, and somebody '
+        + 'will come and say so.';
+    }
     const owner = dest.faction;
     if (owner && owner !== 'federation' && owner !== 'independent') {
       const standing = this.ledger.standingOf(owner);
@@ -449,6 +458,20 @@ export class Game {
   }
 
   /**
+   * Inside the demilitarised zone — and unlike the Zone above, all of it.
+   *
+   * The Romulan Neutral Zone excludes the Federation outposts watching it,
+   * because those are ours and being at one is not a crossing. The
+   * demilitarised zone has no such exception: the colonies in it belong to
+   * both governments by the terms of the treaty that drew it, and a Starfleet
+   * cruiser at the Federation one is exactly as demilitarising as a cruiser at
+   * the Cardassian one. RESEARCH.md §25.
+   */
+  static insideTheDMZ(sys) {
+    return sys?.sector === 'dmz';
+  }
+
+  /**
    * Crossing the Romulan Neutral Zone.
    *
    * The game drew this line, said twice in its own text that crossing it is a
@@ -497,6 +520,44 @@ export class Game {
       'comms',
     );
     return { crossed: true, sanctioned: false };
+  }
+
+  /**
+   * Arriving in the demilitarised zone in a warship.
+   *
+   * Deliberately NOT `crossTheZone` in another colour. Crossing the Romulan
+   * Neutral Zone is the violation and it is charged, once, on the crossing.
+   * Nothing is charged here, because being in the demilitarised zone is not a
+   * violation — people live in it and freighters cross it. What the treaty
+   * forbids is militarising it, and the largest weapon in the zone is us. So
+   * the answer is not a penalty, it is somebody coming to ask.
+   *
+   * "Standing Treaty Rider — free movement through the demilitarised zone" is
+   * the Cardassian track's tier-four project, and a rider is an amendment to
+   * the treaty that drew the line. It does not forgive a violation; it is the
+   * paper that makes the presence lawful, which is a thing you produce when
+   * somebody asks. So it stops the asking — and SAYS that it did, because a
+   * perk that silently prevents something a captain never sees is
+   * indistinguishable from one that does nothing at all, which is the defect
+   * this codebase has spent a dozen changes rooting out.
+   *
+   * Once per entry, like the crossing: leaving the zone arms it again.
+   *
+   * @returns {'challenged'|'cleared'|null}
+   */
+  enterTheDMZ() {
+    if (!Game.insideTheDMZ(this.location)) { this.inTheDMZ = false; return null; }
+    if (this.inTheDMZ) return null;
+    this.inTheDMZ = true;
+
+    if (this.perk('dmz_passage')) {
+      this.officerSays('comms',
+        'We are being scanned, Captain — and waved through. The treaty rider is '
+        + 'on file with both governments and they have found it.',
+        'report');
+      return 'cleared';
+    }
+    return 'challenged';
   }
 
   encounterPerks(systemId) {
@@ -1518,6 +1579,9 @@ export class Game {
     }
 
     this.crossTheZone();
+    // Beside the crossing, and for the same reason: an arrival is the moment
+    // somebody notices. What it returns steers the encounter roll below.
+    const dmz = this.enterTheDMZ();
 
     // Putting in somewhere Starfleet keeps people makes up the ship's
     // complement of specialists. The roster could only ever shrink before
@@ -1570,7 +1634,11 @@ export class Game {
     }
     emit('arrived', { system: t.to, isNew });
 
-    const enc = rollEncounter(this.encounterStream(this.locationId), this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
+    const enc = rollEncounter(this.encounterStream(this.locationId), this.locationId, {
+      ledger: this.ledger,
+      ...this.encounterPerks(this.locationId),
+      ...(dmz === 'challenged' ? { challengeBy: 'cardassian' } : {}),
+    });
     if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
   }
 
@@ -1932,6 +2000,20 @@ export class Game {
       const near = this.transit.nearestSystem?.(this.galaxy);
       if (near) this.locationId = near.id;
       this.transit = null;
+      // And whatever was going on where we left is not going on here.
+      //
+      // This branch moves the ship and nothing cleared what it was holding, so
+      // an encounter begun at the system the course started from stayed live,
+      // pointing at a place the ship was no longer in — `game.encounter.
+      // elsewhere`, the same orphan shape the comment on that invariant
+      // already describes for `helpInbound`. It is invisible in play because
+      // the encounter panel only draws in ENCOUNTER mode, and `hail` reads the
+      // encounter's faction before the engagement's, so hailing after the
+      // battle opened a channel to people in another star system.
+      //
+      // Found by the order monkey in tools/verify-app.mjs, which is the only
+      // thing that gives orders in an order nobody would think to write down.
+      this.encounter = null;
       this.pushLog('Dropping out of warp — we are under attack.', 'helm');
     }
 
@@ -3167,6 +3249,7 @@ export class Game {
       // inside the Zone would be charged for the crossing again on the next
       // arrival, without the ship having moved.
       inTheZone: this.inTheZone === true,
+      inTheDMZ: this.inTheDMZ === true,
 
       // Runtime flags. These are cheap to write and expensive to lose: the
       // promotion feat vanishes without `pendingFeats`, and the ion pod comes
@@ -3647,6 +3730,7 @@ export class Game {
     // claim she is over the line when she is not would otherwise let her cross
     // for free on the way in.
     g.inTheZone = data.inTheZone === true && Game.insideTheZone(g.location);
+    g.inTheDMZ = data.inTheDMZ === true && Game.insideTheDMZ(g.location);
     // Only an offer of a hull that exists, so a hand-edited record cannot put
     // the captain aboard something the registry has never heard of.
     g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)

@@ -41,6 +41,7 @@ export const SECTOR_DEPTH = {
   bajor: 1.7,
   cardassia: 2.9,
   badlands: 0.8,      // the one place where the plane itself is unreliable
+  dmz: 2.1,           // between the Bajor sector and the Union, and nearer the Union
   tholia: -5.6,       // the Assembly is the furthest thing from anybody
   risa: -0.9,
   betazed: 1.2,
@@ -63,6 +64,12 @@ export const SECTORS = {
   bajor: { id: 'bajor', name: 'Bajor Sector', owner: 'federation', color: '#d9a441' },
   cardassia: { id: 'cardassia', name: 'Cardassian Union', owner: 'cardassian', color: '#d9a441' },
   badlands: { id: 'badlands', name: 'The Badlands', owner: 'contested', color: '#ff9a3c' },
+  // A border drawn by negotiators over the heads of the people standing on
+  // it — RESEARCH.md §25. Not the Romulan Zone in another colour: this is a
+  // place both sides may enter and neither may militarise, so it has
+  // colonies in it and a rule about warships rather than a rule about
+  // crossing.
+  dmz: { id: 'dmz', name: 'Cardassian Demilitarised Zone', owner: 'contested', color: '#c98f5a' },
   tholia: { id: 'tholia', name: 'Tholian Assembly', owner: 'tholian', color: '#ff6fae' },
   risa: { id: 'risa', name: 'Risa Sector', owner: 'federation', color: '#9cf' },
   betazed: { id: 'betazed', name: 'Betazed Sector', owner: 'federation', color: '#9cf' },
@@ -294,7 +301,42 @@ export const SYSTEMS = [
     facilities: ['dock'],
     contested: true,
     description: 'A colony with a massacre in its history and a garrison that has never fully stood down.',
-    links: ['bajor', 'starbase_11', 'cardassia_prime'],
+    links: ['bajor', 'starbase_11', 'cardassia_prime', 'dmz_volnar'],
+  },
+
+  // ---- The demilitarised zone ----
+  //
+  // RESEARCH.md §25. The treaty that ended the border war drew a line that did
+  // not follow where anybody actually lived, and its answer to the colonies on
+  // the wrong side of it was that they could move or stay under the other
+  // government. These three are what that looks like from a bridge: a
+  // Federation colony under Cardassian jurisdiction, a Cardassian one under
+  // Federation jurisdiction, and the post that watches the line between them.
+  //
+  // `contested` and `border` are read by machinery that already exists — the
+  // ambush weight in world/encounters.js, the sector tint in ui/galaxymap.js
+  // and the pill on the system panel — so the zone reads as dangerous and
+  // draws itself without anything new.
+  {
+    id: 'dmz_volnar', name: 'Volnar Colony', sector: 'dmz', x: 27.0, y: -22.0, type: 'colony', faction: 'federation',
+    facilities: ['dock'],
+    contested: true, border: true,
+    description: 'Federation settlers on the Cardassian side of a line drawn after they got here. They were offered relocation and declined it.',
+    links: ['setlik', 'dmz_watch', 'badlands_1'],
+  },
+  {
+    id: 'dmz_watch', name: 'Tevren Station', sector: 'dmz', x: 29.5, y: -25.5, type: 'outpost', faction: 'independent',
+    facilities: ['dock', 'trade'],
+    contested: true, border: true,
+    description: 'A monitoring post both governments pay for and neither commands. The traffic through it is mostly freighters and mostly honest.',
+    links: ['dmz_volnar', 'dmz_hakton', 'badlands_1'],
+  },
+  {
+    id: 'dmz_hakton', name: 'Hakton VII', sector: 'dmz', x: 31.0, y: -29.0, type: 'colony', faction: 'cardassian',
+    facilities: [],
+    contested: true, border: true,
+    description: 'A Cardassian settlement that woke up one morning inside Federation jurisdiction. Nobody here voted for that either.',
+    links: ['dmz_watch', 'cardassia_prime', 'badlands_1'],
   },
   {
     id: 'khitomer', name: 'Khitomer', sector: 'archanis', x: -1.5, y: 36.0, type: 'outpost', faction: 'independent',
