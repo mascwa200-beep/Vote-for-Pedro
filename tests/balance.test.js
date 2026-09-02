@@ -191,11 +191,18 @@ test('difficulty makes the same fight measurably harder', () => {
         character: new Character({ speciesId: 'andorian', careerId: 'tactical' }),
       });
       g.startCombat([new Ship('galor', { faction: 'cardassian', name: 'Test' })]);
+      // The ship that fought, not whatever ship the captain has afterwards.
+      //
+      // Losing a hull now costs you that hull and Starfleet assigns another,
+      // so reading `g.ship` after the fight measured a REPLACEMENT at full
+      // health — and the hardest difficulty, which loses ships most often,
+      // came out with the most hull left. The fight is what is being measured.
+      const fought = g.ship;
       for (let i = 0; i < 40000 && g.engagement && !g.engagement.over; i++) {
         if (i % 15 === 0) pilot(g);
         g.update(1 / 30);
       }
-      hull += g.ship.hullPct;
+      hull += fought.destroyed ? 0 : fought.hullPct;
     }
     return hull / runs;
   };

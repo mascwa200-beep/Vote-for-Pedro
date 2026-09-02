@@ -17412,6 +17412,28 @@ const INTENTS = [
     },
   },
   {
+    id: 'take_command',
+    help: 'Accept the ship Starfleet is offering',
+    phrases: [
+      'take the new command', 'accept the command', 'accept the new ship',
+      'i will take her', 'take the bigger ship', 'transfer my flag',
+      'accept starfleet\u2019s offer', 'accept starfleets offer',
+    ],
+    keywords: { accept: 2.4, transfer: 2 },
+    build: () => ({ action: 'take_command' }),
+  },
+  {
+    id: 'keep_command',
+    help: 'Turn down the ship Starfleet is offering',
+    phrases: [
+      'stay with this ship', 'we stay with her', 'decline the command',
+      'turn down the command', 'turn it down', 'i am staying with my ship',
+      'refuse the transfer', 'i keep this ship',
+    ],
+    keywords: { decline: 2.6, refuse: 2.4, stay: 1.6 },
+    build: () => ({ action: 'keep_command' }),
+  },
+  {
     id: 'salvage',
     help: 'Strip the wreck',
     phrases: [
@@ -22680,6 +22702,7 @@ __define("src/sim/invariants.js", function (__exports, __require) {
 // (tests), log (the debug overlay), or count (the fuzzer).
 
 const { FACINGS, SHIELD_OVERCHARGE } = __require("src/sim/ship.js");
+const { getShipClass } = __require("src/world/ships.data.js");
 
 /**
  * How far outside the arena a ship may be before it counts as escaped.
@@ -23166,6 +23189,27 @@ function checkGame(game) {
         'a standing doctrine is set on a hull the crew do not know well enough');
     }
 
+    // A career is a finite number of starships.
+    //
+    // Losing one costs the hull and Starfleet assigns another; losing a second
+    // ends the commission, because Kirk was given exactly one Enterprise-A
+    // (RESEARCH.md §21). A game still running past that has lost count, and a
+    // negative or fractional count is arithmetic that has gone wrong.
+    r.must(ok(game.shipsLost) && num(game.shipsLost) >= 0
+      && Number.isInteger(num(game.shipsLost)),
+      'game.shipsLost', 'error', `ships lost is ${game.shipsLost}`);
+    r.must(num(game.shipsLost) <= 1 || game.over === true, 'game.shipsLost.overrun', 'error',
+      `${game.shipsLost} ships lost and the commission is still running`);
+
+    // An offer of a hull that does not exist cannot be accepted, and would sit
+    // on the screen forever as a button that refuses itself.
+    if (game.commandOffer) {
+      r.must(!!getShipClass(game.commandOffer.classId), 'game.commandOffer.ghost', 'error',
+        `Starfleet is offering a ${game.commandOffer.classId}, which is not a class`);
+      r.must(game.commandOffer.classId !== game.ship?.classId, 'game.commandOffer.same', 'error',
+        'Starfleet is offering the ship the captain is already flying');
+    }
+
     // The duty roster, and the details that are out on it.
     //
     // These are people, and a fight can hurt them: somebody counted as both
@@ -23597,6 +23641,186 @@ __exports.TRAITS = TRAITS;
 __exports.TRAIT_LIST = TRAIT_LIST;
 __exports.EARNINGS = EARNINGS;
 __exports.ShipMastery = ShipMastery;
+
+});
+
+__define("src/sim/command.js", function (__exports, __require) {
+// Losing her, and being taken off her.
+//
+// The grounding is docs/RESEARCH.md §21. Both halves of this are canon and the
+// useful thing about both is that neither is free.
+//
+// Kirk destroyed the Enterprise himself rather than let her be taken, was tried
+// for it, was reduced in rank, and was THEN given the Enterprise-A — a hull is
+// lost, there is a reckoning, the reckoning costs something real, and a ship
+// follows it rather than replacing it. He got exactly one replacement.
+//
+// And promotion is how you stop being a starship captain. Kirk made Admiral and
+// the price was the Enterprise; the demotion at the end of the whale business is
+// what gave her back, and the film plays that as the reward. So a bigger command
+// is an OFFER, and it can be refused.
+
+const { Ship } = __require("src/sim/ship.js");
+const { getShipClass } = __require("src/world/ships.data.js");
+const { hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
+const { emit } = __require("src/core/events.js");
+
+/**
+ * The hulls Starfleet will give a captain, smallest first.
+ *
+ * `tier` is the rank tier at which one becomes available, matching
+ * `CaptainProgress.shipTier`. Every entry is a Federation class already in
+ * ships.data.js with its published numbers — no hull exists for this ladder
+ * that did not exist before it.
+ */
+const COMMAND_LADDER = [
+  { id: 'oberth', tier: 1 },
+  { id: 'miranda', tier: 1 },
+  { id: 'constellation', tier: 2 },
+  { id: 'constitution', tier: 3 },
+  { id: 'constitution_refit', tier: 4 },
+  { id: 'excelsior', tier: 5 },
+  { id: 'ambassador', tier: 5 },
+  { id: 'nebula', tier: 6 },
+  { id: 'galaxy', tier: 6 },
+];
+
+/** Where a class sits on the ladder, or -1 for one that is not on it. */
+function rungOf(classId) {
+  return COMMAND_LADDER.findIndex((r) => r.id === classId);
+}
+
+/**
+ * The next command Starfleet would offer, or null.
+ *
+ * One rung at a time, and never above the captain's rank. A lieutenant does not
+ * get a Galaxy because a Galaxy exists.
+ */
+function nextCommandFor(game) {
+  const here = rungOf(game.ship?.classId);
+  const tier = game.progress?.shipTier ?? 1;
+  for (let i = here + 1; i < COMMAND_LADDER.length; i++) {
+    if (COMMAND_LADDER[i].tier <= tier) return COMMAND_LADDER[i];
+  }
+  return null;
+}
+
+/**
+ * What Starfleet gives a captain who has lost one.
+ *
+ * Not better than what was lost. Kirk got a Constitution for a Constitution,
+ * and a captain who has just lost a ship is not the obvious person to hand a
+ * bigger one. One rung down where there is a rung to go down to.
+ */
+function replacementFor(game) {
+  const here = rungOf(game.ship?.classId);
+  if (here < 0) return COMMAND_LADDER[0];
+  return COMMAND_LADDER[Math.max(0, here - 1)];
+}
+
+/** A Starfleet name that is not the one you just lost. */
+function nameFor(game, avoid) {
+  const names = HOSTILE_NAMES.federation ?? [];
+  for (let i = 0; i < 12; i++) {
+    const n = hostileName('federation', Math.floor(game.rng.float() * names.length));
+    if (n !== avoid) return n;
+  }
+  return avoid ? `${avoid} II` : 'Endeavour';
+}
+
+/**
+ * Put the captain aboard a different hull.
+ *
+ * The crew come too — they followed Kirk from ship to ship and it would be a
+ * strange campaign that took your first officer away because Starfleet changed
+ * your hull. So does the loadout: the consoles are the captain's stores, and
+ * losing them as well would be punishing the same event twice.
+ *
+ * What does NOT come is what the old crew knew about the old ship. Mastery is
+ * keyed by class and stays keyed by class, so the new hull starts at nothing —
+ * with the shakedown penalty from §20 — and the old one still remembers, for a
+ * captain who ever gets her back.
+ *
+ * @returns {{ok: boolean, ship?: Ship, previous?: string, reason?: string}}
+ */
+function takeCommandOf(game, classId, { name = null } = {}) {
+  const cls = getShipClass(classId);
+  if (!cls) return { ok: false, reason: 'There is no such class in the registry.' };
+  const previous = game.ship?.classId ?? null;
+  const previousName = game.ship?.name ?? null;
+
+  game.ship = new Ship(classId, {
+    name: name ?? nameFor(game, previousName),
+    faction: 'federation',
+    isPlayer: true,
+  });
+  // The track follows the captain, not the hull: the points already earned in
+  // other classes stay in the map and are waiting if he ever flies one again.
+  if (game.mastery) game.mastery.classId = classId;
+  game.applyAllMods();
+
+  emit('command:changed', { ship: game.ship, previous, classId });
+  return { ok: true, ship: game.ship, previous };
+}
+
+/**
+ * A standing offer of a bigger command, or null.
+ *
+ * Held on the game rather than computed on the fly at the moment it is read,
+ * because it is a thing Starfleet said to you once — it should still be there
+ * tomorrow, and it should be refusable.
+ */
+function offerCommand(game) {
+  const next = nextCommandFor(game);
+  if (!next) return null;
+  const cls = getShipClass(next.id);
+  game.commandOffer = {
+    classId: next.id,
+    name: cls?.name ?? next.id,
+    hull: cls?.hull ?? 0,
+    crew: cls?.crew ?? 0,
+    // The cost, said out loud at the moment of the offer rather than discovered
+    // afterwards. This is the whole decision.
+    cost: game.mastery?.tier ?? 0,
+  };
+  emit('command:offered', game.commandOffer);
+  return game.commandOffer;
+}
+
+/** @returns {{ok: boolean, reason?: string, ship?: Ship, spent?: number}} */
+function acceptCommandOffer(game) {
+  const offer = game.commandOffer;
+  if (!offer) return { ok: false, reason: 'Nobody has offered us another ship, Captain.' };
+  const spent = game.mastery?.tier ?? 0;
+  const took = takeCommandOf(game, offer.classId);
+  if (!took.ok) return took;
+  game.commandOffer = null;
+  game.ledger?.record('command_accepted', {
+    text: `Took command of ${game.ship.name}, a ${offer.name}`,
+  });
+  return { ok: true, ship: game.ship, spent };
+}
+
+/** @returns {{ok: boolean, reason?: string, kept?: string}} */
+function declineCommandOffer(game) {
+  const offer = game.commandOffer;
+  if (!offer) return { ok: false, reason: 'There is nothing to turn down, Captain.' };
+  game.commandOffer = null;
+  game.ledger?.record('command_declined', {
+    text: `Turned down a ${offer.name} to stay with ${game.ship.name}`,
+  });
+  emit('command:declined', { offer, ship: game.ship });
+  return { ok: true, kept: game.ship.name };
+}
+
+__exports.COMMAND_LADDER = COMMAND_LADDER;
+__exports.rungOf = rungOf;
+__exports.nextCommandFor = nextCommandFor;
+__exports.replacementFor = replacementFor;
+__exports.takeCommandOf = takeCommandOf;
+__exports.offerCommand = offerCommand;
+__exports.acceptCommandOffer = acceptCommandOffer;
+__exports.declineCommandOffer = declineCommandOffer;
 
 });
 
@@ -26922,6 +27146,7 @@ const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer } = __require("src/sim/duty.js");
 const { ShipMastery } = __require("src/sim/mastery.js");
+const { offerCommand, acceptCommandOffer, declineCommandOffer, takeCommandOf, replacementFor } = __require("src/sim/command.js");
 const { resolveHail, STANDING_EFFECTS, HAIL_ENDING } = __require("src/sim/diplomacy.js");
 const { applyAbility, applySignature, applyDevice } = __require("src/sim/powers.js");
 
@@ -27041,6 +27266,9 @@ class Game {
     // campaign gives a captain one command and never a second, so in practice
     // this is one crew learning one ship over five years.
     this.mastery = new ShipMastery(classId);
+    // Hulls this career has cost, and any standing offer of another.
+    this.shipsLost = 0;
+    this.commandOffer = null;
     this.ship = new Ship(classId, {
       name: options.shipName ?? 'Enterprise',
       registry: options.registry ?? FEDERATION_REGISTRIES[0],
@@ -27279,8 +27507,42 @@ class Game {
         'captain',
       );
     }
+    // A promotion is how you stop being a starship captain (RESEARCH.md §21).
+    // Starfleet does not simply move you: it offers, and the offer stands until
+    // it is taken or turned down, because refusing it is the interesting half.
+    const offer = offerCommand(this);
+    if (offer && !silent) {
+      this.pushLog(
+        `Starfleet offers you a ${offer.name}, Captain. `
+        + `${this.ship.name} would go to somebody else, and her crew's five years `
+        + 'of knowing her would go with her.',
+        'comms',
+      );
+    }
     emit('captain:promoted', promo);
     return promo;
+  }
+
+  /** Take the bigger ship. Spends what the crew knew about this one. */
+  acceptCommand() {
+    const before = this.ship?.name;
+    const r = acceptCommandOffer(this);
+    if (!r.ok) return r;
+    this.pushLog(
+      `${this.ship.name} is yours, Captain. ${before} goes to another captain. `
+      + 'Nobody aboard has worked this hull up yet.',
+      'captain',
+    );
+    return r;
+  }
+
+  /** Keep the ship you know. */
+  declineCommand() {
+    const r = declineCommandOffer(this);
+    if (r.ok) {
+      this.pushLog(`We stay with ${r.kept}, Captain. Starfleet is informed.`, 'captain');
+    }
+    return r;
   }
 
   /**
@@ -29239,7 +29501,43 @@ class Game {
    */
   loseTheShip() {
     if (this.difficulty?.def?.shipLoss !== false) {
-      return this.gameOver('ship lost with all hands');
+      // A ship lost is a ship lost — not, by itself, the end of a career.
+      //
+      // The difficulty screen promises that "the ship can be lost". It never
+      // promised the commission ends, and reading the flag that way meant the
+      // single most dramatic thing that can happen to a starship captain was a
+      // game-over screen. Kirk destroyed the Enterprise, was tried for it,
+      // was reduced in rank, and was given the Enterprise-A (RESEARCH.md §21).
+      //
+      // He was given exactly one. So is the player: the second loss is where a
+      // career ends, because Starfleet does not hand out a third hull.
+      this.shipsLost = (this.shipsLost ?? 0) + 1;
+      if (this.shipsLost > 1) {
+        return this.gameOver('a second ship lost — no further command was offered');
+      }
+
+      const lost = this.ship.name;
+      const board = replacementFor(this);
+      this.ledger.record('ship_lost', {
+        text: `${lost} lost at ${this.location?.name ?? 'an unknown system'}`,
+        system: this.locationId,
+      });
+      // The reckoning, and it costs something real before the ship arrives.
+      this.ledger.adjustStanding('federation', -12, 'Board of inquiry: loss of a starship');
+      this.pushLog(
+        `${lost} is gone, Captain. There will be a board of inquiry, and it is `
+        + 'already on your record.',
+        'comms',
+      );
+      const took = takeCommandOf(this, board.id);
+      if (!took.ok) return this.gameOver('ship lost and no hull available');
+      this.pushLog(
+        `Starfleet assigns you ${this.ship.name}. She is not ${lost}, and nobody `
+        + 'aboard has worked her up.',
+        'captain',
+      );
+      emit('ship:replaced', { ship: this.ship, lost });
+      return null;
     }
 
     this.ship.restore();
@@ -29307,6 +29605,12 @@ class Game {
       fabrication: this.fabrication,
       dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
       mastery: this.mastery?.save() ?? null,
+      // How many hulls this career has cost, and any standing offer of
+      // another. Both are decisions the campaign has already made or put to
+      // the captain, and a save that forgot them would hand back a second
+      // first ship or lose an offer that was made.
+      shipsLost: this.shipsLost ?? 0,
+      commandOffer: this.commandOffer ?? null,
       assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
@@ -29773,6 +30077,18 @@ class Game {
     // existed loads as a crew who have learned nothing yet, which is exactly
     // what a fresh track means and needs no migration.
     g.mastery = ShipMastery.load(data.mastery, g.ship.classId);
+    // Ships this career has cost. Clamped to what a running commission can
+    // actually have survived: two losses is the end, so a record claiming two
+    // on a game that is not over is incoherent, and the forgiving reading is
+    // that the next one is the last. A genuine save taken after the second
+    // loss carries `over` and keeps its count.
+    const lost = Number.isFinite(data.shipsLost) && data.shipsLost >= 0
+      ? Math.floor(data.shipsLost) : 0;
+    g.shipsLost = g.over ? lost : Math.min(1, lost);
+    // Only an offer of a hull that exists, so a hand-edited record cannot put
+    // the captain aboard something the registry has never heard of.
+    g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)
+      ? data.commandOffer : null;
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
 
@@ -31157,6 +31473,39 @@ function shipScreen(app) {
       }
     }
     root.append(panel('Her own ship', masteryLines));
+  }
+
+  // --- A bigger command, and the right to say no ---
+  //
+  // Promotion is how you stop being a starship captain (RESEARCH.md §21). So
+  // this is an offer with its cost written on it, not a reward that happens to
+  // you: what you would be giving up is everything the crew have learned about
+  // the hull you are standing in.
+  const offer = g.commandOffer;
+  if (offer) {
+    const spending = g.mastery?.tier ?? 0;
+    root.append(panel('Starfleet offers you a command', [
+      el('h3', { text: offer.name }),
+      el('p', {
+        class: 'muted',
+        text: `${Math.round(offer.hull)} hull against ${Math.round(g.ship.maxHull)}, `
+          + `and ${offer.crew} aboard against ${g.ship.maxCrew}.`,
+      }),
+      el('p', {
+        class: 'hint',
+        text: spending > 0
+          ? `${g.ship.name} would go to another captain, and the ${spending} `
+            + `${spending === 1 ? 'tier' : 'tiers'} your crew have earned in her would stay with her. `
+            + 'Nobody aboard would have worked the new hull up.'
+          : `${g.ship.name} would go to another captain. Nobody aboard has worked `
+            + 'either hull up yet, so there is nothing to lose but her name.',
+      }),
+      button('Take her', tap(() => { g.acceptCommand(); app.render(); }, 'ui_confirm'),
+        { color: 'orange', say: 'take the new command' }),
+      button(`Stay with ${g.ship.name}`,
+        tap(() => { g.declineCommand(); app.render(); }, 'ui_back'),
+        { color: 'ghost', say: 'stay with this ship' }),
+    ]));
   }
 
   // --- Consoles ---
@@ -34172,6 +34521,21 @@ class App {
         audio.play('computer_ack');
         haptic('confirm');
         ack('engineering', `Standing doctrine is ${r.trait.name}, Captain. ${r.trait.text}`);
+        break;
+      }
+      case 'take_command': {
+        const r = g.acceptCommand();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play('computer_ack');
+        haptic('confirm');
+        this.render();
+        break;
+      }
+      case 'keep_command': {
+        const r = g.declineCommand();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play('computer_ack');
+        this.render();
         break;
       }
       case 'salvage': {

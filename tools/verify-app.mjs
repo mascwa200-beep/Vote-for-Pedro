@@ -2945,6 +2945,64 @@ try {
   });
   await page.waitForTimeout(150);
   await page.screenshot({ path: join(SHOTS, '06d-episode-elsewhere.png') });
+
+  // ------------------------------------------------ a bigger command
+  await nav(page, 'Ship');
+  const command = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const { offerCommand } = await import('./src/sim/command.js');
+    const { RANKS } = await import('./src/sim/skills.js');
+    const { TIERS } = await import('./src/sim/mastery.js');
+
+    // A captain who knows her perfectly, so the offer has something to cost.
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'captain');
+    g.mastery.points[g.mastery.classId] = TIERS[4].at;
+    g.applyAllMods();
+    const was = { name: g.ship.name, classId: g.ship.classId, tier: g.mastery.tier };
+
+    offerCommand(g);
+    app.render();
+    const text = document.body.textContent ?? '';
+    return {
+      was,
+      offering: g.commandOffer?.name ?? null,
+      namesIt: /Starfleet offers you a command/i.test(text),
+      saysTheCost: /would go to another captain/i.test(text),
+      offersRefusal: new RegExp(`Stay with ${was.name}`, 'i').test(text),
+    };
+  });
+  check('a bigger command is offered on the screen',
+    command.namesIt && !!command.offering, JSON.stringify(command));
+  check('and the offer says what taking it costs',
+    command.saysTheCost, JSON.stringify(command));
+  check('and refusing it is a button of its own',
+    command.offersRefusal, JSON.stringify(command));
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel')]
+      .find((el) => /Starfleet offers you a command/i.test(el.textContent ?? ''));
+    head?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '06e-a-bigger-command.png') });
+
+  // Turned down by SPEAKING it, and the ship is still yours.
+  await page.fill('.orderbar input', 'stay with this ship');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(200);
+  const refused = await page.evaluate(() => {
+    const g = window.__app.game;
+    return {
+      stillHers: g.ship.name,
+      tier: g.mastery.tier,
+      offerGone: g.commandOffer === null,
+    };
+  });
+  check('a command can be refused by saying so, and the ship stays yours',
+    refused.offerGone && refused.stillHers === command.was.name
+      && refused.tier === command.was.tier,
+    `${JSON.stringify(refused)} vs ${JSON.stringify(command.was)}`);
+
   // NOW put the bridge back the way it was found. A check that leaves the ship
   // four light years from where the next one expects it breaks its neighbours,
   // which is how the main-viewer check was caught.

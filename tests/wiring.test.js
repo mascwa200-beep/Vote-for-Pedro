@@ -39,6 +39,9 @@ import {
   beginAssignment, advanceAssignments, dutySlots, specialistBonusFor,
 } from '../src/sim/duty.js';
 import { TIERS, TRAIT_LIST, SHAKEDOWN } from '../src/sim/mastery.js';
+import { offerCommand, COMMAND_LADDER } from '../src/sim/command.js';
+import { getShipClass } from '../src/world/ships.data.js';
+import { RANKS } from '../src/sim/skills.js';
 import { ROOMS } from '../src/world/interiors.data.js';
 import { checkGame } from '../src/sim/invariants.js';
 import { parseOrder } from '../src/ui/orders.js';
@@ -1036,7 +1039,31 @@ test('the difficulties that promise the ship cannot be lost keep the promise', (
     g.finishCombat('destroyed');
 
     if (def.shipLoss) {
-      assert.equal(g.over, true, `${def.id}: the ship was lost and the commission continued`);
+      // This used to assert that the first loss ended the commission.
+      //
+      // The difficulty screen promises that "the ship can be lost". It never
+      // promised the commission ends, and reading the flag that way made the
+      // most dramatic thing that can happen to a starship captain a game-over
+      // screen. Kirk lost the Enterprise, faced a board, was reduced in rank,
+      // and was given the Enterprise-A — exactly one of them (RESEARCH.md §21).
+      assert.equal(g.over, false,
+        `${def.id}: the first ship lost ended the career`);
+      assert.equal(g.ship.destroyed, false, `${def.id}: still flying a wreck`);
+      assert.notEqual(g.ship.name, 'Enterprise', `${def.id}: the same ship came back`);
+      assert.equal(g.shipsLost, 1, `${def.id}: the loss was not recorded`);
+      assert.ok(g.ledger.entries.some((e) => e.kind === 'ship_lost'),
+        `${def.id}: nothing on the record about losing a starship`);
+      assert.ok(
+        g.log.some((l) => /board of inquiry/i.test(l.text ?? '')),
+        `${def.id}: nobody convened a board`,
+      );
+
+      // And Starfleet gives you exactly one. The second is the end.
+      g.startCombat([new Ship('d7', { name: 'IKS Test' })]);
+      g.ship.destroy('test');
+      g.engagement.end('destroyed');
+      g.finishCombat('destroyed');
+      assert.equal(g.over, true, `${def.id}: a second ship was lost and the career continued`);
       continue;
     }
     assert.equal(g.over, false, `${def.id}: the screen says the ship cannot be lost, and it was`);
@@ -2072,5 +2099,138 @@ describe('a stage is at a place, and the ship has to be there', () => {
       }
       g.missions.abandon?.(g);
     }
+  });
+});
+
+// -------------------------------------------------------------------------
+// A second command. RESEARCH.md §21.
+
+describe('losing her, and being taken off her', () => {
+  const fresh = (opts = {}) => new Game({
+    seed: 0x1701n, crewMode: 'canon', crew: 'tos', difficulty: 'ensign', ...opts,
+  });
+
+  test('a bigger command is offered, not imposed', () => {
+    const g = fresh();
+    assert.equal(g.commandOffer, null, 'a ship was on offer before any promotion');
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'captain');
+    const offer = offerCommand(g);
+    assert.ok(offer, 'a captain was offered nothing at all');
+    assert.notEqual(offer.classId, g.ship.classId, 'offered the ship already being flown');
+    assert.ok(getShipClass(offer.classId).hull > g.ship.cls.hull, 'the offer is not a bigger hull');
+  });
+
+  test('taking it spends what the crew knew about the old one', () => {
+    const g = fresh();
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'captain');
+    g.mastery.points[g.mastery.classId] = TIERS[4].at;
+    g.applyAllMods();
+    const oldClass = g.ship.classId;
+    const oldName = g.ship.name;
+    assert.equal(g.mastery.tier, 5, 'the crew were supposed to know her perfectly');
+
+    offerCommand(g);
+    const r = g.acceptCommand();
+    assert.ok(r.ok, r.reason);
+    assert.notEqual(g.ship.classId, oldClass, 'still flying the old class');
+    assert.notEqual(g.ship.name, oldName, 'the new ship has the old ship’s name');
+    assert.equal(g.mastery.tier, 0, 'the new hull came pre-worked-up');
+    assert.ok(g.mastery.report().shakedown, 'no shakedown on a hull nobody has flown');
+    // And the old ship still remembers, for a captain who ever gets her back.
+    assert.equal(g.mastery.points[oldClass], TIERS[4].at, 'the old ship forgot her crew');
+  });
+
+  test('and it can be turned down', () => {
+    const g = fresh();
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'captain');
+    g.mastery.points[g.mastery.classId] = TIERS[4].at;
+    g.applyAllMods();
+    const kept = g.ship;
+    offerCommand(g);
+    const r = g.declineCommand();
+    assert.ok(r.ok, r.reason);
+    assert.equal(g.ship, kept, 'the ship changed anyway');
+    assert.equal(g.mastery.tier, 5, 'refusing cost the crew what they knew');
+    assert.equal(g.commandOffer, null, 'the offer is still standing after being refused');
+    assert.ok(g.ledger.entries.some((e) => e.kind === 'command_declined'),
+      'turning down a starship went unrecorded');
+  });
+
+  test('an offer nobody made cannot be accepted', () => {
+    const g = fresh();
+    assert.equal(g.acceptCommand().ok, false, 'took a ship that was never offered');
+    assert.equal(g.declineCommand().ok, false, 'declined an offer that does not exist');
+  });
+
+  test('a lieutenant is not offered a Galaxy because a Galaxy exists', () => {
+    const g = fresh();
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'lieutenant');
+    const offer = offerCommand(g);
+    if (offer) {
+      const rung = COMMAND_LADDER.find((r) => r.id === offer.classId);
+      assert.ok(rung.tier <= g.progress.shipTier,
+        `a ${RANKS[g.progress.rankIndex].name} was offered a ${offer.name}`);
+    }
+  });
+
+  test('the ship Starfleet gives after a loss is not a better one', () => {
+    const g = fresh();
+    const before = g.ship.cls.hull;
+    g.loseTheShip();
+    assert.equal(g.over, false, 'the first loss ended the career');
+    assert.ok(g.ship.cls.hull <= before,
+      `lost a ${before}-hull ship and was handed a ${g.ship.cls.hull}-hull one`);
+    assert.ok(g.mastery.report().shakedown, 'the replacement came already worked up');
+  });
+
+  test('and the reckoning is on the record before the ship arrives', () => {
+    const g = fresh();
+    const standing = g.ledger.standingOf('federation');
+    g.loseTheShip();
+    assert.ok(g.ledger.standingOf('federation') < standing,
+      'losing a starship cost nothing with Starfleet');
+    assert.ok(g.ledger.entries.some((e) => e.kind === 'ship_lost'), 'no entry on the record');
+  });
+
+  test('Starfleet gives exactly one', () => {
+    const g = fresh();
+    g.loseTheShip();
+    assert.equal(g.over, false);
+    g.loseTheShip();
+    assert.equal(g.over, true, 'a second ship was lost and the career went on');
+    assert.match(g.overReason ?? '', /second ship/i, `the reason reads "${g.overReason}"`);
+  });
+
+  test('all of it survives a save', () => {
+    const g = fresh();
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'captain');
+    g.loseTheShip();
+    offerCommand(g);
+    const offered = g.commandOffer.classId;
+    const flying = g.ship.classId;
+
+    const loaded = Game.load(g.save());
+    assert.equal(loaded.shipsLost, 1, 'the lost ship was forgotten');
+    assert.equal(loaded.ship.classId, flying, 'came back aboard a different hull');
+    assert.equal(loaded.commandOffer?.classId, offered, 'the offer was lost');
+    assert.equal(checkGame(loaded).some((v) => v.code.startsWith('game.commandOffer')), false,
+      'the loaded game is in a state its own invariants forbid');
+  });
+
+  test('a hand-edited record cannot invent a hull or a lost fleet', () => {
+    const g = fresh();
+    const record = g.save();
+    record.commandOffer = { classId: 'not_a_real_class', name: 'Nonsense' };
+    record.shipsLost = 9;
+    const loaded = Game.load(record);
+    assert.equal(loaded.commandOffer, null, 'an invented class was accepted');
+    assert.equal(loaded.shipsLost, 1, `the record claimed nine losses and got ${loaded.shipsLost}`);
+    assert.equal(checkGame(loaded).some((v) => v.code.startsWith('game.shipsLost')), false,
+      'the loaded game breaks its own rules');
+  });
+
+  test('both halves are sayable', () => {
+    assert.equal(parseOrder('take the new command').action, 'take_command');
+    assert.equal(parseOrder('stay with this ship').action, 'keep_command');
   });
 });

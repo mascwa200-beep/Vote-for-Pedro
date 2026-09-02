@@ -27,6 +27,7 @@
 // (tests), log (the debug overlay), or count (the fuzzer).
 
 import { FACINGS, SHIELD_OVERCHARGE } from './ship.js';
+import { getShipClass } from '../world/ships.data.js';
 
 /**
  * How far outside the arena a ship may be before it counts as escaped.
@@ -511,6 +512,27 @@ export function checkGame(game) {
       r.must(!game.mastery.traits?.[game.mastery.classId] || game.mastery.tier >= 5,
         'mastery.trait.unearned', 'error',
         'a standing doctrine is set on a hull the crew do not know well enough');
+    }
+
+    // A career is a finite number of starships.
+    //
+    // Losing one costs the hull and Starfleet assigns another; losing a second
+    // ends the commission, because Kirk was given exactly one Enterprise-A
+    // (RESEARCH.md §21). A game still running past that has lost count, and a
+    // negative or fractional count is arithmetic that has gone wrong.
+    r.must(ok(game.shipsLost) && num(game.shipsLost) >= 0
+      && Number.isInteger(num(game.shipsLost)),
+      'game.shipsLost', 'error', `ships lost is ${game.shipsLost}`);
+    r.must(num(game.shipsLost) <= 1 || game.over === true, 'game.shipsLost.overrun', 'error',
+      `${game.shipsLost} ships lost and the commission is still running`);
+
+    // An offer of a hull that does not exist cannot be accepted, and would sit
+    // on the screen forever as a button that refuses itself.
+    if (game.commandOffer) {
+      r.must(!!getShipClass(game.commandOffer.classId), 'game.commandOffer.ghost', 'error',
+        `Starfleet is offering a ${game.commandOffer.classId}, which is not a class`);
+      r.must(game.commandOffer.classId !== game.ship?.classId, 'game.commandOffer.same', 'error',
+        'Starfleet is offering the ship the captain is already flying');
     }
 
     // The duty roster, and the details that are out on it.

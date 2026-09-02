@@ -1154,6 +1154,28 @@ export const INTENTS = [
     },
   },
   {
+    id: 'take_command',
+    help: 'Accept the ship Starfleet is offering',
+    phrases: [
+      'take the new command', 'accept the command', 'accept the new ship',
+      'i will take her', 'take the bigger ship', 'transfer my flag',
+      'accept starfleet\u2019s offer', 'accept starfleets offer',
+    ],
+    keywords: { accept: 2.4, transfer: 2 },
+    build: () => ({ action: 'take_command' }),
+  },
+  {
+    id: 'keep_command',
+    help: 'Turn down the ship Starfleet is offering',
+    phrases: [
+      'stay with this ship', 'we stay with her', 'decline the command',
+      'turn down the command', 'turn it down', 'i am staying with my ship',
+      'refuse the transfer', 'i keep this ship',
+    ],
+    keywords: { decline: 2.6, refuse: 2.4, stay: 1.6 },
+    build: () => ({ action: 'keep_command' }),
+  },
+  {
     id: 'salvage',
     help: 'Strip the wreck',
     phrases: [

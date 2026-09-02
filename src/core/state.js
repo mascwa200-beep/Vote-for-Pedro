@@ -17,6 +17,9 @@ import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer } from '../sim/duty.js';
 import { ShipMastery } from '../sim/mastery.js';
+import {
+  offerCommand, acceptCommandOffer, declineCommandOffer, takeCommandOf, replacementFor,
+} from '../sim/command.js';
 import { resolveHail, STANDING_EFFECTS, HAIL_ENDING } from '../sim/diplomacy.js';
 import { applyAbility, applySignature, applyDevice } from '../sim/powers.js';
 
@@ -140,6 +143,9 @@ export class Game {
     // campaign gives a captain one command and never a second, so in practice
     // this is one crew learning one ship over five years.
     this.mastery = new ShipMastery(classId);
+    // Hulls this career has cost, and any standing offer of another.
+    this.shipsLost = 0;
+    this.commandOffer = null;
     this.ship = new Ship(classId, {
       name: options.shipName ?? 'Enterprise',
       registry: options.registry ?? FEDERATION_REGISTRIES[0],
@@ -378,8 +384,42 @@ export class Game {
         'captain',
       );
     }
+    // A promotion is how you stop being a starship captain (RESEARCH.md §21).
+    // Starfleet does not simply move you: it offers, and the offer stands until
+    // it is taken or turned down, because refusing it is the interesting half.
+    const offer = offerCommand(this);
+    if (offer && !silent) {
+      this.pushLog(
+        `Starfleet offers you a ${offer.name}, Captain. `
+        + `${this.ship.name} would go to somebody else, and her crew's five years `
+        + 'of knowing her would go with her.',
+        'comms',
+      );
+    }
     emit('captain:promoted', promo);
     return promo;
+  }
+
+  /** Take the bigger ship. Spends what the crew knew about this one. */
+  acceptCommand() {
+    const before = this.ship?.name;
+    const r = acceptCommandOffer(this);
+    if (!r.ok) return r;
+    this.pushLog(
+      `${this.ship.name} is yours, Captain. ${before} goes to another captain. `
+      + 'Nobody aboard has worked this hull up yet.',
+      'captain',
+    );
+    return r;
+  }
+
+  /** Keep the ship you know. */
+  declineCommand() {
+    const r = declineCommandOffer(this);
+    if (r.ok) {
+      this.pushLog(`We stay with ${r.kept}, Captain. Starfleet is informed.`, 'captain');
+    }
+    return r;
   }
 
   /**
@@ -2338,7 +2378,43 @@ export class Game {
    */
   loseTheShip() {
     if (this.difficulty?.def?.shipLoss !== false) {
-      return this.gameOver('ship lost with all hands');
+      // A ship lost is a ship lost — not, by itself, the end of a career.
+      //
+      // The difficulty screen promises that "the ship can be lost". It never
+      // promised the commission ends, and reading the flag that way meant the
+      // single most dramatic thing that can happen to a starship captain was a
+      // game-over screen. Kirk destroyed the Enterprise, was tried for it,
+      // was reduced in rank, and was given the Enterprise-A (RESEARCH.md §21).
+      //
+      // He was given exactly one. So is the player: the second loss is where a
+      // career ends, because Starfleet does not hand out a third hull.
+      this.shipsLost = (this.shipsLost ?? 0) + 1;
+      if (this.shipsLost > 1) {
+        return this.gameOver('a second ship lost — no further command was offered');
+      }
+
+      const lost = this.ship.name;
+      const board = replacementFor(this);
+      this.ledger.record('ship_lost', {
+        text: `${lost} lost at ${this.location?.name ?? 'an unknown system'}`,
+        system: this.locationId,
+      });
+      // The reckoning, and it costs something real before the ship arrives.
+      this.ledger.adjustStanding('federation', -12, 'Board of inquiry: loss of a starship');
+      this.pushLog(
+        `${lost} is gone, Captain. There will be a board of inquiry, and it is `
+        + 'already on your record.',
+        'comms',
+      );
+      const took = takeCommandOf(this, board.id);
+      if (!took.ok) return this.gameOver('ship lost and no hull available');
+      this.pushLog(
+        `Starfleet assigns you ${this.ship.name}. She is not ${lost}, and nobody `
+        + 'aboard has worked her up.',
+        'captain',
+      );
+      emit('ship:replaced', { ship: this.ship, lost });
+      return null;
     }
 
     this.ship.restore();
@@ -2406,6 +2482,12 @@ export class Game {
       fabrication: this.fabrication,
       dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
       mastery: this.mastery?.save() ?? null,
+      // How many hulls this career has cost, and any standing offer of
+      // another. Both are decisions the campaign has already made or put to
+      // the captain, and a save that forgot them would hand back a second
+      // first ship or lose an offer that was made.
+      shipsLost: this.shipsLost ?? 0,
+      commandOffer: this.commandOffer ?? null,
       assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
@@ -2872,6 +2954,18 @@ export class Game {
     // existed loads as a crew who have learned nothing yet, which is exactly
     // what a fresh track means and needs no migration.
     g.mastery = ShipMastery.load(data.mastery, g.ship.classId);
+    // Ships this career has cost. Clamped to what a running commission can
+    // actually have survived: two losses is the end, so a record claiming two
+    // on a game that is not over is incoherent, and the forgiving reading is
+    // that the next one is the last. A genuine save taken after the second
+    // loss carries `over` and keeps its count.
+    const lost = Number.isFinite(data.shipsLost) && data.shipsLost >= 0
+      ? Math.floor(data.shipsLost) : 0;
+    g.shipsLost = g.over ? lost : Math.min(1, lost);
+    // Only an offer of a hull that exists, so a hand-edited record cannot put
+    // the captain aboard something the registry has never heard of.
+    g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)
+      ? data.commandOffer : null;
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
 

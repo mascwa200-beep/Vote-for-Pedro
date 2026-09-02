@@ -1065,6 +1065,62 @@ Sources: [Memory Alpha — Star Trek: The Motion Picture](https://memory-alpha.f
 
 ---
 
+## 21. Losing her, and being taken off her
+
+The campaign gives a captain one command and never a second: `Game` builds
+`this.ship` once and nothing anywhere replaces it. That makes half of the
+mastery system inert — familiarity is tracked per class, and there is only ever
+one class — and it makes the single most dramatic thing that can happen to a
+starship captain either a game over or nothing at all.
+
+Star Trek has both halves of the answer, and the useful thing about both is
+that **neither is free**.
+
+**Losing a ship costs you, and the replacement comes afterwards.** Kirk
+destroyed the Enterprise himself at the Genesis planet rather than let her be
+taken. He and his officers were then tried by the Federation Council — for
+taking the ship, for destroying her, and for going to Genesis. The heroics
+around the probe got almost all of it dropped; the charge that stuck was
+disobeying a superior officer, he pled guilty, and he was **reduced in rank**.
+Only then was he given the Enterprise-A. So the shape is: a hull is lost, there
+is a reckoning, the reckoning costs something real, and a ship follows the
+reckoning rather than replacing it.
+
+The other useful detail is that he got exactly **one** replacement. A career is
+not an unlimited supply of starships.
+
+**Promotion takes you off the ship, and it reads as a loss.** This is the
+inversion that makes the mechanic interesting. Kirk was promoted to Admiral and
+Chief of Starfleet Operations, and the price was the Enterprise — by the time
+of the refit she belonged to Decker, and Kirk had to take her back by pulling
+rank on a captain who knew her better. The demotion at the end of the whale
+business is what *returned* him to a ship, and the film plays it as a reward.
+
+In Star Trek, moving up the ladder is how you stop being a starship captain.
+
+**What the build takes from this.** Two things that both hurt.
+
+A ship lost is a ship lost: a board of inquiry, a mark on the record, standing
+spent, and another hull assigned. Not a better one — Kirk got a Constitution
+for a Constitution. And not indefinitely: a second loss ends the commission,
+because Starfleet gave Kirk one Enterprise-A and no more.
+
+A promotion past a certain rank comes with the offer of a bigger command, and
+the offer can be **declined**. Taking it means starting again on a hull nobody
+aboard has worked up — the shakedown penalty from §20 applies to the new class,
+and the five years of familiarity built in the old one stay with the old one.
+That is Decker's argument from §20 turned around and handed to the player as a
+decision: is a bigger ship you do not know worth more than a smaller one you
+do? Mastery is already keyed by class, so a captain who takes the new hull and
+later returns to the old one finds his crew still know her.
+
+Sources: [Memory Alpha — Star Trek IV: The Voyage Home](https://memory-alpha.fandom.com/wiki/Star_Trek_IV:_The_Voyage_Home),
+[Memory Alpha — USS Enterprise (NCC-1701-A)](https://memory-alpha.fandom.com/wiki/USS_Enterprise_(NCC-1701-A)),
+[Memory Alpha — court martial](https://memory-alpha.fandom.com/wiki/Court_martial),
+[Memory Alpha — Star Trek: The Motion Picture](https://memory-alpha.fandom.com/wiki/Star_Trek:_The_Motion_Picture)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
