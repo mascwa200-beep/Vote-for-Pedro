@@ -34,6 +34,7 @@ import {
   Engagement, MAX_WEAPON_RANGE,
 } from '../src/sim/combat.js';
 import { RNG } from '../src/core/rng.js';
+import { Galaxy, plotTransit } from '../src/world/galaxy.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { ABILITIES } from '../src/sim/officers.js';
 
@@ -2005,5 +2006,115 @@ describe('a ship that broke contact is out of the fight for everyone', () => {
     ally.aiTarget = gone;
     assert.ok(checkCombat(eng, OPTS).some((v) => v.code === 'eng.aitarget.absent'),
       'nothing noticed a captain locked on a ship that is no longer in the fight');
+  });
+});
+
+// -------------------------------------------------------------------------
+// Ship state the sweep was not looking at.
+//
+// Hull, shields, crew, torpedoes, fires, subsystems, power and position were
+// all checked. The antimatter reserve, the breach countdown, and the two flags
+// that decide whether a ship survives a breach were not.
+
+describe('the numbers a save can carry that nothing was reading', () => {
+  /** The violation codes for one ship, on its own, out of any fight. */
+  const sweep = (ship) => {
+    const eng = new Engagement(ship, [new Ship('d7', { name: 'Opponent' })], new RNG(1n));
+    return checkCombat(eng, OPTS).map((v) => v.code);
+  };
+
+  test('a broken antimatter figure does not survive the load', () => {
+    const record = new Ship('constitution', { isPlayer: true, name: 'Enterprise' }).save();
+    record.antimatter = NaN;
+    const ship = Ship.load(record);
+    assert.ok(Number.isFinite(ship.antimatter),
+      `antimatter loaded as ${ship.antimatter}`);
+  });
+
+  test('and the ship can no longer fly anywhere for free', () => {
+    const record = new Ship('constitution', { isPlayer: true, name: 'Enterprise' }).save();
+    record.antimatter = NaN;
+    const ship = Ship.load(record);
+
+    const galaxy = new Galaxy(new RNG(1n));
+    const plan = plotTransit(galaxy, 'sol', 'qonos', 9, ship);
+    // Either priced or refused — but priced against a reserve the game can read.
+    if (plan.transit) {
+      ship.antimatter = Math.max(0, ship.antimatter - plan.fuel);
+      assert.ok(Number.isFinite(ship.antimatter),
+        `the reserve came back as ${ship.antimatter} after flying the course`);
+      assert.ok(ship.antimatter < 100, 'the course cost nothing');
+    }
+  });
+
+  test('the sweep says so if a bad reserve turns up another way', () => {
+    const ship = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    assert.equal(sweep(ship).some((c) => c.startsWith('ship.antimatter')), false,
+      'complained about a ship with a full tank');
+    ship.antimatter = NaN;
+    assert.ok(sweep(ship).includes('ship.antimatter.finite'),
+      'nothing noticed an unreadable antimatter reserve');
+    ship.antimatter = 140;
+    assert.ok(sweep(ship).includes('ship.antimatter.range'),
+      'nothing noticed a reserve above a full tank');
+  });
+
+  test('a save cannot be both breaching and core-ejected', () => {
+    const s = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    s.beginBreach(20);
+    const record = s.save();
+    record.coreEjected = true;      // the flags are saved independently
+
+    const loaded = Ship.load(record);
+    assert.equal(loaded.breaching && loaded.coreEjected, false,
+      'loaded counting down to an explosion it had already prevented');
+    // And the ship is in one of the two states that actually exist.
+    assert.ok(loaded.destroyed || !loaded.breaching || loaded.ejectCore(),
+      'the one way out of a breach was gone and the breach was still running');
+  });
+
+  test('the sweep sees a breach running on a core that is not there', () => {
+    const ship = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    assert.equal(sweep(ship).includes('ship.breach.ejected'), false,
+      'complained about an undamaged ship');
+    ship.breaching = true;
+    ship.breachTimer = 12;
+    ship.coreEjected = true;
+    assert.ok(sweep(ship).includes('ship.breach.ejected'),
+      'nothing noticed a breach counting down with the core already gone');
+  });
+
+  test('the sweep sees a countdown that is not a number', () => {
+    const ship = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    ship.breaching = true;
+    ship.breachTimer = NaN;
+    assert.ok(sweep(ship).includes('ship.breachTimer'),
+      'nothing noticed a breach countdown of NaN');
+  });
+
+  test('a ship with no cloaking device cannot be cloaked', () => {
+    const ship = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    assert.equal(ship.cloakCapable, false, 'a Constitution should carry no cloak');
+    assert.equal(ship.cloak(), false, 'it cloaked when it has nothing to cloak with');
+    assert.equal(sweep(ship).includes('ship.cloak.incapable'), false,
+      'complained about a ship that is not cloaked');
+
+    // Set past the order layer, which is the only way this can happen.
+    ship.cloaked = true;
+    assert.ok(sweep(ship).includes('ship.cloak.incapable'),
+      'nothing noticed a ship cloaked without a cloaking device');
+  });
+
+  test('the countdown running out is not itself a violation', () => {
+    // The timer is decremented and then tested, so it is a fraction below zero
+    // on the tick it expires. The rule has to tolerate that and nothing wider.
+    const ship = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    ship.breaching = true;
+    ship.breachTimer = -1.5e-13;
+    assert.equal(sweep(ship).includes('ship.breachTimer'), false,
+      'floating-point dust on the last tick was reported as a broken ship');
+    ship.breachTimer = -0.5;
+    assert.ok(sweep(ship).includes('ship.breachTimer'),
+      'a countdown half a second past due went unreported');
   });
 });

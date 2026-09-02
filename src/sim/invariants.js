@@ -178,6 +178,42 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
   r.must(ok(s.torpedoes) && num(s.torpedoes) >= 0, 'ship.torpedoes', 'error',
     `${who}: torpedoes is ${s.torpedoes}`, who);
 
+  // The one number that decides whether the ship can go anywhere, and the
+  // sweep was not looking at it.
+  //
+  // Hull, shields, crew, torpedoes, fires, subsystems, power and position were
+  // all checked here; the antimatter reserve was not, although it is saved to
+  // disk and read by `plotTransit` on every course. A NaN in it is silent and
+  // permanent: `fuel > NaN` is false, so every course at every warp factor is
+  // approved; the subtraction that follows leaves NaN behind; and the next save
+  // writes it out again. The load path now refuses a bad figure, and this is
+  // the rule that says so out loud if one ever appears another way.
+  r.must(ok(s.antimatter), 'ship.antimatter.finite', 'fatal',
+    `${who}: antimatter is ${s.antimatter}`, who);
+  r.must(num(s.antimatter) >= 0 && num(s.antimatter) <= 100 + 1e-6,
+    'ship.antimatter.range', 'error',
+    `${who}: antimatter is ${s.antimatter}, outside 0..100`, who);
+
+  // ---- the breach, and the one way out of it ----
+  // Slack, for the same reason the subsystem range has it. The countdown is
+  // decremented by dt and then tested, so on the tick it expires it is a
+  // fraction below zero before `destroy` fires — the fuzzer measured
+  // -1.5e-13 — and nothing resets it afterwards. A millionth of a second is
+  // far outside anything six hundred subtractions can accumulate and far
+  // inside anything that would matter.
+  r.must(ok(s.breachTimer) && num(s.breachTimer) >= -1e-6, 'ship.breachTimer', 'error',
+    `${who}: breachTimer is ${s.breachTimer}`, who);
+  // Ejecting the core IS how a breach ends. A ship doing both at once is
+  // counting down to an explosion it has already prevented, and `ejectCore`
+  // refuses to help because the core is not there to throw.
+  r.must(!(s.breaching && s.coreEjected), 'ship.breach.ejected', 'error',
+    `${who} is breaching with its core already ejected`, who);
+  // Cloaking is a property of the hull, not a state anything can grant. A ship
+  // that cannot cloak but is flagged cloaked collects the evade bonus in
+  // `resolveHit` for free and cannot be decloaked by any order in the game.
+  r.must(!(s.cloaked && s.cloakCapable === false), 'ship.cloak.incapable', 'error',
+    `${who} is cloaked and has no cloaking device`, who);
+
   // ---- weapons ----
   for (const w of s.weapons ?? []) {
     r.must(ok(w.cooldown), 'weapon.cooldown.finite', 'fatal',
