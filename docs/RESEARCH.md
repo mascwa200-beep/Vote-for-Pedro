@@ -935,6 +935,59 @@ Sources: [Memory Alpha — USS Enterprise (NCC-1701)](https://memory-alpha.fando
 
 ---
 
+## 19. Things that were installed together
+
+The consoles in this game are a flat list: fourteen of them, each with its own
+modifier, and no reason to prefer any combination over any other. Star Trek
+Online's answer to that is the equipment set — pieces that are worth more
+together than apart — and the reason it works there is the reason it works
+here: real refits came as packages.
+
+**The 2270s refit is a documented package, not a list of separate upgrades.**
+When the Constitution went in for the work that produced what is now called the
+Constitution II, the changes were tied to each other:
+
+- The phasers were **run off the main reactor**. Power came directly from the
+  engines, which is why they cut out automatically on an antimatter imbalance —
+  a weapon that draws from the warp plant cannot fire while the plant is sick.
+- New **nacelles and pylons**, the most visible change of the refit.
+- A **twin photon torpedo and probe launcher** on top of the secondary hull.
+- The phaser banks moved to the main strut, from under the saucer.
+
+The coupling is the interesting part. The phaser upgrade is not independent of
+the engine upgrade; it is a consequence of it. That is a set bonus described in
+prose forty years before the mechanic existed.
+
+**The deflector and the sensors were one system.** On a Constitution the
+navigational deflector was a combined installation with the ship's main
+duotronic sensors, and the ship carried two sensor arrays, one on top of the
+primary hull and one beneath. The deflector dish at the front of the secondary
+hull emitted low-power shields against dust and heavier beams against anything
+larger. So the shield emitter, the sensor array and the deflector are not three
+independent boxes a quartermaster picked off a shelf: they are one suite, and
+fitting part of it is fitting part of a system.
+
+**What the build takes from this.** Two sets, each grounded in a package that
+was really installed as a package rather than assembled to fill a grid:
+
+| Set | Pieces | Why they belong together |
+|---|---|---|
+| Refit weapons package | Prefire chamber, EPS regulator, phaser relay | The phasers run off the main reactor |
+| Duotronic suite | Field emitter, multispectral sensors, shield capacitor | The deflector and the sensors are one installation |
+
+Two pieces give a modest bonus and three give a larger one, which is STO's
+shape. What it does NOT take is STO's rarity ladder or its upgrade economy:
+those are a free-to-play game's retention mechanics, and this game has no
+retention to buy.
+
+Sources: [Memory Alpha — Constitution II class](https://memory-alpha.fandom.com/wiki/Constitution_II_class),
+[Memory Alpha — phaser bank](https://memory-alpha.fandom.com/wiki/Phaser_bank),
+[Memory Alpha — navigational deflector](https://memory-alpha.fandom.com/wiki/Navigational_deflector),
+[Memory Alpha — sensor array](https://memory-alpha.fandom.com/wiki/Sensor_array),
+[Memory Alpha — duotronics](https://memory-alpha.fandom.com/wiki/Duotronics)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

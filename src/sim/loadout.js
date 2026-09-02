@@ -55,6 +55,62 @@ export const CONSOLES = {
 
 export const CONSOLE_LIST = Object.values(CONSOLES);
 
+/**
+ * Equipment that was installed as a package.
+ *
+ * The fourteen consoles above are a flat list: each has its own modifier and
+ * there is no reason to prefer any combination to any other, so fitting the
+ * ship is arithmetic rather than a decision. Star Trek Online's answer is the
+ * equipment set, and the reason it works there is the reason it works here —
+ * real refits came as packages (docs/RESEARCH.md §19).
+ *
+ * Both of these are grounded in something that was genuinely one installation
+ * rather than assembled to fill a grid:
+ *
+ *   The 2270s refit ran the phasers off the MAIN REACTOR. Power came from the
+ *   engines, which is why they cut out on an antimatter imbalance — a weapon
+ *   drawing from the warp plant cannot fire while the plant is sick. The
+ *   phaser upgrade was not independent of the engine upgrade; it was a
+ *   consequence of it.
+ *
+ *   The navigational deflector was a COMBINED SYSTEM with the ship's main
+ *   duotronic sensors, and a Constitution carried two arrays. The emitter, the
+ *   sensors and the deflector are one suite, so fitting part of it is fitting
+ *   part of a system.
+ *
+ * Two pieces give a modest bonus, three the full one. What this deliberately
+ * does NOT take from STO is the rarity ladder and the upgrade economy: those
+ * are a free-to-play game's retention mechanics, and there is no retention to
+ * buy here.
+ */
+export const SETS = {
+  refit: {
+    id: 'refit', name: 'Refit weapons package',
+    pieces: ['prefire_chamber', 'eps_conduits', 'phaser_relay'],
+    bonuses: {
+      2: { mods: { beamDamage: 0.08 }, text: 'The banks draw from the main reactor: +8% beam damage.' },
+      3: { mods: { beamDamage: 0.14, critSeverity: 0.12 }, text: 'Full refit coupling: +14% beam damage and harder criticals.' },
+    },
+  },
+  duotronic: {
+    id: 'duotronic', name: 'Duotronic sensor suite',
+    pieces: ['shield_emitters', 'sensor_array', 'shield_capacitor'],
+    bonuses: {
+      2: { mods: { shieldRegen: 0.12 }, text: 'Deflector and sensors on one bus: +12% shield regeneration.' },
+      3: { mods: { shieldRegen: 0.2, defense: 0.08 }, text: 'The whole suite: +20% regeneration, and harder to hit.' },
+    },
+  },
+};
+
+export const SET_LIST = Object.values(SETS);
+
+/** Which set a console belongs to, or null. Built once, read often. */
+const SET_OF = {};
+for (const set of SET_LIST) {
+  for (const piece of set.pieces) SET_OF[piece] = set.id;
+}
+export function setOf(consoleId) { return SET_OF[consoleId] ?? null; }
+
 export class Loadout {
   /** @param {object} slots e.g. { tactical: 3, engineering: 3, science: 2, device: 2 } */
   constructor(slots) {
@@ -97,19 +153,60 @@ export class Loadout {
     return Object.values(this.equipped).flat();
   }
 
+  /**
+   * Which sets are aboard, and how much of each.
+   *
+   * Counted over EQUIPPED consoles only. A piece sitting in the hold is not
+   * wired into anything, which is the whole point of a set being an
+   * installation rather than an inventory.
+   *
+   * @returns {Array<{set, have, bonus}>} — only sets with a live bonus.
+   */
+  activeSets() {
+    // DISTINCT pieces. Three phaser relays are three phaser relays, not a
+    // complete refit — a set is three different parts of one installation, and
+    // counting copies would make the bonus a reward for owning the same thing
+    // three times.
+    const seen = new Map();
+    for (const id of this.all) {
+      const setId = setOf(id);
+      if (!setId) continue;
+      if (!seen.has(setId)) seen.set(setId, new Set());
+      seen.get(setId).add(id);
+    }
+    const out = [];
+    for (const [setId, ids] of seen) {
+      const have = ids.size;
+      const set = SETS[setId];
+      if (!set) continue;
+      // The best tier this many pieces earns.
+      const tier = Object.keys(set.bonuses)
+        .map(Number).filter((n) => have >= n).sort((a, b) => b - a)[0];
+      if (tier) out.push({ set, have, bonus: set.bonuses[tier], pieces: tier });
+    }
+    return out;
+  }
+
   /** Combined modifiers for Ship.applyMods. */
   shipMods() {
     const mods = {};
+    const add = (k, v) => {
+      if (ADDITIVE_MODS.has(k)) mods[k] = (mods[k] ?? 0) + v;
+      else mods[k] = (mods[k] ?? 1) * (1 + v);
+    };
+
     for (const id of this.all) {
       const c = CONSOLES[id];
       if (!c?.mods) continue;
-      for (const [k, v] of Object.entries(c.mods)) {
-        if (ADDITIVE_MODS.has(k)) {
-          mods[k] = (mods[k] ?? 0) + v;
-        } else {
-          mods[k] = (mods[k] ?? 1) * (1 + v);
-        }
-      }
+      for (const [k, v] of Object.entries(c.mods)) add(k, v);
+    }
+
+    // And what the pieces are worth together. Folded in here rather than at
+    // the call site, because `shipMods` is the one place the ship asks what it
+    // is carrying — a bonus applied anywhere else would be a second answer to
+    // the same question, and the two would drift.
+    for (const { bonus } of this.activeSets()) {
+      for (const [k, v] of Object.entries(bonus.mods ?? {})) add(k, v);
     }
     return mods;
   }

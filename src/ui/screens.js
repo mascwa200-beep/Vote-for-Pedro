@@ -22,7 +22,7 @@ import { SCENARIO as KOBAYASHI, GAMBIT_TIER } from '../missions/kobayashi.js';
 import { MODES } from '../core/state.js';
 import { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } from '../sim/power.js';
 import { SKILLS, BRANCHES, BRANCH_LABEL, RANKS } from '../sim/skills.js';
-import { CONSOLES } from '../sim/loadout.js';
+import { CONSOLES, SET_LIST } from '../sim/loadout.js';
 import { ABILITIES } from '../sim/officers.js';
 import { availableHails } from '../sim/diplomacy.js';
 import { STATIONS, ERA_LIST, SPECIES } from '../world/crews.data.js';
@@ -1238,6 +1238,32 @@ export function shipScreen(app) {
 
   root.append(panel('Subsystems', Object.entries(g.ship.subsystems).map(([k, v]) =>
     readout(k.replace(/([a-z])([A-Z])/g, '$1 $2'), v))));
+
+  // --- What is installed together ---
+  //
+  // A set the player cannot see is a table with a story attached. This says
+  // which sets are live, what they are worth, and — for a set that is only
+  // partly fitted — exactly which piece is missing, because "you are one part
+  // short of a refit" is the whole reason to care.
+  const setLines = [];
+  for (const set of SET_LIST) {
+    const live = g.loadout.activeSets().find((a) => a.set.id === set.id);
+    const fitted = set.pieces.filter((id) => g.loadout.all.includes(id));
+    if (!fitted.length) continue;
+    setLines.push(el('h3', { text: `${set.name} — ${fitted.length} of ${set.pieces.length}` }));
+    setLines.push(el('p', {
+      class: live ? 'muted' : 'hint',
+      text: live ? live.bonus.text : 'Not enough of it fitted to do anything yet.',
+    }));
+    const missing = set.pieces.filter((id) => !fitted.includes(id));
+    if (missing.length) {
+      setLines.push(el('p', {
+        class: 'hint',
+        text: `Still wanted: ${missing.map((id) => CONSOLES[id]?.name ?? id).join(', ')}.`,
+      }));
+    }
+  }
+  if (setLines.length) root.append(panel('Installed together', setLines));
 
   // --- Consoles ---
   for (const slot of ['tactical', 'engineering', 'science', 'device']) {

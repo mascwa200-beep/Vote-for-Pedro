@@ -25,7 +25,7 @@ import { Ship, FACINGS } from '../src/sim/ship.js';
 import { RNG } from '../src/core/rng.js';
 import { Character, CAREERS } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
-import { CONSOLES } from '../src/sim/loadout.js';
+import { CONSOLES, Loadout, SET_LIST } from '../src/sim/loadout.js';
 import {
   RECIPES, MATERIAL_LIST, beginFabrication, advanceFabrication, salvageWreck,
 } from '../src/sim/fabrication.js';
@@ -809,6 +809,106 @@ test('the checker objects to an encounter happening somewhere else', () => {
   // And one that is where the ship is, is simply an encounter.
   g.encounter.system = { id: g.locationId, name: g.location.name };
   assert.ok(!checkAll(g, { arenaRadius: 3000 }).some((v) => v.code === 'game.encounter.elsewhere'));
+});
+
+describe('equipment that was installed together', () => {
+  const kitted = () => new Loadout({ tactical: 3, engineering: 3, science: 3, device: 2 });
+  const fit = (l, ids) => { for (const id of ids) { l.acquire(id); l.equip(id); } return l; };
+
+  test('every set names pieces that actually exist', () => {
+    for (const set of SET_LIST) {
+      assert.ok(set.pieces.length >= 2, `${set.id} is not a set`);
+      for (const piece of set.pieces) {
+        assert.ok(CONSOLES[piece], `${set.id} names "${piece}", which is not a console`);
+      }
+      // A tier nobody can reach is a tier that does not exist.
+      for (const tier of Object.keys(set.bonuses).map(Number)) {
+        assert.ok(tier <= set.pieces.length,
+          `${set.id} has a ${tier}-piece bonus and only ${set.pieces.length} pieces`);
+        assert.ok(set.bonuses[tier].text, `${set.id} @${tier} says nothing`);
+      }
+    }
+  });
+
+  test('two pieces are worth more than two pieces apart', () => {
+    // The whole mechanic: if the set bonus is not measurable the pieces are
+    // just consoles with a story attached.
+    const set = SET_LIST[0];
+    const [a, b] = set.pieces;
+
+    const one = fit(kitted(), [a]).shipMods();
+    const two = fit(kitted(), [a, b]).shipMods();
+    const key = Object.keys(set.bonuses[2].mods)[0];
+
+    // What the two consoles are worth WITHOUT the set, computed from the table.
+    const bare = [a, b].reduce((acc, id) => acc * (1 + (CONSOLES[id].mods?.[key] ?? 0)), 1);
+    assert.ok((two[key] ?? 1) > bare + 1e-9,
+      `two pieces give ${two[key]}, the same as the consoles alone (${bare})`);
+    assert.ok((two[key] ?? 1) > (one[key] ?? 1), 'the second piece was worth nothing');
+  });
+
+  test('and three are worth more than two', () => {
+    for (const set of SET_LIST) {
+      if (!set.bonuses[3]) continue;
+      const key = Object.keys(set.bonuses[3].mods)[0];
+      const two = fit(kitted(), set.pieces.slice(0, 2)).shipMods();
+      const three = fit(kitted(), set.pieces).shipMods();
+      assert.ok((three[key] ?? 1) > (two[key] ?? 1),
+        `${set.id}: the third piece changed nothing`);
+    }
+  });
+
+  test('three of the same console is not a complete set', () => {
+    // Caught by driving it rather than by reading it: a set is three different
+    // parts of one installation. Counting copies would make the bonus a reward
+    // for owning the same thing three times.
+    const l = kitted();
+    const piece = SET_LIST[0].pieces[0];
+    for (let i = 0; i < 3; i++) { l.acquire(piece); l.equip(piece); }
+    assert.equal(l.equipped[CONSOLES[piece].slot].length, 3, 'the copies did not fit');
+    assert.deepEqual(l.activeSets(), [], 'three of one console completed a set');
+  });
+
+  test('a piece in the hold is not wired into anything', () => {
+    const l = kitted();
+    const set = SET_LIST[0];
+    for (const id of set.pieces) l.acquire(id);
+    l.equip(set.pieces[0]);
+    l.equip(set.pieces[1]);
+    assert.equal(l.activeSets()[0]?.pieces, 2, 'two fitted pieces are not a two-piece set');
+
+    // The third is aboard but not installed.
+    assert.ok(l.inventory.includes(set.pieces[2]));
+    assert.equal(l.activeSets()[0]?.pieces, 2, 'a console in the hold completed the set');
+  });
+
+  test('pulling a piece drops the bonus back down', () => {
+    const set = SET_LIST[0];
+    const l = fit(kitted(), set.pieces);
+    const key = Object.keys(set.bonuses[3].mods)[0];
+    const full = l.shipMods()[key];
+
+    l.unequip(set.pieces[2]);
+    assert.equal(l.activeSets()[0]?.pieces, 2, 'the set stayed complete without the piece');
+    assert.ok(l.shipMods()[key] < full, 'removing a piece cost nothing');
+  });
+
+  test('the bonus reaches the ship, not just the loadout', () => {
+    // Assert effects. A set that changes a number in `shipMods` and nothing on
+    // the ship is a table with a story attached.
+    const g = gameWith({ seed: 5n });
+    const set = SET_LIST[0];
+    const key = Object.keys(set.bonuses[3].mods)[0];
+
+    // Strip anything already fitted so the measurement is of the set.
+    for (const slot of Object.keys(g.loadout.equipped)) g.loadout.equipped[slot] = [];
+    g.applyAllMods();
+    const bare = g.ship.mod(key);
+
+    for (const id of set.pieces) { g.loadout.acquire(id); g.loadout.equip(id); }
+    g.applyAllMods();
+    assert.ok(g.ship.mod(key) > bare, `${key} on the ship did not move`);
+  });
 });
 
 test('a trap has no way out that involves shooting', () => {
