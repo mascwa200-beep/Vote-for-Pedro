@@ -2747,6 +2747,66 @@ try {
     /detail|aboard/i.test(spoken.said), spoken.said.slice(0, 160));
   await dismissModals(page);
 
+  // ---- Equipment that was installed together ----
+  //
+  // Fourteen consoles with flat modifiers gave fitting the ship no decisions in
+  // it. A set is only a decision if the player can SEE that they are one piece
+  // short of one, so the panel has to name the missing part.
+  await nav(page, 'Ship');
+  const sets = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { SET_LIST } = await import('./src/sim/loadout.js');
+    const set = SET_LIST[0];
+
+    for (const slot of Object.keys(g.loadout.equipped)) g.loadout.equipped[slot] = [];
+    for (const id of set.pieces) g.loadout.acquire(id);
+    const key = Object.keys(set.bonuses[3].mods)[0];
+
+    // Two of three: the panel should say what is still wanted.
+    g.loadout.equip(set.pieces[0]);
+    g.loadout.equip(set.pieces[1]);
+    g.applyAllMods();
+    app.render();
+    const partial = document.body.textContent ?? '';
+    const two = g.ship.mod(key);
+
+    // All three.
+    g.loadout.equip(set.pieces[2]);
+    g.applyAllMods();
+    app.render();
+    const complete = document.body.textContent ?? '';
+    const three = g.ship.mod(key);
+
+    return {
+      name: set.name,
+      missing: (await import('./src/sim/loadout.js')).CONSOLES[set.pieces[2]]?.name ?? '',
+      partialNamesIt: partial.includes(set.name),
+      saysWhatIsMissing: /still wanted/i.test(partial),
+      completeSaysBonus: complete.includes(set.bonuses[3].text),
+      two, three, key,
+    };
+  });
+  check('the ship screen names a set that is partly fitted',
+    sets.partialNamesIt, JSON.stringify({ name: sets.name }));
+  check('and says which piece is still wanted',
+    sets.saysWhatIsMissing && sets.missing.length > 0, sets.missing);
+  check('completing a set says what it bought',
+    sets.completeSaysBonus, JSON.stringify(sets));
+  check('and the third piece actually changes the ship',
+    sets.three > sets.two,
+    `${sets.key}: ${sets.two} with two pieces, ${sets.three} with three`);
+  // Scrolled to the panel, because a screenshot of the part of the screen the
+  // panel is not on proves nothing. Every significant bug in this project was
+  // found in a picture, and only if the picture was of the right thing.
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel')]
+      .find((el) => /installed together/i.test(el.textContent ?? ''));
+    head?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '06b-equipment-sets.png') });
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {
