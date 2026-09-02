@@ -988,6 +988,65 @@ Sources: [Memory Alpha — Constitution II class](https://memory-alpha.fandom.co
 
 ---
 
+## 20. Working her up
+
+Star Trek Online's starship mastery is a bar that fills as you fly a hull and
+pays out passive bonuses on the way, ending in a trait you keep. The reason to
+take it is not that other games have bars. It is that the thing the bar
+represents is stated out loud in Star Trek, twice, in the same film, from both
+directions.
+
+**Familiarity with a hull is a named, specific advantage — and it is
+class-bound.** Decker's whole argument against Kirk taking the Enterprise in
+*The Motion Picture* is not seniority or temperament. It is that the ship has
+been refit, and Kirk's familiarity with her is therefore worth nothing. That is
+a mechanic: an officer accumulates something real by flying a particular
+vessel, it is measured against that vessel, and changing the vessel spends it.
+The film treats it as an argument serious enough to take command over.
+
+**A ship that has not been worked up performs worse than the same ship
+later.** The other direction is the same film's first act. The refit took
+eighteen months; Scott told Kirk it could not be finished in twelve hours and
+that the ship still needed a proper shakedown; Kirk sailed anyway. The
+unbalanced warp drive then opened a wormhole that nearly took the ship, and —
+the detail that matters here — the phasers cut out automatically, because the
+refit runs them through the main engines and the engines were sick. Every one
+of those failures is the ship being at less than her own specification because
+nobody had yet worked her up.
+
+So the two halves of a mastery track are both canon: the ship gets better as
+her crew learns her, and what is learned belongs to that class of ship.
+
+**What the game can and cannot take from this.** The player is given one
+command at the start of the commission and never gets another — `Game` builds
+`this.ship` once and nothing anywhere replaces it. So the per-class half of
+STO's system has nothing to bite on here: there is exactly one class to master,
+and a second command is a campaign feature that does not exist. Mastery is
+therefore tracked per class, because that is what it is, but in practice it
+describes one crew learning one ship over five years.
+
+**What the build takes from this.** A mastery track on the hull, fed by the
+things that actually teach a crew a ship — time under way, battles fought,
+missions completed — with five tiers. The first four give small passive
+improvements to the ship: she holds together better, she turns better, the
+guns are quicker. The fifth opens a slot and a choice of three starship traits,
+which is where the decision is.
+
+What it does NOT take is a penalty below the class baseline for a fresh hull.
+The shakedown material would justify one, and a game about a five-year
+commission arguably wants that arc — but it makes the opening weeks worse for
+a player who has just started, and that is a design decision to be taken
+deliberately rather than smuggled in under a research note. Tier zero is
+therefore the ship exactly as her specification says, and mastery is additive
+from there.
+
+Sources: [Memory Alpha — Star Trek: The Motion Picture](https://memory-alpha.fandom.com/wiki/Star_Trek:_The_Motion_Picture),
+[Memory Alpha — Will Decker](https://memory-alpha.fandom.com/wiki/Will_Decker),
+[Memory Alpha — wormhole effect](https://memory-alpha.fandom.com/wiki/Wormhole_effect),
+[Ex Astris Scientia — The Enterprise Refit of 2271](https://www.ex-astris-scientia.org/articles/constitution-refit.htm)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

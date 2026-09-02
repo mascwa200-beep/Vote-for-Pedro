@@ -496,6 +496,23 @@ export function checkGame(game) {
     r.must(!game.firstStrike || (!!eng && !eng.over), 'game.firstStrike.orphan', 'error',
       'the captain is recorded as having fired first in a battle that is not running');
 
+    // What the crew have learned about the hull.
+    //
+    // The track is saved, and everything downstream of it is arithmetic on the
+    // ship's modifiers — so a bad figure here is the antimatter problem again:
+    // silent, permanent, and written back out on the next save.
+    if (game.mastery) {
+      r.must(ok(game.mastery.current) && num(game.mastery.current) >= 0,
+        'mastery.points', 'error',
+        `mastery on this hull is ${game.mastery.current}`);
+      // A doctrine can only be committed to by a crew that has earned the
+      // slot. One held below the fifth tier would be modifiers the ship has
+      // not paid for, and `shipMods` reads the slot rather than the record.
+      r.must(!game.mastery.traits?.[game.mastery.classId] || game.mastery.tier >= 5,
+        'mastery.trait.unearned', 'error',
+        'a standing doctrine is set on a hull the crew do not know well enough');
+    }
+
     // The duty roster, and the details that are out on it.
     //
     // These are people, and a fight can hurt them: somebody counted as both

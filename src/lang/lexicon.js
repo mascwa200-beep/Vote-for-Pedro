@@ -1116,6 +1116,44 @@ export const INTENTS = [
     },
   },
   {
+    id: 'ship_mastery',
+    help: 'Ask how well the crew know the ship',
+    phrases: [
+      'how well do we know her', 'how well does the crew know the ship',
+      'how is the crew settling in',
+      // NOT "engineering report on the ship": the intercom owns that shape and
+      // owns it correctly — it is how you call engineering — and two intents
+      // fighting over a phrase means one of them loses at random. The command
+      // reference test caught this the first time it was written.
+      'ship mastery', 'have we worked her up', 'is she worked up',
+      'how long have we had her', 'report on the ship herself',
+      'what have we learned about her',
+    ],
+    keywords: { worked: 2, mastery: 3, settling: 2.2, know: 1.2, shakedown: 3 },
+    build: () => ({ action: 'ship_mastery' }),
+  },
+  {
+    id: 'set_doctrine',
+    help: 'Commit the ship to a standing doctrine',
+    phrases: [
+      'set doctrine to running start', 'set doctrine to layered screens',
+      'set doctrine to point blank', 'standing doctrine running start',
+      'commit to running start', 'commit to layered screens',
+      'commit to point blank doctrine', 'set our doctrine', 'choose a doctrine',
+      'run light', 'tune the grid to the shields', 'close and hold',
+    ],
+    keywords: { doctrine: 3, commit: 1.6, standing: 1.4 },
+    build: (c) => {
+      const t = c.text;
+      const named = [
+        [/\brunning start\b|\brun light\b|\blighten\b/, 'running_start'],
+        [/\blayer|\bscreens?\b|\bshield grid\b/, 'layered_screens'],
+        [/\bpoint.?blank\b|\bclose and hold\b/, 'point_blank_doctrine'],
+      ].find(([re]) => re.test(t));
+      return { action: 'set_doctrine', doctrine: named?.[1] ?? null };
+    },
+  },
+  {
     id: 'salvage',
     help: 'Strip the wreck',
     phrases: [

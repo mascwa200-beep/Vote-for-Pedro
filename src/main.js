@@ -34,6 +34,7 @@ import { SKILLS } from './sim/skills.js';
 import { RNG } from './core/rng.js';
 import { FEAT_BY_ID, ABILITIES as ABILITY_LIST } from './rules/character.js';
 import { CONSOLES } from './sim/loadout.js';
+import { TIERS, TRAIT_LIST } from './sim/mastery.js';
 
 // TABS ARE FOR TEXT.
 //
@@ -1660,6 +1661,40 @@ class App {
       }
       case 'assign_detail': {
         this.sendDetail(order.detail);
+        break;
+      }
+      case 'ship_mastery': {
+        // A question, so it is answered rather than acted on.
+        const m = g.mastery?.report();
+        if (!m) { ack('engineering', 'There is nothing to report about the ship, Captain.'); break; }
+        const lines = m.earned.length
+          ? m.earned.map((step) => `${step.name}. ${step.text}`)
+          : ['She is fresh out of the yard, Captain — exactly what her specification says and no more.'];
+        if (m.next) {
+          lines.push(`Next is ${m.next.name}, and we are ${Math.ceil(m.next.remaining)} short of it.`);
+        }
+        if (m.slotOpen) {
+          lines.push(m.trait
+            ? `Standing doctrine: ${m.trait.name}. ${m.trait.text}`
+            : 'We know her well enough to commit to a doctrine, Captain. You have only to say which.');
+        }
+        for (const line of lines) g.pushLog(line, 'engineering');
+        this.showMessage(`${m.className} — ${m.tier} of ${TIERS.length}`, lines);
+        audio.play('computer_ack');
+        break;
+      }
+      case 'set_doctrine': {
+        if (!order.doctrine) {
+          ack('engineering', `Which doctrine, Captain? ${TRAIT_LIST.map((t) => t.name).join(', ')}.`);
+          break;
+        }
+        const r = g.mastery?.chooseTrait(order.doctrine)
+          ?? { ok: false, reason: 'There is no doctrine to set, Captain.' };
+        if (!r.ok) { audio.play('ui_deny'); ack('engineering', r.reason); break; }
+        g.applyAllMods();
+        audio.play('computer_ack');
+        haptic('confirm');
+        ack('engineering', `Standing doctrine is ${r.trait.name}, Captain. ${r.trait.text}`);
         break;
       }
       case 'salvage': {
