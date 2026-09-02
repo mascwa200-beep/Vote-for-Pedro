@@ -972,11 +972,10 @@ describe('a reputation project that grants nothing', () => {
   // The ledger of what is still dead. It shrinks as perks are wired up, and a
   // twenty-sixth dead perk fails this rather than joining the pile quietly.
   const STILL_UNWIRED = [
-    'always_bribe', 'boarding_master', 'border_warning', 'cardassian_ally',
-    'cardassian_dock', 'crew_replacement', 'dmz_passage', 'ferengi_partner',
-    'first_strike', 'folk_hero', 'kdf_ally', 'klingon_passage',
-    'mercenary_escort', 'reduced_detection', 'romulan_accord', 'route_intel',
-    'salvage_bonus', 'see_all_encounters', 'universal_dock',
+    'always_bribe', 'border_warning', 'cardassian_ally', 'crew_replacement',
+    'dmz_passage', 'ferengi_partner', 'folk_hero', 'mercenary_escort',
+    'reduced_detection', 'romulan_accord', 'route_intel', 'salvage_bonus',
+    'see_all_encounters',
   ].sort();
 
   test('the perks nothing reads are exactly the ones we know about', () => {
@@ -1042,6 +1041,112 @@ describe('a reputation project that grants nothing', () => {
       `"requisition any hull in the fleet" still offered only a ${without}`);
     assert.equal(with_, COMMAND_LADDER[COMMAND_LADDER.length - 1].id,
       `the best hull in the fleet is a ${COMMAND_LADDER[COMMAND_LADDER.length - 1].id}, and he was offered a ${with_}`);
+  });
+
+  test('a seat at the table is a berth, and only where the perk says', () => {
+    const dockAt = (perks, id) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      g.locationId = id;
+      return g.canDock();
+    };
+    assert.equal(dockAt([], 'qonos'), false, 'a captain could already berth at Qo’noS');
+    assert.equal(dockAt(['klingon_passage'], 'qonos'), true,
+      'sworn to the Empire and still turned away at the door');
+    assert.equal(dockAt([], 'cardassia_prime'), false, 'Cardassia was already open');
+    assert.equal(dockAt(['cardassian_dock'], 'cardassia_prime'), true,
+      '"repair rights at Cardassian facilities" bought no repair rights');
+    // The two perks that are NOT about berthing must not have been wired to
+    // the nearest gate to hand: Romulus is not the Neutral Zone.
+    assert.equal(dockAt(['romulan_accord', 'dmz_passage'], 'romulus'), false,
+      'a perk about the Neutral Zone opened Romulus instead');
+  });
+
+  test('safe harbour is every inhabited system, and a nebula is not one', () => {
+    const g0 = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    const noYard = [...g0.galaxy.systems.values()]
+      .find((s) => Game.INHABITED.has(s.type) && !s.facilities?.includes('dock'));
+    const nebula = [...g0.galaxy.systems.values()].find((s) => s.type === 'anomaly');
+    assert.ok(noYard && nebula, 'the galaxy has no inhabited system without a yard, or no anomaly');
+    const dockAt = (perks, id) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      g.locationId = id;
+      return g.canDock();
+    };
+    assert.equal(dockAt([], noYard.id), false, `${noYard.name} already had a berth`);
+    assert.equal(dockAt(['universal_dock'], noYard.id), true,
+      `"every inhabited system will dock and repair you" did not include ${noYard.name}`);
+    assert.equal(dockAt(['universal_dock'], nebula.id), false,
+      `the ship put in at ${nebula.name}, which has nobody in it`);
+  });
+
+  test('firing first means their guns open a cycle behind', () => {
+    // Both sides opening with batteries ready means "you always fire first"
+    // means nothing at all — whoever taps the screen sooner fires first.
+    const cooldowns = (perks) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS T' })]);
+      return g.engagement.hostiles[0].weapons.reduce((n, w) => n + w.cooldown, 0);
+    };
+    assert.equal(cooldowns([]), 0, 'hostiles no longer open with their guns ready');
+    assert.ok(cooldowns(['first_strike']) > 0,
+      '"you always fire first" left both sides opening together');
+  });
+
+  test('a trained boarding party is twice the party, and only for boarding', () => {
+    const detail = (perks, boarding) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      return g.buildAwayTeam(['tactical', 'medical', 'engineering'], false, { boarding }).security;
+    };
+    assert.equal(detail(['boarding_master'], true), detail([], true) * 2,
+      '"twice as effective" did not double the party that does the boarding');
+    assert.equal(detail(['boarding_master'], false), detail([], false),
+      'a geology survey got the boarding party training');
+  });
+
+  test('the Empire answers where Starfleet will not, once per voyage', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.reputation.perks.add('kdf_ally');
+    g.locationId = 'qonos';   // outside Federation space: Starfleet does not come
+    const fight = (name) => {
+      g.engagement = null;
+      g.helpCalled = false;
+      g.helpInbound = null;
+      g.startCombat([new Ship('d7', { faction: 'klingon', name })]);
+      return g.callForHelp();
+    };
+
+    const plain = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    plain.locationId = 'qonos';
+    plain.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS X' })]);
+    assert.equal(plain.callForHelp().answered, false,
+      'somebody answered a captain with no allies out beyond Federation space');
+
+    assert.equal(fight('IKS A').answered, true, 'a sworn ally of the Empire called and nobody came');
+    assert.equal(g.helpInbound.faction, 'klingon',
+      `a Klingon ally arrived flying ${g.helpInbound.faction} colours`);
+
+    assert.equal(fight('IKS B').answered, false, 'the Empire answered twice in one voyage');
+
+    // Putting in ends the voyage and the favour is available again.
+    g.engagement = null;
+    g.locationId = 'sol';
+    assert.ok(g.dock().ok, 'could not berth at Sol');
+    g.locationId = 'qonos';
+    assert.equal(fight('IKS C').answered, true, 'the favour never came back after putting in');
+    assert.equal(g.helpInbound.faction, 'klingon', 'and it was not the Empire that answered');
+  });
+
+  test('a favour already spent survives closing the app', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.reputation.perks.add('kdf_ally');
+    g.klingonAnswered = true;
+    const restored = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(restored.klingonAnswered, true,
+      'closing the app between fights was a way to call the Empire again');
   });
 
   test('a cloaking device is not left behind with the old hull', () => {
