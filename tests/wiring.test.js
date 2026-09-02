@@ -38,7 +38,7 @@ import {
   SPECIALITIES, DIVISIONS, specialitiesIn, rosterSizeFor,
   beginAssignment, advanceAssignments, dutySlots, specialistBonusFor,
 } from '../src/sim/duty.js';
-import { TIERS, TRAIT_LIST, SHAKEDOWN } from '../src/sim/mastery.js';
+import { TIERS, TRAIT_LIST, SHAKEDOWN, EARNINGS } from '../src/sim/mastery.js';
 import { offerCommand, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { getShipClass } from '../src/world/ships.data.js';
 import { RANKS } from '../src/sim/skills.js';
@@ -1951,9 +1951,9 @@ describe('what the crew learn about one hull', () => {
 
   test('a bad figure cannot get into the track', () => {
     const g = fresh();
-    g.creditMastery('hour', NaN);
+    g.creditMastery('lightYear', NaN);
     g.creditMastery('nonsense', 10);
-    g.creditMastery('hour', -5);
+    g.creditMastery('lightYear', -5);
     assert.equal(g.mastery.current, 0, `the track reads ${g.mastery.current}`);
     assert.ok(Number.isFinite(g.ship.maxHull), 'the ship took a NaN from the track');
   });
@@ -2367,5 +2367,71 @@ describe('Starfleet does not ask the same question twice', () => {
   test('the whole conversation is sayable', () => {
     assert.equal(parseOrder('ask starfleet for a new command').action, 'request_command');
     assert.equal(parseOrder('is there another ship').action, 'request_command');
+  });
+});
+
+describe('what a voyage teaches a crew', () => {
+  /** Fly one course at a warp factor and report the mastery it paid. */
+  const voyage = (from, to, warp) => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.locationId = from;
+    g.ship.antimatter = 100;
+    const before = g.mastery.current;
+    const r = g.setCourse(to, warp);
+    assert.ok(g.transit, `could not fly ${from}->${to} at warp ${warp}: ${r?.reason ?? ''}`);
+    let ticks = 0;
+    while (g.transit && ticks++ < 20000) g.update(1 / 30);
+    assert.equal(g.locationId, to, `never arrived at ${to}`);
+    return g.mastery.current - before;
+  };
+
+  test('the same journey teaches the same thing at any speed', () => {
+    // Mastery used to be credited per HOUR under way, and `travelHours` goes as
+    // the inverse cube of the warp factor — so the identical journey paid eight
+    // times as much at warp 4 as at warp 8, and the way to master your ship was
+    // to crawl. Measured over all 1,560 charted courses, a mean voyage was
+    // worth 335 points at warp 4 and 40 at warp 8.
+    const slow = voyage('sol', 'vega', 4);
+    const fast = voyage('sol', 'vega', 8);
+    assert.ok(slow > 0, 'a voyage taught the crew nothing');
+    assert.ok(Math.abs(slow - fast) < 1e-6,
+      `warp 4 paid ${slow.toFixed(2)} and warp 8 paid ${fast.toFixed(2)}`);
+  });
+
+  test('but a longer one teaches more than a shorter one', () => {
+    const near = voyage('sol', 'alpha_centauri', 6);
+    const far = voyage('sol', 'vega', 6);
+    assert.ok(far > near,
+      `a hop next door paid ${near.toFixed(2)} and a long haul paid ${far.toFixed(2)}`);
+  });
+
+  test('and the whole track is a commission, not an afternoon', () => {
+    // The rates are what decide whether the starship trait at the top of the
+    // track is ever seen. With mastery credited per hour, the entire five-tier
+    // track — including "five years in one hull" — came out at fifteen voyages.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    const galaxy = g.galaxy;
+    const ids = SYSTEMS.map((s) => s.id);
+    let ly = 0;
+    let n = 0;
+    for (const a of ids) {
+      for (const b of ids) {
+        if (a === b) continue;
+        ly += galaxy.plotCourse(a, b).lightYears;
+        n += 1;
+      }
+    }
+    // A mean voyage, with a battle and an episode every third one.
+    const perVoyage = (ly / n) * EARNINGS.lightYear
+      + EARNINGS.battle / 3 + EARNINGS.mission / 3;
+    const toTheTop = TIERS[TIERS.length - 1].at / perVoyage;
+    assert.ok(toTheTop > 60,
+      `the top of the track is ${Math.ceil(toTheTop)} voyages away, which is an afternoon`);
+    // And not so far that nobody reaches it either.
+    assert.ok(toTheTop < 400,
+      `the top of the track is ${Math.ceil(toTheTop)} voyages away, which nobody will fly`);
+    // The shakedown is the opening of a commission, not a campaign in itself.
+    assert.ok(TIERS[0].at / perVoyage < 20,
+      `the shakedown alone takes ${Math.ceil(TIERS[0].at / perVoyage)} voyages`);
   });
 });

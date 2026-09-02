@@ -1173,9 +1173,13 @@ export class Game {
     if (!t) return;
     this.locationId = t.to.id;
     this.clock.advanceStardate(t.totalHours / 24);
-    // Hours under way are where a crew actually learn a ship. Docked hours are
+    // Distance under way is where a crew actually learn a ship. Docked time is
     // not credited, which is why this is here and not in the campaign sync.
-    this.creditMastery('hour', t.totalHours);
+    //
+    // The DISTANCE and not the hours: crediting hours paid eight times as much
+    // for the same journey at warp 4 as at warp 8, so the way to master your
+    // ship was to crawl. See EARNINGS in sim/mastery.js.
+    this.creditMastery('lightYear', t.route?.lightYears ?? 0);
     // A detail sent out before a two-day voyage is finished when you arrive.
     // The transit is where the bulk of a commission's hours actually pass, and
     // nothing aboard used to notice them going by.
