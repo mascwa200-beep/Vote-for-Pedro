@@ -23,6 +23,8 @@ import {
   DIFFICULTIES, DifficultySettings, getDifficulty, DEFAULT_DIFFICULTY,
 } from '../src/rules/difficulty.js';
 import { findingFor, sitsAt, venueFor } from '../src/rules/inquiry.js';
+import { parseOrder } from '../src/ui/orders.js';
+import { SYSTEMS } from '../src/world/systems.data.js';
 import { nextCommandFor, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { availableHails } from '../src/sim/diplomacy.js';
 import { rollEncounter } from '../src/world/encounters.js';
@@ -1712,4 +1714,71 @@ test('spending a skill point takes the point and changes the ship', () => {
   g.progress.unspent = 0;
   assert.equal(g.spendSkill('sensors').ok, false);
   assert.equal(g.spendSkill('no_such_skill').ok, false);
+});
+
+// ================================================= taking the standing orders
+
+describe('standing orders can be taken by saying so', () => {
+  // Three things a captain does with an episode: take it, choose inside it,
+  // walk away from it. `mission_choice` and `abandon_mission` existed. Taking
+  // one did not — the bridge offered orders as buttons and the buttons printed
+  // no phrase, because there was no phrase to print. That is the one rule this
+  // game has about its own interface, broken at the point where an episode
+  // begins.
+
+  test('the order exists and does not steal the two that did', () => {
+    assert.equal(parseOrder('take the mission').action, 'take_mission');
+    assert.equal(parseOrder('accept those orders').action, 'take_mission');
+    assert.equal(parseOrder('we accept').action, 'take_mission');
+    assert.equal(parseOrder('start the mission').action, 'take_mission');
+    // `mission_choice` owns the ordinals and keeps them.
+    assert.equal(parseOrder('take the second one').action, 'mission_choice');
+    assert.equal(parseOrder('option two').action, 'mission_choice');
+    // And walking away is still walking away.
+    assert.equal(parseOrder('abandon the mission').action, 'abandon_mission');
+    assert.equal(parseOrder('break off the mission').action, 'abandon_mission');
+  });
+
+  // The two below characterise `startMission`, which this change does not
+  // touch — they pass on the old code and are here because the new order leans
+  // on both behaviours and would be the thing that broke if either moved.
+  test('and it starts the episode that is on the boards', () => {
+    const g = new Game({ seed: 3n, crewMode: 'original' });
+    g.locationId = 'sol';
+    const offered = g.availableMissions();
+    assert.equal(offered.length, 1, 'Sol stopped offering exactly one thing');
+    assert.equal(g.missions.active, null);
+    g.startMission(offered[0].id);
+    assert.ok(g.missions.active, 'the episode never started');
+    assert.equal(g.missions.active.id, offered[0].id);
+  });
+
+  test('a second one is refused while the first is running', () => {
+    const g = new Game({ seed: 3n, crewMode: 'original' });
+    g.locationId = 'sol';
+    g.startMission(g.availableMissions()[0].id);
+    const running = g.missions.active;
+    g.locationId = 'organia';
+    const r = g.startMission('organia_question');
+    assert.equal(r.ok, false, 'a second episode started over the first');
+    assert.equal(g.missions.active, running, 'the running episode was replaced');
+  });
+});
+
+test('the briefing screen has both cases to handle, and the empty one is the common one', () => {
+  // Not a test of the panel — that is a DOM builder and the browser check in
+  // tools/verify-app.mjs owns it. This is the fact about the world the panel
+  // is written against, and it passes on the old code: orders are posted at a
+  // handful of systems and nowhere else, so "nothing on the boards" is the
+  // branch a captain meets most and cannot be an afterthought.
+  const g = new Game({ seed: 3n, crewMode: 'original' });
+  const posting = [];
+  const bare = [];
+  for (const sys of SYSTEMS) {
+    g.locationId = sys.id;
+    (g.availableMissions().length ? posting : bare).push(sys.id);
+  }
+  assert.ok(posting.length > 0, 'no system in the galaxy posts any orders at all');
+  assert.ok(bare.length > posting.length,
+    `${posting.length} systems post orders and only ${bare.length} do not`);
 });

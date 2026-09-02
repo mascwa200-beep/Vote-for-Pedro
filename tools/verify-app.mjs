@@ -3428,6 +3428,101 @@ try {
     window.__app.render();
   });
 
+  // ------------------------------- the room the ship keeps for standing orders
+  //
+  // The briefing screen declared `panel: 'missions'`, STATION_PANEL passed it
+  // through unchanged, and `openConsole` had no case for it — so the one
+  // station on the ship devoted to standing orders fell to the `default:`
+  // branch and said "Working, Captain." Walked to and operated here, because
+  // a console is only a console when somebody standing at it gets something.
+  await dismissModals(page);
+  const briefing = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    g.missions.abandon?.(g);
+    g.locationId = 'sol';
+    // Put the captain in the briefing room without walking the corridors for
+    // thirty seconds — the walk itself is checked elsewhere in this file.
+    g.walkOrder = null;
+    g.walk.roomId = 'briefing';
+    g.walk.seated = false;
+    const station = (await import('./src/world/interiors.data.js')).ROOMS.briefing
+      .stations.find((st) => st.panel === 'missions');
+    g.walk.atStation = station;
+    // Render the room BEFORE opening the console: the console is a modal over
+    // whatever was last drawn, so without this the screenshot is an honest
+    // briefing console over a stale picture of the bridge.
+    app.render();
+    app.useWhatIsInFront();
+    const text = document.querySelector('.modal')?.textContent ?? '';
+    return {
+      station: station?.label ?? null,
+      opened: !!document.querySelector('.modal'),
+      // The failure this replaces, verbatim.
+      working: /Working, Captain/i.test(text),
+      namesTheOrders: /Orders Available/i.test(text),
+      // And the phrase, on the button, which did not exist before.
+      printsThePhrase: /take the mission/i.test(text),
+      offered: g.availableMissions().map((m) => m.title),
+    };
+  });
+  check('the briefing screen opens a console with the standing orders on it',
+    briefing.opened && briefing.namesTheOrders && !briefing.working,
+    JSON.stringify(briefing));
+  check('and the button prints the phrase that takes them',
+    briefing.printsThePhrase, JSON.stringify(briefing));
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(SHOTS, '06j-briefing-room.png') });
+
+  // Taken by SAYING it, which was the one thing a captain could not do with an
+  // episode: `mission_choice` and `abandon_mission` existed and this did not.
+  await dismissModals(page);
+  await page.fill('.orderbar input', 'take the mission');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(400);
+  const taken = await page.evaluate(() => {
+    const g = window.__app.game;
+    return {
+      active: g.missions.active?.title ?? null,
+      mode: g.mode,
+    };
+  });
+  check('and standing orders can be taken by saying so',
+    !!taken.active, JSON.stringify(taken));
+
+  // And the empty case, which is the one a captain meets most.
+  await dismissModals(page);
+  const empty = await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    g.missions.abandon?.(g);
+    g.locationId = 'vulcan';
+    app.useWhatIsInFront();
+    const text = document.querySelector('.modal')?.textContent ?? '';
+    return {
+      offered: g.availableMissions().length,
+      saysSo: /Nothing on the boards/i.test(text),
+      working: /Working, Captain/i.test(text),
+    };
+  });
+  check('and says so plainly where there are none, rather than nothing at all',
+    empty.offered === 0 && empty.saysSo && !empty.working, JSON.stringify(empty));
+
+  // Put the captain back in his chair and the world back at Sol.
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    g.missions.abandon?.(g);
+    g.locationId = 'sol';
+    g.walk.atStation = null;
+    g.walk.roomId = 'bridge';
+    g.walk.seated = true;
+    g.mode = 'bridge';
+    app.go('bridge');
+    app.render();
+  });
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {

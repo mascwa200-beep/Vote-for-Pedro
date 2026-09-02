@@ -721,6 +721,11 @@ class App {
       case 'chair': this.consoleOpen = null; this.go('chair'); return;
       case 'power': body.push(screens.powerPanel(this)); break;
       case 'shop': body.push(screens.machineShopPanel(this)); break;
+      // The briefing room. Its station has always declared this key and
+      // nothing has ever answered to it, so the screen said "Working,
+      // Captain." and a captain read his standing orders anywhere but the
+      // room the ship keeps for reading them.
+      case 'missions': body.push(screens.briefingPanel(this)); break;
       case 'comms':
         // Hailing is an ORDER, not a console read-out: it goes through the same
         // dispatch a typed "open a channel" does, so there is one path.
@@ -1091,6 +1096,19 @@ class App {
   startMission(id) {
     this.game.startMission(id);
     this.render();
+  }
+
+  /** More than one set of orders on the boards: let the captain say which. */
+  chooseStandingOrders(offered) {
+    audio.play('ui_select');
+    this.modalHandle = this.raiseModal('Standing Orders', [
+      el('p', { class: 'muted', text: 'More than one assignment is on the boards here, Captain.' }),
+      ...offered.map((m) => button(m.title, () => {
+        this.closeModal();
+        this.startMission(m.id);
+      }, { say: 'take the mission', sub: m.summary, color: 'amber' })),
+    ], [button('Not now', () => this.closeModal(), { color: 'ghost' })]);
+    this.needsRender = true;
   }
 
   chooseMission(choiceId) {
@@ -1654,6 +1672,29 @@ class App {
             `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
             'report');
         }
+        break;
+      }
+      case 'take_mission': {
+        // Standing orders could be TAKEN only by pressing a button, which is
+        // the one thing this game says it will not have. The refusals go
+        // through the same officer who would voice them, because an order that
+        // does nothing and says nothing is indistinguishable from a broken one.
+        const running = g.missions.active;
+        if (running && !running.complete) {
+          audio.play('ui_deny');
+          ack('comms', `We are still in the middle of ${running.title}, Captain.`);
+          break;
+        }
+        const offered = g.availableMissions();
+        if (!offered.length) {
+          audio.play('ui_deny');
+          ack('comms', 'Nothing on the boards for us here, Captain.');
+          break;
+        }
+        // One set of orders is taken; several are laid out to choose from, the
+        // same way more than one place to send a landing party is.
+        if (offered.length === 1) { this.startMission(offered[0].id); break; }
+        this.chooseStandingOrders(offered);
         break;
       }
       case 'abandon_mission': {

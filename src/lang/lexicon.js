@@ -1048,6 +1048,31 @@ export const INTENTS = [
     build: () => ({ action: 'work_shop' }),
   },
   {
+    // Taking standing orders — which could not be SAID at all.
+    //
+    // `mission_choice` picks an option inside an episode and `abandon_mission`
+    // walks away from one, so the only thing a captain could not do with his
+    // voice was accept the orders in the first place. The bridge offered them
+    // as buttons with no phrase printed on them, because there was no phrase.
+    //
+    // Deliberately claims no ordinals: "take the first one" belongs to
+    // `mission_choice`, which owns it and owns it correctly. More than one set
+    // of orders on offer raises the chooser instead, the same way "send an
+    // away team" does when there is more than one place to send them.
+    id: 'take_mission',
+    help: 'Take the standing orders offered here',
+    phrases: [
+      'take the mission', 'accept the mission', 'take the assignment',
+      'accept the assignment', 'accept those orders', 'take those orders',
+      'take the orders', 'we will take it', 'tell them we accept',
+      'we accept', 'start the mission', 'begin the mission',
+      'take standing orders', 'what are our orders', 'read the standing orders',
+    ],
+    keywords: { accept: 2.6, assignment: 2.6, mission: 2, orders: 1.8, take: 1.2 },
+    veto: ['abandon', 'abort', 'break off', 'drop', 'option', 'course', 'warp'],
+    build: () => ({ action: 'take_mission' }),
+  },
+  {
     id: 'abandon_mission',
     help: 'Break off the episode you are in the middle of',
     phrases: [
