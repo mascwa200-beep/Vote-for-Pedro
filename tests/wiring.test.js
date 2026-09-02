@@ -37,6 +37,7 @@ import { Ledger } from '../src/core/ledger.js';
 import {
   SPECIALITIES, DIVISIONS, specialitiesIn, rosterSizeFor,
   beginAssignment, advanceAssignments, dutySlots, specialistBonusFor, replaceLosses,
+  ASSIGNMENTS, availableAssignments,
 } from '../src/sim/duty.js';
 import { TIERS, TRAIT_LIST, SHAKEDOWN, EARNINGS } from '../src/sim/mastery.js';
 import { offerCommand, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
@@ -2524,5 +2525,93 @@ describe('Starfleet makes up the ship’s complement', () => {
     };
     assert.deepEqual(roll(true), roll(false),
       'posting replacements moved the shared random stream');
+  });
+});
+
+describe('boarding a hulk', () => {
+  /** Win a fight so there is something adrift to board. */
+  const withWreck = (tier = null) => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Test' })],
+      { relentless: true });
+    let n = 0;
+    while (g.engagement && !g.engagement.over && n < 30000) { g.engagement.update(1 / 30); n++; }
+    assert.ok(g.wreckHere, 'the fight left nothing adrift');
+    if (tier) g.wreck.tier = tier;
+    g.stores = g.stores ?? {};
+    return g;
+  };
+  const send = (g) => {
+    const a = ASSIGNMENTS.salvage_party;
+    const team = g.dutyRoster.filter((p) => p.available).slice(0, a.team).map((p) => p.id);
+    const before = { ...g.stores };
+    const r = beginAssignment(g, 'salvage_party', team);
+    assert.ok(r?.ok, `the party would not go: ${r?.reason}`);
+    advanceAssignments(g, a.hours + 1, g.rng);
+    let got = 0;
+    for (const [k, v] of Object.entries(g.stores)) got += v - (before[k] ?? 0);
+    return got;
+  };
+
+  test('one hulk cannot be salvaged twice', () => {
+    // Dispatching a party used to leave the wreck sitting there, so the same
+    // Bird-of-Prey could be boarded AND stripped: 61 units off one kill
+    // instead of 29. `stripWreck` made the wreck a real object precisely to
+    // stop a second helping, and this detail opened another door to it.
+    const g = withWreck();
+    const a = ASSIGNMENTS.salvage_party;
+    const team = g.dutyRoster.filter((p) => p.available).slice(0, a.team).map((p) => p.id);
+    assert.ok(beginAssignment(g, 'salvage_party', team)?.ok);
+    assert.equal(g.wreckHere, null, 'the hulk is still there after a party boarded it');
+    assert.equal(g.stripWreck().ok, false, 'the same hulk was stripped as well');
+  });
+
+  test('and a bigger hulk is worth more, not less', () => {
+    // The grant was flat, while `stripWreck` scales with the wreck's tier — so
+    // a day's dangerous work by three people beat a quick strip on a shuttle
+    // and lost to it on a capital hull, which is backwards.
+    const small = send(withWreck(1));
+    const big = send(withWreck(5));
+    assert.ok(big > small * 2,
+      `a tier-1 hulk gave ${small} and a tier-5 hulk gave ${big}`);
+  });
+
+  test('and boarding pays better than tractoring in the floaters', () => {
+    // It costs a day, three people, and the worst odds in the book. If it did
+    // not pay clearly more than the instant riskless option, nobody sane would
+    // ever send it — which is what the measurement found.
+    for (const tier of [1, 3, 5]) {
+      const g = withWreck(tier);
+      // What a strip would have yielded off the same hulk, averaged.
+      let strip = 0;
+      for (let i = 0; i < 200; i++) {
+        strip += Object.values(g.salvage({ tier })).reduce((n, v) => n + v, 0);
+      }
+      strip /= 200;
+      const party = send(withWreck(tier));
+      assert.ok(party > strip * 1.5,
+        `tier ${tier}: boarding gave ${party} against a strip's ${strip.toFixed(1)}`);
+    }
+  });
+
+  test('a party paid for the hulk it boarded, not the one it came home to', () => {
+    // They may come back after the ship has left the system entirely.
+    const g = withWreck(5);
+    const a = ASSIGNMENTS.salvage_party;
+    const team = g.dutyRoster.filter((p) => p.available).slice(0, a.team).map((p) => p.id);
+    const before = { ...g.stores };
+    beginAssignment(g, 'salvage_party', team);
+    g.locationId = 'qonos';        // long gone
+    g.wreck = null;
+    advanceAssignments(g, a.hours + 1, g.rng);
+    let got = 0;
+    for (const [k, v] of Object.entries(g.stores)) got += v - (before[k] ?? 0);
+    assert.ok(got > 40, `the party came home with ${got} from a tier-5 hulk`);
+  });
+
+  test('and it is not offered when there is nothing out there', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    assert.equal(availableAssignments(g).some((a) => a.id === 'salvage_party'), false,
+      'a salvage party was offered with no hulk anywhere');
   });
 });

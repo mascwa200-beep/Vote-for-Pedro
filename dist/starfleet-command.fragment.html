@@ -2495,10 +2495,32 @@ const ASSIGNMENTS = {
   salvage_party: {
     id: 'salvage_party', name: 'Salvage party', hours: 24,
     wants: 'engineer', hazard: 'dangerous', team: 3,
-    grant: { materials: { salvage: 18, duranium: 8 } },
+    // Paid by the hulk they actually boarded, not by a flat table.
+    //
+    // A flat grant of 18 salvage and 8 duranium made this the one detail in
+    // the book nobody should ever send. `stripWreck` scales with the wreck's
+    // tier and yields a mean of 8.3 units per tier — 8 off a shuttle, 42 off a
+    // capital hull — and it is instant, riskless and costs nobody. The flat
+    // detail paid 32 whatever it boarded, so it beat a strip on a small hulk
+    // and was strictly worse on a big one, which is backwards: a day's work by
+    // three people on a dangerous boarding should be worth MORE the bigger the
+    // hulk, not less.
+    //
+    // 15 units per tier against a strip's 8.3, so boarding pays about twice
+    // what tractoring in the floaters does. That is the trade: a day, three
+    // people, and the worst odds in the book (E[dead] 0.081, three times any
+    // other detail) for twice the haul.
+    perTier: { salvage: 10, duranium: 5 },
     text: 'Board the hulk and strip what is left of it.',
     // Only worth offering when there is something out there to board.
     requires: (game) => !!game.wreckHere,
+    // And boarding it TAKES it. Without this one hulk paid twice: dispatch the
+    // party, strip the same wreck while they were away, and a single
+    // Bird-of-Prey gave up 61 units instead of 29. `stripWreck` made the wreck
+    // a real object precisely to stop a second helping — its own comment says
+    // so — and this detail, written later, opened another door to the same
+    // hulk.
+    claimsWreck: true,
   },
 };
 const ASSIGNMENT_LIST = Object.values(ASSIGNMENTS);
@@ -2569,12 +2591,22 @@ function beginAssignment(game, assignmentId, officerIds = []) {
     .filter((p) => p && p.available);
   if (!team.length) return { ok: false, reason: 'Nobody was named for it.' };
 
+  // A detail that boards a hulk takes the hulk with it. The tier is captured
+  // now rather than read at payout, because the party may come back after the
+  // ship has left the system and the haul is off the wreck they boarded.
+  let wreckTier = 0;
+  if (assignment.claimsWreck) {
+    wreckTier = game.wreckHere?.tier ?? 0;
+    game.wreck = null;
+  }
+
   for (const person of team) person.state = 'assigned';
   game.assignments.push({
     assignmentId,
     team: team.map((p) => p.id),
     hoursRemaining: assignment.hours,
     hoursTotal: assignment.hours,
+    wreckTier,
   });
 
   const names = team.map((p) => p.name).join(', ');
@@ -2648,7 +2680,7 @@ function resolveAssignment(game, job, rng = game?.rng) {
 
   // A well-suited team brings back more of what it went for.
   const share = Math.max(0.4, Math.min(1.6, 1 + fitness / 120));
-  const paid = payAssignment(game, assignment, share);
+  const paid = payAssignment(game, assignment, share, job);
 
   for (const person of lost) {
     game.ledger?.record?.('lives_lost', {
@@ -2672,9 +2704,23 @@ function resolveAssignment(game, job, rng = game?.rng) {
 }
 
 /** Hand over what a detail earned, in the vocabulary the projects already use. */
-function payAssignment(game, assignment, share) {
+function payAssignment(game, assignment, share, job = null) {
   const grant = assignment.grant ?? {};
   const parts = [];
+
+  // What a boarding party brings back off the hulk it actually boarded. The
+  // tier was captured when they were dispatched — see `beginAssignment` — so a
+  // party that comes back after the ship has moved on is still paid for the
+  // wreck they went to, and a bigger hulk is worth more rather than less.
+  if (assignment.perTier) {
+    const tier = Math.max(1, Math.round(job?.wreckTier ?? 1));
+    game.stores = game.stores ?? {};
+    for (const [material, per] of Object.entries(assignment.perTier)) {
+      const got = Math.max(1, Math.round(per * tier * share));
+      game.stores[material] = (game.stores[material] ?? 0) + got;
+      parts.push(`${got} ${material}`);
+    }
+  }
 
   if (grant.materials) {
     game.stores = game.stores ?? {};
