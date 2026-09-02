@@ -24227,7 +24227,14 @@ function availableHails(factionId, context = {}) {
   const faction = FACTIONS[factionId];
   if (!faction?.hailable) return [];
   return HAIL_OPTIONS.filter((o) => {
-    if (o.requires === 'bribeable' && !faction.bribeable) return false;
+    // "Line of Credit — any bribeable captain will always hear an offer."
+    // Ninety-five Bars of Latinum bought a green pill: the perk went into a
+    // Set nothing read, and the option stayed hidden against every faction
+    // whose data did not already say it took money. A line of credit with the
+    // Ferengi is what gets an offer heard where it otherwise would not be —
+    // heard, not accepted. `resolveHail` still rolls it, and a Klingon who
+    // hears an offer of latinum is not obliged to like it.
+    if (o.requires === 'bribeable' && !faction.bribeable && !context.alwaysBribe) return false;
     if (o.id === 'demand_surrender' && !context.winning) return false;
     return true;
   });
@@ -25445,6 +25452,16 @@ const ENCOUNTER_KINDS = [
  * Roll one encounter for a location.
  * @returns {object|null} encounter descriptor, or null for an uneventful arrival
  */
+/**
+ * What a derelict can be carrying.
+ *
+ * Exported because the Ferengi "Salvage Contacts" perk draws a SECOND console
+ * from it, and a second private copy of this list is how a captain's contacts
+ * come to know about parts no derelict in the galaxy actually carries.
+ */
+const SALVAGE_POOL = [
+  'phaser_relay', 'shield_capacitor', 'ablative_armor', 'sensor_array', 'eps_conduits',
+];
 function rollEncounter(rng, systemId, { ledger, inTransit = false } = {}) {
   const system = SYSTEM_BY_ID[systemId];
   if (!system) return null;
@@ -25629,7 +25646,7 @@ function buildDerelict(rng, system) {
       'A drifting hulk. Something cut it open from the inside.',
       'An unregistered vessel, dark, tumbling slowly. Sensors read faint biosigns.',
     ]),
-    salvage: rng.pick(['phaser_relay', 'shield_capacitor', 'ablative_armor', 'sensor_array', 'eps_conduits']),
+    salvage: rng.pick(SALVAGE_POOL),
     risk: rng.range(0.15, 0.5),
     hostile: false,
   };
@@ -25725,6 +25742,7 @@ function environmentalHazard(system, ship, rng, dt) {
 }
 
 __exports.ENCOUNTER_KINDS = ENCOUNTER_KINDS;
+__exports.SALVAGE_POOL = SALVAGE_POOL;
 __exports.rollEncounter = rollEncounter;
 __exports.article = article;
 __exports.TRAPS = TRAPS;
@@ -25972,6 +25990,17 @@ class Mission {
 
     if (effects.flag) {
       for (const f of [].concat(effects.flag)) g.ledger.setFlag(f);
+    }
+
+    // "Silent Partnership — every mission reward is increased by half. They
+    // take their cut invisibly." Two hundred and eighty Bars of Latinum for
+    // nothing at all: the perk went into a Set no code read.
+    //
+    // The reward a mission pays is its experience — `item` is the only other
+    // thing an episode grants, and half a console is not a thing. Applied
+    // here rather than at each episode, so a new episode cannot forget it.
+    if (effects.xp && g.perk?.('ferengi_partner')) {
+      effects = { ...effects, xp: Math.round(effects.xp * 1.5) };
     }
 
     if (effects.xp) {
@@ -27664,7 +27693,7 @@ const { Galaxy, Transit, plotTransit } = __require("src/world/galaxy.js");
 const { vista, worldLabel } = __require("src/gfx/vista.js");
 const { makeSurface, clearSurface, surfaceReport } = __require("src/world/surface.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
-const { rollEncounter, environmentalHazard } = __require("src/world/encounters.js");
+const { rollEncounter, environmentalHazard, SALVAGE_POOL } = __require("src/world/encounters.js");
 const { buildRoster, ERAS } = __require("src/world/crews.data.js");
 const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
 const { SYSTEM_BY_ID, distanceLy } = __require("src/world/systems.data.js");
@@ -27859,9 +27888,11 @@ class Game {
     // Whether this fight's call for help has been made, and what is on its way.
     this.helpCalled = false;
     this.helpInbound = null;
-    // The Empire answers once per VOYAGE, not once per fight. Reset at the
-    // next berth, which is what makes it a favour rather than a button.
+    // The Empire answers once per VOYAGE, not once per fight, and the hired
+    // Marauder sails once per voyage too. Both reset at the next berth, which
+    // is what makes one a favour and the other a contract rather than buttons.
     this.klingonAnswered = false;
+    this.marauderHired = false;
     // Explicitly false rather than undefined: `over` is read as a boolean all
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
@@ -29072,6 +29103,21 @@ class Game {
         if (r1.success && enc.salvage) {
           this.loadout.acquire(enc.salvage);
           out.messages.push('Salvage recovered and stowed.');
+          // "Salvage Contacts — derelicts yield an additional console." Fifty-
+          // five Bars of Latinum, and no derelict ever yielded anything extra.
+          //
+          // A DIFFERENT console, not a second of the same one: two identical
+          // relays is not an additional console in any sense a captain would
+          // recognise, and the set bonuses count distinct pieces anyway. From
+          // a derived stream, so a perk cannot shift the seeded galaxy.
+          if (this.perk('salvage_bonus')) {
+            const pool = SALVAGE_POOL.filter((id) => id !== enc.salvage);
+            const extra = pool[Math.floor(this.derived(`salvage:${enc.system.id}`).float() * pool.length)];
+            this.loadout.acquire(extra);
+            out.messages.push(
+              `Your Ferengi contacts had a buyer's list. ${CONSOLES[extra]?.name ?? extra} came off her too.`,
+            );
+          }
           this.awardXP(350);
         }
         break;
@@ -29292,6 +29338,25 @@ class Game {
         name: hostileName('federation', Math.floor(this.derived('escort').float() * 12)),
         faction: 'federation',
       }));
+    }
+    // "Marauder Contract — a hired Marauder joins one engagement per voyage."
+    //
+    // Anywhere, unlike the Starfleet escort: money does not care whose space
+    // this is, which is the whole difference between the two contracts and the
+    // reason a captain might buy both. Once per VOYAGE and reset at the next
+    // berth, because that is what the description says and because a hired
+    // ship in every fight is a second ship, not a contract.
+    if (!opts.scripted && this.perk('mercenary_escort') && !this.marauderHired) {
+      this.marauderHired = true;
+      allies.push(new Ship('marauder', {
+        name: hostileName('ferengi', Math.floor(this.derived('marauder').float() * 12)),
+        faction: 'ferengi',
+      }));
+      this.pushLog(
+        'The Marauder is answering, Captain. They want it noted that this is '
+        + 'the contracted engagement.',
+        'comms',
+      );
     }
     // "Battle Doctrine Exchange — you always fire first in an engagement."
     //
@@ -30142,8 +30207,10 @@ class Game {
     // Not zero: the ship still has to be alongside. But the days in the yard
     // are what the yard access buys, so a hull that came in shot to pieces is
     // turned round in the same time as one that came in for stores.
-    // A new voyage begins alongside, so the Empire's favour is available again.
+    // A new voyage begins alongside, so the Empire's favour and the Marauder's
+    // contracted engagement are both available again.
     this.klingonAnswered = false;
+    this.marauderHired = false;
     const yard = this.perk('free_refit') ? 0.5 : (damaged ? 2.5 : 0.5);
     this.clock.advanceStardate(yard);
     this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`
@@ -30388,6 +30455,7 @@ class Game {
       // A favour already spent this voyage. Dropped on load, closing the app
       // between fights would have been a way to call the Empire again.
       klingonAnswered: this.klingonAnswered === true,
+      marauderHired: this.marauderHired === true,
 
       // Runtime flags. These are cheap to write and expensive to lose: the
       // promotion feat vanishes without `pendingFeats`, and the ion pod comes
@@ -30860,6 +30928,7 @@ class Game {
       ? Math.floor(data.shipsLost) : 0;
     g.shipsLost = g.over ? lost : Math.min(1, lost);
     g.klingonAnswered = data.klingonAnswered === true;
+    g.marauderHired = data.marauderHired === true;
     // Only an offer of a hull that exists, so a hand-edited record cannot put
     // the captain aboard something the registry has never heard of.
     g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)
@@ -32898,7 +32967,7 @@ function hailOptions(app, factionId, onPick) {
   const winning = eng
     ? g.ship.hullPct > (eng.liveHostiles.reduce((n, s) => n + s.hullPct, 0) / Math.max(1, eng.liveHostiles.length))
     : false;
-  const options = availableHails(factionId, { winning });
+  const options = availableHails(factionId, { winning, alwaysBribe: g.perk('always_bribe') });
   const faction = FACTIONS[factionId];
 
   return [

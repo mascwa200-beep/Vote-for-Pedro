@@ -33,7 +33,7 @@ import { Galaxy, Transit, plotTransit } from '../world/galaxy.js';
 import { vista, worldLabel } from '../gfx/vista.js';
 import { makeSurface, clearSurface, surfaceReport } from '../world/surface.js';
 import { ROOMS } from '../world/interiors.data.js';
-import { rollEncounter, environmentalHazard } from '../world/encounters.js';
+import { rollEncounter, environmentalHazard, SALVAGE_POOL } from '../world/encounters.js';
 import { buildRoster, ERAS } from '../world/crews.data.js';
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
 import { SYSTEM_BY_ID, distanceLy } from '../world/systems.data.js';
@@ -232,9 +232,11 @@ export class Game {
     // Whether this fight's call for help has been made, and what is on its way.
     this.helpCalled = false;
     this.helpInbound = null;
-    // The Empire answers once per VOYAGE, not once per fight. Reset at the
-    // next berth, which is what makes it a favour rather than a button.
+    // The Empire answers once per VOYAGE, not once per fight, and the hired
+    // Marauder sails once per voyage too. Both reset at the next berth, which
+    // is what makes one a favour and the other a contract rather than buttons.
     this.klingonAnswered = false;
+    this.marauderHired = false;
     // Explicitly false rather than undefined: `over` is read as a boolean all
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
@@ -1445,6 +1447,21 @@ export class Game {
         if (r1.success && enc.salvage) {
           this.loadout.acquire(enc.salvage);
           out.messages.push('Salvage recovered and stowed.');
+          // "Salvage Contacts — derelicts yield an additional console." Fifty-
+          // five Bars of Latinum, and no derelict ever yielded anything extra.
+          //
+          // A DIFFERENT console, not a second of the same one: two identical
+          // relays is not an additional console in any sense a captain would
+          // recognise, and the set bonuses count distinct pieces anyway. From
+          // a derived stream, so a perk cannot shift the seeded galaxy.
+          if (this.perk('salvage_bonus')) {
+            const pool = SALVAGE_POOL.filter((id) => id !== enc.salvage);
+            const extra = pool[Math.floor(this.derived(`salvage:${enc.system.id}`).float() * pool.length)];
+            this.loadout.acquire(extra);
+            out.messages.push(
+              `Your Ferengi contacts had a buyer's list. ${CONSOLES[extra]?.name ?? extra} came off her too.`,
+            );
+          }
           this.awardXP(350);
         }
         break;
@@ -1665,6 +1682,25 @@ export class Game {
         name: hostileName('federation', Math.floor(this.derived('escort').float() * 12)),
         faction: 'federation',
       }));
+    }
+    // "Marauder Contract — a hired Marauder joins one engagement per voyage."
+    //
+    // Anywhere, unlike the Starfleet escort: money does not care whose space
+    // this is, which is the whole difference between the two contracts and the
+    // reason a captain might buy both. Once per VOYAGE and reset at the next
+    // berth, because that is what the description says and because a hired
+    // ship in every fight is a second ship, not a contract.
+    if (!opts.scripted && this.perk('mercenary_escort') && !this.marauderHired) {
+      this.marauderHired = true;
+      allies.push(new Ship('marauder', {
+        name: hostileName('ferengi', Math.floor(this.derived('marauder').float() * 12)),
+        faction: 'ferengi',
+      }));
+      this.pushLog(
+        'The Marauder is answering, Captain. They want it noted that this is '
+        + 'the contracted engagement.',
+        'comms',
+      );
     }
     // "Battle Doctrine Exchange — you always fire first in an engagement."
     //
@@ -2515,8 +2551,10 @@ export class Game {
     // Not zero: the ship still has to be alongside. But the days in the yard
     // are what the yard access buys, so a hull that came in shot to pieces is
     // turned round in the same time as one that came in for stores.
-    // A new voyage begins alongside, so the Empire's favour is available again.
+    // A new voyage begins alongside, so the Empire's favour and the Marauder's
+    // contracted engagement are both available again.
     this.klingonAnswered = false;
+    this.marauderHired = false;
     const yard = this.perk('free_refit') ? 0.5 : (damaged ? 2.5 : 0.5);
     this.clock.advanceStardate(yard);
     this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`
@@ -2761,6 +2799,7 @@ export class Game {
       // A favour already spent this voyage. Dropped on load, closing the app
       // between fights would have been a way to call the Empire again.
       klingonAnswered: this.klingonAnswered === true,
+      marauderHired: this.marauderHired === true,
 
       // Runtime flags. These are cheap to write and expensive to lose: the
       // promotion feat vanishes without `pendingFeats`, and the ion pod comes
@@ -3233,6 +3272,7 @@ export class Game {
       ? Math.floor(data.shipsLost) : 0;
     g.shipsLost = g.over ? lost : Math.min(1, lost);
     g.klingonAnswered = data.klingonAnswered === true;
+    g.marauderHired = data.marauderHired === true;
     // Only an offer of a hull that exists, so a hand-edited record cannot put
     // the captain aboard something the registry has never heard of.
     g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)

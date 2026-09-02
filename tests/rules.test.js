@@ -24,6 +24,8 @@ import {
 } from '../src/rules/difficulty.js';
 import { findingFor, sitsAt, venueFor } from '../src/rules/inquiry.js';
 import { nextCommandFor, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
+import { availableHails } from '../src/sim/diplomacy.js';
+import { Mission } from '../src/missions/engine.js';
 import { Ship } from '../src/sim/ship.js';
 import { AwayTeam, CHECK_TYPES } from '../src/sim/away.js';
 import { Officer } from '../src/sim/officers.js';
@@ -972,9 +974,8 @@ describe('a reputation project that grants nothing', () => {
   // The ledger of what is still dead. It shrinks as perks are wired up, and a
   // twenty-sixth dead perk fails this rather than joining the pile quietly.
   const STILL_UNWIRED = [
-    'always_bribe', 'border_warning', 'cardassian_ally', 'crew_replacement',
-    'dmz_passage', 'ferengi_partner', 'folk_hero', 'mercenary_escort',
-    'reduced_detection', 'romulan_accord', 'route_intel', 'salvage_bonus',
+    'border_warning', 'cardassian_ally', 'crew_replacement', 'dmz_passage',
+    'folk_hero', 'reduced_detection', 'romulan_accord', 'route_intel',
     'see_all_encounters',
   ].sort();
 
@@ -1147,6 +1148,81 @@ describe('a reputation project that grants nothing', () => {
     const restored = Game.load(JSON.parse(JSON.stringify(g.save())));
     assert.equal(restored.klingonAnswered, true,
       'closing the app between fights was a way to call the Empire again');
+  });
+
+  test('a line of credit gets an offer heard where it would not be', () => {
+    const canBribe = (perk, faction) => availableHails(faction, {
+      winning: false, alwaysBribe: perk,
+    }).some((o) => o.id === 'bribe');
+    assert.equal(canBribe(false, 'klingon'), false,
+      'a Klingon already took money without a line of credit');
+    assert.equal(canBribe(true, 'klingon'), true,
+      '"any bribeable captain will always hear an offer" left the option hidden');
+    // Heard, not accepted — `resolveHail` still rolls it.
+    assert.equal(canBribe(false, 'ferengi'), true, 'the Ferengi stopped taking money');
+  });
+
+  test('a hired Marauder sails once a voyage, anywhere', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.reputation.perks.add('mercenary_escort');
+    // Klingon space: the Starfleet escort would not come here, and money does
+    // not care whose space this is. That is the difference between the two
+    // contracts and the reason a captain might buy both.
+    g.locationId = 'qonos';
+    const fight = (name) => {
+      g.engagement = null;
+      g.startCombat([new Ship('d7', { faction: 'klingon', name })]);
+      return g.engagement.allies;
+    };
+    const first = fight('IKS A');
+    assert.equal(first.length, 1, 'the contracted Marauder never sailed');
+    assert.equal(first[0].faction, 'ferengi', `a ${first[0].faction} ship answered a Ferengi contract`);
+    assert.equal(fight('IKS B').length, 0, 'the Marauder sailed twice in one voyage');
+
+    g.engagement = null;
+    g.locationId = 'sol';
+    assert.ok(g.dock().ok, 'could not berth at Sol');
+    g.locationId = 'qonos';
+    assert.equal(fight('IKS C').length, 1, 'the contract never came round again');
+  });
+
+  test('a silent partner takes half again on every mission', () => {
+    const paid = (perks) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      const m = new Mission({ id: 'probe_ep', title: 'Probe', stages: [] }, { game: g });
+      const before = g.progress.xp;
+      m.applyEffects({ xp: 1000 });
+      return g.progress.xp - before;
+    };
+    assert.equal(paid([]), 1000, 'a mission stopped paying what it says');
+    assert.equal(paid(['ferengi_partner']), 1500,
+      '"every mission reward is increased by half" paid the same as before');
+  });
+
+  test('salvage contacts take a second console off the same hulk', () => {
+    // A seed where the boarding check succeeds — the perk is about what a
+    // successful board yields, not about making one succeed.
+    const boarded = (perks) => {
+      const g = new Game({ seed: 0x1234n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      for (const o of g.crew.officers) o.expertise = 100;
+      g.encounter = {
+        kind: 'derelict', system: g.location, salvage: 'phaser_relay', risk: 0.05, hostile: false,
+      };
+      const before = g.loadout.inventory.length;
+      g.resolveEncounter('board');
+      return { gained: g.loadout.inventory.length - before, held: g.loadout.inventory };
+    };
+    const plain = boarded([]);
+    assert.equal(plain.gained, 1, 'the boarding check no longer succeeds on this seed');
+    const rich = boarded(['salvage_bonus']);
+    assert.equal(rich.gained, 2, '"derelicts yield an additional console" yielded one');
+    // A DIFFERENT console: two identical relays is not an additional console
+    // in any sense a captain would recognise, and set bonuses count distinct
+    // pieces anyway.
+    const added = rich.held.slice(-2);
+    assert.notEqual(added[0], added[1], `the hulk yielded two of the same: ${added.join(', ')}`);
   });
 
   test('a cloaking device is not left behind with the old hull', () => {

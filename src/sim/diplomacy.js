@@ -57,7 +57,14 @@ export function availableHails(factionId, context = {}) {
   const faction = FACTIONS[factionId];
   if (!faction?.hailable) return [];
   return HAIL_OPTIONS.filter((o) => {
-    if (o.requires === 'bribeable' && !faction.bribeable) return false;
+    // "Line of Credit — any bribeable captain will always hear an offer."
+    // Ninety-five Bars of Latinum bought a green pill: the perk went into a
+    // Set nothing read, and the option stayed hidden against every faction
+    // whose data did not already say it took money. A line of credit with the
+    // Ferengi is what gets an offer heard where it otherwise would not be —
+    // heard, not accepted. `resolveHail` still rolls it, and a Klingon who
+    // hears an offer of latinum is not obliged to like it.
+    if (o.requires === 'bribeable' && !faction.bribeable && !context.alwaysBribe) return false;
     if (o.id === 'demand_surrender' && !context.winning) return false;
     return true;
   });
