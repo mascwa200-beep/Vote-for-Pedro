@@ -35,6 +35,7 @@ import { RNG } from './core/rng.js';
 import { FEAT_BY_ID, ABILITIES as ABILITY_LIST } from './rules/character.js';
 import { CONSOLES } from './sim/loadout.js';
 import { yardReport } from './sim/command.js';
+import { venueFor } from './rules/inquiry.js';
 import { TIERS, TRAIT_LIST } from './sim/mastery.js';
 
 // TABS ARE FOR TEXT.
@@ -343,10 +344,17 @@ class App {
       else audio.play('ui_tap');
     });
 
-    on('ledger:inquiry', () => {
+    on('ledger:inquiry', ({ reason } = {}) => {
       this.game?.ledger.setFlag('inquiry_summoned');
+      // The venue was hardcoded to Starbase 11 — the one from the episode —
+      // and the board sat nowhere at all, so this was an order to a place the
+      // game had no business with and a promise nothing kept. Now it names the
+      // base the captain is actually nearest, and the board really is waiting
+      // there.
+      const venue = venueFor(this.game)?.name ?? 'the nearest starbase';
       this.showMessage('Signal from Starfleet Command', [
-        'You are ordered to Starbase 11 to appear before a board of inquiry.',
+        `You are ordered to ${venue} to appear before a board of inquiry into `
+        + `${reason ?? 'your command record'}.`,
         'Promotion is suspended until the board reports.',
       ]);
     });
@@ -1388,6 +1396,12 @@ class App {
       case 'dock': {
         const r = g.dock();
         if (r.ok) audio.play('dock'); else { audio.play('ui_deny'); g.pushLog(r.error, 'helm'); }
+        // Spoken and tapped reach the same place: a board that sat while you
+        // were docking gets a screen either way.
+        if (r.finding) {
+          this.showMessage('Board of Inquiry', [r.finding.text]
+            .concat(r.finding.reducedTo ? [`Your rank is now ${r.finding.reducedTo}.`] : []));
+        }
         break;
       }
       case 'alert':

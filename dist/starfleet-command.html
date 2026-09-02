@@ -20399,6 +20399,11 @@ const RECORD_WEIGHTS = {
   first_contact: 8,
   ship_destroyed_hostile: 1.5,
   ship_destroyed_civilian: -25,
+  // Losing your own ship weighed NOTHING. The single worst thing that can
+  // happen to a starship captain moved the review by zero, so a captain who
+  // had lost two hulls could still be assessed Exemplary. Worse than losing a
+  // colony you were sent to protect, not as bad as killing civilians yourself.
+  ship_lost: -20,
   colony_saved: 12,
   colony_lost: -10,
   treaty_signed: 15,
@@ -20410,6 +20415,28 @@ const RECORD_WEIGHTS = {
   anomaly_catalogued: 3,
   order_disobeyed: -5,
 };
+
+/**
+ * How Starfleet reads a service score, worst last.
+ *
+ * Exported because the board of inquiry (rules/inquiry.js) decides its finding
+ * on the same bands, and a second copy of these numbers would be a second
+ * answer to the same question — the screen and the board would eventually
+ * disagree about the same record.
+ */
+const ASSESSMENTS = [
+  { id: 'exemplary', label: 'Exemplary', from: 120 },
+  { id: 'distinguished', label: 'Distinguished', from: 60 },
+  { id: 'satisfactory', label: 'Satisfactory', from: 20 },
+  { id: 'unremarkable', label: 'Unremarkable', from: -20 },
+  { id: 'concerning', label: 'Concerning', from: -60 },
+  { id: 'censure', label: 'Subject to Censure', from: -Infinity },
+];
+
+/** The band a score falls in, ignoring whether a board happens to be sitting. */
+function assessmentOf(score) {
+  return ASSESSMENTS.find((a) => score >= a.from) ?? ASSESSMENTS[ASSESSMENTS.length - 1];
+}
 class Ledger {
   constructor() {
     this.entries = [];        // full narrative record, in order
@@ -20423,6 +20450,10 @@ class Ledger {
     this.commendations = [];
     this.reprimands = [];
     this.inquiryOpen = false;
+    // What the board is about, so it can be named on the screen and in its own
+    // finding. A board with no subject was a flag, not a proceeding.
+    this.inquiryReason = null;
+    this.findings = [];
   }
 
   // ------------- recording -------------
@@ -20451,9 +20482,8 @@ class Ledger {
     if (kind === 'prime_directive_violation') {
       this.reprimands.push(entry);
       // Three violations and Starfleet stops writing letters.
-      if ((this.counters[kind] ?? 0) >= 3 && !this.inquiryOpen) {
-        this.inquiryOpen = true;
-        emit('ledger:inquiry', entry);
+      if ((this.counters[kind] ?? 0) >= 3) {
+        this.openInquiry('a pattern of Prime Directive violations', entry);
       }
     }
     if (kind === 'colony_saved' || kind === 'first_contact' || kind === 'treaty_signed') {
@@ -20477,6 +20507,45 @@ class Ledger {
       ship.civilian ? 'ship_destroyed_civilian' : 'ship_destroyed_hostile',
       { text: `${ship.name} destroyed`, faction: ship.faction, ...detail },
     );
+  }
+
+  // ------------- the board of inquiry -------------
+  //
+  // `inquiryOpen` used to be set in exactly one place and cleared in none. So
+  // the flag had two failures at once: the event the game actually calls a
+  // board of inquiry — losing your ship — never set it, and the one thing
+  // that did set it (a third Prime Directive violation) froze the rank ladder
+  // for the rest of the commission, under a screen promising that promotion
+  // was suspended only "until it concludes".
+  //
+  // Both callers now come through one door, and there is a door out.
+  // RESEARCH.md §22: a board convenes at a starbase, reads the record, and
+  // returns a finding. Sitting it lives in rules/inquiry.js — the ledger holds
+  // the fact of it, not the verdict.
+
+  /** @returns {boolean} true if this opened one that was not already open. */
+  openInquiry(reason, detail = {}) {
+    if (this.inquiryOpen) return false;
+    this.inquiryOpen = true;
+    this.inquiryReason = reason;
+    emit('ledger:inquiry', { reason, ...detail });
+    return true;
+  }
+
+  /** Record the board's finding and close it. */
+  closeInquiry(finding) {
+    if (!this.inquiryOpen) return false;
+    const closed = { reason: this.inquiryReason, ...finding };
+    this.inquiryOpen = false;
+    this.inquiryReason = null;
+    this.findings.push(closed);
+    // The finding goes on the record either way. An exoneration is worth
+    // having on paper, and a captain who was cleared should be able to see it
+    // rather than only noticing that a warning stopped appearing.
+    this.record('inquiry_concluded', { text: closed.text ?? closed.label });
+    if (finding?.verdict !== 'exonerated') this.reprimands.push(closed);
+    emit('ledger:inquiry-closed', closed);
+    return true;
   }
 
   // ------------- flags -------------
@@ -20528,14 +20597,8 @@ class Ledger {
 
   /** Human-readable assessment of the command record so far. */
   assessment() {
-    const s = this.serviceScore();
     if (this.inquiryOpen) return { id: 'inquiry', label: 'Under Board of Inquiry' };
-    if (s >= 120) return { id: 'exemplary', label: 'Exemplary' };
-    if (s >= 60) return { id: 'distinguished', label: 'Distinguished' };
-    if (s >= 20) return { id: 'satisfactory', label: 'Satisfactory' };
-    if (s >= -20) return { id: 'unremarkable', label: 'Unremarkable' };
-    if (s >= -60) return { id: 'concerning', label: 'Concerning' };
-    return { id: 'censure', label: 'Subject to Censure' };
+    return assessmentOf(this.serviceScore());
   }
 
   /** Most recent N entries that carry narrative text. */
@@ -20556,6 +20619,8 @@ class Ledger {
       commendations: this.commendations,
       reprimands: this.reprimands,
       inquiryOpen: this.inquiryOpen,
+      inquiryReason: this.inquiryReason,
+      findings: this.findings,
     };
   }
 
@@ -20571,12 +20636,18 @@ class Ledger {
       commendations: data.commendations ?? [],
       reprimands: data.reprimands ?? [],
       inquiryOpen: data.inquiryOpen ?? false,
+      // A board hanging over a captain has to still be hanging over him after
+      // he closes the app, and it has to still know what it is about.
+      inquiryReason: data.inquiryReason ?? (data.inquiryOpen ? 'your command record' : null),
+      findings: data.findings ?? [],
     });
     l.flags = new Set(data.flags ?? []);
     return l;
   }
 }
 
+__exports.ASSESSMENTS = ASSESSMENTS;
+__exports.assessmentOf = assessmentOf;
 __exports.Ledger = Ledger;
 
 });
@@ -27165,6 +27236,169 @@ __exports.DifficultySettings = DifficultySettings;
 
 });
 
+__define("src/rules/inquiry.js", function (__exports, __require) {
+// The board of inquiry, and what it finds.
+//
+// The grounding is docs/RESEARCH.md §22, and the three things it takes from
+// the series are the three things this file does.
+//
+// A board convenes at a STARBASE. Kirk's court-martial in "Court Martial" is
+// held at Starbase 11: the ship puts in, the officers go ashore, and a panel
+// sits in a room. Nothing about that can happen on patrol. So a board opened
+// in deep space is a thing hanging over a captain until he next makes port,
+// which is exactly the interval a campaign wants.
+//
+// The RECORD is the evidence. The whole device of that episode is that the
+// computer log is treated as incontrovertible. The game already keeps a
+// service record with a weighted score, and until now that number did nothing
+// but print itself on a screen — so reading the finding off it is not a
+// mechanic invented for the occasion. It is the one the record was for.
+//
+// And the worst finding costs a RANK, not a career. Kirk pled guilty after
+// Genesis and was reduced from Admiral to Captain, and the reduction is what
+// put him back on a ship. The floor follows from the same fact: reduced *to*
+// Captain and no further, because below Captain there is no starship, and the
+// campaign is about commanding one.
+
+const { RANKS } = __require("src/sim/skills.js");
+const { assessmentOf } = __require("src/core/ledger.js");
+const { emit } = __require("src/core/events.js");
+
+/**
+ * The findings.
+ *
+ * Which one applies is decided by the assessment band the record already sits
+ * in — `assessmentOf` from the ledger, the same function that labels the
+ * captain's own screen. The thresholds are not restated here, because two
+ * copies of them would drift and this file would be the one that ended up
+ * disagreeing with the record it is supposed to be reading.
+ */
+const FINDINGS = {
+  exonerated: {
+    verdict: 'exonerated',
+    label: 'Exonerated',
+    standing: 0,
+    text: 'The board finds no fault. The circumstances are entered in the record.',
+  },
+  reprimanded: {
+    verdict: 'reprimanded',
+    label: 'Formal reprimand',
+    standing: -10,
+    text: 'The board issues a formal reprimand. It stays on your record.',
+  },
+  reduced: {
+    verdict: 'reduced',
+    label: 'Reduced in rank',
+    standing: -15,
+    text: 'The board finds against you. You are reduced in rank.',
+  },
+};
+
+/** The rank a board will not reduce a captain below. */
+const RANK_FLOOR = 'captain';
+
+/**
+ * Whether a board can sit here.
+ *
+ * A Federation STARBASE, not merely anywhere with a spacedock. The game
+ * already ordered the captain to Starbase 11 in so many words, so sitting the
+ * board over a repair berth at Vulcan would have made that order a lie — and
+ * docking at Qo'noS would have convened a Starfleet board of inquiry in the
+ * Klingon capital, which is the sort of thing a seam produces when nobody
+ * checks. Both of the game's starbases carry docking facilities, so this is a
+ * destination rather than a wall.
+ */
+function sitsAt(system) {
+  return system?.type === 'starbase' && system?.faction === 'federation';
+}
+
+/**
+ * Where the captain is ordered to appear: the nearest starbase that will hear
+ * him. Named on the screen, so the order is one he can actually follow.
+ */
+function venueFor(game) {
+  const here = game?.location;
+  const bases = [...(game?.galaxy?.systems?.values() ?? [])].filter(sitsAt);
+  if (!bases.length || !here) return bases[0] ?? null;
+  return bases.reduce((best, s) => {
+    const d = (s.x - here.x) ** 2 + (s.y - here.y) ** 2;
+    return d < best.d ? { s, d } : best;
+  }, { s: bases[0], d: Infinity }).s;
+}
+
+/**
+ * What the board WOULD find, without sitting it.
+ *
+ * Split out so the screen can warn a captain what he is sailing into. A
+ * verdict he can only discover by docking is a trap, and §22's point is that
+ * the finding turns on a record he can already read.
+ */
+function findingFor(ledger) {
+  // NOT `ledger.assessment()`, which reports 'inquiry' while a board is
+  // sitting — true, but useless to the board itself, which is asking what the
+  // record says apart from the fact that it is being read. Same bands, taken
+  // from the same table.
+  const band = assessmentOf(ledger?.serviceScore?.() ?? 0).id;
+  if (band === 'unremarkable') return FINDINGS.reprimanded;
+  if (band === 'concerning' || band === 'censure') return FINDINGS.reduced;
+  return FINDINGS.exonerated;
+}
+
+/**
+ * Sit the board. Applies the finding and closes the inquiry.
+ *
+ * Deterministic — a function of the record, with no draw from `game.rng`.
+ * Taking one would shift every downstream seeded outcome, and a captain ought
+ * to be able to see a verdict coming from the record he has been keeping.
+ *
+ * @returns {object|null} the finding, or null if no board was open.
+ */
+function convene(game) {
+  const ledger = game?.ledger;
+  if (!ledger?.inquiryOpen) return null;
+  if (!sitsAt(game.location)) return null;
+  const reason = ledger.inquiryReason ?? 'your command record';
+  const base = findingFor(ledger);
+  const finding = { ...base, reason, reducedTo: null };
+
+  if (base.verdict === 'reduced') {
+    const floor = RANKS.findIndex((r) => r.id === RANK_FLOOR);
+    const p = game.progress;
+    if (p && p.rankIndex > floor) {
+      p.rankIndex--;
+      finding.reducedTo = p.rank?.name ?? null;
+      // Skill points already spent are NOT clawed back. Nothing in
+      // CaptainProgress can unspend one, and a demotion that silently
+      // corrupted a skill tree would be a worse bug than the one this fixes.
+    } else {
+      // Already at the floor: the finding stands on the record, but there is
+      // no rank to take. The verdict changes with the label, so nothing
+      // downstream can read 'reduced' and go looking for the rank that went.
+      finding.verdict = 'reprimanded';
+      finding.label = 'Formal reprimand';
+      finding.text = 'The board finds against you. There is no rank to take; '
+        + 'the finding stands on your record.';
+    }
+  }
+
+  if (finding.standing) {
+    ledger.adjustStanding('federation', finding.standing, `Board of inquiry: ${reason}`);
+  }
+  finding.text = `Board of inquiry into ${reason}. ${finding.text}`;
+  ledger.closeInquiry(finding);
+  emit('inquiry:concluded', finding);
+  return finding;
+}
+
+__exports.FINDINGS = FINDINGS;
+__exports.RANK_FLOOR = RANK_FLOOR;
+__exports.sitsAt = sitsAt;
+__exports.venueFor = venueFor;
+__exports.findingFor = findingFor;
+__exports.convene = convene;
+
+});
+
 __define("src/campaign/clock.js", function (__exports, __require) {
 // The five-year mission, in real time.
 //
@@ -27451,6 +27685,7 @@ const { EPISODES } = __require("src/missions/episodes/index.js");
 const { Character, FEAT_BY_ID } = __require("src/rules/character.js");
 const { Reputation, REP_TRACKS } = __require("src/rules/reputation.js");
 const { DifficultySettings, DEFAULT_DIFFICULTY } = __require("src/rules/difficulty.js");
+const { convene, findingFor } = __require("src/rules/inquiry.js");
 const { CampaignClock, absenceReport, COMMISSION_DAYS } = __require("src/campaign/clock.js");
 
 /**
@@ -27779,6 +28014,24 @@ class Game {
    */
   awardXP(amount, { silent = false } = {}) {
     const promo = this.progress.addXP(amount, { ledger: this.ledger });
+    // A promotion earned and held is worth saying. `addXP` has always returned
+    // {blocked: true} and nobody read it, so a captain under inquiry simply saw
+    // his rank stop moving with no explanation offered anywhere.
+    //
+    // Once, not on every award: xp arrives from combat, missions and duty
+    // details, and repeating it would be a log full of the same sentence.
+    if (promo?.blocked) {
+      if (!this.promotionHeld) {
+        this.promotionHeld = true;
+        const would = findingFor(this.ledger);
+        this.pushLog(
+          'You have earned the next rank, Captain, and the board of inquiry is '
+          + `holding it. On the record as it stands the finding would be: ${would.label.toLowerCase()}.`,
+          'comms',
+        );
+      }
+      return promo;
+    }
     if (!promo?.promoted) return promo ?? null;
 
     this.character?.levelUp();
@@ -29743,7 +29996,26 @@ class Game {
     this.clock.advanceStardate(damaged ? 2.5 : 0.5);
     this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`, 'engineering');
     emit('docked', this.location);
-    return { ok: true };
+    // A board of inquiry sits ashore, not on patrol (RESEARCH.md §22). This is
+    // the only way one ever concludes: before this, the flag that suspends
+    // promotion was set in one place and cleared in none, so three Prime
+    // Directive violations froze the rank ladder for the rest of a five-year
+    // commission — under a screen promising it lasted only until the board
+    // concluded.
+    const finding = convene(this);
+    if (finding) {
+      // A rank held by a closed board can be earned again, and should be said
+      // again if a second board ever holds it.
+      this.promotionHeld = false;
+      // Two days for it. A hearing is not a formality you attend between
+      // resupply and departure.
+      this.clock.advanceStardate(2);
+      this.pushLog(finding.text, 'comms');
+      if (finding.reducedTo) {
+        this.pushLog(`Your rank is now ${finding.reducedTo}.`, 'captain');
+      }
+    }
+    return { ok: true, finding: finding ?? null };
   }
 
   // ------------------------------------------------------------------ tick
@@ -29860,10 +30132,15 @@ class Game {
         system: this.locationId,
       });
       // The reckoning, and it costs something real before the ship arrives.
-      this.ledger.adjustStanding('federation', -12, 'Board of inquiry: loss of a starship');
+      this.ledger.adjustStanding('federation', -12, 'Loss of a starship');
+      // And an actual board, which this used to promise in the next line and
+      // never convene: the flag was never set, so a captain could lose the
+      // Enterprise and be promoted to Fleet Captain the same day. It sits when
+      // he next makes port (RESEARCH.md §22).
+      this.ledger.openInquiry(`the loss of ${lost}`);
       this.pushLog(
-        `${lost} is gone, Captain. There will be a board of inquiry, and it is `
-        + 'already on your record.',
+        `${lost} is gone, Captain. There will be a board of inquiry when we next `
+        + 'put in, and it is already on your record.',
         'comms',
       );
       const took = takeCommandOf(this, board.id);
@@ -30538,6 +30815,7 @@ const { SCENARIO: KOBAYASHI, GAMBIT_TIER } = __require("src/missions/kobayashi.j
 const { MODES } = __require("src/core/state.js");
 const { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } = __require("src/sim/power.js");
 const { SKILLS, BRANCHES, BRANCH_LABEL, RANKS } = __require("src/sim/skills.js");
+const { findingFor, venueFor, sitsAt } = __require("src/rules/inquiry.js");
 const { CONSOLES, SET_LIST } = __require("src/sim/loadout.js");
 const { TIERS, TRAIT_LIST } = __require("src/sim/mastery.js");
 const { ABILITIES } = __require("src/sim/officers.js");
@@ -30805,8 +31083,19 @@ function chairConsole(app) {
     actions.push(button('Request docking', tap(() => {
       const r = g.dock();
       if (r.ok) { audio.play('dock'); haptic('confirm'); }
+      // A board of inquiry concluding is not a thing to leave in the log
+      // strip. It can cost a rank.
+      if (r.finding) app.showMessage('Board of Inquiry', [r.finding.text].concat(r.finding.reducedTo ? [`Your rank is now ${r.finding.reducedTo}.`] : []));
       app.render();
-    }, 'ui_confirm'), { say: 'request docking', color: 'green', sub: 'Full repair, resupply, and crew replacement' }));
+    }, 'ui_confirm'), {
+      say: 'request docking',
+      color: 'green',
+      // The board sits ashore, so putting in is what convenes it. Said on the
+      // button, because a captain choosing to dock is choosing to be tried.
+      sub: g.ledger.inquiryOpen && sitsAt(g.location)
+        ? `Full repair and resupply — and the board of inquiry sits. Likely finding: ${findingFor(g.ledger).label.toLowerCase()}.`
+        : 'Full repair, resupply, and crew replacement',
+    }));
   }
   actions.push(button('Set course', tap(() => app.go('galaxy')), { color: 'blue', sub: 'Plot a course to another system' }));
   actions.push(button('Long-range scan', tap(() => {
@@ -31677,9 +31966,32 @@ function captainScreen(app) {
         g.ledger.serviceScore() >= 20 ? 'green' : g.ledger.serviceScore() < -20 ? 'red' : ''),
       pill(`Score ${g.ledger.serviceScore()}`),
     ]),
-    g.ledger.inquiryOpen
-      ? el('p', { class: 'muted', text: 'A board of inquiry is open. Promotion is suspended until it concludes.' })
-      : null,
+    // What the board is about, where it sits, and what it would find on the
+    // record as it stands. It used to say only that promotion was suspended
+    // "until it concludes" — and nothing in the game concluded one, so the
+    // sentence was a promise the game would not keep and the rank ladder was
+    // frozen for the rest of the commission. RESEARCH.md §22.
+    ...(g.ledger.inquiryOpen ? [
+      el('p', {
+        class: 'muted',
+        text: `A board of inquiry into ${g.ledger.inquiryReason ?? 'your command record'} is open. `
+          + 'Promotion is suspended until it sits, and it sits when you put in at '
+          + `${venueFor(g)?.name ?? 'a Federation starbase'}.`,
+      }),
+      el('p', {
+        class: 'hint',
+        text: `On the record as it stands the finding would be: ${findingFor(g.ledger).label.toLowerCase()}.`
+          + (findingFor(g.ledger).verdict === 'reduced'
+            ? ' A better record between now and then is the only thing that changes it.'
+            : ''),
+      }),
+    ] : []),
+    // And the findings of boards already held, because an exoneration is worth
+    // having on paper too.
+    ...(g.ledger.findings ?? []).slice(-3).map((f) => el('p', {
+      class: 'muted',
+      text: `Board of inquiry into ${f.reason}: ${f.label}.`,
+    })),
   ], g.ledger.inquiryOpen ? 'danger' : 'accent'));
 
   // --- Skills ---
@@ -33275,6 +33587,7 @@ const { RNG } = __require("src/core/rng.js");
 const { FEAT_BY_ID, ABILITIES: ABILITY_LIST } = __require("src/rules/character.js");
 const { CONSOLES } = __require("src/sim/loadout.js");
 const { yardReport } = __require("src/sim/command.js");
+const { venueFor } = __require("src/rules/inquiry.js");
 const { TIERS, TRAIT_LIST } = __require("src/sim/mastery.js");
 
 // TABS ARE FOR TEXT.
@@ -33583,10 +33896,17 @@ class App {
       else audio.play('ui_tap');
     });
 
-    on('ledger:inquiry', () => {
+    on('ledger:inquiry', ({ reason } = {}) => {
       this.game?.ledger.setFlag('inquiry_summoned');
+      // The venue was hardcoded to Starbase 11 — the one from the episode —
+      // and the board sat nowhere at all, so this was an order to a place the
+      // game had no business with and a promise nothing kept. Now it names the
+      // base the captain is actually nearest, and the board really is waiting
+      // there.
+      const venue = venueFor(this.game)?.name ?? 'the nearest starbase';
       this.showMessage('Signal from Starfleet Command', [
-        'You are ordered to Starbase 11 to appear before a board of inquiry.',
+        `You are ordered to ${venue} to appear before a board of inquiry into `
+        + `${reason ?? 'your command record'}.`,
         'Promotion is suspended until the board reports.',
       ]);
     });
@@ -34628,6 +34948,12 @@ class App {
       case 'dock': {
         const r = g.dock();
         if (r.ok) audio.play('dock'); else { audio.play('ui_deny'); g.pushLog(r.error, 'helm'); }
+        // Spoken and tapped reach the same place: a board that sat while you
+        // were docking gets a screen either way.
+        if (r.finding) {
+          this.showMessage('Board of Inquiry', [r.finding.text]
+            .concat(r.finding.reducedTo ? [`Your rank is now ${r.finding.reducedTo}.`] : []));
+        }
         break;
       }
       case 'alert':

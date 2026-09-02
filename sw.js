@@ -66,6 +66,7 @@ const PRECACHE = [
   './src/rules/character.js',
   './src/rules/reputation.js',
   './src/rules/difficulty.js',
+  './src/rules/inquiry.js',
   './src/rules/resolve.js',
   './src/campaign/clock.js',
   './src/sim/fabrication.js',

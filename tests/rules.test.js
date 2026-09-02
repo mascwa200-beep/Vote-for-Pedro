@@ -22,8 +22,11 @@ import {
 import {
   DIFFICULTIES, DifficultySettings, getDifficulty, DEFAULT_DIFFICULTY,
 } from '../src/rules/difficulty.js';
+import { findingFor, sitsAt, venueFor } from '../src/rules/inquiry.js';
 import { AwayTeam, CHECK_TYPES } from '../src/sim/away.js';
 import { Officer } from '../src/sim/officers.js';
+import { Ledger, assessmentOf } from '../src/core/ledger.js';
+import { RANKS } from '../src/sim/skills.js';
 import { Game } from '../src/core/state.js';
 
 // ================================================================ dice
@@ -926,6 +929,145 @@ test('a board of inquiry blocks the promotion and everything under it', () => {
   assert.equal(g.progress.rankIndex, rank, 'the pip arrived anyway');
   assert.equal(g.character.level, level, 'the level arrived anyway');
   assert.equal(g.pendingFeats ?? 0, 0, 'the feat arrived anyway');
+});
+
+describe('the board of inquiry actually sits', () => {
+  /** Put in where the board will actually sit. */
+  const putIn = (g) => {
+    const port = venueFor(g);
+    assert.ok(port, 'no Federation starbase exists for a board to sit at');
+    g.locationId = port.id;
+    return g.dock();
+  };
+
+  test('losing a ship opens one', () => {
+    // `loseTheShip` printed "there will be a board of inquiry" and opened
+    // none: the flag stayed false, so the sentence was a promise the game
+    // would not keep.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    assert.equal(g.ledger.inquiryOpen, false);
+    g.loseTheShip();
+    assert.equal(g.ledger.inquiryOpen, true, 'no board was opened');
+    assert.match(g.ledger.inquiryReason ?? '', /loss of/i,
+      `the board did not know what it was about: "${g.ledger.inquiryReason}"`);
+  });
+
+  test('and the rank stops moving until it does', () => {
+    // The effect that made this worth finding: a captain could lose the
+    // Enterprise and be promoted to Fleet Captain the same day.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.loseTheShip();
+    const rank = g.progress.rank.name;
+    g.awardXP(1e6);
+    assert.equal(g.progress.rank.name, rank,
+      `promoted to ${g.progress.rank.name} the same day the ship was lost`);
+    assert.match(g.log.map((e) => e.text).join(' '), /holding it/i,
+      'the captain was never told his promotion was being held');
+  });
+
+  test('and a board opened by Prime Directive violations closes', () => {
+    // The mirror image, in the same flag. `inquiryOpen` was set in one place
+    // and cleared in none, so three violations froze the rank ladder for the
+    // rest of a five-year commission — under a screen saying promotion was
+    // suspended only "until it concludes".
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    for (let i = 0; i < 3; i++) g.ledger.record('prime_directive_violation', { text: 'v' });
+    assert.equal(g.ledger.inquiryOpen, true, 'three violations did not open a board');
+    const r = putIn(g);
+    assert.ok(r.finding, 'docking at a starbase did not sit the board');
+    assert.equal(g.ledger.inquiryOpen, false, 'the board never concluded');
+  });
+
+  test('the finding follows the record', () => {
+    const verdictFor = (setUp) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'commodore');
+      setUp(g);
+      g.loseTheShip();
+      return { g, finding: putIn(g).finding };
+    };
+    const clean = verdictFor((g) => {
+      for (let i = 0; i < 12; i++) g.ledger.record('treaty_signed', { text: 't' });
+    });
+    assert.equal(clean.finding.verdict, 'exonerated',
+      `a record scoring ${clean.g.ledger.serviceScore()} was not cleared`);
+
+    const bad = verdictFor((g) => {
+      for (let i = 0; i < 4; i++) g.ledger.record('prime_directive_violation', { text: 'v' });
+    });
+    assert.equal(bad.finding.verdict, 'reduced',
+      `a record scoring ${bad.g.ledger.serviceScore()} escaped a finding`);
+    assert.equal(bad.g.progress.rank.id, 'fleet_captain',
+      `a commodore found against is now ${bad.g.progress.rank.name}`);
+  });
+
+  test('but never below Captain, because below Captain there is no ship', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    assert.equal(g.progress.rank.id, 'captain', 'the campaign no longer starts at Captain');
+    for (let i = 0; i < 6; i++) g.ledger.record('prime_directive_violation', { text: 'v' });
+    g.loseTheShip();
+    const finding = putIn(g).finding;
+    assert.equal(g.progress.rank.id, 'captain',
+      `a captain was reduced to ${g.progress.rank.name} and has no command`);
+    assert.equal(finding.reducedTo, null, 'the finding claimed a rank it did not take');
+    assert.equal(finding.verdict, 'reprimanded',
+      'the finding still said "reduced" after taking nothing');
+  });
+
+  test('a board sits at a starbase, not over a repair berth', () => {
+    // The game has ordered the captain to a starbase in so many words since
+    // before any of this existed. Sitting the board wherever a spacedock
+    // happened to be made that order a lie — and docking at Qo'noS would have
+    // convened a Starfleet board of inquiry in the Klingon capital.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.loseTheShip();
+    const berth = [...g.galaxy.systems.values()]
+      .find((s) => s.facilities?.includes('dock') && !sitsAt(s));
+    assert.ok(berth, 'every docking system in the galaxy is a Federation starbase');
+    g.locationId = berth.id;
+    assert.equal(g.dock().finding ?? null, null,
+      `the board sat at ${berth.name}, which is a ${berth.type}`);
+    assert.equal(g.ledger.inquiryOpen, true, 'the board closed away from a starbase');
+
+    const venue = venueFor(g);
+    assert.ok(sitsAt(venue), `the captain was ordered to ${venue?.name}, which will not hear him`);
+    assert.ok(putIn(g).finding, `the board did not sit at ${venue.name} either`);
+  });
+
+  test('losing a ship moves the service record at all', () => {
+    // ship_lost had no weight, so the worst thing that can happen to a captain
+    // scored exactly zero and two lost hulls could still read as Exemplary.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    const before = g.ledger.serviceScore();
+    g.loseTheShip();
+    assert.ok(g.ledger.serviceScore() < before,
+      `the record scored ${g.ledger.serviceScore()} before and after losing a starship`);
+  });
+
+  test('the screen and the board read the same record', () => {
+    // Two answers to the same question drift. The board's bands and the
+    // assessment on the captain's screen come from one table; this fails if
+    // anybody ever writes a second copy.
+    for (const score of [200, 120, 119, 60, 20, 19, -20, -21, -60, -61, -500]) {
+      const band = assessmentOf(score);
+      const ledger = { serviceScore: () => score };
+      const finding = findingFor(ledger);
+      const expected = ['exemplary', 'distinguished', 'satisfactory'].includes(band.id)
+        ? 'exonerated'
+        : band.id === 'unremarkable' ? 'reprimanded' : 'reduced';
+      assert.equal(finding.verdict, expected,
+        `a score of ${score} reads as ${band.label} but the board finds ${finding.verdict}`);
+    }
+  });
+
+  test('an open board survives being saved and loaded', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.loseTheShip();
+    const restored = Ledger.load(JSON.parse(JSON.stringify(g.ledger.save())));
+    assert.equal(restored.inquiryOpen, true, 'the board was dropped on load');
+    assert.equal(restored.inquiryReason, g.ledger.inquiryReason,
+      'the board came back not knowing what it was about');
+  });
 });
 
 test('a feat can be taken without a screen, and only when one is banked', () => {
