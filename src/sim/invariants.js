@@ -176,6 +176,15 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
     `${who}: crew ${s.crew} exceeds complement ${s.maxCrew}`, who);
   r.must(ok(s.fires) && num(s.fires) >= 0, 'ship.fires', 'error',
     `${who}: fires is ${s.fires}`, who);
+  r.must(ok(s.boarders) && num(s.boarders) >= 0, 'ship.boarders', 'error',
+    `${who}: boarders is ${s.boarders}`, who);
+  // Crew are people, and a fraction of a person is not one. Everything that
+  // kills crew floors it except the repel loop, which subtracted a continuous
+  // quantity — and since nothing had ever put a boarding party aboard, the
+  // tactical overlay had never had the chance to print `Crew 426.1326943672293`
+  // at a captain in the middle of a fight.
+  r.must(Number.isInteger(num(s.crew)), 'ship.crew.fractional', 'error',
+    `${who}: crew is ${s.crew}`, who);
   r.must(ok(s.torpedoes) && num(s.torpedoes) >= 0, 'ship.torpedoes', 'error',
     `${who}: torpedoes is ${s.torpedoes}`, who);
 

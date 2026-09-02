@@ -1616,7 +1616,11 @@ describe('every sound cue is reachable', () => {
    * here.
    */
   const RESERVED = {
-    intruder_alert: 'boarding is not implemented — ship.boarders is only ever decremented, never set',
+    // `intruder_alert` came off this list when something could finally board
+    // you. `ship.boarders` used to be a counter the game could only decrement
+    // — the defence in `Ship.update` was written in full and nothing had ever
+    // put one intruder aboard anything — and the second test below is what
+    // caught the reservation going stale the moment the trigger was written.
     tractor_beam: 'there is no tractor beam mechanic',
     // `door` came off this list when the ship got an inside: "go to sickbay"
     // walks you through real doorways and the cue plays on the way out.

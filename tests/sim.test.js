@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { RNG, hashSeed } from '../src/core/rng.js';
-import { Ship, facingForBearing, inArc, FACINGS } from '../src/sim/ship.js';
+import { Ship, facingForBearing, inArc, FACINGS, facingForDirection } from '../src/sim/ship.js';
 import { PowerGrid, effectiveness } from '../src/sim/power.js';
 import {
   Engagement, rangeFactor, ARENA_RADIUS, MAX_WEAPON_RANGE, WITHDRAW_SECONDS, OUTCOMES,
@@ -2470,4 +2470,218 @@ test('the upkeep does not disturb the seeded world', () => {
   };
   assert.deepEqual(voyage(true), voyage(false),
     'a fire on the way out changed what was waiting at the other end');
+});
+
+// ============================================== somebody else's boarding party
+
+// Three defects in one mechanic, and the first is the reason the other two were
+// never noticed.
+//
+// `boarding_action` — the alternative to killing a ship, three steps at extreme
+// hazard — was gated on the target's `shieldPct <= 0.05`. That is the MEAN
+// across six facings, and combat cannot drive a mean to five per cent: fire
+// lands on one facing while the other five regenerate. Across forty ordinary
+// engagements the lowest mean a hostile ever reached was 0.497. So it was never
+// once offered in a fight, and every test that exercised it flattened all six
+// facings by hand.
+//
+// Nothing had ever boarded the PLAYER. `ship.boarders` was a counter the game
+// could only decrement — the defence in `Ship.update` was written in full and
+// no code anywhere set one above zero — so the `intruder_alert` cue sat
+// reserved and the `boarding_drill` duty detail rehearsed repelling people who
+// could not arrive.
+//
+// And that defence never ended. It takes `Math.min(boarders, killed)` a tick,
+// so once the party is smaller than the defenders can kill in a second it
+// decays geometrically and never reaches zero.
+
+/** Fly at the target and shoot, which is what makes a facing go flat. */
+function brawl(g, seconds = 300, watch = null) {
+  for (let t = 0; t < 30 * seconds && g.engagement && !g.engagement.over; t++) {
+    const eng = g.engagement;
+    if (!eng.target || eng.target.destroyed) eng.cycleTarget();
+    const mark = eng.target ?? eng.liveHostiles[0];
+    if (mark) eng.comeAboutTo(mark);
+    eng.setThrottle(1);
+    eng.fireAll();
+    g.update(1 / 30);
+    if (watch) watch(g);
+  }
+  return g;
+}
+
+test('a boarding party goes through the facing that is down, not through an average', async () => {
+  // Loaded here rather than at the top of the file: run against a tree
+  // without it, a static import fails the whole file instead of this test,
+  // and then nothing in it can be compared against the old behaviour.
+  const { boardableState } = await import('../src/sim/ai.js');
+  const g = new Game({ seed: 7n, crewMode: 'original' });
+  g.startCombat([new Ship('d7', { name: 'Target' })], { relentless: true });
+  const foe = g.engagement.hostiles[0];
+  foe.hull = foe.maxHull * 0.2;
+  foe.x = 200; foe.y = 0; foe.z = 0;
+  g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+
+  // Every facing up: nobody boards anybody.
+  for (const f of FACINGS) foe.shields[f] = foe.maxShield;
+  assert.equal(boardableState(foe, g.ship), false, 'boardable through raised shields');
+
+  // The facing AWAY from us flat, and the rest up. The mean has dropped and
+  // the gap is on the wrong side, so it is still no.
+  const toward = facingForDirection(foe.directionFrom(g.ship));
+  const away = { fore: 'aft', aft: 'fore', port: 'starboard', starboard: 'port', dorsal: 'ventral', ventral: 'dorsal' }[toward];
+  foe.shields[away] = 0;
+  assert.equal(boardableState(foe, g.ship), false,
+    'boardable through the shield on the far side of the ship');
+
+  // The facing toward us flat: that is the gap you beam through.
+  foe.shields[away] = foe.maxShield;
+  foe.shields[toward] = 0;
+  assert.equal(boardableState(foe, g.ship), true, 'the gap toward us was not a gap');
+});
+
+test('and the condition is one a real fight actually produces', () => {
+  // The whole point. On the old rule this was zero out of forty.
+  let offered = 0;
+  for (let seed = 1n; seed <= 40n; seed++) {
+    const g = new Game({ seed, crewMode: 'original', difficulty: 'commander' });
+    g.startCombat([new Ship('d7', { name: 'Target' })]);
+    let saw = false;
+    brawl(g, 300, (game) => {
+      if (game.availableAwayMissions().some((m) => m.id === 'boarding_action')) saw = true;
+    });
+    if (saw) offered++;
+  }
+  assert.ok(offered >= 3,
+    `a boarding party was offered in ${offered} of forty ordinary fights — the mechanic is unreachable`);
+  assert.ok(offered <= 30,
+    `${offered} of forty is not an alternative to killing, it is the default`);
+});
+
+test('a hostile can put a party aboard us, which nothing could ever do', () => {
+  const g = new Game({ seed: 7n, crewMode: 'original' });
+  g.startCombat([new Ship('d7', { name: 'IKS Target' })], { relentless: true });
+  const foe = g.engagement.hostiles[0];
+  const before = g.ship.boarders;
+  const sent = g.ship.receiveBoarders(Math.round(foe.crew * 0.18), foe);
+  assert.ok(sent > 0, 'nobody came across');
+  assert.ok(g.ship.boarders > before, 'the counter that only ever went down still only goes down');
+});
+
+test('and the fight for the ship ends', () => {
+  // On the old code this ran until the heat death of the commission: after ten
+  // minutes a boarded ship still had 1e-264 Klingons aboard and `boarders > 0`
+  // was still true, so the block went on damaging a subsystem about once a
+  // second and drawing from the RNG every tick, forever.
+  for (const party of [10, 40, 80]) {
+    const g = new Game({ seed: 7n, crewMode: 'original' });
+    g.ship.receiveBoarders(party);
+    let t = 0;
+    while (g.ship.boarders > 0 && !g.ship.destroyed && t < 30 * 600) { g.update(1 / 30); t++; }
+    assert.equal(g.ship.boarders, 0, `${party} boarders were still aboard after ten minutes`);
+    assert.ok(t < 30 * 60, `${party} boarders took ${(t / 30).toFixed(0)}s to repel`);
+    assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS }), []);
+  }
+});
+
+test('and it costs the crew who fought them', () => {
+  const g = new Game({ seed: 7n, crewMode: 'original' });
+  const before = g.ship.crew;
+  g.ship.receiveBoarders(60);
+  while (g.ship.boarders > 0 && !g.ship.destroyed) g.update(1 / 30);
+  assert.ok(g.ship.crew < before,
+    'sixty intruders were repelled without costing a single member of the crew');
+  assert.ok(g.ship.crew > before * 0.5, 'repelling them killed half the ship');
+});
+
+test('turning out the guard makes the fight shorter and cheaper', async () => {
+  const { REPEL_STRENGTH, REPEL_DURATION } = await import('../src/sim/ship.js');
+  const fight = (ordered) => {
+    const g = new Game({ seed: 7n, crewMode: 'original' });
+    const before = g.ship.crew;
+    g.ship.receiveBoarders(80);
+    if (ordered) {
+      g.ship.addBuff({
+        id: 'repel_boarders', label: 'Security to all decks',
+        until: REPEL_DURATION, mods: { repelBoarders: REPEL_STRENGTH },
+      });
+    }
+    let t = 0;
+    while (g.ship.boarders > 0 && !g.ship.destroyed && t < 30 * 600) { g.update(1 / 30); t++; }
+    return { seconds: t / 30, lost: before - g.ship.crew };
+  };
+  const alone = fight(false);
+  const guard = fight(true);
+  assert.ok(guard.seconds < alone.seconds,
+    `the guard made no difference to the time (${guard.seconds} vs ${alone.seconds})`);
+  assert.ok(guard.lost < alone.lost,
+    `the guard made no difference to the cost (${guard.lost} vs ${alone.lost})`);
+});
+
+test('the people who fight them are whole people', () => {
+  // Found by looking at a screenshot. Everything else that kills crew floors
+  // it — `takeDamage` uses Math.floor, a fire takes one at a time — and the
+  // repel loop subtracted a continuous quantity, which nobody had ever seen
+  // because nothing had ever put a boarding party aboard anything. The
+  // tactical overlay printed the result straight: `Crew 426.1326943672293`,
+  // on a bridge display, in the middle of a fight.
+  const g = new Game({ seed: 7n, crewMode: 'original' });
+  const before = g.ship.crew;
+  g.ship.receiveBoarders(80);
+  let t = 0;
+  while (g.ship.boarders > 0 && t < 30 * 600) {
+    g.update(1 / 30); t++;
+    assert.ok(Number.isInteger(g.ship.crew), `crew went fractional: ${g.ship.crew}`);
+  }
+  assert.ok(g.ship.crew < before, 'a boarding party was repelled at no cost at all');
+  // And the checker objects if anything else ever produces it.
+  g.ship.crew -= 0.5;
+  assert.ok(checkAll(g, { arenaRadius: ARENA_RADIUS }).some((v) => v.code === 'ship.crew.fractional'));
+});
+
+test('a boarding is a fight in progress, and survives the app closing', () => {
+  const g = new Game({ seed: 7n, crewMode: 'original' });
+  g.ship.receiveBoarders(50);
+  for (let i = 0; i < 30 * 2; i++) g.update(1 / 30);
+  const mid = g.ship.boarders;
+  assert.ok(mid > 0);
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.ok(Math.abs(back.ship.boarders - mid) < 1e-6,
+    'a save taken during a boarding came back with the intruders gone');
+  let t = 0;
+  while (back.ship.boarders > 0 && t < 30 * 600) { back.update(1 / 30); t++; }
+  assert.equal(back.ship.boarders, 0);
+  assert.deepEqual(checkAll(back, { arenaRadius: ARENA_RADIUS }), []);
+});
+
+test('and a record written before any of this loads without one aboard', () => {
+  // Passes either way — the old code never wrote the field, so it read as
+  // absent then too. It is here as the migration guard: every save in
+  // existence predates this mechanic, and none of them may load with a
+  // boarding party already in the corridors.
+  const g = new Game({ seed: 7n, crewMode: 'original' });
+  const raw = JSON.parse(JSON.stringify(g.save()));
+  delete raw.ship.boarders;
+  const old = Game.load(raw);
+  assert.equal(old.ship.boarders, 0);
+  assert.deepEqual(checkAll(old, { arenaRadius: ARENA_RADIUS }), []);
+});
+
+test('the factions that board are the ones whose doctrine is to take a ship', () => {
+  // An effect, measured: Cardassians grind at range and do not board, so a
+  // Galor never puts anybody aboard however badly the fight goes.
+  const boardedBy = (id, difficulty, count) => {
+    let seen = 0;
+    for (let seed = 1n; seed <= 20n; seed++) {
+      const g = new Game({ seed, crewMode: 'original', difficulty });
+      g.startCombat(Array.from({ length: count }, (_, i) => new Ship(id, { name: `${id} ${i}` })));
+      let saw = false;
+      brawl(g, 300, (game) => { if (game.ship.boarders > 0) saw = true; });
+      if (saw) seen++;
+    }
+    return seen;
+  };
+  assert.equal(boardedBy('galor', 'admiral', 2), 0,
+    'a Cardassian ship boarded us, and attrition doctrine does not board');
+  assert.ok(boardedBy('d7', 'admiral', 2) > 0, 'Klingons never once tried to take the ship');
 });

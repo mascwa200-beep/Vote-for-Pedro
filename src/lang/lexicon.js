@@ -1073,6 +1073,26 @@ export const INTENTS = [
     build: () => ({ action: 'take_mission' }),
   },
   {
+    // Meeting a boarding party. Nothing could board you until the trigger for
+    // it was written, so this is the order for a thing that used to be
+    // impossible — and "repel boarders" parsed as nothing at all.
+    //
+    // The duty-detail phrasing keeps its own words: "schedule a boarding
+    // drill" still rehearses it, which is a fortnight of ship's time and not
+    // a thing you do while they are in the corridor.
+    id: 'repel_boarders',
+    help: 'Turn the crew out against intruders already aboard',
+    phrases: [
+      'repel boarders', 'all hands repel boarders', 'repel the boarders',
+      'security to intercept', 'security teams to intercept',
+      'turn out the guard', 'get them off my ship', 'clear the intruders',
+      'intruders on board', 'get security down there',
+    ],
+    keywords: { repel: 3, boarders: 3, intruder: 2.6, intercept: 2.2, security: 1.6 },
+    veto: ['drill', 'rehearse', 'schedule', 'board them', 'boarding party'],
+    build: () => ({ action: 'repel_boarders' }),
+  },
+  {
     id: 'abandon_mission',
     help: 'Break off the episode you are in the middle of',
     phrases: [
