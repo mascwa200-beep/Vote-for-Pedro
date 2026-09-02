@@ -343,6 +343,24 @@ export class Game {
     return new RNG(hashSeed(`${tag}:${this.seed}:${this.locationId}:${this.clock.stardate}`));
   }
 
+  /**
+   * What the captain's reputation changes about what finds him.
+   *
+   * One place, so all three call sites of `rollEncounter` agree — the arrival
+   * roll, the aborted-transit roll and the mid-transit roll were otherwise
+   * three chances to forget a perk.
+   *
+   * "Charted space" is space this ship has actually been to. The galaxy's
+   * lanes are charted from the start, so reading it that way would have made
+   * "in charted space" mean "everywhere" and the perk a flat halving.
+   */
+  encounterPerks(systemId) {
+    return {
+      quietInHostileSpace: this.perk('reduced_detection'),
+      halveHostile: this.perk('route_intel') && this.galaxy.visited.has(systemId),
+    };
+  }
+
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
   applyAllMods() {
     // Reset to the class baseline, then reapply everything.
@@ -1230,7 +1248,7 @@ export class Game {
     emit('arrived', { system: near, isNew, aborted: true });
 
     // Stopping in the middle of nowhere is exactly when something finds you.
-    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger });
+    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
     if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
     return { ok: true, system: near, isNew };
   }
@@ -1265,6 +1283,23 @@ export class Game {
         'comms',
       );
     }
+    // "Volunteer Crew — crew losses replenish at any inhabited world." Fifty
+    // Letters of Thanks, and nothing read the perk: the ship's complement only
+    // ever came back at a spacedock, so a captain who had earned the goodwill
+    // of every colony in the sector still limped between starbases.
+    //
+    // Volunteers, not a draft: they make up the numbers, and they do NOT bring
+    // back the officers in the ledger by name. Nothing does that.
+    if (this.perk('crew_replacement') && Game.INHABITED.has(this.location?.type)
+      && this.ship.crew < this.ship.maxCrew) {
+      const before = this.ship.crew;
+      this.ship.crew = this.ship.maxCrew;
+      this.pushLog(
+        `${this.ship.crew - before} volunteers have come aboard at `
+        + `${this.location?.name ?? 'the colony'}, Captain. They know your name.`,
+        'comms',
+      );
+    }
     this.transit = null;
     // Arriving somewhere new is not arriving in orbit. The order to make orbit
     // is a separate one and the captain gives it.
@@ -1289,7 +1324,7 @@ export class Game {
     }
     emit('arrived', { system: t.to, isNew });
 
-    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger });
+    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
     if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
   }
 
@@ -2606,7 +2641,7 @@ export class Game {
         if (state === 'arrived') this.arrive();
         else if (this.rng.chance(0.02 * dt) && !this.transit.interrupted) {
           // Something drops us out of warp mid-course.
-          const enc = rollEncounter(this.rng, this.transit.to.id, { ledger: this.ledger, inTransit: true });
+          const enc = rollEncounter(this.rng, this.transit.to.id, { ledger: this.ledger, inTransit: true, ...this.encounterPerks(this.transit.to.id) });
           if (enc && enc.hostile) {
             this.transit.interrupt('hostile contact');
             const near = this.transit.nearestSystem(this.galaxy);
