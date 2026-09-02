@@ -383,6 +383,47 @@ export class Game {
     return null;
   }
 
+  /**
+   * What is waiting at a system, as a stream of its own.
+   *
+   * The encounter used to be drawn from `game.rng`, which made it a function
+   * of everything the captain had done beforehand — every damage roll in every
+   * fight shifted what was waiting at the next system. That is fine until
+   * something has to KNOW what is waiting before arriving, and then it is
+   * impossible: the state of the main stream at the moment of arrival is not
+   * knowable in advance.
+   *
+   * Keyed by the seed, the system and WHICH VISIT this is, so it is a fact
+   * about a place and a moment rather than about the draw order. Measured
+   * before changing it: the whole suite and the whole browser harness pass
+   * either way, so nothing depended on encounters consuming the main stream.
+   *
+   * `ahead` looks one visit further on, which is what a peek needs: `arrive`
+   * calls `markVisited` before it rolls, so the roll for the visit now
+   * beginning already counts it.
+   */
+  encounterStream(systemId, ahead = 0) {
+    const n = this.galaxy.visitCount(systemId) + ahead;
+    return new RNG(hashSeed(`encounter:${this.seed}:${systemId}:${n}`));
+  }
+
+  /**
+   * "Intelligence Sharing — you know what is waiting before you arrive."
+   *
+   * Two hundred Tokens of Regard, and it was the last of the twenty-five
+   * perks to do nothing. It could not have been wired to the old encounter
+   * roll at all, which is why it waited: see `encounterStream`.
+   *
+   * @returns {object|null} the encounter that will be there, or null.
+   */
+  peekEncounter(systemId) {
+    if (!this.perk('see_all_encounters')) return null;
+    if (systemId === this.locationId) return null;
+    return rollEncounter(this.encounterStream(systemId, 1), systemId, {
+      ledger: this.ledger, ...this.encounterPerks(systemId),
+    });
+  }
+
   encounterPerks(systemId) {
     return {
       quietInHostileSpace: this.perk('reduced_detection'),
@@ -1290,7 +1331,7 @@ export class Game {
     emit('arrived', { system: near, isNew, aborted: true });
 
     // Stopping in the middle of nowhere is exactly when something finds you.
-    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
+    const enc = rollEncounter(this.encounterStream(this.locationId), this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
     if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
     return { ok: true, system: near, isNew };
   }
@@ -1366,7 +1407,7 @@ export class Game {
     }
     emit('arrived', { system: t.to, isNew });
 
-    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
+    const enc = rollEncounter(this.encounterStream(this.locationId), this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
     if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
   }
 
@@ -2706,6 +2747,15 @@ export class Game {
         if (state === 'arrived') this.arrive();
         else if (this.rng.chance(0.02 * dt) && !this.transit.interrupted) {
           // Something drops us out of warp mid-course.
+          //
+          // On the MAIN stream, unlike the arrival roll. Being intercepted is
+          // a random event in time and in the space between two systems; what
+          // is waiting AT a system is a fact about that place and that visit.
+          // Sharing one key between them made intelligence about the
+          // destination describe the ambush on the way to it instead — the
+          // forecast said "nothing waiting" and the ship met a distress call
+          // it had been told nothing about, because the two rolls read the
+          // same key with different options.
           const enc = rollEncounter(this.rng, this.transit.to.id, { ledger: this.ledger, inTransit: true, ...this.encounterPerks(this.transit.to.id) });
           if (enc && enc.hostile) {
             this.transit.interrupt('hostile contact');

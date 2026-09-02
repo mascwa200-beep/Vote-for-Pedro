@@ -3459,6 +3459,49 @@ try {
   });
   check('a berthing right opens a door that was shut — Qo’noS',
     berth.shut === false && berth.open === true, JSON.stringify(berth));
+
+  // The last of the twenty-five perks, and the only one that needed the game
+  // to change shape: "you know what is waiting before you arrive" could not be
+  // wired to an encounter drawn from the main stream at the moment of arrival.
+  const intel = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    g.locationId = 'sol';
+    const dest = g.galaxy.systems.find((s) => s.id !== g.locationId
+      && g.galaxy.plotCourse(g.locationId, s.id).charted);
+    app.go('galaxy');
+    app.selectedSystemId = dest.id;
+    app.renderSystemDetail(dest);
+    const blind = /Tal Shiar intelligence/i.test(document.body.textContent ?? '');
+    g.reputation.perks.add('see_all_encounters');
+    app.renderSystemDetail(dest);
+    const text = document.body.textContent ?? '';
+    return {
+      dest: dest.name,
+      blind,
+      informed: /Tal Shiar intelligence/i.test(text),
+      line: (text.match(/Tal Shiar intelligence:[^.]*\./) ?? [null])[0],
+      foretold: g.peekEncounter(dest.id)?.kind ?? 'quiet',
+    };
+  });
+  check('the galaxy map says nothing about what is waiting, unless you bought it',
+    intel.blind === false && intel.informed === true, JSON.stringify(intel));
+  // A modal from an earlier check was still up and the line sat below the
+  // fold, so the first photograph of this showed neither.
+  await dismissModals(page);
+  await page.evaluate(() => {
+    [...document.querySelectorAll('p')]
+      .find((el) => /Tal Shiar intelligence/i.test(el.textContent ?? ''))
+      ?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '13d-what-is-waiting.png') });
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    g.reputation.perks.delete('see_all_encounters');
+    globalThis.__app.go('bridge');
+    globalThis.__app.render();
+  });
   await page.screenshot({ path: join(SHOTS, '13c-a-seat-at-the-table.png') });
   await page.evaluate(() => {
     const g = globalThis.__app.game;
