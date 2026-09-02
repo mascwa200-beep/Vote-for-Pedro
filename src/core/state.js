@@ -35,6 +35,7 @@ import { vista, worldLabel } from '../gfx/vista.js';
 import { makeSurface, clearSurface, surfaceReport } from '../world/surface.js';
 import { ROOMS } from '../world/interiors.data.js';
 import { rollEncounter, environmentalHazard, SALVAGE_POOL } from '../world/encounters.js';
+import { FACTIONS } from '../world/factions.data.js';
 import { buildRoster, ERAS } from '../world/crews.data.js';
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
 import { SYSTEM_BY_ID, distanceLy } from '../world/systems.data.js';
@@ -1651,6 +1652,112 @@ export class Game {
     if (encounter.hostile) this.setAlert('red');
     else if (encounter.kind === 'anomaly' || encounter.kind === 'derelict') this.setAlert('yellow');
     emit('encounter:begin', encounter);
+  }
+
+  /**
+   * What the captain may do about whatever is in front of the ship.
+   *
+   * This was built inside `encounterPanel` in src/ui/screens.js — a switch on
+   * the encounter kind that appended buttons — so the only thing that knew
+   * what choices existed was the thing drawing them. The consequence was the
+   * central rule of this game broken across a whole panel: of the twenty-one
+   * labels that switch prints, THREE said what they did. The rest were not
+   * merely unsayable, they were wired to something else —
+   *
+   *   "Engage" asked which warp factor.
+   *   "Withdraw" broke off a fight that was not happening.
+   *   "Decline" refused a command nobody had offered.
+   *   "Render assistance" called FOR help, which is the opposite.
+   *   "Take us in close" was read as taking standing orders.
+   *
+   * So it lives here, where the order line can read it too, and each choice
+   * carries the words that reach it. `say` is not decoration: it is checked
+   * against the parser by a test, because a phrase printed on a button and
+   * never tried is exactly how the panel got into this state.
+   *
+   * @returns {Array<{id, label, sub, color, say}>}
+   */
+  encounterChoices() {
+    const enc = this.encounter;
+    if (!enc) return [];
+    const out = [];
+    const add = (id, label, say, sub = null, color = '') => out.push({ id, label, say, sub, color });
+
+    if (enc.hostile) {
+      add('engage', 'Engage', 'engage them', 'Red alert. Bring weapons to bear.', 'red');
+      if (enc.hailable !== false && FACTIONS[enc.factionId]?.hailable) {
+        add('hail', 'Hail them', 'hail them', 'Talking is free until it is not.', 'lilac');
+      }
+      add('withdraw', 'Withdraw', 'withdraw', 'Leave the system.', 'ghost');
+      return out;
+    }
+
+    switch (enc.kind) {
+      case 'distress':
+        add('assist', 'Render assistance', 'render assistance',
+          `${enc.lives ?? 'Unknown'} lives at stake. Costs time.`, 'green');
+        add('ignore', 'Continue on course', 'ignore it',
+          'It will be in the log either way.', 'ghost');
+        break;
+      case 'derelict':
+        add('board', 'Send an away team', 'board it',
+          'Salvage is possible. So is the other thing.', 'amber');
+        add('scan', 'Scan from here', 'scan it', 'Safer. Less useful.', 'ice');
+        add('withdraw', 'Leave it', 'withdraw', null, 'ghost');
+        break;
+      case 'anomaly':
+        add('approach', 'Take us in close', 'take us in close',
+          `Hazard rating ${Math.round((enc.anomaly?.hazard ?? 0.3) * 100)}%.`, 'amber');
+        add('scan', 'Scan from a safe distance', 'scan it', null, 'ice');
+        add('withdraw', 'Note it and move on', 'withdraw', null, 'ghost');
+        break;
+      case 'convoy':
+        add('escort', 'Provide escort', 'provide escort',
+          `${enc.escortReward ?? 300} credits. Costs time.`, 'green');
+        add('withdraw', 'Decline', 'withdraw', null, 'ghost');
+        break;
+      case 'first_contact':
+        if (enc.preWarp) {
+          add('withdraw', 'Withdraw without revealing ourselves', 'withdraw',
+            'The Directive exists for a reason.', 'green');
+          add('contact_prewarp', 'Make contact anyway', 'make contact anyway',
+            'This cannot be undone.', 'red');
+        } else {
+          add('contact_peaceful', 'Open a channel', 'hail them',
+            'First contact protocol.', 'green');
+          add('scan', 'Scan them first', 'scan it', null, 'ice');
+          add('withdraw', 'Withdraw', 'withdraw', null, 'ghost');
+        }
+        break;
+      case 'trapped': {
+        // Deliberately no "engage" and no "withdraw". There is nothing to
+        // shoot and nowhere to go; what gets you out is something you built,
+        // something you divert power to, or the patience to sit it out.
+        const trap = enc.trap ?? {};
+        const held = this.devices?.[trap.device] ?? 0;
+        const recipe = RECIPE_BY_ID[trap.device];
+        const name = recipe?.name?.toLowerCase() ?? 'device';
+        add('trap_device',
+          held > 0 ? `Use the ${name}` : `No ${name} aboard`,
+          held > 0 ? 'use the device' : '',
+          held > 0 ? 'The clean way out — if you thought of it in advance.'
+            : 'You would need to have built one already.',
+          held > 0 ? 'green' : 'ghost');
+        add('trap_power', `Everything to ${trap.powerChannel ?? 'auxiliary'}`,
+          'everything to auxiliary', 'Costs antimatter and unbalances the grid.', 'amber');
+        add('trap_wait', 'Ride it out', 'ride it out',
+          `${trap.waitHours ?? 0} hours${trap.damage ? ', and it will hurt' : ''}.`, 'ice');
+        break;
+      }
+      case 'patrol':
+        if (enc.hailable) add('hail', 'Hail them', 'hail them', null, 'lilac');
+        add('withdraw', 'Continue', 'withdraw', null, 'ghost');
+        break;
+      default:
+        add('withdraw', 'Continue', 'withdraw', null, 'ghost');
+        break;
+    }
+    return out;
   }
 
   /** Resolve an encounter choice. Returns messages for the UI. */

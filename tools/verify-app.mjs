@@ -3740,6 +3740,101 @@ try {
     app.render();
   });
 
+  // ------------------------------------- answering what is on the viewer
+  //
+  // Measured before this was written: of the twenty-one labels the encounter
+  // panel printed, three said what they did. The rest were wired to something
+  // else — "Engage" asked which warp factor, "Decline" refused a command
+  // nobody had offered, "Render assistance" was read as calling FOR help.
+  // Driven through the real order bar, because the whole finding is that the
+  // words on the buttons and the words the order line takes were two lists.
+  await dismissModals(page);
+  const viewerOrders = [];
+  for (const [kind, enc, say, expect] of [
+    ['a distress call', { kind: 'distress', lives: 40 }, 'render assistance', 'assist'],
+    ['a convoy', { kind: 'convoy', escortReward: 400, factionId: 'independent' }, 'provide escort', 'escort'],
+    ['an anomaly', { kind: 'anomaly', anomaly: { hazard: 0.3, name: 'Rift', value: 2 } }, 'take us in close', 'approach'],
+    ['a derelict', { kind: 'derelict', risk: 0.4 }, 'withdraw', 'withdraw'],
+  ]) {
+    // Put the encounter up, and read the button the panel actually drew.
+    const before = await page.evaluate((e) => {
+      const app = window.__app;
+      const g = app.game;
+      if (g.engagement) g.engagement.end('routed');
+      g.update(1 / 30);
+      g.locationId = 'sol';
+      g.beginEncounter({ system: g.location, title: 'Contact', text: 'Something is out there.', hostile: false, ...e });
+      app.go('encounter');
+      app.render();
+      const box = [...document.querySelectorAll('.panel')]
+        .find((p) => /^Orders/i.test(p.querySelector('h2')?.textContent ?? ''));
+      return {
+        // Every button prints a phrase now; none of them did before.
+        printed: [...(box?.querySelectorAll('.btn .say') ?? [])].map((n) => n.textContent.replace(/[“”]/g, '')),
+        buttons: (box?.querySelectorAll('.btn') ?? []).length,
+      };
+    }, enc);
+
+    await page.fill('.orderbar input', say);
+    await page.press('.orderbar input', 'Enter');
+    await page.waitForTimeout(300);
+    const after = await page.evaluate(() => ({
+      cleared: window.__app.game.encounter === null,
+      mode: window.__app.game.mode,
+    }));
+    viewerOrders.push({
+      kind, say, expect,
+      everyButtonPrints: before.buttons > 0 && before.printed.length === before.buttons,
+      printed: before.printed,
+      answered: after.cleared,
+    });
+    await dismissModals(page);
+  }
+  check('every button on the encounter panel prints the phrase that does it',
+    viewerOrders.every((r) => r.everyButtonPrints), JSON.stringify(viewerOrders.map((r) => [r.kind, r.printed])));
+  check('and saying it answers what is on the viewer',
+    viewerOrders.every((r) => r.answered), JSON.stringify(viewerOrders.map((r) => [r.kind, r.say, r.answered])));
+
+  await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    g.beginEncounter({
+      kind: 'distress', system: g.location, hostile: false, lives: 40,
+      title: 'Distress call', text: 'A freighter is calling for help.',
+    });
+    app.go('encounter');
+    app.render();
+    const head = [...document.querySelectorAll('.panel h2')].find((x) => /^Orders/i.test(x.textContent ?? ''));
+    head?.closest('.panel')?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(SHOTS, '06o-encounter-orders.png') });
+
+  // And the same word still means the fight when there is one.
+  await dismissModals(page);
+  const stillWarpsOut = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    g.encounter = null;
+    g.mode = 'bridge';
+    const { Ship } = await import('./src/sim/ship.js');
+    g.startCombat([new Ship('d7', { name: 'IKS Test' })]);
+    const { parseOrder } = await import('./src/ui/orders.js');
+    app.executeOrder(parseOrder('withdraw'), 'withdraw');
+    const out = { warping: (g.engagement?.warpOutTimer ?? 0) > 0 };
+    if (g.engagement) g.engagement.end('escaped');
+    g.update(1 / 30);
+    g.ship.restore?.();
+    g.encounter = null;
+    g.mode = 'bridge';
+    g.setAlert('green');
+    app.go('bridge');
+    app.render();
+    return out;
+  });
+  check('and "withdraw" still breaks off a fight when there is one to break off',
+    stillWarpsOut.warping, JSON.stringify(stillWarpsOut));
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {

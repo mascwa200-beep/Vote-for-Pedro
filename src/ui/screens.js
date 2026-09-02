@@ -1814,87 +1814,29 @@ export function encounterPanel(app) {
     ...(enc.ships ?? []).map((s) => el('p', { class: 'hint', text: `${s.name} — ${s.cls.name}` })),
   ], enc.hostile ? 'danger' : 'warn'));
 
-  const choices = [];
-  const add = (id, label, sub, color) => choices.push(
-    button(label, tap(() => app.resolveEncounter(id), 'ui_select'), { color, sub }));
+  // The choices come from the model — `Game.encounterChoices` — because the
+  // order line has to read the same list. This switch used to live here, which
+  // meant the only thing that knew what a captain could do about an encounter
+  // was the thing drawing the buttons, and the buttons printed no phrases
+  // because there were none to print.
+  const choices = g.encounterChoices().map((c) => button(c.label,
+    tap(() => app.resolveEncounter(c.id), 'ui_select'),
+    { color: c.color, sub: c.sub, say: c.say }));
 
-  if (enc.hostile) {
-    add('engage', 'Engage', 'Red alert. Bring weapons to bear.', 'red');
-    if (enc.hailable !== false && FACTIONS[enc.factionId]?.hailable) {
-      add('hail', 'Hail them', 'Talking is free until it is not.', 'lilac');
-    }
-    add('withdraw', 'Withdraw', 'Leave the system.', 'ghost');
-  } else {
-    switch (enc.kind) {
-      case 'distress':
-        add('assist', 'Render assistance', `${enc.lives ?? 'Unknown'} lives at stake. Costs time.`, 'green');
-        add('ignore', 'Continue on course', 'It will be in the log either way.', 'ghost');
-        break;
-      case 'derelict':
-        add('board', 'Send an away team', 'Salvage is possible. So is the other thing.', 'amber');
-        add('scan', 'Scan from here', 'Safer. Less useful.', 'ice');
-        add('withdraw', 'Leave it', null, 'ghost');
-        break;
-      case 'anomaly':
-        add('approach', 'Take us in close', `Hazard rating ${Math.round((enc.anomaly?.hazard ?? 0.3) * 100)}%.`, 'amber');
-        add('scan', 'Scan from a safe distance', null, 'ice');
-        add('withdraw', 'Note it and move on', null, 'ghost');
-        break;
-      case 'convoy':
-        add('escort', 'Provide escort', `${enc.escortReward ?? 300} credits. Costs time.`, 'green');
-        add('withdraw', 'Decline', null, 'ghost');
-        break;
-      case 'first_contact':
-        if (enc.preWarp) {
-          // Three paths, not two. `covert_landing` has been in AWAY_TEMPLATES
-          // since the away system was written, with its own consequence for
-          // being seen, and this panel offered obey-or-violate and nothing
-          // else — studying them without being seen is what a covert survey
-          // IS, and it is the interesting answer to General Order One.
-          const survey = g.availableAwayMissions().find((t) => t.id === 'covert_landing');
-          root.append(panel('General Order One', [
-            el('p', { class: 'muted', text: 'Sensors confirm the culture is pre-warp. The Prime Directive applies, and Starfleet will read this page of the log very carefully.' }),
-            survey
-              ? button(survey.title, tap(() => app.runAwayMission('covert_landing')), {
-                say: 'send an away team',
-                color: 'ice',
-                sub: 'Learn what they are without letting them learn what we are. Dangerous — and being seen is the failure that counts.',
-              })
-              : el('p', { class: 'hint', text: 'A covert survey would mean putting a team on the surface, and that means standard orbit first.' }),
-          ], 'danger'));
-          add('withdraw', 'Withdraw without revealing ourselves', 'The Directive exists for a reason.', 'green');
-          add('contact_prewarp', 'Make contact anyway', 'This cannot be undone.', 'red');
-        } else {
-          add('contact_peaceful', 'Open a channel', 'First contact protocol.', 'green');
-          add('scan', 'Scan them first', null, 'ice');
-          add('withdraw', 'Withdraw', null, 'ghost');
-        }
-        break;
-      case 'trapped': {
-        // Deliberately no "engage" and no "withdraw". There is nothing to
-        // shoot and nowhere to go; what gets you out is something you built,
-        // something you divert power to, or the patience to sit it out.
-        const trap = enc.trap ?? {};
-        const held = app.game.devices?.[trap.device] ?? 0;
-        const recipe = RECIPE_BY_ID[trap.device];
-        add('trap_device',
-          held > 0 ? `Use the ${recipe?.name?.toLowerCase() ?? 'device'}` : `No ${recipe?.name?.toLowerCase() ?? 'device'} aboard`,
-          held > 0 ? 'The clean way out — if you thought of it in advance.' : 'You would need to have built one already.',
-          held > 0 ? 'green' : 'ghost');
-        add('trap_power', `Everything to ${trap.powerChannel ?? 'auxiliary'}`,
-          'Costs antimatter and unbalances the grid.', 'amber');
-        add('trap_wait', 'Ride it out',
-          `${trap.waitHours ?? 0} hours${trap.damage ? ', and it will hurt' : ''}.`, 'ice');
-        break;
-      }
-      case 'patrol':
-        if (enc.hailable) add('hail', 'Hail them', null, 'lilac');
-        add('withdraw', 'Continue', null, 'ghost');
-        break;
-      default:
-        add('withdraw', 'Continue', null, 'ghost');
-        break;
-    }
+  // The pre-warp first contact keeps its own panel above the orders, because
+  // the warning has to sit above the choice rather than inside it.
+  if (!enc.hostile && enc.kind === 'first_contact' && enc.preWarp) {
+    const survey = g.availableAwayMissions().find((t) => t.id === 'covert_landing');
+    root.append(panel('General Order One', [
+      el('p', { class: 'muted', text: 'Sensors confirm the culture is pre-warp. The Prime Directive applies, and Starfleet will read this page of the log very carefully.' }),
+      survey
+        ? button(survey.title, tap(() => app.runAwayMission('covert_landing')), {
+          say: 'send an away team',
+          color: 'ice',
+          sub: 'Learn what they are without letting them learn what we are. Dangerous — and being seen is the failure that counts.',
+        })
+        : el('p', { class: 'hint', text: 'A covert survey would mean putting a team on the surface, and that means standard orbit first.' }),
+    ], 'danger'));
   }
 
   root.append(panel('Orders', choices));

@@ -1317,6 +1317,40 @@ class App {
       haptic('confirm');
     };
 
+    // While something is on the viewer, the orders that name its choices answer
+    // IT rather than doing the same thing to the wider world.
+    //
+    // The two are the same words. Withdrawing from a convoy and breaking off a
+    // battle are both "withdraw"; hailing a patrol and hailing anybody are both
+    // "hail them". The difference is what is happening, and the dispatcher is
+    // the only place that knows. Without this the order line answered the
+    // wrong question: "withdraw" at an encounter ran `warp_out`, which breaks
+    // off a fight that is not happening, and "engage them" ran `fire`, which
+    // shoots at nothing.
+    //
+    // Only choices the encounter actually OFFERS: a trapped ship has no
+    // withdraw and saying it must not silently do nothing.
+    if (g.encounter) {
+      const offered = g.encounterChoices();
+      const has = (id) => offered.some((c) => c.id === id);
+      const wanted = order.action === 'encounter_choice' ? order.choice
+        : order.action === 'warp_out' ? 'withdraw'
+        : order.action === 'fire' ? 'engage'
+        : order.action === 'scan' ? 'scan'
+        : order.action === 'hail' ? (has('hail') ? 'hail' : 'contact_peaceful')
+        : null;
+      if (wanted && has(wanted)) {
+        this.resolveEncounter(wanted);
+        return;
+      }
+      if (order.action === 'encounter_choice') {
+        // Said at the wrong moment, which is a refusal and not a silence.
+        audio.play('ui_deny');
+        ack('comms', 'That is not one of the choices in front of us, Captain.');
+        return;
+      }
+    }
+
     switch (order.action) {
       case 'course': {
         const r = g.setCourse(order.system, order.warp);
@@ -1721,6 +1755,16 @@ class App {
         audio.play('intruder_alert');
         haptic('confirm');
         ack('security', `Security teams to all decks. ${Math.round(g.ship.boarders)} aboard, Captain.`);
+        break;
+      }
+      case 'encounter_choice': {
+        // Reached only when nothing is in front of the ship: the dispatch above
+        // answers it while an encounter is up, and returns. A case here anyway,
+        // because an order with no handler falls through the switch and does
+        // nothing at all — which is what the guard in tests/lang.test.js is
+        // for, and it caught this.
+        audio.play('ui_deny');
+        ack('comms', 'There is nothing in front of us to answer, Captain.');
         break;
       }
       case 'take_mission': {
