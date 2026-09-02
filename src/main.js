@@ -1066,7 +1066,17 @@ class App {
   }
 
   useDevice(id) {
-    if (!this.game.useDevice(id).ok) { audio.play('ui_deny'); return; }
+    const r = this.game.useDevice(id);
+    if (!r.ok) {
+      // A buzz and nothing else. Every other refusal in the game says why —
+      // this one made a device that declined to be wasted look broken.
+      audio.play('ui_deny');
+      // Through the officer who would actually say it, the same way a refused
+      // order is answered. `ack` in executeOrder is a closure, not a method.
+      this.game.officerSays('engineering', r.reason ?? 'That one is spent, Captain.');
+      this.needsRender = true;
+      return;
+    }
     audio.play('power_reroute');
     haptic('confirm');
   }

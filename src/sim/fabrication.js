@@ -148,6 +148,65 @@ export const RECIPES = [
       return `${put} fire${put > 1 ? 's' : ''} out. Decks are cold and breathable.`;
     },
   },
+
+  // --- Device kits ---
+  //
+  // Every device in the game was unobtainable. `startingLoadout` hands a new
+  // captain two shield batteries and one hull patch kit, and NOTHING anywhere
+  // ever produced another: not a mission, not a reputation project, not the
+  // salvage pool, and not the machine shop. Three of the five — the weapons
+  // battery, the engine battery and the probe — could not be held at all, by
+  // anyone, ever. They had names, descriptions, slot types and (all but the
+  // probe) working effects, and no captain could ever have one.
+  //
+  // The recipe named `hull_patch` above is not the exception it looks like:
+  // it plates over a breach directly and does not produce a Hull Patch Kit.
+  //
+  // The machine shop is where a ship makes its own consumables, so this is
+  // where they come from. Priced against the recipes already here — a device
+  // is roughly a coolant purge in materials and a torpedo run in hours, which
+  // keeps a bay of them a real decision about the shop's one slot rather than
+  // something a captain tops up between fights.
+  ...[
+    {
+      id: 'shield_battery', name: 'Shield battery',
+      blurb: 'Charge a bank off the mains and crate it. Forty percent of the screens, once.',
+      needs: { deuterium: 18, isolinear: 6 }, hours: 6,
+    },
+    {
+      id: 'weapons_battery', name: 'Weapons battery',
+      blurb: 'A capacitor bank wired to the phaser feeds. Twenty seconds of everything you have.',
+      needs: { deuterium: 20, isolinear: 10 }, hours: 7,
+    },
+    {
+      id: 'engine_battery', name: 'Engine battery',
+      blurb: 'The same bank, wired to the drive instead. Twenty seconds of being somewhere else.',
+      needs: { deuterium: 20, isolinear: 10 }, hours: 7,
+    },
+    {
+      id: 'hull_patch', name: 'Hull patch kit',
+      blurb: 'Plating, sealant and a frame, crated for the damage-control party to carry.',
+      needs: { duranium: 16, salvage: 4 }, hours: 5,
+    },
+    {
+      id: 'probe', name: 'Class-IV probe',
+      blurb: 'A sensor pallet on a sustainer engine. It goes and looks so the ship does not have to.',
+      needs: { isolinear: 18, duranium: 8, deuterium: 6 }, hours: 9,
+    },
+  ].map((d) => ({
+    id: `kit_${d.id}`,
+    name: d.name,
+    blurb: d.blurb,
+    needs: d.needs,
+    hours: d.hours,
+    // Only worth making if there is a bay to put it in or a hold to keep it
+    // in — which there always is, so no `requires`. A captain who wants a
+    // crate of spares in the hold may have one.
+    apply: (g) => {
+      g.loadout.acquire(d.id);
+      return `One ${d.name.toLowerCase()} in the hold. Fit it from the ship screen.`;
+    },
+  })),
 ];
 
 export const RECIPE_BY_ID = Object.fromEntries(RECIPES.map((r) => [r.id, r]));

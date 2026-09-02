@@ -476,6 +476,10 @@ test('every recipe has an effect that can be observed', () => {
       fires: g.ship.fires,
       buffs: g.ship.buffs.map((b) => b.id),
       devices: g.devices,
+      // The hold, too. The device kits put a crate in it and change nothing
+      // else, and this guard could not see them — which would have let a
+      // recipe that yields a device be added and never connected.
+      hold: [...g.loadout.inventory].sort(),
       pod: g.podJettisoned,
       transfer: g.ship.power.transferRate,
     });
@@ -491,6 +495,7 @@ test('every recipe has an effect that can be observed', () => {
       fires: g.ship.fires,
       buffs: g.ship.buffs.map((b) => b.id),
       devices: g.devices,
+      hold: [...g.loadout.inventory].sort(),
       pod: g.podJettisoned,
       transfer: g.ship.power.transferRate,
     });
@@ -1466,6 +1471,61 @@ describe('fabrication accounting', () => {
         assert.ok(Number.isFinite(g.stores[m]), `${m} = ${g.stores[m]} after ${recipe.id}`);
       }
     }
+  });
+
+  test('every device in the game can actually be had', () => {
+    // None of them could. `startingLoadout` hands a new captain two shield
+    // batteries and one hull patch kit, and nothing anywhere ever produced
+    // another — not a mission, not a reputation project, not the salvage pool,
+    // and not the machine shop. The weapons battery, the engine battery and
+    // the Class-IV probe could not be held at all, by anyone, ever.
+    //
+    // The recipe named `hull_patch` is not the exception it looks like: it
+    // plates over a breach directly and yields no kit.
+    const devices = Object.values(CONSOLES).filter((c) => c.slot === 'device');
+    assert.ok(devices.length >= 5, `only ${devices.length} devices in the game`);
+    for (const device of devices) {
+      const g = stocked();
+      const r = beginFabrication(g, `kit_${device.id}`);
+      assert.ok(r?.ok, `no way to obtain a ${device.name}: ${r?.error ?? 'no such recipe'}`);
+      advanceFabrication(g, 1e6);
+      assert.ok(g.loadout.inventory.includes(device.id),
+        `the shop finished a ${device.name} and it was not in the hold`);
+    }
+  });
+
+  test('a probe scans an anomaly without the ship going near it', () => {
+    // The probe had no case in `applyDevice` at all: it fell through to the
+    // default, which spends the device and logs "probe discharged." The one
+    // thing this device could reliably do was be wasted.
+    const g = gameWith();
+    for (const d of [...g.loadout.equipped.device]) g.loadout.unequip(d);
+    g.loadout.acquire('probe');
+    assert.ok(g.loadout.equip('probe'), 'could not fit a probe');
+    g.encounter = {
+      kind: 'anomaly', system: g.location,
+      anomaly: { name: 'Murasaki 312', value: 3, hazard: 1 },  // hazard 1: approaching WOULD hurt
+    };
+    const before = { xp: g.progress.xp, hull: g.ship.hullPct };
+    const r = g.useDevice('probe');
+    assert.ok(r.ok, `the probe did nothing: ${r.reason}`);
+    assert.ok(g.progress.xp > before.xp, 'a probe survey earned nothing');
+    assert.equal(g.ship.hullPct, before.hull,
+      'the ship took the anomaly damage from a survey it sent a probe to do');
+    assert.equal(g.encounter, null, 'the anomaly was still sitting there afterwards');
+    assert.ok(!g.loadout.all.includes('probe'), 'the probe was not spent');
+  });
+
+  test('and a probe fired at nothing is not spent', () => {
+    const g = gameWith();
+    for (const d of [...g.loadout.equipped.device]) g.loadout.unequip(d);
+    g.loadout.acquire('probe');
+    g.loadout.equip('probe');
+    g.encounter = null;
+    const r = g.useDevice('probe');
+    assert.equal(r.ok, false, 'a probe was fired into empty space');
+    assert.match(r.reason ?? '', /nothing out there/i, `the refusal said "${r.reason}"`);
+    assert.ok(g.loadout.all.includes('probe'), 'the refused probe was spent anyway');
   });
 
   test('a bad number of hours does not break a job', () => {
