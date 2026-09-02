@@ -329,10 +329,48 @@ export function applySignature(game) {
  * @returns {{ok: boolean, reason?: string, id?: string, line?: string}}
  */
 export function applyDevice(game, id) {
+  // The probe is the one device that can be spent on nothing, so it is asked
+  // BEFORE it is spent. Everything else works wherever it is used; a probe
+  // fired at empty space is forty isolinear chips thrown out of a tube.
+  //
+  // It had no case at all below and fell through to the default, which spends
+  // the device and logs "probe discharged." — so the one thing this device
+  // could reliably do was be wasted. (It could also never be obtained: see
+  // the device kits in sim/fabrication.js.)
+  if (id === 'probe') {
+    const enc = game?.encounter;
+    if (!enc || (enc.kind !== 'anomaly' && !enc.anomaly)) {
+      return { ok: false, reason: 'There is nothing out there to put a probe into, Captain.', id };
+    }
+  }
+
   if (!game?.loadout?.useDevice(id)) return { ok: false, reason: 'none left', id };
 
   let line = '';
   switch (id) {
+    case 'probe': {
+      // "Full scan of a system or anomaly without approaching it."
+      //
+      // The `approach` choice pays a catalogue and rolls the anomaly's hazard
+      // against the hull. This is the same catalogue with the hazard roll
+      // skipped, which is exactly what sending a probe instead of the ship
+      // buys — and it costs a device, so it is a decision rather than a
+      // strictly better button.
+      const enc = game.encounter;
+      const value = enc.anomaly?.value ?? 2;
+      game.ledger.record('anomaly_catalogued', {
+        count: value,
+        text: `Probe survey of ${enc.anomaly?.name ?? 'phenomenon'}`,
+        system: enc.system?.id ?? game.locationId,
+      });
+      game.awardXP(260 * (enc.anomaly?.value ?? 1));
+      game.galaxy.markSurveyed(enc.system?.id ?? game.locationId, enc.anomaly?.name);
+      game.earnReputation('anomaly_catalogued');
+      game.encounter = null;
+      line = `Probe away. Full telemetry on ${enc.anomaly?.name ?? 'the phenomenon'} `
+        + 'without taking the ship anywhere near it.';
+      break;
+    }
     case 'shield_battery':
       for (const f of FACINGS) {
         game.ship.shields[f] = Math.min(

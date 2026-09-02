@@ -3144,6 +3144,71 @@ try {
     JSON.stringify(shop));
   check('starting a job spends the materials', shop.started && shop.spent, JSON.stringify(shop));
 
+  // Every device in the game was unobtainable: the starting kit was all a
+  // captain would ever have, and three of the five could not be held at all.
+  // The shop is where a ship makes its own consumables, so this drives the
+  // real menu and then uses the thing it made.
+  const devices = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { advanceFabrication } = await import('./src/sim/fabrication.js');
+    const { RECIPES } = await import('./src/sim/fabrication.js');
+    g.fabrication = null;
+    g.stores = { duranium: 999, isolinear: 999, deuterium: 999, salvage: 999 };
+    app.render();
+    await new Promise((r) => setTimeout(r, 60));
+    // The SHOP's buttons, by the recipe name — the console names also appear
+    // on this screen in the loadout panel, which is not the shop offering to
+    // build one.
+    const buttons = [...document.querySelectorAll('.btn')].map((b) => b.textContent ?? '');
+    const listed = RECIPES.filter((r) => r.id.startsWith('kit_'))
+      .filter((r) => buttons.some((t) => t.includes(r.name)))
+      .map((r) => r.name);
+
+    // Make a probe through the real button, then use it on an anomaly.
+    const btn = [...document.querySelectorAll('.btn')].find((b) => b.textContent.includes('Class-IV probe'));
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 60));
+    advanceFabrication(g, 1e6);
+    const inHold = g.loadout.inventory.includes('probe');
+
+    for (const d of [...g.loadout.equipped.device]) g.loadout.unequip(d);
+    g.loadout.equip('probe');
+    g.encounter = {
+      kind: 'anomaly', system: g.location,
+      anomaly: { name: 'Murasaki 312', value: 3, hazard: 1 },
+    };
+    const hullBefore = g.ship.hullPct;
+    const used = g.useDevice('probe');
+    return {
+      listed,
+      madeOne: !!btn && inHold,
+      probed: used.ok,
+      hullHeld: g.ship.hullPct === hullBefore,
+      encounterCleared: g.encounter === null,
+    };
+  });
+  check('the shop can build every device in the game',
+    devices.listed.length >= 5, JSON.stringify(devices.listed));
+  check('and a probe built there scans an anomaly the ship never goes near',
+    devices.madeOne && devices.probed && devices.hullHeld && devices.encounterCleared,
+    JSON.stringify(devices));
+  // The probe survey pays experience, which can promote the captain and put a
+  // modal over the shop. Clear it and scroll to the menu, so the photograph is
+  // of the thing being checked.
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    g.encounter = null;
+    g.mode = 'bridge';
+    globalThis.__app.render();
+    const panel = [...document.querySelectorAll('.panel')]
+      .find((el) => /Class-IV probe/i.test(el.textContent ?? ''));
+    panel?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '14b-device-kits.png') });
+
   // A trap has no combat option and every way out actually works.
   const trapped = await page.evaluate(async () => {
     const { TRAPS } = await import('./src/world/encounters.js');
