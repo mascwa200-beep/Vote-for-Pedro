@@ -1032,13 +1032,31 @@ improvements to the ship: she holds together better, she turns better, the
 guns are quicker. The fifth opens a slot and a choice of three starship traits,
 which is where the decision is.
 
-What it does NOT take is a penalty below the class baseline for a fresh hull.
-The shakedown material would justify one, and a game about a five-year
-commission arguably wants that arc — but it makes the opening weeks worse for
-a player who has just started, and that is a design decision to be taken
-deliberately rather than smuggled in under a research note. Tier zero is
-therefore the ship exactly as her specification says, and mastery is additive
-from there.
+It DOES take the penalty below the class baseline for a fresh hull, which is
+the half of this that STO has no version of. A ship straight out of the yard
+runs under her own numbers: the drive will not quite make her speed, the
+batteries are still walking their shot in, and damage control have never run a
+casualty on this hull. Every one of those is something the film shows going
+wrong on a ship that sailed without a shakedown.
+
+That was a deliberate decision, taken after the first version shipped
+additive-only. The argument against it is real — it makes the opening weeks
+worse for a player who has just started — and the argument for it is that the
+arc is the point of a five-year commission. A ship that is merely less good
+than she will become is not the same thing as a ship that is worse than she
+should be, and only the second gives the first tier anything to be.
+
+It is cleared entirely by the first tier, which is why that tier is called
+Shakedown complete. Measured against a Bird-of-Prey over forty seeds: 87.2% of
+the hull left on a fresh ship, 87.7% once the shakedown is done, 88.9% at the
+top of the track. Against a D7, which a lone Constitution with no skills
+invested cannot beat at all early on, the top of the track is what first wins
+five of forty. The shakedown is felt and it is not a wall.
+
+What it does NOT take is modelling the phasers cutting out altogether. A
+discrete failure at a random moment is a different and much crueller mechanic
+than a ship that is simply not yet at her best, and the second is what a
+shakedown actually feels like.
 
 Sources: [Memory Alpha — Star Trek: The Motion Picture](https://memory-alpha.fandom.com/wiki/Star_Trek:_The_Motion_Picture),
 [Memory Alpha — Will Decker](https://memory-alpha.fandom.com/wiki/Will_Decker),

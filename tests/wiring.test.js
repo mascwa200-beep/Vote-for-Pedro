@@ -38,7 +38,7 @@ import {
   SPECIALITIES, DIVISIONS, specialitiesIn, rosterSizeFor,
   beginAssignment, advanceAssignments, dutySlots, specialistBonusFor,
 } from '../src/sim/duty.js';
-import { TIERS, TRAIT_LIST } from '../src/sim/mastery.js';
+import { TIERS, TRAIT_LIST, SHAKEDOWN } from '../src/sim/mastery.js';
 import { ROOMS } from '../src/world/interiors.data.js';
 import { checkGame } from '../src/sim/invariants.js';
 import { parseOrder } from '../src/ui/orders.js';
@@ -1815,12 +1815,38 @@ describe('what the crew learn about one hull', () => {
     return g;
   };
 
-  test('a fresh commission is the ship exactly as her specification says', () => {
+  test('a fresh commission is UNDER her own specification', () => {
+    // This assertion used to read the other way. A ship straight out of the
+    // yard is not the ship her plate says she is — Scott asked for a proper
+    // shakedown, Kirk sailed in twelve hours, and the drive would not balance.
     const g = fresh();
     assert.equal(g.mastery.tier, 0, 'a brand-new crew already knew the ship');
-    // Nothing from mastery, so the class baseline stands. Asserted as an
-    // effect: the modifiers mastery touches are untouched.
-    assert.deepEqual(g.mastery.shipMods(), {}, 'tier zero moved something');
+    const mods = g.mastery.shipMods();
+    assert.notDeepEqual(mods, {}, 'a fresh hull is at her full specification');
+    for (const [k, v] of Object.entries(SHAKEDOWN.mods)) {
+      assert.ok(v < 0, `${k} is supposed to be a cost`);
+      assert.ok(g.ship.mod(k) < 1, `${k} on a fresh hull reads ${g.ship.mod(k)}`);
+    }
+  });
+
+  test('and the shakedown is over by the first tier', () => {
+    const g = at(fresh(), TIERS[0].at);
+    assert.equal(g.mastery.report().shakedown, null, 'still working her up at tier one');
+    for (const k of Object.keys(SHAKEDOWN.mods)) {
+      assert.ok(g.ship.mod(k) >= 1,
+        `${k} is still under specification at tier one: ${g.ship.mod(k)}`);
+    }
+  });
+
+  test('the shakedown costs less than the whole track is worth', () => {
+    // A penalty deeper than the tiers can repay would mean a hull that is
+    // never as good as her own numbers, which is not an arc, it is a nerf.
+    const worst = at(fresh(), 0).ship;
+    const best = at(fresh(), TIERS[4].at).ship;
+    for (const k of Object.keys(SHAKEDOWN.mods)) {
+      assert.ok(best.mod(k) > worst.mod(k),
+        `${k}: a worked-up hull (${best.mod(k)}) is no better than a fresh one (${worst.mod(k)})`);
+    }
   });
 
   test('each tier actually moves the ship', () => {

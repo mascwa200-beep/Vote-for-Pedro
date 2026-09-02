@@ -1277,10 +1277,11 @@ export function shipScreen(app) {
       el('h3', { text: `${m.className} — ${m.tier} of ${TIERS.length}` }),
       ...m.earned.map((step) => el('p', { class: 'muted', text: `${step.name}. ${step.text}` })),
     ];
-    if (!m.earned.length) {
+    if (m.shakedown) {
+      masteryLines.push(el('p', { class: 'muted', text: `${m.shakedown.name}. ${m.shakedown.text}` }));
       masteryLines.push(el('p', {
         class: 'hint',
-        text: 'Fresh out of the yard. She is exactly what her specification says and no more.',
+        text: 'Fresh out of the yard, and under her own numbers until the crew have her measure.',
       }));
     }
     if (m.next) {
