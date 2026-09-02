@@ -30248,7 +30248,14 @@ class Game {
         }
         // A world that has not invented warp is one you do not announce
         // yourself to. The Prime Directive is the reason this template exists.
-        if (sys.preWarp || sys.type === 'frontier' || sys.type === 'unexplored') {
+        //
+        // The pre-warp flag lives on the ENCOUNTER — buildFirstContact sets it
+        // — and `unexplored` is a flag on the system, not one of its eight
+        // types. Reading `sys.preWarp` and `sys.type === 'unexplored'` meant
+        // this template could never be offered anywhere, which left the
+        // captain at a first contact with obey-or-violate and no third path.
+        // `sys.preWarp` stays in case a system is ever authored with one.
+        if (this.encounter?.preWarp || sys.preWarp || sys.unexplored) {
           out.push({ ...AWAY_TEMPLATES.covert_landing });
         }
       }
@@ -33314,8 +33321,21 @@ function encounterPanel(app) {
         break;
       case 'first_contact':
         if (enc.preWarp) {
+          // Three paths, not two. `covert_landing` has been in AWAY_TEMPLATES
+          // since the away system was written, with its own consequence for
+          // being seen, and this panel offered obey-or-violate and nothing
+          // else — studying them without being seen is what a covert survey
+          // IS, and it is the interesting answer to General Order One.
+          const survey = g.availableAwayMissions().find((t) => t.id === 'covert_landing');
           root.append(panel('General Order One', [
             el('p', { class: 'muted', text: 'Sensors confirm the culture is pre-warp. The Prime Directive applies, and Starfleet will read this page of the log very carefully.' }),
+            survey
+              ? button(survey.title, tap(() => app.runAwayMission('covert_landing')), {
+                say: 'send an away team',
+                color: 'ice',
+                sub: 'Learn what they are without letting them learn what we are. Dangerous — and being seen is the failure that counts.',
+              })
+              : el('p', { class: 'hint', text: 'A covert survey would mean putting a team on the surface, and that means standard orbit first.' }),
           ], 'danger'));
           add('withdraw', 'Withdraw without revealing ourselves', 'The Directive exists for a reason.', 'green');
           add('contact_prewarp', 'Make contact anyway', 'This cannot be undone.', 'red');

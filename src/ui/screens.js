@@ -1817,8 +1817,21 @@ export function encounterPanel(app) {
         break;
       case 'first_contact':
         if (enc.preWarp) {
+          // Three paths, not two. `covert_landing` has been in AWAY_TEMPLATES
+          // since the away system was written, with its own consequence for
+          // being seen, and this panel offered obey-or-violate and nothing
+          // else — studying them without being seen is what a covert survey
+          // IS, and it is the interesting answer to General Order One.
+          const survey = g.availableAwayMissions().find((t) => t.id === 'covert_landing');
           root.append(panel('General Order One', [
             el('p', { class: 'muted', text: 'Sensors confirm the culture is pre-warp. The Prime Directive applies, and Starfleet will read this page of the log very carefully.' }),
+            survey
+              ? button(survey.title, tap(() => app.runAwayMission('covert_landing')), {
+                say: 'send an away team',
+                color: 'ice',
+                sub: 'Learn what they are without letting them learn what we are. Dangerous — and being seen is the failure that counts.',
+              })
+              : el('p', { class: 'hint', text: 'A covert survey would mean putting a team on the surface, and that means standard orbit first.' }),
           ], 'danger'));
           add('withdraw', 'Withdraw without revealing ourselves', 'The Directive exists for a reason.', 'green');
           add('contact_prewarp', 'Make contact anyway', 'This cannot be undone.', 'red');

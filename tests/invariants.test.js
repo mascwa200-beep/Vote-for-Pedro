@@ -37,6 +37,7 @@ import { RNG } from '../src/core/rng.js';
 import { Galaxy, plotTransit } from '../src/world/galaxy.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { ABILITIES } from '../src/sim/officers.js';
+import { AWAY_TEMPLATES } from '../src/sim/away.js';
 
 const STEP = 1 / 30;
 const OPTS = { arenaRadius: ARENA_RADIUS };
@@ -1601,6 +1602,158 @@ describe('a landing party goes somewhere', () => {
     const order = parseOrder('board them', g);
     assert.equal(order.action, 'away_team');
     assert.equal(order.prefer, 'board', 'the parser lost which mission was meant');
+  });
+});
+
+// =========================================== the Prime Directive's third path
+
+describe('a pre-warp culture can be studied without being met', () => {
+  // `covert_landing` was written with everything it needs — three steps, a
+  // dangerous hazard rating, and its own consequence for being seen — and its
+  // gate read `sys.preWarp` (a flag that lives on ENCOUNTERS) and
+  // `sys.type === 'unexplored'` (a flag that lives on the system, not its
+  // type). Two near misses, so at a pre-warp first contact the captain was
+  // offered obey-or-violate and nothing else.
+
+  /** A ship in orbit somewhere, which is what a landing party needs. */
+  function inOrbit(systemId, { seed = 11n } = {}) {
+    const g = new Game({ seed, crewMode: 'original' });
+    g.locationId = systemId;
+    const r = g.enterOrbit();
+    assert.equal(r.ok, true, `nothing to orbit at ${systemId}: ${r.error}`);
+    return g;
+  }
+
+  /** The encounter that raises the question. */
+  function firstContact(g, preWarp) {
+    g.beginEncounter({
+      kind: 'first_contact', system: g.locationId, hostile: false,
+      speciesName: 'Melkotian', title: 'First contact',
+      text: 'An unknown vessel of unfamiliar configuration.',
+      preWarp,
+    });
+  }
+
+  const offered = (g) => g.availableAwayMissions().map((t) => t.id);
+
+  test('a covert survey is offered at a pre-warp first contact', () => {
+    const g = inOrbit('sol');
+    assert.ok(!offered(g).includes('covert_landing'),
+      'Sol offered a covert survey before anyone was found to survey');
+    firstContact(g, true);
+    assert.ok(offered(g).includes('covert_landing'),
+      'a pre-warp culture in front of the ship and still no way to study it');
+  });
+
+  test('and at an unexplored system, which is the flag the gate meant', () => {
+    // deep_1, deep_2, gamma_1 and gamma_2 carry `unexplored: true`. None of
+    // them has ever had `type: 'unexplored'`, which is what the gate read.
+    for (const id of ['deep_1', 'deep_2', 'gamma_1', 'gamma_2']) {
+      const g = inOrbit(id);
+      assert.ok(g.location.unexplored, `${id} is not flagged unexplored any more`);
+      assert.ok(offered(g).includes('covert_landing'),
+        `no covert survey at ${id}, which is the whole reason the flag exists`);
+    }
+  });
+
+  test('and nowhere a covert survey would be absurd', () => {
+    // A guard, not a proof: this passed before the gate was fixed too. It is
+    // here so a later widening of the gate cannot quietly offer a covert
+    // survey of Earth.
+    for (const id of ['sol', 'vulcan', 'andoria', 'qonos']) {
+      const g = inOrbit(id);
+      assert.ok(!offered(g).includes('covert_landing'),
+        `${id} offered a covert survey of a warp-capable homeworld`);
+    }
+    const warpCapable = inOrbit('sol');
+    firstContact(warpCapable, false);
+    assert.ok(!offered(warpCapable).includes('covert_landing'),
+      'a covert survey was offered of a culture that flies its own starships');
+  });
+
+  test('the survey needs orbit, like every other landing party', () => {
+    // Also a guard rather than a proof — it passed before the gate was fixed,
+    // because before the fix nothing was offered anywhere. It holds the
+    // `!eng && body && sys` precondition in place now that something is.
+    const g = new Game({ seed: 11n, crewMode: 'original' });
+    g.locationId = 'deep_1';
+    assert.equal(g.orbit, null);
+    assert.ok(!offered(g).includes('covert_landing'),
+      'a landing party was offered from open space');
+    assert.equal(g.awayMission('covert_landing').ok, false);
+  });
+
+  test('being seen by a pre-warp culture costs standing', () => {
+    // The consequence was written when the template was and has never once
+    // run. It is the reason the third path is a real choice and not a free
+    // one: the survey is dangerous, and being observed is what failing means.
+    let seen = 0;
+    for (let seed = 1n; seed <= 60n && !seen; seed++) {
+      const g = inOrbit('deep_1', { seed });
+      firstContact(g, true);
+      const before = g.ledger.standingOf('federation');
+      const r = g.awayMission('covert_landing');
+      assert.equal(r.ok, true, r.reason);
+      assert.equal(r.of, 3, 'a three-step template ran a different number of steps');
+      if (r.outcome !== 'failure') continue;
+      seen++;
+      assert.ok(g.ledger.standingOf('federation') < before,
+        'the landing party was observed by a pre-warp culture and Starfleet did not care');
+      assert.deepEqual(checkAll(g, OPTS), [], 'the checker objects after a covert survey');
+    }
+    assert.ok(seen > 0, 'no covert survey in sixty attempts was ever botched');
+  });
+
+  test('a survey that goes well is quiet, and still a real away mission', () => {
+    let clean = 0;
+    for (let seed = 1n; seed <= 60n && !clean; seed++) {
+      const g = inOrbit('deep_1', { seed });
+      firstContact(g, true);
+      const before = g.ledger.standingOf('federation');
+      const r = g.awayMission('covert_landing');
+      if (r.outcome !== 'success') continue;
+      clean++;
+      assert.equal(r.passed, 3);
+      assert.equal(g.ledger.standingOf('federation'), before,
+        'a survey nobody noticed still cost the captain standing');
+      assert.deepEqual(checkAll(g, OPTS), []);
+    }
+    assert.ok(clean > 0, 'no covert survey in sixty attempts ever went clean');
+  });
+
+  test('every away template is reachable from some state', () => {
+    // The guard that would have caught this. A template declared in the table,
+    // given steps and a hazard rating and a consequence, and gated on a field
+    // nothing sets, is indistinguishable from a template that does not exist.
+    const reached = new Set();
+    const note = (g) => { for (const t of g.availableAwayMissions()) reached.add(t.id); };
+
+    const boarding = fight('d7');
+    const foe = boarding.engagement.hostiles[0];
+    for (const f of Object.keys(foe.shields)) foe.shields[f] = 0;
+    foe.hull = foe.maxHull * 0.2;
+    foe.x = 200; foe.y = 0; foe.z = 0;
+    boarding.ship.x = 0; boarding.ship.y = 0; boarding.ship.z = 0;
+    note(boarding);
+
+    const distress = inOrbit('sol');
+    distress.beginEncounter({ kind: 'distress', system: 'sol', hostile: false, lives: 40, text: 'A freighter is calling for help.' });
+    note(distress);
+
+    note(inOrbit('alpha_centauri'));    // a colony: colony_rescue
+    note(inOrbit('vulcan'));            // a homeworld: diplomatic_landing
+    note(inOrbit('deep_1'));            // unexplored: covert_landing
+
+    // A hulk comes from winning a fight, so win one — the wreck has to exist
+    // by the path the game actually takes to it.
+    const won = fight('d7');
+    won.engagement.hostiles[0].destroy('test');
+    for (let i = 0; i < 30 * 30 && !won.lastCombat; i++) won.update(STEP);
+    assert.ok(won.wreckHere, 'a fight was won and left nothing adrift');
+    note(won);
+
+    assert.deepEqual([...Object.keys(AWAY_TEMPLATES)].filter((id) => !reached.has(id)), [],
+      'an away template exists in the table and no state in the game can offer it');
   });
 });
 
