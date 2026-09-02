@@ -2807,6 +2807,84 @@ try {
   await page.waitForTimeout(150);
   await page.screenshot({ path: join(SHOTS, '06b-equipment-sets.png') });
 
+  // ------------------------------------------------ working her up
+  //
+  // The tiers are not a choice, so what has to be proved on screen is that
+  // they are VISIBLE and that the doctrine at the end is a real decision the
+  // player can see the cost of.
+  const unworked = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const { TIERS } = await import('./src/sim/mastery.js');
+
+    // Wound back to nothing on purpose. By the time the harness reaches this
+    // point it has flown transits and fought battles, and the crew have
+    // therefore already learned something — which is itself the proof that the
+    // earning is wired, and which means "fresh out of the yard" has to be set
+    // up rather than assumed.
+    const earnedByPlaying = g.mastery.current;
+    g.mastery.points[g.mastery.classId] = 0;
+    g.applyAllMods();
+    app.render();
+    const fresh = document.body.textContent ?? '';
+
+    // Take her to the top tier the way five years of flying would.
+    g.mastery.points[g.mastery.classId] = TIERS[4].at;
+    g.applyAllMods();
+    app.render();
+    const veteran = document.body.textContent ?? '';
+
+    return {
+      freshSaysUnworked: /fresh out of the yard/i.test(fresh),
+      freshHidesDoctrine: !/standing doctrine/i.test(fresh),
+      veteranNamesTiers: TIERS.every((t) => veteran.includes(t.name)),
+      veteranOffersDoctrine: /standing doctrine/i.test(veteran),
+      earnedByPlaying,
+      hull: g.ship.maxHull,
+      impulse: g.ship.mod('impulse'),
+    };
+  });
+  check('flying the ship teaches the crew about her',
+    unworked.earnedByPlaying > 0,
+    `${unworked.earnedByPlaying} points earned just by playing this far`);
+  check('a fresh hull says the crew have not worked her up',
+    unworked.freshSaysUnworked, JSON.stringify(unworked.freshSaysUnworked));
+  check('and offers no doctrine the crew have not earned',
+    unworked.freshHidesDoctrine, JSON.stringify(unworked.freshHidesDoctrine));
+  check('a hull the crew know names every tier they earned',
+    unworked.veteranNamesTiers && unworked.veteranOffersDoctrine, JSON.stringify(unworked));
+
+  // Committed by SPEAKING it through the real order bar, not by reaching into
+  // the model: the rule is that the button and the phrase do the same thing,
+  // and only the phrase proves the order layer is wired to it.
+  await page.fill('.orderbar input', 'set doctrine to running start');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(200);
+  await nav(page, 'Ship');
+  const committed = await page.evaluate(() => {
+    const app = window.__app;
+    app.render();
+    return {
+      trait: app.game.mastery.trait?.id ?? null,
+      onScreen: /Running Start/.test(document.body.textContent ?? ''),
+      hull: app.game.ship.maxHull,
+      impulse: app.game.ship.mod('impulse'),
+    };
+  });
+  check('a doctrine can be committed to by speaking it',
+    committed.trait === 'running_start' && committed.onScreen, JSON.stringify(committed));
+  check('and the doctrine costs what it gains',
+    committed.hull < unworked.hull && committed.impulse > unworked.impulse,
+    `hull ${unworked.hull} -> ${committed.hull}, impulse ${unworked.impulse} -> ${committed.impulse}`);
+
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel')]
+      .find((el) => /her own ship/i.test(el.textContent ?? ''));
+    head?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '06c-ship-mastery.png') });
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {

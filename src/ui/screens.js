@@ -23,6 +23,7 @@ import { MODES } from '../core/state.js';
 import { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } from '../sim/power.js';
 import { SKILLS, BRANCHES, BRANCH_LABEL, RANKS } from '../sim/skills.js';
 import { CONSOLES, SET_LIST } from '../sim/loadout.js';
+import { TIERS, TRAIT_LIST } from '../sim/mastery.js';
 import { ABILITIES } from '../sim/officers.js';
 import { availableHails } from '../sim/diplomacy.js';
 import { STATIONS, ERA_LIST, SPECIES } from '../world/crews.data.js';
@@ -1264,6 +1265,53 @@ export function shipScreen(app) {
     }
   }
   if (setLines.length) root.append(panel('Installed together', setLines));
+
+  // --- What the crew have learned about this hull ---
+  //
+  // The tiers are not a choice — a crew learning their ship is something that
+  // happens to them. The trait at the end is the choice, and it is the reason
+  // the track is here rather than being one more invisible multiplier.
+  const m = g.mastery?.report();
+  if (m) {
+    const masteryLines = [
+      el('h3', { text: `${m.className} — ${m.tier} of ${TIERS.length}` }),
+      ...m.earned.map((step) => el('p', { class: 'muted', text: `${step.name}. ${step.text}` })),
+    ];
+    if (!m.earned.length) {
+      masteryLines.push(el('p', {
+        class: 'hint',
+        text: 'Fresh out of the yard. She is exactly what her specification says and no more.',
+      }));
+    }
+    if (m.next) {
+      masteryLines.push(el('p', {
+        class: 'hint',
+        text: `Next: ${m.next.name}, ${Math.ceil(m.next.remaining)} more to go. `
+          + 'Hours under way, battles fought and episodes seen through.',
+      }));
+    }
+    if (m.slotOpen) {
+      masteryLines.push(el('h3', { text: 'Standing doctrine' }));
+      masteryLines.push(el('p', {
+        class: 'hint',
+        text: m.trait
+          ? `Say "set doctrine to <name>" to change it.`
+          : `Say "set doctrine to <name>" to commit to one.`,
+      }));
+      for (const t of TRAIT_LIST) {
+        masteryLines.push(button(
+          `${t.id === m.trait?.id ? '✓ ' : ''}${t.name}`,
+          tap(() => {
+            g.mastery.chooseTrait(t.id);
+            g.applyAllMods();
+            app.render();
+          }, 'ui_confirm'),
+          { color: t.id === m.trait?.id ? 'blue' : 'ghost', sub: t.text },
+        ));
+      }
+    }
+    root.append(panel('Her own ship', masteryLines));
+  }
 
   // --- Consoles ---
   for (const slot of ['tactical', 'engineering', 'science', 'device']) {

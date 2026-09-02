@@ -38,6 +38,9 @@ import {
   SPECIALITIES, DIVISIONS, specialitiesIn, rosterSizeFor,
   beginAssignment, advanceAssignments, dutySlots, specialistBonusFor,
 } from '../src/sim/duty.js';
+import { TIERS, TRAIT_LIST } from '../src/sim/mastery.js';
+import { checkGame } from '../src/sim/invariants.js';
+import { parseOrder } from '../src/ui/orders.js';
 import { checkAll } from '../src/sim/invariants.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1783,5 +1786,157 @@ describe('the duty roster', () => {
     g.assignments = [];
     g.dutyRoster[0].state = 'assigned';
     assert.ok(checkAll(g, { arenaRadius: 3000 }).some((v) => v.code === 'duty.stranded'));
+  });
+});
+
+// -------------------------------------------------------------------------
+// Working her up. RESEARCH.md §20.
+
+describe('what the crew learn about one hull', () => {
+  const fresh = () => new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+  const at = (g, points) => {
+    g.mastery.points[g.mastery.classId] = points;
+    g.applyAllMods();
+    return g;
+  };
+
+  test('a fresh commission is the ship exactly as her specification says', () => {
+    const g = fresh();
+    assert.equal(g.mastery.tier, 0, 'a brand-new crew already knew the ship');
+    // Nothing from mastery, so the class baseline stands. Asserted as an
+    // effect: the modifiers mastery touches are untouched.
+    assert.deepEqual(g.mastery.shipMods(), {}, 'tier zero moved something');
+  });
+
+  test('each tier actually moves the ship', () => {
+    const baseline = fresh();
+    const hull0 = baseline.ship.maxHull;
+    const turn0 = baseline.ship.mod('turn');
+    const acc0 = baseline.ship.mod('accuracy');
+    const imp0 = baseline.ship.mod('impulse');
+
+    const g1 = at(fresh(), TIERS[0].at);
+    assert.ok(g1.ship.maxHull > hull0, 'the shakedown tier did not toughen the hull');
+
+    const g2 = at(fresh(), TIERS[1].at);
+    assert.ok(g2.ship.mod('impulse') > imp0, 'the engine-room tier did nothing');
+
+    const g3 = at(fresh(), TIERS[2].at);
+    assert.ok(g3.ship.mod('turn') > turn0, 'the helm tier did not make her handier');
+
+    const g4 = at(fresh(), TIERS[3].at);
+    assert.ok(g4.ship.mod('accuracy') > acc0, 'the gunnery tier did not help the guns');
+  });
+
+  test('a doctrine cannot be committed to before the crew have earned it', () => {
+    const g = fresh();
+    const r = g.mastery.chooseTrait('running_start');
+    assert.equal(r.ok, false, 'a day-one crew committed the ship to a doctrine');
+    assert.equal(g.mastery.trait, null, 'a doctrine took effect anyway');
+  });
+
+  test('and every doctrine costs what it gains', () => {
+    for (const trait of TRAIT_LIST) {
+      const g = at(fresh(), TIERS[4].at);
+      const before = Object.fromEntries(
+        Object.keys(trait.mods).map((k) => [k, g.ship.mod(k)]),
+      );
+      assert.ok(g.mastery.chooseTrait(trait.id).ok, `${trait.name} was refused at the top tier`);
+      g.applyAllMods();
+
+      let gains = 0; let costs = 0;
+      for (const [k, v] of Object.entries(trait.mods)) {
+        const after = g.ship.mod(k);
+        if (v > 0) { assert.ok(after > before[k], `${trait.name}: ${k} did not improve`); gains++; }
+        else { assert.ok(after < before[k], `${trait.name}: ${k} was supposed to cost something`); costs++; }
+      }
+      assert.ok(gains > 0 && costs > 0, `${trait.name} is not a trade-off`);
+    }
+  });
+
+  test('only one doctrine is in force at a time', () => {
+    const g = at(fresh(), TIERS[4].at);
+    g.mastery.chooseTrait('running_start');
+    g.mastery.chooseTrait('layered_screens');
+    g.applyAllMods();
+    assert.equal(g.mastery.trait.id, 'layered_screens', 'the second order was ignored');
+    // And the first one is genuinely gone, not merely unlisted.
+    const solo = at(fresh(), TIERS[4].at);
+    solo.mastery.chooseTrait('layered_screens');
+    solo.applyAllMods();
+    assert.equal(g.ship.mod('impulse'), solo.ship.mod('impulse'),
+      'the ship is still carrying a doctrine it was taken off');
+  });
+
+  test('a battle teaches the crew, and the simulator does not', () => {
+    const real = fresh();
+    real.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Target' })]);
+    real.finishCombat('victory');
+    assert.ok(real.mastery.current > 0, 'a battle taught the crew nothing');
+
+    const sim = fresh();
+    sim.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Target' })]);
+    sim.scriptedScenario = true;
+    sim.finishCombat('victory');
+    assert.equal(sim.mastery.current, 0, 'an exercise counted as flying the ship');
+  });
+
+  test('a bad figure cannot get into the track', () => {
+    const g = fresh();
+    g.creditMastery('hour', NaN);
+    g.creditMastery('nonsense', 10);
+    g.creditMastery('hour', -5);
+    assert.equal(g.mastery.current, 0, `the track reads ${g.mastery.current}`);
+    assert.ok(Number.isFinite(g.ship.maxHull), 'the ship took a NaN from the track');
+  });
+
+  test('a junk record loads as a crew who have learned nothing', () => {
+    const g = at(fresh(), TIERS[4].at);
+    g.mastery.chooseTrait('running_start');
+    const record = g.save();
+    record.mastery = {
+      classId: 'constitution',
+      points: { constitution: NaN },
+      traits: { constitution: 'not_a_real_doctrine' },
+    };
+    const loaded = Game.load(record);
+    assert.equal(loaded.mastery.current, 0, 'a NaN got into the loaded track');
+    assert.equal(loaded.mastery.trait, null, 'an invented doctrine was accepted');
+    assert.equal(checkGame(loaded).some((v) => v.code.startsWith('mastery.')), false,
+      'the loaded game is in a state its own invariants forbid');
+  });
+
+  test('and a real one comes back exactly as it was', () => {
+    const g = at(fresh(), TIERS[4].at);
+    g.mastery.chooseTrait('layered_screens');
+    g.applyAllMods();
+    const before = g.ship.mod('shieldRegen');
+
+    const loaded = Game.load(g.save());
+    assert.equal(loaded.mastery.tier, 5, 'the tier was lost');
+    assert.equal(loaded.mastery.trait?.id, 'layered_screens', 'the doctrine was lost');
+    assert.equal(loaded.ship.mod('shieldRegen'), before,
+      'the ship came back without what the doctrine was worth');
+  });
+
+  test('the sweep sees a doctrine the crew have not earned', () => {
+    const g = fresh();
+    assert.equal(checkGame(g).some((v) => v.code === 'mastery.trait.unearned'), false,
+      'complained about a game in which nothing is wrong');
+    // Set past the order layer, which refuses it.
+    g.mastery.traits[g.mastery.classId] = 'running_start';
+    assert.ok(checkGame(g).some((v) => v.code === 'mastery.trait.unearned'),
+      'nothing noticed a doctrine on a hull the crew do not know');
+  });
+
+  test('every doctrine and every tier can be reached by speaking', () => {
+    for (const trait of TRAIT_LIST) {
+      const phrase = `set doctrine to ${trait.name.toLowerCase()}`;
+      const parsed = parseOrder(phrase);
+      assert.equal(parsed.action, 'set_doctrine', `"${phrase}" did not reach the order`);
+      assert.equal(parsed.doctrine, trait.id, `"${phrase}" chose ${parsed.doctrine}`);
+    }
+    assert.equal(parseOrder('have we worked her up').action, 'ship_mastery',
+      'the crew cannot be asked how well they know the ship');
   });
 });

@@ -16,6 +16,7 @@ import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '
 import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
 import { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer } from '../sim/duty.js';
+import { ShipMastery } from '../sim/mastery.js';
 import { resolveHail, STANDING_EFFECTS, HAIL_ENDING } from '../sim/diplomacy.js';
 import { applyAbility, applySignature, applyDevice } from '../sim/powers.js';
 
@@ -134,6 +135,11 @@ export class Game {
       new RNG(hashSeed(`duty:${this.seed}`)), getShipClass(classId)?.crew ?? 0,
     );
     this.assignments = [];
+    // What the crew have learned about this particular hull. Tracked per class
+    // because that is what familiarity is (RESEARCH.md §20) — though the
+    // campaign gives a captain one command and never a second, so in practice
+    // this is one crew learning one ship over five years.
+    this.mastery = new ShipMastery(classId);
     this.ship = new Ship(classId, {
       name: options.shipName ?? 'Enterprise',
       registry: options.registry ?? FEDERATION_REGISTRIES[0],
@@ -271,6 +277,27 @@ export class Game {
     this.applyAllMods();
   }
 
+  /**
+   * Credit something the crew learned about this hull, and say so if it told.
+   *
+   * The mods are only recomputed when a tier is actually crossed. Mastery
+   * points move on every hour under way, and re-deriving every modifier on the
+   * ship several thousand times a commission to change nothing is work for
+   * nothing.
+   */
+  creditMastery(kind, count = 1) {
+    if (!this.mastery) return null;
+    const result = this.mastery.award(kind, count);
+    if (!result.tierUp) return result;
+    this.applyAllMods();
+    this.pushLog(
+      `${this.ship.name} has her crew, Captain — ${result.tierUp.name}. ${result.tierUp.text}`,
+      'engineering',
+    );
+    emit('mastery:tier', { tier: result.tierUp, mastery: this.mastery });
+    return result;
+  }
+
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
   applyAllMods() {
     // Reset to the class baseline, then reapply everything.
@@ -282,6 +309,8 @@ export class Game {
     };
     this.ship.applyMods(this.progress.shipMods());
     this.ship.applyMods(this.loadout.shipMods());
+    // What the crew know about this hull is part of what the hull can do.
+    if (this.mastery) this.ship.applyMods(this.mastery.shipMods());
     // The captain's own abilities are part of the ship's performance.
     if (this.character) this.ship.applyMods(this.character.shipMods());
     // Difficulty is a setting on the campaign, not on a training simulator.
@@ -1066,6 +1095,9 @@ export class Game {
     if (!t) return;
     this.locationId = t.to.id;
     this.clock.advanceStardate(t.totalHours / 24);
+    // Hours under way are where a crew actually learn a ship. Docked hours are
+    // not credited, which is why this is here and not in the campaign sync.
+    this.creditMastery('hour', t.totalHours);
     // A detail sent out before a two-day voyage is finished when you arrive.
     // The transit is where the bulk of a commission's hours actually pass, and
     // nothing aboard used to notice them going by.
@@ -1513,6 +1545,9 @@ export class Game {
     // Captured before the flags are cleared below, because losing the ship is
     // decided at the very end of this method and by then they are gone.
     const simulated = this.inKobayashi === true || this.scriptedScenario === true;
+    // A battle teaches a crew their ship whatever the outcome — losing teaches
+    // too. An exercise does not: the simulator is not this hull.
+    if (!simulated) this.creditMastery('battle');
 
     const killed = eng.hostiles.filter((s) => s.destroyed);
     for (const s of killed) {
@@ -1649,6 +1684,7 @@ export class Game {
     const settled = this.missions?.active?.settleCombat?.(outcome);
     if (settled?.complete) {
       this.missions.finishActive();
+      if (!simulated) this.creditMastery('mission');
       this.pushLog(`${settled.ending?.label ?? 'The episode ends.'}`, 'captain');
     }
 
@@ -1803,6 +1839,8 @@ export class Game {
     if (result.complete) {
       this.earnReputation('mission_complete');
       this.missions.finishActive();
+      // An episode seen through is the other thing that teaches a crew a ship.
+      this.creditMastery('mission');
       // Not while people are shooting. Setting the mode back to BRIDGE during a
       // battle orphaned the engagement completely: Game.update stopped stepping
       // it, so it never reached an end condition, never paid out, and never
@@ -2367,6 +2405,7 @@ export class Game {
       stores: this.stores,
       fabrication: this.fabrication,
       dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
+      mastery: this.mastery?.save() ?? null,
       assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
@@ -2829,6 +2868,10 @@ export class Game {
       g.dutyRoster = data.dutyRoster.map((p) => new DutyOfficer(p));
     }
     g.assignments = Array.isArray(data.assignments) ? data.assignments : [];
+    // What the crew had learned about this hull. A save written before mastery
+    // existed loads as a crew who have learned nothing yet, which is exactly
+    // what a fresh track means and needs no migration.
+    g.mastery = ShipMastery.load(data.mastery, g.ship.classId);
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
 

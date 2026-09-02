@@ -17364,6 +17364,44 @@ const INTENTS = [
     },
   },
   {
+    id: 'ship_mastery',
+    help: 'Ask how well the crew know the ship',
+    phrases: [
+      'how well do we know her', 'how well does the crew know the ship',
+      'how is the crew settling in',
+      // NOT "engineering report on the ship": the intercom owns that shape and
+      // owns it correctly — it is how you call engineering — and two intents
+      // fighting over a phrase means one of them loses at random. The command
+      // reference test caught this the first time it was written.
+      'ship mastery', 'have we worked her up', 'is she worked up',
+      'how long have we had her', 'report on the ship herself',
+      'what have we learned about her',
+    ],
+    keywords: { worked: 2, mastery: 3, settling: 2.2, know: 1.2, shakedown: 3 },
+    build: () => ({ action: 'ship_mastery' }),
+  },
+  {
+    id: 'set_doctrine',
+    help: 'Commit the ship to a standing doctrine',
+    phrases: [
+      'set doctrine to running start', 'set doctrine to layered screens',
+      'set doctrine to point blank', 'standing doctrine running start',
+      'commit to running start', 'commit to layered screens',
+      'commit to point blank doctrine', 'set our doctrine', 'choose a doctrine',
+      'run light', 'tune the grid to the shields', 'close and hold',
+    ],
+    keywords: { doctrine: 3, commit: 1.6, standing: 1.4 },
+    build: (c) => {
+      const t = c.text;
+      const named = [
+        [/\brunning start\b|\brun light\b|\blighten\b/, 'running_start'],
+        [/\blayer|\bscreens?\b|\bshield grid\b/, 'layered_screens'],
+        [/\bpoint.?blank\b|\bclose and hold\b/, 'point_blank_doctrine'],
+      ].find(([re]) => re.test(t));
+      return { action: 'set_doctrine', doctrine: named?.[1] ?? null };
+    },
+  },
+  {
     id: 'salvage',
     help: 'Strip the wreck',
     phrases: [
@@ -23101,6 +23139,23 @@ function checkGame(game) {
     r.must(!game.firstStrike || (!!eng && !eng.over), 'game.firstStrike.orphan', 'error',
       'the captain is recorded as having fired first in a battle that is not running');
 
+    // What the crew have learned about the hull.
+    //
+    // The track is saved, and everything downstream of it is arithmetic on the
+    // ship's modifiers — so a bad figure here is the antimatter problem again:
+    // silent, permanent, and written back out on the next save.
+    if (game.mastery) {
+      r.must(ok(game.mastery.current) && num(game.mastery.current) >= 0,
+        'mastery.points', 'error',
+        `mastery on this hull is ${game.mastery.current}`);
+      // A doctrine can only be committed to by a crew that has earned the
+      // slot. One held below the fifth tier would be modifiers the ship has
+      // not paid for, and `shipMods` reads the slot rather than the record.
+      r.must(!game.mastery.traits?.[game.mastery.classId] || game.mastery.tier >= 5,
+        'mastery.trait.unearned', 'error',
+        'a standing doctrine is set on a hull the crew do not know well enough');
+    }
+
     // The duty roster, and the details that are out on it.
     //
     // These are people, and a fight can hurt them: somebody counted as both
@@ -23254,6 +23309,251 @@ __exports.checkCombat = checkCombat;
 __exports.checkGame = checkGame;
 __exports.checkAll = checkAll;
 __exports.Watchdog = Watchdog;
+
+});
+
+__define("src/sim/mastery.js", function (__exports, __require) {
+// Working her up: what a crew learns about one particular ship.
+//
+// The grounding is in docs/RESEARCH.md §20. Decker's argument for keeping the
+// Enterprise away from Kirk in The Motion Picture is not seniority — it is that
+// the ship has been refit, so Kirk's familiarity with her is worth nothing.
+// That is a mechanic stated out loud: an officer accumulates something real by
+// flying a particular vessel, it is measured against that vessel, and changing
+// the vessel spends it.
+//
+// The other direction is the same film's first act. Scott asked for a proper
+// shakedown, Kirk sailed in twelve hours anyway, and the ship gave him an
+// unbalanced warp drive, a wormhole, and phasers that cut out on their own. A
+// ship that has not been worked up is not the same ship as one that has.
+//
+// Tier zero here is the ship exactly as her specification says. Mastery is
+// additive from there — the shakedown material would justify starting BELOW
+// the baseline, and that is a design decision to be taken deliberately rather
+// than smuggled in under a research note.
+
+const { ADDITIVE_MODS } = __require("src/sim/ship.js");
+const { getShipClass } = __require("src/world/ships.data.js");
+
+/**
+ * The five tiers, and what each one is the crew having learned.
+ *
+ * Thresholds are in mastery points against the 1826-day commission: a captain
+ * who flies the whole five years and fights reaches the last tier with time to
+ * use it, and one who spends the commission docked does not.
+ */
+const TIERS = [
+  {
+    tier: 1, at: 120, name: 'Shakedown complete',
+    mods: { hullMax: 0.04 },
+    text: 'The yard work is settled and the seams have stopped talking. The hull takes a hit better.',
+  },
+  {
+    tier: 2, at: 340, name: 'Engine room knows her',
+    mods: { impulse: 0.05, repairRate: 0.08 },
+    text: 'Damage control has run the same casualty on this hull enough times to be quick about it.',
+  },
+  {
+    tier: 3, at: 700, name: 'She answers the helm',
+    mods: { turn: 0.07, defense: 0.04 },
+    text: 'The helm has learned where she is slow and stops fighting her.',
+  },
+  {
+    tier: 4, at: 1150, name: 'Gunnery has the range',
+    mods: { accuracy: 0.05, critChance: 0.03 },
+    text: 'The batteries know their own fall of shot on this ship and do not need to walk it in.',
+  },
+  {
+    tier: 5, at: 1700, name: 'Her own ship',
+    mods: { damageResist: 0.04 },
+    text: 'Five years in one hull. The crew fly her the way an engineer would, and a starship trait is yours to choose.',
+  },
+];
+
+/** The highest tier reached at a given number of points. */
+function tierAt(points) {
+  let t = 0;
+  for (const step of TIERS) if (points >= step.at) t = step.tier;
+  return t;
+}
+
+/** Points still wanted for the next tier, or null at the top. */
+function nextTierAt(points) {
+  for (const step of TIERS) if (points < step.at) return step;
+  return null;
+}
+
+/**
+ * Starship traits, unlocked at the fifth tier.
+ *
+ * One is slotted at a time. This is where the decision lives: the four tiers
+ * below are the crew learning the ship, which is not a choice anybody makes,
+ * and a track with no choice in it is a bar.
+ *
+ * Each is a doctrine a crew that knows one hull perfectly could actually
+ * commit to, not a grab-bag: what you gain, you gain by giving something up.
+ */
+const TRAITS = {
+  running_start: {
+    id: 'running_start', name: 'Running Start',
+    mods: { impulse: 0.12, turn: 0.1, hullMax: -0.04 },
+    text: 'Weight out of her and the plates run light: faster and handier, and she takes a hit worse.',
+  },
+  layered_screens: {
+    id: 'layered_screens', name: 'Layered Screens',
+    mods: { shieldRegen: 0.22, shieldMax: 0.08, impulse: -0.06 },
+    text: 'The grid is tuned to the shields at the expense of the drive: the screens come back fast and she is slower for it.',
+  },
+  point_blank_doctrine: {
+    id: 'point_blank_doctrine', name: 'Point-Blank Doctrine',
+    mods: { critSeverity: 0.2, beamDamage: 0.08, defense: -0.05 },
+    text: 'Close and hold: the gunnery hurts far more, and a ship that will not break off is easier to hit.',
+  },
+};
+const TRAIT_LIST = Object.values(TRAITS);
+
+/**
+ * What each thing that happens is worth, in points.
+ *
+ * These are the things that actually teach a crew a ship: time under way,
+ * fights, and missions seen through. Sitting at a starbase teaches nobody
+ * anything, which is why docked hours are not on this list.
+ */
+const EARNINGS = {
+  /** Per hour of campaign time under way. */
+  hour: 0.05,
+  /** Per battle fought, whatever the outcome — losing teaches too. */
+  battle: 14,
+  /** Per episode finished. */
+  mission: 30,
+};
+class ShipMastery {
+  constructor(classId) {
+    this.classId = classId ?? null;
+    /** classId -> points. A map because mastery is a property of the class. */
+    this.points = {};
+    /** classId -> the trait chosen for that hull, once the fifth tier is up. */
+    this.traits = {};
+  }
+
+  get current() { return this.points[this.classId] ?? 0; }
+
+  get tier() { return tierAt(this.current); }
+
+  /** The tiers actually earned, worst-first. */
+  get earned() { return TIERS.filter((t) => this.current >= t.at); }
+
+  /** What is next, and how far off it is. */
+  get next() {
+    const step = nextTierAt(this.current);
+    if (!step) return null;
+    return { ...step, remaining: step.at - this.current };
+  }
+
+  /** The trait in the slot, or null — including when the slot is not open. */
+  get trait() {
+    if (this.tier < 5) return null;
+    return TRAITS[this.traits[this.classId]] ?? null;
+  }
+
+  /** Whether a trait can be chosen at all yet. */
+  get slotOpen() { return this.tier >= 5; }
+
+  /**
+   * Choose the trait for this hull.
+   *
+   * @returns {{ok: boolean, reason?: string, trait?: object}}
+   */
+  chooseTrait(id) {
+    if (!this.slotOpen) {
+      return { ok: false, reason: 'The crew do not know her well enough yet, Captain.' };
+    }
+    const trait = TRAITS[id];
+    if (!trait) return { ok: false, reason: 'No such doctrine in the book.' };
+    this.traits[this.classId] = trait.id;
+    return { ok: true, trait };
+  }
+
+  /**
+   * Credit something the crew learned from.
+   *
+   * @param {'hour'|'battle'|'mission'} kind
+   * @param {number} count how many of them
+   * @returns {{gained: number, tierUp: object|null}} the tier crossed, if any
+   */
+  award(kind, count = 1) {
+    const rate = EARNINGS[kind];
+    // A caller with a bad key, or a NaN count from a clock that has gone wrong,
+    // must not turn the whole track into NaN — it is saved, and a NaN written
+    // to disk never comes back.
+    if (!rate || !Number.isFinite(count) || count <= 0) return { gained: 0, tierUp: null };
+    const before = this.tier;
+    const gained = rate * count;
+    this.points[this.classId] = this.current + gained;
+    const after = this.tier;
+    return {
+      gained,
+      tierUp: after > before ? (TIERS.find((t) => t.tier === after) ?? null) : null,
+    };
+  }
+
+  /** Combined modifiers for Ship.applyMods — tiers earned, plus the trait. */
+  shipMods() {
+    const mods = {};
+    const add = (k, v) => {
+      if (ADDITIVE_MODS.has(k)) mods[k] = (mods[k] ?? 0) + v;
+      else mods[k] = (mods[k] ?? 1) * (1 + v);
+    };
+    for (const step of this.earned) {
+      for (const [k, v] of Object.entries(step.mods)) add(k, v);
+    }
+    // The trait folds in here rather than at the call site, for the reason the
+    // loadout's set bonuses do: shipMods is the one place the ship is asked
+    // what it is carrying, and a second answer would drift from this one.
+    const trait = this.trait;
+    if (trait) for (const [k, v] of Object.entries(trait.mods)) add(k, v);
+    return mods;
+  }
+
+  /** What the crew would say about the hull, for the panel and the con. */
+  report() {
+    const cls = getShipClass(this.classId);
+    return {
+      classId: this.classId,
+      className: cls?.name ?? this.classId,
+      points: this.current,
+      tier: this.tier,
+      earned: this.earned,
+      next: this.next,
+      slotOpen: this.slotOpen,
+      trait: this.trait,
+    };
+  }
+
+  save() { return { classId: this.classId, points: this.points, traits: this.traits }; }
+
+  static load(data, classId) {
+    const m = new ShipMastery(classId ?? data?.classId ?? null);
+    if (!data) return m;
+    // Same guard as `award`: a bad figure in the record is refused rather than
+    // carried, because everything downstream of it is arithmetic.
+    for (const [k, v] of Object.entries(data.points ?? {})) {
+      if (Number.isFinite(v) && v >= 0) m.points[k] = v;
+    }
+    for (const [k, v] of Object.entries(data.traits ?? {})) {
+      if (TRAITS[v]) m.traits[k] = v;
+    }
+    return m;
+  }
+}
+
+__exports.TIERS = TIERS;
+__exports.tierAt = tierAt;
+__exports.nextTierAt = nextTierAt;
+__exports.TRAITS = TRAITS;
+__exports.TRAIT_LIST = TRAIT_LIST;
+__exports.EARNINGS = EARNINGS;
+__exports.ShipMastery = ShipMastery;
 
 });
 
@@ -26532,6 +26832,7 @@ const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __req
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer } = __require("src/sim/duty.js");
+const { ShipMastery } = __require("src/sim/mastery.js");
 const { resolveHail, STANDING_EFFECTS, HAIL_ENDING } = __require("src/sim/diplomacy.js");
 const { applyAbility, applySignature, applyDevice } = __require("src/sim/powers.js");
 
@@ -26646,6 +26947,11 @@ class Game {
       new RNG(hashSeed(`duty:${this.seed}`)), getShipClass(classId)?.crew ?? 0,
     );
     this.assignments = [];
+    // What the crew have learned about this particular hull. Tracked per class
+    // because that is what familiarity is (RESEARCH.md §20) — though the
+    // campaign gives a captain one command and never a second, so in practice
+    // this is one crew learning one ship over five years.
+    this.mastery = new ShipMastery(classId);
     this.ship = new Ship(classId, {
       name: options.shipName ?? 'Enterprise',
       registry: options.registry ?? FEDERATION_REGISTRIES[0],
@@ -26783,6 +27089,27 @@ class Game {
     this.applyAllMods();
   }
 
+  /**
+   * Credit something the crew learned about this hull, and say so if it told.
+   *
+   * The mods are only recomputed when a tier is actually crossed. Mastery
+   * points move on every hour under way, and re-deriving every modifier on the
+   * ship several thousand times a commission to change nothing is work for
+   * nothing.
+   */
+  creditMastery(kind, count = 1) {
+    if (!this.mastery) return null;
+    const result = this.mastery.award(kind, count);
+    if (!result.tierUp) return result;
+    this.applyAllMods();
+    this.pushLog(
+      `${this.ship.name} has her crew, Captain — ${result.tierUp.name}. ${result.tierUp.text}`,
+      'engineering',
+    );
+    emit('mastery:tier', { tier: result.tierUp, mastery: this.mastery });
+    return result;
+  }
+
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
   applyAllMods() {
     // Reset to the class baseline, then reapply everything.
@@ -26794,6 +27121,8 @@ class Game {
     };
     this.ship.applyMods(this.progress.shipMods());
     this.ship.applyMods(this.loadout.shipMods());
+    // What the crew know about this hull is part of what the hull can do.
+    if (this.mastery) this.ship.applyMods(this.mastery.shipMods());
     // The captain's own abilities are part of the ship's performance.
     if (this.character) this.ship.applyMods(this.character.shipMods());
     // Difficulty is a setting on the campaign, not on a training simulator.
@@ -27578,6 +27907,9 @@ class Game {
     if (!t) return;
     this.locationId = t.to.id;
     this.clock.advanceStardate(t.totalHours / 24);
+    // Hours under way are where a crew actually learn a ship. Docked hours are
+    // not credited, which is why this is here and not in the campaign sync.
+    this.creditMastery('hour', t.totalHours);
     // A detail sent out before a two-day voyage is finished when you arrive.
     // The transit is where the bulk of a commission's hours actually pass, and
     // nothing aboard used to notice them going by.
@@ -28025,6 +28357,9 @@ class Game {
     // Captured before the flags are cleared below, because losing the ship is
     // decided at the very end of this method and by then they are gone.
     const simulated = this.inKobayashi === true || this.scriptedScenario === true;
+    // A battle teaches a crew their ship whatever the outcome — losing teaches
+    // too. An exercise does not: the simulator is not this hull.
+    if (!simulated) this.creditMastery('battle');
 
     const killed = eng.hostiles.filter((s) => s.destroyed);
     for (const s of killed) {
@@ -28161,6 +28496,7 @@ class Game {
     const settled = this.missions?.active?.settleCombat?.(outcome);
     if (settled?.complete) {
       this.missions.finishActive();
+      if (!simulated) this.creditMastery('mission');
       this.pushLog(`${settled.ending?.label ?? 'The episode ends.'}`, 'captain');
     }
 
@@ -28315,6 +28651,8 @@ class Game {
     if (result.complete) {
       this.earnReputation('mission_complete');
       this.missions.finishActive();
+      // An episode seen through is the other thing that teaches a crew a ship.
+      this.creditMastery('mission');
       // Not while people are shooting. Setting the mode back to BRIDGE during a
       // battle orphaned the engagement completely: Game.update stopped stepping
       // it, so it never reached an end condition, never paid out, and never
@@ -28879,6 +29217,7 @@ class Game {
       stores: this.stores,
       fabrication: this.fabrication,
       dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
+      mastery: this.mastery?.save() ?? null,
       assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
@@ -29341,6 +29680,10 @@ class Game {
       g.dutyRoster = data.dutyRoster.map((p) => new DutyOfficer(p));
     }
     g.assignments = Array.isArray(data.assignments) ? data.assignments : [];
+    // What the crew had learned about this hull. A save written before mastery
+    // existed loads as a crew who have learned nothing yet, which is exactly
+    // what a fresh track means and needs no migration.
+    g.mastery = ShipMastery.load(data.mastery, g.ship.classId);
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
 
@@ -29446,6 +29789,7 @@ const { MODES } = __require("src/core/state.js");
 const { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } = __require("src/sim/power.js");
 const { SKILLS, BRANCHES, BRANCH_LABEL, RANKS } = __require("src/sim/skills.js");
 const { CONSOLES, SET_LIST } = __require("src/sim/loadout.js");
+const { TIERS, TRAIT_LIST } = __require("src/sim/mastery.js");
 const { ABILITIES } = __require("src/sim/officers.js");
 const { availableHails } = __require("src/sim/diplomacy.js");
 const { STATIONS, ERA_LIST, SPECIES } = __require("src/world/crews.data.js");
@@ -30677,6 +31021,53 @@ function shipScreen(app) {
     }
   }
   if (setLines.length) root.append(panel('Installed together', setLines));
+
+  // --- What the crew have learned about this hull ---
+  //
+  // The tiers are not a choice — a crew learning their ship is something that
+  // happens to them. The trait at the end is the choice, and it is the reason
+  // the track is here rather than being one more invisible multiplier.
+  const m = g.mastery?.report();
+  if (m) {
+    const masteryLines = [
+      el('h3', { text: `${m.className} — ${m.tier} of ${TIERS.length}` }),
+      ...m.earned.map((step) => el('p', { class: 'muted', text: `${step.name}. ${step.text}` })),
+    ];
+    if (!m.earned.length) {
+      masteryLines.push(el('p', {
+        class: 'hint',
+        text: 'Fresh out of the yard. She is exactly what her specification says and no more.',
+      }));
+    }
+    if (m.next) {
+      masteryLines.push(el('p', {
+        class: 'hint',
+        text: `Next: ${m.next.name}, ${Math.ceil(m.next.remaining)} more to go. `
+          + 'Hours under way, battles fought and episodes seen through.',
+      }));
+    }
+    if (m.slotOpen) {
+      masteryLines.push(el('h3', { text: 'Standing doctrine' }));
+      masteryLines.push(el('p', {
+        class: 'hint',
+        text: m.trait
+          ? `Say "set doctrine to <name>" to change it.`
+          : `Say "set doctrine to <name>" to commit to one.`,
+      }));
+      for (const t of TRAIT_LIST) {
+        masteryLines.push(button(
+          `${t.id === m.trait?.id ? '✓ ' : ''}${t.name}`,
+          tap(() => {
+            g.mastery.chooseTrait(t.id);
+            g.applyAllMods();
+            app.render();
+          }, 'ui_confirm'),
+          { color: t.id === m.trait?.id ? 'blue' : 'ghost', sub: t.text },
+        ));
+      }
+    }
+    root.append(panel('Her own ship', masteryLines));
+  }
 
   // --- Consoles ---
   for (const slot of ['tactical', 'engineering', 'science', 'device']) {
@@ -32016,6 +32407,7 @@ const { SKILLS } = __require("src/sim/skills.js");
 const { RNG } = __require("src/core/rng.js");
 const { FEAT_BY_ID, ABILITIES: ABILITY_LIST } = __require("src/rules/character.js");
 const { CONSOLES } = __require("src/sim/loadout.js");
+const { TIERS, TRAIT_LIST } = __require("src/sim/mastery.js");
 
 // TABS ARE FOR TEXT.
 //
@@ -33642,6 +34034,40 @@ class App {
       }
       case 'assign_detail': {
         this.sendDetail(order.detail);
+        break;
+      }
+      case 'ship_mastery': {
+        // A question, so it is answered rather than acted on.
+        const m = g.mastery?.report();
+        if (!m) { ack('engineering', 'There is nothing to report about the ship, Captain.'); break; }
+        const lines = m.earned.length
+          ? m.earned.map((step) => `${step.name}. ${step.text}`)
+          : ['She is fresh out of the yard, Captain — exactly what her specification says and no more.'];
+        if (m.next) {
+          lines.push(`Next is ${m.next.name}, and we are ${Math.ceil(m.next.remaining)} short of it.`);
+        }
+        if (m.slotOpen) {
+          lines.push(m.trait
+            ? `Standing doctrine: ${m.trait.name}. ${m.trait.text}`
+            : 'We know her well enough to commit to a doctrine, Captain. You have only to say which.');
+        }
+        for (const line of lines) g.pushLog(line, 'engineering');
+        this.showMessage(`${m.className} — ${m.tier} of ${TIERS.length}`, lines);
+        audio.play('computer_ack');
+        break;
+      }
+      case 'set_doctrine': {
+        if (!order.doctrine) {
+          ack('engineering', `Which doctrine, Captain? ${TRAIT_LIST.map((t) => t.name).join(', ')}.`);
+          break;
+        }
+        const r = g.mastery?.chooseTrait(order.doctrine)
+          ?? { ok: false, reason: 'There is no doctrine to set, Captain.' };
+        if (!r.ok) { audio.play('ui_deny'); ack('engineering', r.reason); break; }
+        g.applyAllMods();
+        audio.play('computer_ack');
+        haptic('confirm');
+        ack('engineering', `Standing doctrine is ${r.trait.name}, Captain. ${r.trait.text}`);
         break;
       }
       case 'salvage': {
