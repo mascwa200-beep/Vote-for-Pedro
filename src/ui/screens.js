@@ -1763,6 +1763,20 @@ export function missionPanel(app) {
     return wrap;
   }
 
+  // Where this is happening, when it is not happening here.
+  //
+  // The lock reason is on every button, but a captain reading four greyed-out
+  // orders should not have to infer the one thing they all have in common. It
+  // is one line, at the top, naming the system and saying to set a course.
+  const here = m.testLocation();
+  if (!here.ok) {
+    const name = g.galaxy?.get?.(here.need)?.name ?? here.need;
+    wrap.append(panel('Not here', [
+      el('p', { class: 'muted', text: `This is happening at ${name}, Captain. We are at ${g.galaxy?.get?.(g.locationId)?.name ?? g.locationId}.` }),
+      el('p', { class: 'hint', text: `Say "set course for ${name}".` }),
+    ]));
+  }
+
   // Numbered, so they can be spoken. The parser cannot know what an episode
   // wrote in its choice labels, but it can count — and "option two" is how a
   // captain picks one of three things somebody has just laid out for them.

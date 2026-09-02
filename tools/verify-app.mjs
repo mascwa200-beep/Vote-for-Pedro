@@ -536,6 +536,13 @@ try {
     g.walk.enter('bridge');
     g.walk.sit(true);
     g.startMission?.(ep.id) ?? g.missions.start(ep.id);
+    // A stage happens somewhere now, and by this point the harness has flown.
+    // This check is about the ORDERS printing the phrase that picks them, so
+    // put the ship where the episode is rather than testing the gate here —
+    // the gate has its own checks further down.
+    const wasAt = g.locationId;
+    const need = g.missions.active?.stageLocation?.();
+    if (need) g.locationId = need;
     app.render();
     const titles = () => [...document.querySelectorAll('.panel h2')].map((h) => h.textContent.trim());
     const onBridge = titles().includes('Main Bridge');
@@ -563,6 +570,11 @@ try {
     };
     g.missions.active = null;
     g.mode = 'bridge';
+    // And put the ship back where it was found. Moving it for this check and
+    // leaving it moved changed the system behind the main viewer, which showed
+    // up four hundred lines later as a fight that was not busy enough to pass
+    // its own screenshot threshold.
+    g.locationId = wasAt;
     app.render();
     return out;
   });
@@ -2884,6 +2896,65 @@ try {
   });
   await page.waitForTimeout(150);
   await page.screenshot({ path: join(SHOTS, '06c-ship-mastery.png') });
+
+  // ------------------------------------------------ an episode is somewhere
+  await nav(page, 'Bridge');
+  const place = await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    g.missions.abandon?.(g);
+    const m = g.missions.start('shakedown', g);
+    if (!m) return { started: false };
+
+    // At Sol, where the episode opens.
+    g.locationId = 'sol';
+    app.render();
+    const atSol = {
+      open: m.choices().filter((c) => !c.locked).length,
+      saysNotHere: /not here/i.test(document.body.textContent ?? ''),
+    };
+
+    // Somewhere else entirely.
+    g.locationId = 'qonos';
+    app.render();
+    const text = document.body.textContent ?? '';
+    const away = {
+      open: m.choices().filter((c) => !c.locked).length,
+      total: m.choices().length,
+      saysNotHere: /not here/i.test(text),
+      namesTheSystem: /This is happening at Sol/i.test(text),
+      tellsYouTheOrder: /set course for Sol/i.test(text),
+    };
+    // NOTE: deliberately does NOT clean up yet. The screenshot below has to be
+    // of the state this check is about, and tidying first is how the last
+    // panel ended up with a picture of something else entirely.
+    return { started: true, atSol, away };
+  });
+  check('an episode at Sol is playable at Sol',
+    place.started && place.atSol.open > 0 && !place.atSol.saysNotHere,
+    JSON.stringify(place.atSol));
+  check('and every order is shut from four light years away',
+    place.away.total > 0 && place.away.open === 0, JSON.stringify(place.away));
+  check('the screen says where it is happening and how to get there',
+    place.away.saysNotHere && place.away.namesTheSystem && place.away.tellsYouTheOrder,
+    JSON.stringify(place.away));
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel')]
+      .find((el) => /not here/i.test(el.textContent ?? ''));
+    head?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '06d-episode-elsewhere.png') });
+  // NOW put the bridge back the way it was found. A check that leaves the ship
+  // four light years from where the next one expects it breaks its neighbours,
+  // which is how the main-viewer check was caught.
+  await page.evaluate(() => {
+    const g = window.__app.game;
+    g.missions.abandon?.(g);
+    g.locationId = 'sol';
+    window.__app.render();
+  });
+
 
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
