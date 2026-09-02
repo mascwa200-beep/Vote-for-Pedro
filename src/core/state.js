@@ -15,7 +15,9 @@ import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { checkAll, Watchdog } from '../sim/invariants.js';
 import { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } from '../sim/fabrication.js';
-import { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer } from '../sim/duty.js';
+import {
+  buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer, replaceLosses,
+} from '../sim/duty.js';
 import { ShipMastery } from '../sim/mastery.js';
 import {
   offerCommand, acceptCommandOffer, declineCommandOffer, takeCommandOf, replacementFor,
@@ -1185,6 +1187,17 @@ export class Game {
     // nothing aboard used to notice them going by.
     for (const back of advanceAssignments(this, t.totalHours, this.rng)) {
       this.pushLog(`${back.assignment.name} finished on the way. ${back.text}`, 'comms');
+    }
+
+    // Putting in somewhere Starfleet keeps people makes up the ship's
+    // complement of specialists. The roster could only ever shrink before
+    // this, and a commission ground it down until there were not enough of
+    // them left to run a detail at all — see `replaceLosses`.
+    for (const person of replaceLosses(this)) {
+      this.pushLog(
+        `${person.name}, ${person.label}, has come aboard at ${this.location?.name ?? 'the station'}.`,
+        'comms',
+      );
     }
     this.transit = null;
     // Arriving somewhere new is not arriving in orbit. The order to make orbit
