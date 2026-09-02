@@ -19,7 +19,7 @@ import { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOf
 import { resolveHail, STANDING_EFFECTS, HAIL_ENDING } from '../sim/diplomacy.js';
 import { applyAbility, applySignature, applyDevice } from '../sim/powers.js';
 
-import { Galaxy, plotTransit } from '../world/galaxy.js';
+import { Galaxy, Transit, plotTransit } from '../world/galaxy.js';
 // Placement only, and deterministic from the system id — see gfx/vista.js. The
 // state needs it to answer "orbit of what", which is a question about the world
 // and not about the renderer.
@@ -2349,6 +2349,9 @@ export class Game {
       galaxy: this.galaxy.save(),
       missions: this.missions.save(),
       locationId: this.locationId,
+      // Where the ship is GOING, not only where it last was. See Transit.save.
+      transit: this.transit?.save?.() ?? null,
+      mode: this.mode,
       stardate: this.clock.stardate,
       latinum: this.latinum,
       log: this.log.slice(-80),
@@ -2788,7 +2791,21 @@ export class Game {
     g.latinum = data.latinum ?? 500;
     g.log = data.log ?? [];
     g.over = data.over ?? false;
+
+    // Back on the course you were flying.
+    //
+    // The transit was not saved at all and the mode was forced to the bridge,
+    // so closing the app at warp put the ship back in the system it had left
+    // with the antimatter for the trip already spent and no days elapsed. The
+    // fuel was charged and the voyage was not.
+    //
+    // The mode still defaults to the bridge, which is the right place to wake
+    // up for every other state — a fight, an encounter and a mission stage are
+    // all things the game re-derives or that should not resume mid-air. A
+    // voyage is the exception, because it is the one that is BETWEEN places.
     g.mode = MODES.BRIDGE;
+    g.transit = Transit.load(data.transit, g.galaxy);
+    if (g.transit) g.mode = MODES.TRANSIT;
 
     // A save from before the commission clock existed starts its five years
     // now rather than pretending the time already passed. Nobody should lose a
