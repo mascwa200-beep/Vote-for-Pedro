@@ -3376,6 +3376,31 @@ try {
     perkBites.without === 0 && perkBites.withPerk === 1, JSON.stringify(perkBites));
   check('and the reputation screen says what is in force',
     perkBites.screenSaysInForce, JSON.stringify(perkBites));
+
+  // A berthing right is a door that opens on the real screen. "Free passage
+  // through Klingon space, and a seat at the table" bought a green pill and a
+  // captain sworn to the Empire was still turned away at Qo'noS.
+  const berth = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const g = app.game;
+    g.locationId = 'qonos';
+    app.go('chair');
+    app.render();
+    const shut = /Request docking/i.test(document.body.textContent ?? '');
+    g.reputation.perks.add('klingon_passage');
+    app.render();
+    const open = /Request docking/i.test(document.body.textContent ?? '');
+    return { shut, open, standing: g.ledger.standingOf('klingon') };
+  });
+  check('a berthing right opens a door that was shut — Qo’noS',
+    berth.shut === false && berth.open === true, JSON.stringify(berth));
+  await page.screenshot({ path: join(SHOTS, '13c-a-seat-at-the-table.png') });
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    g.reputation.perks.delete('klingon_passage');
+    g.locationId = 'sol';
+    globalThis.__app.render();
+  });
   await page.screenshot({ path: join(SHOTS, '13b-in-force.png') });
   await page.evaluate(() => {
     const g = globalThis.__app.game;

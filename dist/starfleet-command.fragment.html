@@ -27859,6 +27859,9 @@ class Game {
     // Whether this fight's call for help has been made, and what is on its way.
     this.helpCalled = false;
     this.helpInbound = null;
+    // The Empire answers once per VOYAGE, not once per fight. Reset at the
+    // next berth, which is what makes it a favour rather than a button.
+    this.klingonAnswered = false;
     // Explicitly false rather than undefined: `over` is read as a boolean all
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
@@ -27951,6 +27954,18 @@ class Game {
    */
   perk(id) {
     return !!this.reputation?.has(id);
+  }
+
+  /**
+   * A seeded stream of its own, for anything that must not disturb `game.rng`.
+   *
+   * Drawing from the main stream for a name or an ETA shifts every seeded
+   * outcome downstream of it, so the same battle would play out differently
+   * depending on whether a perk happened to be held. Keyed by the seed, the
+   * place and the date, so it is deterministic and still varies.
+   */
+  derived(tag) {
+    return new RNG(hashSeed(`${tag}:${this.seed}:${this.locationId}:${this.clock.stardate}`));
   }
 
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
@@ -29273,11 +29288,24 @@ class Game {
       // would shift every seeded outcome downstream of the fight, so the same
       // battle would play out differently depending on whether an escort was
       // authorised — which is a determinism bug hiding inside a cosmetic.
-      const named = new RNG(hashSeed(`escort:${this.seed}:${this.locationId}:${this.clock.stardate}`));
       allies.push(new Ship('miranda', {
-        name: hostileName('federation', Math.floor(named.float() * 12)),
+        name: hostileName('federation', Math.floor(this.derived('escort').float() * 12)),
         faction: 'federation',
       }));
+    }
+    // "Battle Doctrine Exchange — you always fire first in an engagement."
+    //
+    // Firing first has to MEAN something, and both sides opening with their
+    // batteries ready means it means nothing: whoever taps the screen sooner
+    // fires first. So the hostiles open one cycle behind, which is a real free
+    // volley and is what the Empire teaching you their opening actually buys.
+    //
+    // NOT `game.firstStrike`, which is a different thing wearing the same
+    // name — that flag means the captain shot at somebody peaceful and costs
+    // 25% off every diplomacy roll.
+    if (this.perk('first_strike')) {
+      for (const s of fleet) for (const w of s.weapons) w.cooldown = w.cycle;
+      this.pushLog('Their gunnery is slow off the mark, Captain. Empire doctrine.', 'tactical');
     }
     // `onEnd` is how a fight settles itself the moment it ends, from wherever
     // it ends. See Engagement.end.
@@ -29647,12 +29675,19 @@ class Game {
 
   // ------------------------------------------------------------------ away teams
 
-  buildAwayTeam(stations = ['science', 'medical', 'tactical'], captainLeads = false) {
+  buildAwayTeam(stations = ['science', 'medical', 'tactical'], captainLeads = false, opts = {}) {
     const members = stations.map((s) => this.crew.at(s)).filter(Boolean);
     this.awayTeam = new AwayTeam(members, {
       captainLeads,
       character: this.character,
       difficulty: this.difficulty,
+      // "Boarding Party Training — your boarding parties are twice as
+      // effective." The security detail is the boarding party: they are what
+      // the check counts, and they are what dies. So twice as many of them,
+      // which is both halves of "effective" at once — the party is better at
+      // taking a bridge and the officers are further back in the queue when
+      // somebody has to be hit.
+      ...(opts.boarding && this.perk('boarding_master') ? { security: 8 } : {}),
     });
     return this.awayTeam;
   }
@@ -29747,7 +29782,8 @@ class Game {
     const stations = template.id === 'boarding_action'
       ? ['tactical', 'medical', 'engineering']
       : ['science', 'medical', 'tactical'];
-    const team = this.buildAwayTeam(stations, false);
+    const team = this.buildAwayTeam(stations, false,
+      { boarding: template.id === 'boarding_action' });
     if (!team.members.length) {
       return { ok: false, reason: 'There is nobody fit to send, Captain.' };
     }
@@ -29939,6 +29975,34 @@ class Game {
     const standing = this.ledger.standingOf('federation');
     const tier = this.reputation?.track('federation')?.tier ?? 0;
 
+    // "Sworn Ally of the Empire — a Klingon battlecruiser answers your call
+    // once per voyage."
+    //
+    // Which is exactly the two cases below, where Starfleet does not come. A
+    // sworn ally is worth having precisely where your own service will not
+    // reach you, and the perk was sold for 290 Marks of Honour and never
+    // read. Once per VOYAGE, not per fight: the Empire is doing you a favour,
+    // and the debt resets when you next put in.
+    const starfleetSilent = (!friendly && tier < 2) || standing < -20;
+    if (starfleetSilent && this.perk('kdf_ally') && !this.klingonAnswered) {
+      this.klingonAnswered = true;
+      this.helpCalled = true;
+      const eta = 18 + this.derived('kdf-help').float() * 22;
+      this.helpInbound = {
+        classId: 'd7',
+        name: hostileName('klingon', 0),
+        faction: 'klingon',
+        eta,
+      };
+      this.pushLog(
+        `${this.helpInbound.name} answers on a Klingon frequency, Captain. `
+        + `Estimated ${Math.round(eta)} seconds. They say they are owed a song for this.`,
+        'comms',
+      );
+      emit('help:called', this.helpInbound);
+      return { ok: true, answered: true, eta, ship: this.helpInbound.name };
+    }
+
     // Somebody has to be near enough to come. Federation space always has a
     // patrol in it; outside it, only a record good enough to make a captain
     // break off what they are doing will bring one.
@@ -29995,7 +30059,14 @@ class Game {
     if (inbound.eta > 0) return;
     this.helpInbound = null;
 
-    const ally = new Ship(inbound.classId, { name: inbound.name, faction: 'federation' });
+    // The faction the caller said, not always Starfleet. A sworn ally of the
+    // Empire who calls for help gets a D7, and hardcoding 'federation' here
+    // would have put a Klingon battlecruiser on the board flying Starfleet
+    // colours — which the renderer, the AI's target selection and the log
+    // would all have believed.
+    const ally = new Ship(inbound.classId, {
+      name: inbound.name, faction: inbound.faction ?? 'federation',
+    });
     eng.allies.push(ally);
     eng.placeCombatants();
     eng.pushLog(`${ally.name} dropping out of warp, Captain. She is engaging.`, 'comms');
@@ -30007,11 +30078,41 @@ class Game {
 
   // ------------------------------------------------------------------ docking
 
+  /**
+   * Berthing rights a reputation project buys outright.
+   *
+   * Only the two whose descriptions are ABOUT berthing. "Free passage through
+   * Klingon space, and a seat at the table" is a berth at Qo'noS, and
+   * "repair rights at Cardassian facilities" is a berth at Cardassia Prime.
+   *
+   * Deliberately NOT `romulan_accord` ("the Neutral Zone opens to you") or
+   * `dmz_passage` ("free movement through the demilitarised zone"): the two
+   * remaining gated systems are Romulus and the Founders' Homeworld, and
+   * neither is the Neutral Zone or the DMZ. Wiring a perk to whatever
+   * mechanism is nearest to hand is how a project comes to do something other
+   * than what it says, which is barely better than doing nothing.
+   */
+  static PASSAGE_PERKS = {
+    klingon: 'klingon_passage',
+    cardassian: 'cardassian_dock',
+  };
+
+  /** Somewhere with people in it — a "Safe Harbour" is not an anomaly. */
+  static INHABITED = new Set(['core', 'colony', 'homeworld', 'starbase', 'outpost', 'station']);
+
   canDock() {
     const sys = this.location;
-    if (!sys?.facilities?.includes('dock')) return false;
+    // "Safe Harbour — every inhabited system will dock and repair you." A
+    // colony with no yard finds you a berth anyway; a nebula does not, because
+    // there is nobody in it to ask.
+    const harbour = this.perk('universal_dock') && Game.INHABITED.has(sys?.type);
+    if (!harbour && !sys?.facilities?.includes('dock')) return false;
     if (sys.requiresStanding) {
       for (const [f, v] of Object.entries(sys.requiresStanding)) {
+        // The gate is the whole of what these projects were selling, and it
+        // was never lifted: a captain sworn to the Empire was still turned
+        // away at Qo'noS for want of ten points of standing.
+        if (this.perk(Game.PASSAGE_PERKS[f]) || harbour) continue;
         if (this.ledger.standingOf(f) < v) return false;
       }
     }
@@ -30041,6 +30142,8 @@ class Game {
     // Not zero: the ship still has to be alongside. But the days in the yard
     // are what the yard access buys, so a hull that came in shot to pieces is
     // turned round in the same time as one that came in for stores.
+    // A new voyage begins alongside, so the Empire's favour is available again.
+    this.klingonAnswered = false;
     const yard = this.perk('free_refit') ? 0.5 : (damaged ? 2.5 : 0.5);
     this.clock.advanceStardate(yard);
     this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`
@@ -30282,6 +30385,9 @@ class Game {
       assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
+      // A favour already spent this voyage. Dropped on load, closing the app
+      // between fights would have been a way to call the Empire again.
+      klingonAnswered: this.klingonAnswered === true,
 
       // Runtime flags. These are cheap to write and expensive to lose: the
       // promotion feat vanishes without `pendingFeats`, and the ion pod comes
@@ -30753,6 +30859,7 @@ class Game {
     const lost = Number.isFinite(data.shipsLost) && data.shipsLost >= 0
       ? Math.floor(data.shipsLost) : 0;
     g.shipsLost = g.over ? lost : Math.min(1, lost);
+    g.klingonAnswered = data.klingonAnswered === true;
     // Only an offer of a hull that exists, so a hand-edited record cannot put
     // the captain aboard something the registry has never heard of.
     g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)
