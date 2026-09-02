@@ -305,7 +305,23 @@ describe('save round trip', () => {
     assert.equal(g.gambitOpen, false, 'the channel came back open to nobody');
     assert.equal(g.parleyForced, false, 'the parley flag outlived its fight');
     assert.equal(g.inKobayashi, false, 'the scenario outlived the engagement that was it');
-    assert.equal(g.firstStrike, true, 'who shot first was lost');
+    // This assertion used to read `true`, and it was the one flag the fix
+    // above did not move.
+    //
+    // `firstStrike` belongs to a fight exactly as much as the other three do.
+    // It is set by opening fire on an encounter that was not hostile, and
+    // `finishCombat` clears it on the line immediately after
+    // `this.engagement = null`. Nothing else in the game clears it. So the old
+    // behaviour was incoherent in both directions: play the fight out and the
+    // flag is gone in seconds; force-quit the same fight and it lasts the rest
+    // of the commission, taking a quarter off the chance of being heard on
+    // every hail, against every faction, anywhere in the galaxy — for a shot
+    // fired at people who are no longer there.
+    //
+    // If shooting first were meant to be remembered, it would be remembered in
+    // the ledger, which is what standing is for, and finishing the fight would
+    // not wipe it.
+    assert.equal(g.firstStrike, false, 'who shot first outlived the fight it was about');
   });
 
   test('and an appeal into that silence is refused, not scored', () => {
