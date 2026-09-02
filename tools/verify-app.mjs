@@ -2344,8 +2344,17 @@ try {
     const eng = g.engagement;
     let held = g.ship.buffs?.some((b) => b.id === 'fire_at_will') ?? false;
     // The officer being unfit is a fact about this moment in the harness, not
-    // about the ability. Put him back on his feet and give the order again.
+    // about the ability. Put her back on her feet and give the order again.
+    //
+    // Being DEAD is the same kind of fact and was not covered: this recovery
+    // cleared `injured`, which does nothing for an officer the boarding party
+    // earlier in the run got killed, and `available` is `alive && !injured`.
+    // Two runs in a row of this harness disagreed about the ability for that
+    // reason alone. Noted here and put back below, because reviving her is a
+    // setup poke and must not outlive the check.
     if (!held && gunner) {
+      globalThis.__reviveGunner = !gunner.alive;
+      gunner.alive = true;
       gunner.injured = false;
       gunner.injurySeverity = 0;
       gunner.cooldowns = {};
@@ -2385,6 +2394,12 @@ try {
     const g = globalThis.__app.game;
     if (g.engagement) g.engagement.projectiles.length = 0;
     g.ship.buffs = (g.ship.buffs ?? []).filter((b) => b.id !== 'fire_at_will');
+    // And she goes back in the casualty list if that is where the run left her.
+    if (globalThis.__reviveGunner) {
+      const gunner = g.crew.officers.find((o) => o.abilities?.includes('fire_at_will'));
+      gunner?.kill('killed in action');
+      globalThis.__reviveGunner = false;
+    }
     globalThis.__app.render();
   });
 
@@ -3189,6 +3204,93 @@ try {
     window.__app.render();
   });
 
+  // ------------------------------------------ the third answer to the Directive
+  //
+  // At a pre-warp first contact the panel used to offer two things: withdraw
+  // and learn nothing, or make contact and take eighteen points of standing
+  // and a board of inquiry. The third path — study them without being seen —
+  // was written, given a hazard rating and its own consequence for being
+  // observed, and gated on `sys.preWarp` and `sys.type === 'unexplored'`, two
+  // fields nothing in the data has ever set. So the game's central ethical
+  // question was obey-or-violate with the interesting answer unreachable.
+  await dismissModals(page);
+  const directive = await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    // Grid 4471 — unexplored, unowned, nobody's homeworld, so a covert survey
+    // is the only landing party on offer and "send an away team" is unambiguous.
+    g.locationId = 'deep_1';
+    const orbit = g.enterOrbit();
+    g.beginEncounter({
+      kind: 'first_contact', system: 'deep_1', hostile: false,
+      speciesName: 'Melkotian', title: 'First contact',
+      text: 'An unknown vessel of unfamiliar configuration. No match in the database.',
+      preWarp: true,
+    });
+    app.go('encounter');
+    app.render();
+    const text = document.body.textContent ?? '';
+    const survey = [...document.querySelectorAll('.btn')]
+      .find((b) => /Covert survey/i.test(b.textContent ?? ''));
+    return {
+      orbiting: orbit.ok,
+      screen: app.screen,
+      warns: /General Order One/i.test(text),
+      offersTheSurvey: !!survey,
+      // The rule: every button prints the phrase that does the same thing.
+      printsThePhrase: /send an away team/i.test(survey?.textContent ?? ''),
+      stillOffersBoth: /Withdraw without revealing ourselves/i.test(text)
+        && /Make contact anyway/i.test(text),
+    };
+  });
+  check('a pre-warp contact still warns about General Order One',
+    directive.orbiting && directive.warns, JSON.stringify(directive));
+  check('and offers the covert survey beside obeying and violating',
+    directive.offersTheSurvey && directive.stillOffersBoth, JSON.stringify(directive));
+  check('and the survey button prints the phrase that does the same thing',
+    directive.printsThePhrase, JSON.stringify(directive));
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel')]
+      .find((el) => /General Order One/i.test(el.textContent ?? ''));
+    head?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(SHOTS, '06g-general-order-one.png') });
+
+  // Sent by SPEAKING it, because a path a captain can only reach by clicking
+  // is half a path. One template is on offer here, so the order runs it
+  // outright rather than raising the chooser.
+  await page.fill('.orderbar input', 'send an away team');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(400);
+  const sent = await page.evaluate(() => {
+    const g = window.__app.game;
+    const text = document.body.textContent ?? '';
+    return {
+      ran: /Covert survey/i.test(text) && /objectives/i.test(text),
+      // Whatever came back, the ship's log has the landing party in it now.
+      logged: g.log.some((l) => /landing party|away team|survey/i.test(l.text ?? '')),
+    };
+  });
+  check('and the survey can be sent by saying so', sent.ran, JSON.stringify(sent));
+  await page.waitForTimeout(100);
+  await page.screenshot({ path: join(SHOTS, '06h-covert-survey.png') });
+
+  // Put the world back: the encounter, the orbit and the system all have to go
+  // home, or the fuzz check downstream finds a first contact at Grid 4471 with
+  // the ship sitting at Sol.
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const app = window.__app;
+    const g = app.game;
+    g.encounter = null;
+    g.orbit = null;
+    g.locationId = 'sol';
+    g.mode = 'bridge';
+    g.setAlert('green');
+    app.go('bridge');
+    app.render();
+  });
 
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');

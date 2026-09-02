@@ -2327,7 +2327,14 @@ export class Game {
         }
         // A world that has not invented warp is one you do not announce
         // yourself to. The Prime Directive is the reason this template exists.
-        if (sys.preWarp || sys.type === 'frontier' || sys.type === 'unexplored') {
+        //
+        // The pre-warp flag lives on the ENCOUNTER — buildFirstContact sets it
+        // — and `unexplored` is a flag on the system, not one of its eight
+        // types. Reading `sys.preWarp` and `sys.type === 'unexplored'` meant
+        // this template could never be offered anywhere, which left the
+        // captain at a first contact with obey-or-violate and no third path.
+        // `sys.preWarp` stays in case a system is ever authored with one.
+        if (this.encounter?.preWarp || sys.preWarp || sys.unexplored) {
           out.push({ ...AWAY_TEMPLATES.covert_landing });
         }
       }
