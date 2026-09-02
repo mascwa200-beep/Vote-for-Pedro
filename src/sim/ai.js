@@ -5,7 +5,7 @@
 // really does hold at beam range and grind; Jem'Hadar really do ram.
 
 import { FACTIONS } from '../world/factions.data.js';
-import { WEAPON_RANGE } from './combat.js';
+import { WEAPON_RANGE, stillEngaged } from './combat.js';
 
 const DECISION_INTERVAL = 0.5; // seconds between re-evaluations
 
@@ -72,18 +72,18 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   const doctrine = FACTIONS[ship.faction]?.doctrine ?? 'balanced';
   const rng = engagement.rng;
 
-  // Pick a target.
-  if (!ship.aiTarget || ship.aiTarget.destroyed) {
+  // Pick a target — anything that is no longer in the fight is not one.
+  if (!stillEngaged(ship.aiTarget)) {
     if (opts.allyOf) {
       ship.aiTarget = engagement.liveHostiles[0] ?? null;
     } else {
-      const candidates = [engagement.player, ...engagement.allies].filter((s) => !s.destroyed);
+      const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
       // Prefer whoever is hurting them most, otherwise the player.
       ship.aiTarget = candidates.includes(engagement.player) ? engagement.player : candidates[0];
     }
   }
   const target = ship.aiTarget;
-  if (!target || target.destroyed) return;
+  if (!stillEngaged(target)) return;
 
   const distance = ship.distanceTo(target);
   const want = preferredRange(ship);

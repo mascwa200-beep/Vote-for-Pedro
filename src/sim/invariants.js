@@ -252,6 +252,20 @@ export function checkCombat(eng, { arenaRadius = 2600 } = {}) {
       }
     }
 
+    // The same rule for everyone else's lock, which nothing was checking.
+    //
+    // The player's lock was re-acquired every tick and cleared on withdrawal;
+    // an AI captain's was neither. An ally whose target broke off went on
+    // chasing a ship that is no longer simulated and stopped fighting for the
+    // rest of the battle, with a live hostile alongside it. Nothing in the
+    // game could see that had happened.
+    for (const s of ships) {
+      if (!s?.aiTarget) continue;
+      r.must(seen.has(s.aiTarget), 'eng.aitarget.absent', 'error',
+        `${s.name ?? 'a ship'} is locked on ${s.aiTarget.name ?? '?'}, which has left the fight`,
+        s.name);
+    }
+
     // ---- projectiles ----
     const shots = eng.projectiles ?? [];
     r.must(shots.length <= LIMITS.projectiles, 'eng.projectiles.leak', 'error',
