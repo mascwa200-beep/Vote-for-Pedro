@@ -764,6 +764,53 @@ test('a save with no voyage in it still loads onto the bridge', () => {
   assert.equal(safe.mode, 'bridge');
 });
 
+test('a distress call that was a trap does not follow you home', () => {
+  // `engage` clears the encounter the moment it becomes a battle, with a
+  // comment saying exactly why: left set, the next hail in the campaign is
+  // answered by whoever was in THIS one. The assist branch — the distress call
+  // that turns out to be an ambush — started its fight and returned without
+  // doing the same. So you won, flew four light years, and the game still
+  // believed there was a freighter under attack back at Sol.
+  const g = gameWith({ seed: 21n });
+  const home = g.location;
+  g.beginEncounter({
+    kind: 'distress', hostile: true, title: 'Freighter under attack',
+    system: { id: home.id, name: home.name },
+    factionId: 'orion', lives: 200,
+    ships: [new Ship('orion_raider', { faction: 'orion', name: 'Raider' })],
+  });
+
+  const r = g.resolveEncounter('assist');
+  assert.equal(r.combat, true, 'the trap did not spring');
+  assert.equal(g.encounter, null, 'the encounter outlived the ambush it was');
+
+  // Win it, go somewhere else, and there is nobody there to talk to.
+  g.engagement.end('victory');
+  g.update(1 / 30);
+  g.locationId = g.galaxy.systems.find((s) => s.id !== home.id).id;
+  assert.deepEqual(checkAll(g, { arenaRadius: 3000 }), [],
+    'the checker objects to the state after a trap');
+
+  const hail = g.hail('identify');
+  assert.match(hail.text, /no one to hail/i,
+    `hailing an empty system reached ${hail.text}`);
+});
+
+test('the checker objects to an encounter happening somewhere else', () => {
+  const g = gameWith({ seed: 21n });
+  const elsewhere = g.galaxy.systems.find((s) => s.id !== g.locationId);
+  g.encounter = {
+    kind: 'distress', title: 'Somewhere else entirely',
+    system: { id: elsewhere.id, name: elsewhere.name },
+  };
+  assert.ok(checkAll(g, { arenaRadius: 3000 }).some((v) => v.code === 'game.encounter.elsewhere'),
+    'a live encounter in another system broke no rule');
+
+  // And one that is where the ship is, is simply an encounter.
+  g.encounter.system = { id: g.locationId, name: g.location.name };
+  assert.ok(!checkAll(g, { arenaRadius: 3000 }).some((v) => v.code === 'game.encounter.elsewhere'));
+});
+
 test('a trap has no way out that involves shooting', () => {
   // The whole point of these: `engage` is not on the menu and withdrawing does
   // not work. If a trap ever grows a combat option, this fails.
