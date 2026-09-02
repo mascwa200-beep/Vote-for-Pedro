@@ -226,17 +226,46 @@ export const HAIL_ENDING = {
   acknowledged: 'parley',
 };
 
-/** Standing change from an action, before the ledger applies it. */
+/**
+ * What an act costs a captain in standing, in one place.
+ *
+ * The table is only worth having if the game reads it, and half of it was not
+ * read at all — six of the eleven had no consumer, and three of those had
+ * quietly come to contradict what the game actually does:
+ *
+ *   `violated_border` said -14. Crossing the Romulan Neutral Zone costs -20,
+ *   written out as a number in `Game.crossTheZone`. Measured, not read.
+ *
+ *   `prime_directive_violation` said -6. Revealing the ship to a pre-warp
+ *   culture costs -18. The -6 belongs to a different act entirely — being
+ *   seen during a covert survey — which is the kind of thing a shared
+ *   constant exists to stop happening.
+ *
+ *   `first_contact_peaceful` said +12 and the code said 12, agreeing by
+ *   coincidence rather than by reference.
+ *
+ * Three more described nothing the game does and are gone rather than left
+ * to look authoritative: a surrender's standing comes from the hail result's
+ * own `standingDelta` twenty lines above (and was -4, the opposite sign to
+ * the +5 this table claimed), nothing in the game refuses a surrender, and a
+ * treaty's standing is written by the episode that signs it.
+ *
+ * A test in wiring.test.js now asserts every entry here is read by something,
+ * the same way one already asserts every sound cue is either played or
+ * reserved with a reason.
+ */
 export const STANDING_EFFECTS = {
   destroyed_their_ship: -12,
   destroyed_civilian: -20,
-  accepted_surrender: +5,
-  refused_surrender: -10,
   answered_distress: +6,
   ignored_distress: -3,
   completed_escort: +8,
-  violated_border: -14,
-  treaty_signed: +25,
   first_contact_peaceful: +12,
-  prime_directive_violation: -6,
+  // Crossing a line somebody signed a treaty over. RESEARCH.md §23.
+  violated_border: -20,
+  // Being seen by a culture that has not invented warp — the act itself, not
+  // the lesser one of being spotted while trying not to be.
+  prime_directive_violation: -18,
+  // And that lesser one, which the covert survey pays when it goes wrong.
+  observed_during_survey: -6,
 };
