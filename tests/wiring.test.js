@@ -714,6 +714,56 @@ test('a ship that cannot run says so instead of pretending', () => {
     `nothing said we were stuck: ${said}`);
 });
 
+test('closing the app at warp does not put the ship back where it started', () => {
+  // The transit was not in the save at all, and `Game.load` forced the mode to
+  // the bridge. So a captain who closed the app twenty-three per cent of the
+  // way to Vulcan woke at Sol with the antimatter for the trip already spent,
+  // no days elapsed and no course laid in. The fuel was charged; the voyage
+  // was not. Escapes make it worse, because those transits are not chosen.
+  const g = gameWith({ seed: 12n });
+  const home = g.locationId;
+  const fuelBefore = g.ship.antimatter;
+  assert.equal(g.setCourse('vulcan', 6).ok, true);
+  for (let t = 0; t < 30 * 6 && g.transit; t++) g.update(1 / 30);
+  assert.ok(g.transit, 'the voyage finished before the test could interrupt it');
+  const wasAt = g.transit.progress;
+  assert.ok(wasAt > 0 && wasAt < 1, `progress was ${wasAt}`);
+  assert.ok(g.ship.antimatter < fuelBefore, 'the course was free');
+
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.ok(back.transit, 'the voyage was lost with the app');
+  assert.equal(back.mode, 'transit', `woke up in ${back.mode} mode`);
+  assert.equal(back.transit.to.id, 'vulcan', 'woke up on a different course');
+  assert.ok(Math.abs(back.transit.progress - wasAt) < 1e-9,
+    `resumed at ${back.transit.progress} rather than ${wasAt}`);
+
+  // And it still finishes, which is the point of keeping it.
+  const dateBefore = back.clock.stardate;
+  for (let t = 0; t < 30 * 200 && back.transit; t++) back.update(1 / 30);
+  assert.equal(back.transit, null, 'the restored voyage never arrived');
+  assert.equal(back.locationId, 'vulcan', `arrived at ${back.locationId}`);
+  assert.notEqual(back.locationId, home);
+  assert.ok(back.clock.stardate > dateBefore, 'arriving took no time');
+});
+
+test('a save with no voyage in it still loads onto the bridge', () => {
+  // Every save written before this existed, and every save made in orbit.
+  const g = gameWith({ seed: 12n });
+  const data = JSON.parse(JSON.stringify(g.save()));
+  delete data.transit;
+  delete data.mode;
+  const back = Game.load(data);
+  assert.equal(back.transit, null);
+  assert.equal(back.mode, 'bridge');
+
+  // And a voyage to nowhere is refused rather than restored.
+  const broken = JSON.parse(JSON.stringify(g.save()));
+  broken.transit = { toId: 'no_such_system', path: [], elapsedReal: 1 };
+  const safe = Game.load(broken);
+  assert.equal(safe.transit, null, 'loaded a course to a system that does not exist');
+  assert.equal(safe.mode, 'bridge');
+});
+
 test('a trap has no way out that involves shooting', () => {
   // The whole point of these: `engage` is not on the menu and withdrawing does
   // not work. If a trap ever grows a combat option, this fails.

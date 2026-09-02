@@ -188,6 +188,59 @@ export class Transit {
   }
 
   /**
+   * A voyage, written down.
+   *
+   * The whole transit was missing from the save. Close the app twenty-three per
+   * cent of the way to Vulcan and you woke at Sol with the antimatter for the
+   * trip already spent, no days elapsed, and no course — the fuel was charged
+   * and the journey was not. Escapes made it worse, because those transits are
+   * not chosen.
+   *
+   * The route is stored as its system ids and rebuilt on load, so a save is not
+   * a snapshot of the galaxy's objects.
+   */
+  save() {
+    return {
+      path: this.route?.path ?? [],
+      lightYears: this.route?.lightYears ?? 0,
+      charted: this.route?.charted ?? true,
+      warpFactor: this.warpFactor,
+      hours: this.totalHours,
+      fuel: this.fuel,
+      fromId: this.from?.id ?? null,
+      toId: this.to?.id ?? null,
+      elapsedReal: this.elapsedReal,
+      interrupted: this.interrupted,
+    };
+  }
+
+  /** @returns {Transit|null} — null for anything that is not a saved voyage. */
+  static load(data, galaxy) {
+    if (!data?.toId || !galaxy) return null;
+    const to = galaxy.get(data.toId);
+    const from = galaxy.get(data.fromId);
+    if (!to) return null;
+    const t = new Transit({
+      route: {
+        path: Array.isArray(data.path) && data.path.length ? data.path : [data.fromId, data.toId],
+        lightYears: Number(data.lightYears) || 0,
+        charted: data.charted !== false,
+      },
+      warpFactor: Number(data.warpFactor) || 1,
+      hours: Number(data.hours) || 0,
+      fuel: Number(data.fuel) || 0,
+      from: from ?? to,
+      to,
+    });
+    // How far along it was. Clamped, because a hand-edited save should drop the
+    // ship out at the far end rather than into a transit that never completes.
+    t.elapsedReal = Math.max(0, Math.min(t.realSeconds, Number(data.elapsedReal) || 0));
+    t.remainingHours = t.totalHours * (1 - t.progress);
+    t.interrupted = data.interrupted === true;
+    return t;
+  }
+
+  /**
    * Current position along the route, for the map.
    *
    * The third axis is interpolated with the other two. It has to be: the chart
