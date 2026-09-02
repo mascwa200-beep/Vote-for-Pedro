@@ -36,7 +36,7 @@ import { Reputation, REP_TIERS, MAX_TIER, TRACK_LIST } from '../src/rules/reputa
 import { Ledger } from '../src/core/ledger.js';
 import {
   SPECIALITIES, DIVISIONS, specialitiesIn, rosterSizeFor,
-  beginAssignment, advanceAssignments, dutySlots, specialistBonusFor,
+  beginAssignment, advanceAssignments, dutySlots, specialistBonusFor, replaceLosses,
 } from '../src/sim/duty.js';
 import { TIERS, TRAIT_LIST, SHAKEDOWN, EARNINGS } from '../src/sim/mastery.js';
 import { offerCommand, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
@@ -2433,5 +2433,96 @@ describe('what a voyage teaches a crew', () => {
     // The shakedown is the opening of a commission, not a campaign in itself.
     assert.ok(TIERS[0].at / perVoyage < 20,
       `the shakedown alone takes ${Math.ceil(TIERS[0].at / perVoyage)} voyages`);
+  });
+});
+
+describe('Starfleet makes up the ship’s complement', () => {
+  const atDock = (g) => { g.locationId = 'sol'; return g; };
+  const kill = (g, n) => {
+    for (const p of g.dutyRoster.filter((x) => x.state !== 'lost').slice(0, n)) p.state = 'lost';
+    return g;
+  };
+  const living = (g) => g.dutyRoster.filter((p) => p.state !== 'lost').length;
+
+  test('a ship that has lost specialists gets replacements at a starbase', () => {
+    // The roster was built once and could only shrink. Over 120 rounds of duty
+    // a complement of twelve lost a mean of 4.6 people, and because dutySlots
+    // counts the able, the ship went from running three details to one.
+    const g = atDock(kill(new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' }), 4));
+    const before = living(g);
+    const posted = replaceLosses(g);
+    assert.ok(posted.length > 0, 'nobody was posted aboard');
+    assert.ok(living(g) > before, `still ${living(g)} aboard`);
+    for (const p of posted) {
+      assert.ok(p.name && p.label, 'a replacement arrived with no name or billet');
+      assert.equal(p.state, 'aboard', 'a replacement arrived already unavailable');
+    }
+  });
+
+  test('and nowhere else', () => {
+    const g = kill(new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' }), 4);
+    g.locationId = 'deep_2';   // no dock out there
+    assert.deepEqual(replaceLosses(g), [], 'people were posted aboard in deep space');
+  });
+
+  test('the dead stay dead — the billet is refilled, not the person', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    const doomed = g.dutyRoster[0];
+    const wasCalled = doomed.name;
+    kill(g, 1);
+    atDock(g);
+    const posted = replaceLosses(g);
+    assert.ok(posted.length, 'nobody replaced the casualty');
+    assert.equal(doomed.state, 'lost', 'the dead came back');
+    assert.ok(g.dutyRoster.some((p) => p.state === 'lost' && p.name === wasCalled),
+      'the casualty was erased rather than remembered');
+    assert.ok(posted.every((p) => p.name !== wasCalled || p !== doomed),
+      'the replacement is the same object as the person who died');
+  });
+
+  test('a full ship is not given people it has no billets for', () => {
+    const g = atDock(new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' }));
+    const before = g.dutyRoster.length;
+    assert.deepEqual(replaceLosses(g), [], 'a full roster was topped up anyway');
+    assert.equal(g.dutyRoster.length, before, 'the roster grew with nobody missing');
+  });
+
+  test('and never past the complement, however many calls it takes', () => {
+    const g = atDock(kill(new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' }), 8));
+    const want = rosterSizeFor(g.ship.maxCrew);
+    for (let i = 0; i < 20; i++) replaceLosses(g);
+    assert.equal(living(g), want, `${living(g)} aboard on a ship rated for ${want}`);
+  });
+
+  test('the replacement fills the billet that is actually empty', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    // Kill everyone in one speciality and nobody else.
+    const gap = g.dutyRoster[0].speciality;
+    for (const p of g.dutyRoster) if (p.speciality === gap) p.state = 'lost';
+    atDock(g);
+    const posted = replaceLosses(g, { limit: 1 });
+    assert.ok(posted.length, 'nobody came');
+    assert.equal(posted[0].speciality, gap,
+      `lost the ${gap} and was sent a ${posted[0].speciality}`);
+  });
+
+  test('replacements are the same people for the same seed, forever', () => {
+    const make = () => {
+      const g = atDock(kill(new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' }), 3));
+      return replaceLosses(g).map((p) => `${p.name}/${p.speciality}`);
+    };
+    assert.deepEqual(make(), make(), 'the same save produced different replacements');
+  });
+
+  test('and posting them does not shift anything else that is seeded', () => {
+    // The original roster shipped drawing from `game.rng` and moved every
+    // seeded outcome downstream of it. This uses a derived stream.
+    const roll = (post) => {
+      const g = atDock(kill(new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' }), 3));
+      if (post) replaceLosses(g);
+      return [g.rng.float(), g.rng.float(), g.rng.float()];
+    };
+    assert.deepEqual(roll(true), roll(false),
+      'posting replacements moved the shared random stream');
   });
 });

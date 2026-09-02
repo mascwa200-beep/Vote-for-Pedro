@@ -20,6 +20,7 @@
 import { HAZARD_LEVEL } from './away.js';
 import { emit } from '../core/events.js';
 import { generateOfficer } from '../world/crews.data.js';
+import { RNG, hashSeed } from '../core/rng.js';
 
 /**
  * What a specialist is trained for.
@@ -166,6 +167,80 @@ export function buildDutyRoster(rng, maxCrew) {
  *
  * `grant` speaks the vocabulary the reputation projects already speak.
  */
+/**
+ * Make up the ship's complement of specialists at a starbase.
+ *
+ * The roster was built once and could only ever shrink. Measured over 120
+ * rounds of filling every duty slot, a complement of twelve lost a mean of
+ * 4.6 people — thirty-eight per cent of the ship's specialists, permanently —
+ * and because `dutySlots` counts the able, the number of details the ship
+ * could run fell with it, from three to one. The whole system quietly
+ * throttled itself out of existence over a long commission, and nothing could
+ * bring it back.
+ *
+ * Starfleet replaces casualties. `loseTheShip` already says so about the four
+ * hundred and twenty — "replacements are found at the next starbase" — and the
+ * same is true of the twelve who have names.
+ *
+ * Two at a time, and only where Starfleet keeps people. A billet is refilled;
+ * the person is not. Whoever was lost stays lost, in the ledger and in the
+ * log, and somebody else is posted aboard to do the job — which is what makes
+ * the loss cost something while stopping it cost everything.
+ *
+ * The stream is derived from the seed and the number of people already posted,
+ * never drawn from `game.rng`: drawing from the shared stream would shift
+ * every seeded outcome downstream of it, which is exactly the bug the original
+ * roster shipped with.
+ *
+ * @returns {DutyOfficer[]} the people who came aboard, newest first
+ */
+export function replaceLosses(game, { limit = 2 } = {}) {
+  const roster = game?.dutyRoster;
+  if (!Array.isArray(roster)) return [];
+  // Only where there are people to post. `dock` is the facility that means a
+  // ship can be stored, repaired and manned.
+  if (!(game.location?.facilities ?? []).includes('dock')) return [];
+
+  const want = rosterSizeFor(game.ship?.maxCrew ?? 0);
+  const present = roster.filter((p) => p.state !== 'lost').length;
+  const short = Math.min(limit, want - present);
+  if (short <= 0) return [];
+
+  const posted = [];
+  for (let i = 0; i < short; i++) {
+    const n = roster.length + i;
+    const rng = new RNG(hashSeed(`replacement:${game.seed}:${n}`));
+    // The billet that is actually empty, so a ship that lost its surgeon gets
+    // a surgeon rather than a third cartographer.
+    //
+    // A GAP first — a speciality this ship carried and has now buried — before
+    // any speciality that merely happens to be unfilled. There are fourteen
+    // specialities and at most fourteen billets, so a roster of twelve always
+    // has a couple it never carried, and picking from those meant a ship that
+    // lost its surgeon could be sent a yeoman with the surgeon's billet still
+    // empty. The test for this failed on the first version and was right to.
+    const held = new Set(roster.filter((p) => p.state !== 'lost').map((p) => p.speciality));
+    const buried = SPECIALITY_LIST.filter(
+      (spec) => !held.has(spec.id) && roster.some((p) => p.speciality === spec.id),
+    );
+    const unfilled = SPECIALITY_LIST.filter((spec) => !held.has(spec.id));
+    const pool = buried.length ? buried : (unfilled.length ? unfilled : SPECIALITY_LIST);
+    const spec = rng.pick(pool);
+    const person = generateOfficer(rng, spec.station);
+    posted.push(new DutyOfficer({
+      id: `duty_${n}`,
+      name: person.name,
+      species: person.species,
+      speciesId: person.speciesId,
+      speciality: spec.id,
+      expertise: person.expertise,
+      discipline: person.discipline,
+    }));
+  }
+  roster.push(...posted);
+  return posted;
+}
+
 export const ASSIGNMENTS = {
   survey_detail: {
     id: 'survey_detail', name: 'Survey detail', hours: 18,
