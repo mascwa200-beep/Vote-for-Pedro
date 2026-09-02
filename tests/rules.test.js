@@ -25,6 +25,7 @@ import {
 import { findingFor, sitsAt, venueFor } from '../src/rules/inquiry.js';
 import { nextCommandFor, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { availableHails } from '../src/sim/diplomacy.js';
+import { rollEncounter } from '../src/world/encounters.js';
 import { Mission } from '../src/missions/engine.js';
 import { Ship } from '../src/sim/ship.js';
 import { AwayTeam, CHECK_TYPES } from '../src/sim/away.js';
@@ -974,9 +975,8 @@ describe('a reputation project that grants nothing', () => {
   // The ledger of what is still dead. It shrinks as perks are wired up, and a
   // twenty-sixth dead perk fails this rather than joining the pile quietly.
   const STILL_UNWIRED = [
-    'border_warning', 'cardassian_ally', 'crew_replacement', 'dmz_passage',
-    'folk_hero', 'reduced_detection', 'romulan_accord', 'route_intel',
-    'see_all_encounters',
+    'border_warning', 'cardassian_ally', 'dmz_passage', 'folk_hero',
+    'romulan_accord', 'see_all_encounters',
   ].sort();
 
   test('the perks nothing reads are exactly the ones we know about', () => {
@@ -1223,6 +1223,79 @@ describe('a reputation project that grants nothing', () => {
     // pieces anyway.
     const added = rich.held.slice(-2);
     assert.notEqual(added[0], added[1], `the hulk yielded two of the same: ${added.join(', ')}`);
+  });
+
+  test('signal dampening quietens hostile space, and only hostile space', () => {
+    // Rates over 3,000 rolls, not one: an encounter table is a distribution
+    // and a single draw says nothing about it.
+    const rate = (opts, systemId) => {
+      let n = 0;
+      for (let i = 0; i < 3000; i++) {
+        const e = rollEncounter(new RNG(BigInt(i + 1)), systemId, opts);
+        if (e && e.kind !== 'quiet' && e.kind !== 'anomaly') n++;
+      }
+      return n / 3000;
+    };
+    const hostile = { plain: rate({}, 'qonos'), damped: rate({ quietInHostileSpace: true }, 'qonos') };
+    assert.ok(hostile.damped < hostile.plain * 0.85,
+      `"encounters trigger less often in hostile space": ${(hostile.plain * 100).toFixed(1)}% -> ${(hostile.damped * 100).toFixed(1)}%`);
+    // Nobody is looking for you at Sol.
+    assert.equal(rate({ quietInHostileSpace: true }, 'sol'), rate({}, 'sol'),
+      'signal dampening changed how often something finds you in Federation space');
+  });
+
+  test('a trader network halves the hostile encounters, in charted space only', () => {
+    const hostileShare = (opts) => {
+      let hostile = 0;
+      let total = 0;
+      for (let i = 0; i < 3000; i++) {
+        const e = rollEncounter(new RNG(BigInt(i + 1)), 'qonos', opts);
+        if (!e) continue;
+        total++;
+        if (e.hostile) hostile++;
+      }
+      return hostile / total;
+    };
+    const plain = hostileShare({});
+    const halved = hostileShare({ halveHostile: true });
+    assert.ok(halved < plain * 0.7,
+      `"hostile encounters are halved": ${(plain * 100).toFixed(1)}% -> ${(halved * 100).toFixed(1)}%`);
+
+    // And "charted" means somewhere this ship has been. The galaxy's lanes are
+    // charted from the start, so reading it the other way would have made the
+    // perk a flat halving everywhere.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.reputation.perks.add('route_intel');
+    const unvisited = [...g.galaxy.systems.values()].find((s) => !g.galaxy.visited.has(s.id));
+    assert.ok(unvisited, 'the ship has already been everywhere');
+    assert.equal(g.encounterPerks(unvisited.id).halveHostile, false,
+      `the trader network covered ${unvisited.name}, which the ship has never seen`);
+    assert.equal(g.encounterPerks(g.locationId).halveHostile, true,
+      'the trader network did not cover the system the ship is sitting in');
+  });
+
+  test('volunteers come aboard at an inhabited world, not at a nebula', () => {
+    const arriveAt = (perks, type) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      const target = [...g.galaxy.systems.values()]
+        .find((s) => s.type === type && s.id !== g.locationId);
+      assert.ok(target, `the galaxy has no ${type}`);
+      g.ship.crew = Math.round(g.ship.maxCrew * 0.5);
+      g.locationId = target.id;
+      g.transit = { to: target, route: { lightYears: 1 } };
+      const before = g.ship.crew;
+      g.arrive();
+      return { before, after: g.ship.crew, where: target.name };
+    };
+    const none = arriveAt([], 'colony');
+    assert.equal(none.after, none.before, `a half-crewed ship refilled itself at ${none.where}`);
+    const volunteers = arriveAt(['crew_replacement'], 'colony');
+    assert.ok(volunteers.after > volunteers.before,
+      `"crew losses replenish at any inhabited world" left her at ${volunteers.after} of ${volunteers.before}`);
+    const nebula = arriveAt(['crew_replacement'], 'anomaly');
+    assert.equal(nebula.after, nebula.before,
+      `volunteers came aboard at ${nebula.where}, which has nobody in it`);
   });
 
   test('a cloaking device is not left behind with the old hull', () => {

@@ -64,17 +64,26 @@ export const SALVAGE_POOL = [
   'phaser_relay', 'shield_capacitor', 'ablative_armor', 'sensor_array', 'eps_conduits',
 ];
 
-export function rollEncounter(rng, systemId, { ledger, inTransit = false } = {}) {
+export function rollEncounter(rng, systemId, {
+  ledger, inTransit = false, quietInHostileSpace = false, halveHostile = false,
+} = {}) {
   const system = SYSTEM_BY_ID[systemId];
   if (!system) return null;
   const presence = SECTOR_PRESENCE[system.sector] ?? { independent: 2 };
 
   // Safe space is mostly quiet; the frontier is not.
-  const danger = system.faction === 'federation' && !system.contested ? 0.18
+  let danger = system.faction === 'federation' && !system.contested ? 0.18
     : system.contested ? 0.6
     : system.unexplored ? 0.55
     : system.hazard ? 0.5
     : 0.4;
+
+  // "Signal Dampening — encounters trigger less often in hostile space."
+  // Seventy Tokens of Regard, and it did nothing at all: the perk went into a
+  // Set nothing read. In hostile space only, which is what it says and what
+  // Romulan signal work would plausibly buy — a quiet ship is harder to find
+  // where somebody is looking for you, and nobody is looking at Vulcan.
+  if (quietInHostileSpace && system.faction !== 'federation') danger *= 0.6;
 
   // Traps are rare and are not gated on danger: a gravimetric shear does not
   // care whose space you are in.
@@ -95,16 +104,32 @@ export function rollEncounter(rng, systemId, { ledger, inTransit = false } = {})
   ];
   const pick = rng.weighted(table);
 
-  switch (pick.kind) {
-    case 'patrol': return buildPatrol(rng, system, presence, ledger);
-    case 'ambush': return buildAmbush(rng, system, presence, ledger);
-    case 'distress': return buildDistress(rng, system);
-    case 'derelict': return buildDerelict(rng, system);
-    case 'convoy': return buildConvoy(rng, system, presence);
-    case 'first_contact': return buildFirstContact(rng, system);
-    case 'anomaly':
-    default: return buildAnomaly(rng, system);
+  const built = (() => {
+    switch (pick.kind) {
+      case 'patrol': return buildPatrol(rng, system, presence, ledger);
+      case 'ambush': return buildAmbush(rng, system, presence, ledger);
+      case 'distress': return buildDistress(rng, system);
+      case 'derelict': return buildDerelict(rng, system);
+      case 'convoy': return buildConvoy(rng, system, presence);
+      case 'first_contact': return buildFirstContact(rng, system);
+      case 'anomaly':
+      default: return buildAnomaly(rng, system);
+    }
+  })();
+
+  // "Trader Network — hostile encounters in charted space are halved."
+  //
+  // Applied to what was BUILT rather than to the weights, because whether a
+  // patrol is hostile depends on the captain's standing and is not knowable
+  // from the table. Halving the ambush weight would also have halved the
+  // friendly patrols, which is not what a trader network sells.
+  //
+  // The caller decides what "charted" means — it passes the flag only for a
+  // system the ship has actually visited.
+  if (halveHostile && built?.hostile && rng.chance(0.5)) {
+    return rng.chance(0.45) ? { kind: 'quiet', system } : buildAnomaly(rng, system);
   }
+  return built;
 }
 
 /**
