@@ -229,14 +229,44 @@ export class Loadout {
     return true;
   }
 
-  /** Resize when changing ships. Anything that no longer fits goes to inventory. */
+  /**
+   * Resize when changing ships. Anything that no longer fits goes to inventory.
+   *
+   * The hull is the only source of slot counts — nothing in the game grants a
+   * bay that the class does not have — so this is the one place the two can be
+   * reconciled, and every path that puts the captain aboard a different ship
+   * has to come through it. Missing it was worth a great deal in both
+   * directions: a captain moved from a Constitution to a Constellation kept
+   * three tactical consoles firing on a hull with two bays, and a captain
+   * promoted to an Excelsior could never fill her third science bay because
+   * the loadout still believed it was flying a ship with two.
+   *
+   * Reports what happened rather than doing it quietly. Losing a console is
+   * the sort of thing a captain should be told at the moment it happens, and
+   * a bay opening up is the reason to go and look at the ship screen.
+   *
+   * What comes out when a bay is lost is the LAST thing fitted there. Not a
+   * judgement about which console is worth more — there is no honest way to
+   * weigh beam damage against shield capacity — but it is at least the rule a
+   * captain can predict and undo.
+   *
+   * @returns {{stowed: string[], gained: Record<string, number>}}
+   */
   refitTo(slots) {
+    const before = this.slots;
     this.slots = { tactical: 0, engineering: 0, science: 0, device: 0, ...slots };
+    const stowed = [];
+    const gained = {};
     for (const slot of Object.keys(this.equipped)) {
       while (this.used(slot) > this.capacity(slot)) {
-        this.inventory.push(this.equipped[slot].pop());
+        const out = this.equipped[slot].pop();
+        this.inventory.push(out);
+        stowed.push(out);
       }
+      const more = this.capacity(slot) - (before?.[slot] ?? 0);
+      if (more > 0) gained[slot] = more;
     }
+    return { stowed, gained };
   }
 
   save() {
@@ -249,6 +279,11 @@ export class Loadout {
       l.equipped = { tactical: [], engineering: [], science: [], device: [], ...data.equipped };
       l.inventory = data.inventory ?? [];
     }
+    // The hull the captain is standing in wins over whatever the save says he
+    // had bays for. A save written before changing ships resized the loadout
+    // carries the old ship's counts, and loading it would have restored a
+    // Constitution's bays aboard a Constellation.
+    if (slots) l.refitTo(slots);
     return l;
   }
 }

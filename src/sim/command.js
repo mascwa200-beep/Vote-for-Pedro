@@ -115,7 +115,18 @@ function nameFor(game, avoid) {
  * with the shakedown penalty from §20 — and the old one still remembers, for a
  * captain who ever gets her back.
  *
- * @returns {{ok: boolean, ship?: Ship, previous?: string, reason?: string}}
+ * Nor do the bays. The consoles are the captain's, but the holes they go in
+ * belong to the ship, and this used to leave the loadout describing the hull
+ * he had just walked off. Every one of the seventy-two moves along the ladder
+ * was wrong in one direction or the other: a Constitution captain given a
+ * Constellation after a board of inquiry kept three tactical consoles firing
+ * on a hull with two bays, and a Constitution captain promoted to an Excelsior
+ * could never fill her third science bay, because the loadout still allowed
+ * two. So the bays are resized here, and what it cost is returned rather than
+ * discovered later on the ship screen.
+ *
+ * @returns {{ok: boolean, ship?: Ship, previous?: string, reason?: string,
+ *            stowed?: string[], gained?: Record<string, number>}}
  */
 export function takeCommandOf(game, classId, { name = null } = {}) {
   const cls = getShipClass(classId);
@@ -131,10 +142,43 @@ export function takeCommandOf(game, classId, { name = null } = {}) {
   // The track follows the captain, not the hull: the points already earned in
   // other classes stay in the map and are waiting if he ever flies one again.
   if (game.mastery) game.mastery.classId = classId;
+  // Before applyAllMods, which reads the loadout: a console in a bay the new
+  // hull does not have must not still be modifying her.
+  const refit = game.loadout?.refitTo(cls.slots) ?? { stowed: [], gained: {} };
   game.applyAllMods();
 
-  emit('command:changed', { ship: game.ship, previous, classId });
-  return { ok: true, ship: game.ship, previous };
+  emit('command:changed', { ship: game.ship, previous, classId, ...refit });
+  return { ok: true, ship: game.ship, previous, ...refit };
+}
+
+/**
+ * What the yard did to the loadout, in a sentence, or null if nothing changed.
+ *
+ * Shared by all three ways a captain ends up in a different hull — promotion,
+ * a board of inquiry, and the change-of-command screen — because the three had
+ * three different amounts to say about it, and two of them said nothing at all.
+ *
+ * @param {{stowed?: string[], gained?: Record<string, number>}} refit
+ */
+export function yardReport(refit, consoleNames = {}) {
+  const stowed = refit?.stowed ?? [];
+  const gained = Object.entries(refit?.gained ?? {}).filter(([, n]) => n > 0);
+  const parts = [];
+  if (stowed.length) {
+    const names = stowed.map((id) => consoleNames[id]?.name ?? id);
+    parts.push(`She has no bay for ${listOf(names)} — ${stowed.length === 1 ? 'it is' : 'they are'} in stores.`);
+  }
+  if (gained.length) {
+    const bays = gained.map(([slot, n]) => `${n} ${slot}`);
+    parts.push(`She carries ${listOf(bays)} ${gained.length === 1 && gained[0][1] === 1 ? 'bay' : 'bays'} more than the old ship.`);
+  }
+  return parts.length ? parts.join(' ') : null;
+}
+
+/** "a", "a and b", "a, b and c" — the ship's computer does not use commas before "and". */
+function listOf(items) {
+  if (items.length <= 1) return items[0] ?? '';
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
 /**
@@ -156,6 +200,12 @@ export function offerCommand(game) {
     // The cost, said out loud at the moment of the offer rather than discovered
     // afterwards. This is the whole decision.
     cost: game.mastery?.tier ?? 0,
+    // And the other half of it. A bigger ship is not bigger in every bay —
+    // an Excelsior carries one more of nearly everything than a Constitution,
+    // but a Nebula carries one FEWER tactical than an Excelsior, and a captain
+    // who has built his ship around a tactical console ought to know that
+    // before he says yes rather than after the console is in a crate.
+    slots: cls?.slots ?? null,
   };
   emit('command:offered', game.commandOffer);
   return game.commandOffer;
@@ -172,7 +222,7 @@ export function acceptCommandOffer(game) {
   game.ledger?.record('command_accepted', {
     text: `Took command of ${game.ship.name}, a ${offer.name}`,
   });
-  return { ok: true, ship: game.ship, spent };
+  return { ok: true, ship: game.ship, spent, stowed: took.stowed, gained: took.gained };
 }
 
 /** @returns {{ok: boolean, reason?: string, kept?: string}} */

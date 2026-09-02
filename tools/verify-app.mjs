@@ -3030,6 +3030,12 @@ try {
       namesIt: /Starfleet offers you a command/i.test(text),
       saysTheCost: /would go to another captain/i.test(text),
       offersRefusal: new RegExp(`Stay with ${was.name}`, 'i').test(text),
+      // The bays, said before he answers. A bigger ship is not bigger in every
+      // bay, and a console with nowhere to go on the new hull goes into stores.
+      saysTheBays: /Bays: [-+]?\d+ \w+/.test(text) || /The same bays/i.test(text),
+      bayLine: (text.match(/Bays: [^.]+\./) ?? [null])[0],
+      hullBays: g.ship.cls.slots,
+      offerBays: g.commandOffer?.slots ?? null,
     };
   });
   check('a bigger command is offered on the screen',
@@ -3038,6 +3044,8 @@ try {
     command.saysTheCost, JSON.stringify(command));
   check('and refusing it is a button of its own',
     command.offersRefusal, JSON.stringify(command));
+  check('and the offer says how her bays differ from the ship you are flying',
+    command.saysTheBays, JSON.stringify(command));
   await page.evaluate(() => {
     const head = [...document.querySelectorAll('.panel')]
       .find((el) => /Starfleet offers you a command/i.test(el.textContent ?? ''));

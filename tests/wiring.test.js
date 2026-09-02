@@ -2372,6 +2372,110 @@ describe('Starfleet does not ask the same question twice', () => {
   });
 });
 
+describe('the bays belong to the ship, not to the captain', () => {
+  const SLOTS = ['tactical', 'engineering', 'science', 'device'];
+
+  /** Fit something in every bay the hull has, so a change has something to move. */
+  const fill = (g) => {
+    const kit = {
+      tactical: 'phaser_relay',
+      engineering: 'sif_generator',
+      science: 'shield_capacitor',
+      device: 'shield_battery',
+    };
+    for (const s of SLOTS) {
+      while (g.loadout.used(s) < g.loadout.capacity(s)) {
+        g.loadout.acquire(kit[s]);
+        if (!g.loadout.equip(kit[s])) break;
+      }
+    }
+  };
+
+  test('every move along the command ladder leaves the loadout describing the new hull', () => {
+    // takeCommandOf built the new ship and never touched the loadout, so the
+    // slot counts went on describing the hull the captain had walked off.
+    // All seventy-two moves along the ladder were wrong in one direction or
+    // the other; this asserts every one of them.
+    const wrong = [];
+    for (const from of COMMAND_LADDER) {
+      for (const to of COMMAND_LADDER) {
+        if (from.id === to.id) continue;
+        const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+        takeCommandOf(g, from.id);
+        fill(g);
+        takeCommandOf(g, to.id);
+        for (const s of SLOTS) {
+          const hull = g.ship.cls.slots[s] ?? 0;
+          if (g.loadout.capacity(s) !== hull) {
+            wrong.push(`${from.id}->${to.id}: hull has ${hull} ${s}, loadout allows ${g.loadout.capacity(s)}`);
+          }
+          if (g.loadout.used(s) > hull) {
+            wrong.push(`${from.id}->${to.id}: ${g.loadout.used(s)} ${s} consoles in ${hull} bays`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(wrong.slice(0, 8), [],
+      `${wrong.length} of ${COMMAND_LADDER.length * (COMMAND_LADDER.length - 1) * 4} slot counts disagreed with the hull`);
+  });
+
+  test('a console with no bay on the new hull stops modifying her', () => {
+    // The effect, not the count. A Constitution carries three tactical bays
+    // and a Constellation two, so the board of inquiry's replacement used to
+    // fly with three phaser relays firing out of two bays.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    fill(g);
+    const before = g.loadout.shipMods().beamDamage;
+    const took = takeCommandOf(g, 'constellation');
+    const after = g.loadout.shipMods().beamDamage;
+    assert.ok(before > after,
+      `beam damage was ${before.toFixed(4)} on a Constitution and ${after.toFixed(4)} on a Constellation`);
+    assert.ok(took.stowed.includes('phaser_relay'),
+      `the yard did not report the relay it took out: ${JSON.stringify(took.stowed)}`);
+  });
+
+  test('a promotion to a bigger hull can actually fill her extra bays', () => {
+    // The other direction, and the one nothing would ever have shown the
+    // captain: an Excelsior has three science bays, and the loadout went on
+    // allowing the Constitution's two — so the third bay could never be used.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    fill(g);
+    const took = takeCommandOf(g, 'excelsior');
+    assert.equal(took.gained.science, 1, `the yard did not report the new science bay: ${JSON.stringify(took.gained)}`);
+    g.loadout.acquire('shield_emitters');
+    assert.ok(g.loadout.equip('shield_emitters'),
+      `an Excelsior with ${g.ship.cls.slots.science} science bays refused a third science console`);
+  });
+
+  test('and the captain is told what the yard did', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    fill(g);
+    const before = g.log.length;
+    // A Constellation: a smaller tactical bank than the Constitution she is
+    // flying, so a relay has to come out.
+    const cls = getShipClass('constellation');
+    g.commandOffer = { classId: 'constellation', name: cls.name, hull: cls.hull, crew: cls.crew, cost: 0, slots: cls.slots };
+    const r = g.acceptCommand();
+    assert.ok(r.ok, r.reason);
+    const said = g.log.slice(before).map((e) => e.text ?? '').join(' ');
+    assert.match(said, /no bay for/i, `nothing in the log mentioned the stowed console: "${said}"`);
+    assert.match(said, /Phaser Relay/i, 'the console was not named');
+  });
+
+  test('a save written before the bays were reconciled is corrected on load', () => {
+    // A campaign saved mid-flight under the old code carries the wrong slot
+    // counts. The hull is the truth, so loading reconciles rather than
+    // restoring bays the ship does not have.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    fill(g);
+    const stale = g.loadout.save();
+    const l = Loadout.load(stale, { tactical: 1, engineering: 1, science: 1, device: 1 });
+    assert.equal(l.capacity('tactical'), 1,
+      `loaded a save that claimed ${stale.slots.tactical} tactical bays onto a hull with 1`);
+    assert.equal(l.used('tactical'), 1, 'consoles stayed fitted in bays the hull does not have');
+  });
+});
+
 describe('what a voyage teaches a crew', () => {
   /** Fly one course at a warp factor and report the mastery it paid. */
   const voyage = (from, to, warp) => {
