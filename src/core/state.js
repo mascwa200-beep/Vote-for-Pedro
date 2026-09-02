@@ -1187,6 +1187,13 @@ export class Game {
         this.clock.advanceStardate(0.6);
         out.messages.push(`Assistance rendered. ${lives} lives saved.`);
         if (enc.hostile && enc.ships?.length) {
+          // Spent, exactly as in `engage` above and for the same reason. The
+          // distress call that turns out to be a trap left this set: you won
+          // the fight, flew four light years, and the game still believed
+          // there was a freighter under attack back at Sol — so hailing at the
+          // new system opened a channel to the ambushers' faction, because
+          // `hail` reads the encounter's faction before the engagement's.
+          this.encounter = null;
           this.startCombat(enc.ships, { name: enc.title });
           out.combat = true;
           return out;

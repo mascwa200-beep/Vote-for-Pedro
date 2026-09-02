@@ -22855,6 +22855,20 @@ function checkGame(game) {
         `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
     }
 
+    // An encounter that belongs somewhere else.
+    //
+    // The same orphan shape as `helpInbound` above, and the same cause: a
+    // branch that started a fight and returned without clearing what it was
+    // holding. A distress call that turned out to be a trap survived the
+    // battle, and `hail` reads the encounter's faction before the
+    // engagement's — so hailing anywhere afterwards opened a channel to the
+    // ambushers, in a system they were never in. Invisible, because the
+    // encounter panel only draws in ENCOUNTER mode.
+    if (game.encounter?.system?.id) {
+      r.must(game.encounter.system.id === game.locationId, 'game.encounter.elsewhere', 'error',
+        `an encounter at ${game.encounter.system.id} is live while the ship is at ${game.locationId}`);
+    }
+
     // An episode waiting for a fight that is not coming.
     //
     // A mission choice that orders a battle now holds its reward until the
@@ -27468,6 +27482,13 @@ class Game {
         this.clock.advanceStardate(0.6);
         out.messages.push(`Assistance rendered. ${lives} lives saved.`);
         if (enc.hostile && enc.ships?.length) {
+          // Spent, exactly as in `engage` above and for the same reason. The
+          // distress call that turns out to be a trap left this set: you won
+          // the fight, flew four light years, and the game still believed
+          // there was a freighter under attack back at Sol — so hailing at the
+          // new system opened a channel to the ambushers' faction, because
+          // `hail` reads the encounter's faction before the engagement's.
+          this.encounter = null;
           this.startCombat(enc.ships, { name: enc.title });
           out.combat = true;
           return out;

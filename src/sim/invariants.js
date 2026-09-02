@@ -404,6 +404,20 @@ export function checkGame(game) {
         `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
     }
 
+    // An encounter that belongs somewhere else.
+    //
+    // The same orphan shape as `helpInbound` above, and the same cause: a
+    // branch that started a fight and returned without clearing what it was
+    // holding. A distress call that turned out to be a trap survived the
+    // battle, and `hail` reads the encounter's faction before the
+    // engagement's — so hailing anywhere afterwards opened a channel to the
+    // ambushers, in a system they were never in. Invisible, because the
+    // encounter panel only draws in ENCOUNTER mode.
+    if (game.encounter?.system?.id) {
+      r.must(game.encounter.system.id === game.locationId, 'game.encounter.elsewhere', 'error',
+        `an encounter at ${game.encounter.system.id} is live while the ship is at ${game.locationId}`);
+    }
+
     // An episode waiting for a fight that is not coming.
     //
     // A mission choice that orders a battle now holds its reward until the
