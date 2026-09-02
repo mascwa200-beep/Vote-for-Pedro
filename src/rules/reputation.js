@@ -63,6 +63,10 @@ export const REP_TRACKS = {
         grant: { perk: 'boarding_master' }, text: 'Your boarding parties are twice as effective.' },
       { id: 'kdf_t3_bloodwine', tier: 3, cost: 100, name: 'Warrior\'s Standing',
         grant: { perk: 'klingon_passage' }, text: 'Free passage through Klingon space, and a seat at the table.' },
+      // NOT `game.firstStrike`, which is a different thing wearing the same
+      // name: that flag means the captain opened fire on a contact that was
+      // not hostile, and it costs 25% off every diplomacy roll. Wiring this
+      // perk to it would punish a captain for the reward he bought.
       { id: 'kdf_t4_cloak_detect', tier: 4, cost: 170, name: 'Battle Doctrine Exchange',
         grant: { perk: 'first_strike' }, text: 'You always fire first in an engagement.' },
       { id: 'kdf_t5_ally', tier: 5, cost: 290, name: 'Sworn Ally of the Empire',

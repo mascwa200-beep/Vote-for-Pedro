@@ -531,10 +531,23 @@ export function reputationScreen(app) {
       nodes.push(el('p', { class: 'hint', text: `Locked: ${locked.map((p) => `${p.name} (${REP_TIERS[p.tier].name})`).join(' · ')}` }));
     }
     if (t.completed.length) {
-      nodes.push(el('div', {}, t.completed.map((id) => {
+      // What they are still doing for you, not just that you bought them.
+      // These were a row of green pills carrying a name and nothing else, so a
+      // captain twenty hours into a commission had no way to see what any of
+      // them was worth — which mattered rather a lot given that most of them
+      // were, at the time, worth nothing.
+      nodes.push(el('h3', { text: 'In force' }));
+      for (const id of t.completed) {
         const p = track.projects.find((x) => x.id === id);
-        return p ? pill(p.name, 'green') : null;
-      })));
+        if (!p) continue;
+        nodes.push(el('div', { class: 'skill' }, [
+          el('div', { class: 'info' }, [
+            el('b', { text: p.name }),
+            el('p', { class: 'muted small', text: p.text }),
+          ]),
+          pill('active', 'green'),
+        ]));
+      }
     }
 
     const card = panel(track.name, nodes, t.tier >= 3 ? 'good' : '');
