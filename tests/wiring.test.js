@@ -2840,3 +2840,58 @@ test('a set that will not fit the starting hull is a fact, not a surprise', () =
   assert.ok(roomFor.length > 0,
     'no hull in the game can carry the duotronic suite — it is dead content');
 });
+
+// ==================================================== every station opens something
+
+test('every station a captain can walk up to opens a console with something in it', () => {
+  // The pattern this file exists for, applied to the walkable ship. A station
+  // in `interiors.data.js` declares a `panel` key; `STATION_PANEL` in main.js
+  // translates it; `openConsole` switches on the result. Three lists kept in
+  // step by hand, and a key that falls out of step does not fail — it lands on
+  // the `default:` branch, which pushes "Working, Captain." and nothing else.
+  //
+  // That is what the briefing room's briefing screen did: `missions` mapped to
+  // `missions`, `openConsole` had no case for it, and the one place on the
+  // ship devoted to standing orders opened a blank console while `missionPanel`
+  // sat two files away.
+  const MAIN = readFileSync(join(HERE, '..', 'src', 'main.js'), 'utf8');
+
+  // The alias map, read from the source rather than duplicated here — a copy
+  // would go stale in exactly the way this test is about.
+  const mapSrc = MAIN.match(/const STATION_PANEL = \{([\s\S]*?)\n\};/);
+  assert.ok(mapSrc, 'STATION_PANEL is not where this test expects it in main.js');
+  const alias = {};
+  for (const [, from, to] of mapSrc[1].matchAll(/(\w+)\s*:\s*'([\w]+)'/g)) alias[from] = to;
+  assert.ok(Object.keys(alias).length > 8, `only parsed ${Object.keys(alias).length} aliases`);
+
+  // The keys `openConsole` actually answers to.
+  const bodySrc = MAIN.slice(MAIN.indexOf('openConsole(key, station) {'));
+  const handled = new Set([...bodySrc.slice(0, bodySrc.indexOf('\n  }')).matchAll(/case '([\w]+)':/g)]
+    .map((m) => m[1]));
+  assert.ok(handled.size > 8, `only parsed ${handled.size} console cases`);
+
+  const dead = [];
+  for (const [roomId, room] of Object.entries(ROOMS)) {
+    for (const st of room.stations ?? []) {
+      if (!st.panel) continue;
+      const key = alias[st.panel] ?? st.panel;
+      if (!handled.has(key)) dead.push(`${roomId}/${st.label} (panel "${st.panel}" -> "${key}")`);
+    }
+  }
+  assert.deepEqual(dead, [],
+    `stations whose console falls through to "Working, Captain.": ${dead.join('; ')}`);
+});
+
+test('and every alias points at a key the console answers to', () => {
+  // The other half: an alias that names a case nobody wrote is the same defect
+  // one step earlier, and it would go unnoticed until a station used it.
+  const MAIN = readFileSync(join(HERE, '..', 'src', 'main.js'), 'utf8');
+  const mapSrc = MAIN.match(/const STATION_PANEL = \{([\s\S]*?)\n\};/);
+  const bodySrc = MAIN.slice(MAIN.indexOf('openConsole(key, station) {'));
+  const handled = new Set([...bodySrc.slice(0, bodySrc.indexOf('\n  }')).matchAll(/case '([\w]+)':/g)]
+    .map((m) => m[1]));
+  const bad = [...mapSrc[1].matchAll(/(\w+)\s*:\s*'([\w]+)'/g)]
+    .filter(([, , to]) => !handled.has(to))
+    .map(([, from, to]) => `${from} -> ${to}`);
+  assert.deepEqual(bad, [], `STATION_PANEL aliases with no console case: ${bad.join(', ')}`);
+});

@@ -276,13 +276,7 @@ export function chairConsole(app) {
   ], g.ship.hullPct < 0.4 ? 'danger' : g.ship.hullPct < 0.8 ? 'warn' : ''));
 
   // --- Missions here ---
-  const missions = g.availableMissions();
-  if (missions.length) {
-    root.append(panel('Orders Available', missions.map((m) =>
-      button(m.title, tap(() => { app.startMission(m.id); }), {
-        color: 'amber', sub: m.summary,
-      }))));
-  }
+  root.append(ordersAvailablePanel(app));
 
   // --- Actions ---
   const actions = [];
@@ -1917,6 +1911,56 @@ function stageElsewhere(g, stage) {
  * changed is that it hangs on the bridge you are standing on rather than
  * replacing it.
  */
+/**
+ * The orders on the boards here.
+ *
+ * Extracted from the bridge screen so the briefing room shows the same thing
+ * rather than a second implementation of it, and so the buttons can print the
+ * phrase that does the same job — which they could not, because until
+ * `take_mission` there was no phrase. Taking standing orders was the one act
+ * in the game a captain could not perform with his voice.
+ */
+export function ordersAvailablePanel(app) {
+  const g = app.game;
+  const missions = g.availableMissions();
+  if (!missions.length) return el('div', {});
+  return panel('Orders Available', missions.map((m) =>
+    button(m.title, tap(() => { app.startMission(m.id); }), {
+      color: 'amber',
+      sub: m.summary,
+      say: 'take the mission',
+    })));
+}
+
+/**
+ * The briefing room's screen.
+ *
+ * Its station declared `panel: 'missions'`, `STATION_PANEL` passed that
+ * through unchanged, and `openConsole` had no case for it — so the one place
+ * on the ship devoted to standing orders fell through to the `default:` branch
+ * and said "Working, Captain." while `missionPanel` sat in this file.
+ */
+export function briefingPanel(app) {
+  const g = app.game;
+  const wrap = el('div', {});
+  const running = g.missions.active;
+  if (running && !running.complete) {
+    wrap.append(missionPanel(app));
+    return wrap;
+  }
+  const orders = g.availableMissions();
+  if (orders.length) {
+    wrap.append(el('p', { class: 'muted', text: `${orders.length === 1 ? 'One assignment is' : `${orders.length} assignments are`} on the boards for ${g.location?.name ?? 'this system'}.` }));
+    wrap.append(ordersAvailablePanel(app));
+    return wrap;
+  }
+  wrap.append(panel('Standing Orders', [
+    el('p', { class: 'muted', text: 'Nothing on the boards for us here, Captain.' }),
+    el('p', { class: 'hint', text: 'Orders are posted at the systems that need them. The chart marks the ones with something waiting.' }),
+  ]));
+  return wrap;
+}
+
 export function missionPanel(app) {
   const g = app.game;
   const m = g.missions.active;

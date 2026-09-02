@@ -17560,6 +17560,31 @@ const INTENTS = [
     build: () => ({ action: 'work_shop' }),
   },
   {
+    // Taking standing orders — which could not be SAID at all.
+    //
+    // `mission_choice` picks an option inside an episode and `abandon_mission`
+    // walks away from one, so the only thing a captain could not do with his
+    // voice was accept the orders in the first place. The bridge offered them
+    // as buttons with no phrase printed on them, because there was no phrase.
+    //
+    // Deliberately claims no ordinals: "take the first one" belongs to
+    // `mission_choice`, which owns it and owns it correctly. More than one set
+    // of orders on offer raises the chooser instead, the same way "send an
+    // away team" does when there is more than one place to send them.
+    id: 'take_mission',
+    help: 'Take the standing orders offered here',
+    phrases: [
+      'take the mission', 'accept the mission', 'take the assignment',
+      'accept the assignment', 'accept those orders', 'take those orders',
+      'take the orders', 'we will take it', 'tell them we accept',
+      'we accept', 'start the mission', 'begin the mission',
+      'take standing orders', 'what are our orders', 'read the standing orders',
+    ],
+    keywords: { accept: 2.6, assignment: 2.6, mission: 2, orders: 1.8, take: 1.2 },
+    veto: ['abandon', 'abort', 'break off', 'drop', 'option', 'course', 'warp'],
+    build: () => ({ action: 'take_mission' }),
+  },
+  {
     id: 'abandon_mission',
     help: 'Break off the episode you are in the middle of',
     phrases: [
@@ -31965,13 +31990,7 @@ function chairConsole(app) {
   ], g.ship.hullPct < 0.4 ? 'danger' : g.ship.hullPct < 0.8 ? 'warn' : ''));
 
   // --- Missions here ---
-  const missions = g.availableMissions();
-  if (missions.length) {
-    root.append(panel('Orders Available', missions.map((m) =>
-      button(m.title, tap(() => { app.startMission(m.id); }), {
-        color: 'amber', sub: m.summary,
-      }))));
-  }
+  root.append(ordersAvailablePanel(app));
 
   // --- Actions ---
   const actions = [];
@@ -33594,6 +33613,55 @@ function stageElsewhere(g, stage) {
  * changed is that it hangs on the bridge you are standing on rather than
  * replacing it.
  */
+/**
+ * The orders on the boards here.
+ *
+ * Extracted from the bridge screen so the briefing room shows the same thing
+ * rather than a second implementation of it, and so the buttons can print the
+ * phrase that does the same job — which they could not, because until
+ * `take_mission` there was no phrase. Taking standing orders was the one act
+ * in the game a captain could not perform with his voice.
+ */
+function ordersAvailablePanel(app) {
+  const g = app.game;
+  const missions = g.availableMissions();
+  if (!missions.length) return el('div', {});
+  return panel('Orders Available', missions.map((m) =>
+    button(m.title, tap(() => { app.startMission(m.id); }), {
+      color: 'amber',
+      sub: m.summary,
+      say: 'take the mission',
+    })));
+}
+
+/**
+ * The briefing room's screen.
+ *
+ * Its station declared `panel: 'missions'`, `STATION_PANEL` passed that
+ * through unchanged, and `openConsole` had no case for it — so the one place
+ * on the ship devoted to standing orders fell through to the `default:` branch
+ * and said "Working, Captain." while `missionPanel` sat in this file.
+ */
+function briefingPanel(app) {
+  const g = app.game;
+  const wrap = el('div', {});
+  const running = g.missions.active;
+  if (running && !running.complete) {
+    wrap.append(missionPanel(app));
+    return wrap;
+  }
+  const orders = g.availableMissions();
+  if (orders.length) {
+    wrap.append(el('p', { class: 'muted', text: `${orders.length === 1 ? 'One assignment is' : `${orders.length} assignments are`} on the boards for ${g.location?.name ?? 'this system'}.` }));
+    wrap.append(ordersAvailablePanel(app));
+    return wrap;
+  }
+  wrap.append(panel('Standing Orders', [
+    el('p', { class: 'muted', text: 'Nothing on the boards for us here, Captain.' }),
+    el('p', { class: 'hint', text: 'Orders are posted at the systems that need them. The chart marks the ones with something waiting.' }),
+  ]));
+  return wrap;
+}
 function missionPanel(app) {
   const g = app.game;
   const m = g.missions.active;
@@ -33920,6 +33988,8 @@ __exports.referenceScreen = referenceScreen;
 __exports.optionsScreen = optionsScreen;
 __exports.encounterScreen = encounterScreen;
 __exports.encounterPanel = encounterPanel;
+__exports.ordersAvailablePanel = ordersAvailablePanel;
+__exports.briefingPanel = briefingPanel;
 __exports.missionPanel = missionPanel;
 __exports.missionScreen = missionScreen;
 __exports.hailOptions = hailOptions;
@@ -35218,6 +35288,11 @@ class App {
       case 'chair': this.consoleOpen = null; this.go('chair'); return;
       case 'power': body.push(screens.powerPanel(this)); break;
       case 'shop': body.push(screens.machineShopPanel(this)); break;
+      // The briefing room. Its station has always declared this key and
+      // nothing has ever answered to it, so the screen said "Working,
+      // Captain." and a captain read his standing orders anywhere but the
+      // room the ship keeps for reading them.
+      case 'missions': body.push(screens.briefingPanel(this)); break;
       case 'comms':
         // Hailing is an ORDER, not a console read-out: it goes through the same
         // dispatch a typed "open a channel" does, so there is one path.
@@ -35588,6 +35663,19 @@ class App {
   startMission(id) {
     this.game.startMission(id);
     this.render();
+  }
+
+  /** More than one set of orders on the boards: let the captain say which. */
+  chooseStandingOrders(offered) {
+    audio.play('ui_select');
+    this.modalHandle = this.raiseModal('Standing Orders', [
+      el('p', { class: 'muted', text: 'More than one assignment is on the boards here, Captain.' }),
+      ...offered.map((m) => button(m.title, () => {
+        this.closeModal();
+        this.startMission(m.id);
+      }, { say: 'take the mission', sub: m.summary, color: 'amber' })),
+    ], [button('Not now', () => this.closeModal(), { color: 'ghost' })]);
+    this.needsRender = true;
   }
 
   chooseMission(choiceId) {
@@ -36151,6 +36239,29 @@ class App {
             `${(g.fabricationStatus.hoursRemaining).toFixed(1)} hours to go on the ${status.name.toLowerCase()}.`,
             'report');
         }
+        break;
+      }
+      case 'take_mission': {
+        // Standing orders could be TAKEN only by pressing a button, which is
+        // the one thing this game says it will not have. The refusals go
+        // through the same officer who would voice them, because an order that
+        // does nothing and says nothing is indistinguishable from a broken one.
+        const running = g.missions.active;
+        if (running && !running.complete) {
+          audio.play('ui_deny');
+          ack('comms', `We are still in the middle of ${running.title}, Captain.`);
+          break;
+        }
+        const offered = g.availableMissions();
+        if (!offered.length) {
+          audio.play('ui_deny');
+          ack('comms', 'Nothing on the boards for us here, Captain.');
+          break;
+        }
+        // One set of orders is taken; several are laid out to choose from, the
+        // same way more than one place to send a landing party is.
+        if (offered.length === 1) { this.startMission(offered[0].id); break; }
+        this.chooseStandingOrders(offered);
         break;
       }
       case 'abandon_mission': {
