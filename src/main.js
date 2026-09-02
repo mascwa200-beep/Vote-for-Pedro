@@ -1667,9 +1667,9 @@ class App {
         // A question, so it is answered rather than acted on.
         const m = g.mastery?.report();
         if (!m) { ack('engineering', 'There is nothing to report about the ship, Captain.'); break; }
-        const lines = m.earned.length
-          ? m.earned.map((step) => `${step.name}. ${step.text}`)
-          : ['She is fresh out of the yard, Captain — exactly what her specification says and no more.'];
+        const lines = m.shakedown
+          ? [`${m.shakedown.name}, Captain. ${m.shakedown.text}`]
+          : m.earned.map((step) => `${step.name}. ${step.text}`);
         if (m.next) {
           lines.push(`Next is ${m.next.name}, and we are ${Math.ceil(m.next.remaining)} short of it.`);
         }

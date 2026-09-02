@@ -12,13 +12,38 @@
 // unbalanced warp drive, a wormhole, and phasers that cut out on their own. A
 // ship that has not been worked up is not the same ship as one that has.
 //
-// Tier zero here is the ship exactly as her specification says. Mastery is
-// additive from there — the shakedown material would justify starting BELOW
-// the baseline, and that is a design decision to be taken deliberately rather
-// than smuggled in under a research note.
+// Tier zero is therefore NOT the ship as her specification says: a hull whose
+// crew have not worked her up runs under her own numbers, and the first tier is
+// called Shakedown complete because clearing it is what a shakedown is for.
+// This was decided deliberately after the first version shipped additive-only.
+// A ship that is merely less good than she will become is not the same thing as
+// a ship that is worse than she should be, and the second is the arc.
 
 import { ADDITIVE_MODS } from './ship.js';
 import { getShipClass } from '../world/ships.data.js';
+
+/**
+ * What a hull costs you before her crew have worked her up.
+ *
+ * Every one of these is something the film shows going wrong on a ship that
+ * sailed without a proper shakedown: the drive is out of balance so she does
+ * not make her speed, the phasers run through the engines so the gunnery is
+ * unreliable, and a crew who have never run a casualty on this hull are slow
+ * at it. Cleared entirely by the first tier — this is the opening of a
+ * commission, not a handicap carried through it.
+ *
+ * Deliberately NOT modelled as the phasers cutting out altogether. A discrete
+ * failure at a random moment is a different and much crueller mechanic than a
+ * ship that is simply not yet at her best, and the second is what a shakedown
+ * actually feels like.
+ */
+export const SHAKEDOWN = {
+  name: 'Not yet worked up',
+  mods: { impulse: -0.06, accuracy: -0.05, repairRate: -0.1, shieldRegen: -0.08 },
+  text: 'She is straight out of the yard and nobody aboard has her measure yet. '
+    + 'The drive will not quite make her numbers, the batteries are walking their '
+    + 'shot in, and damage control have never run a casualty on this hull.',
+};
 
 /**
  * The five tiers, and what each one is the crew having learned.
@@ -191,6 +216,12 @@ export class ShipMastery {
       if (ADDITIVE_MODS.has(k)) mods[k] = (mods[k] ?? 0) + v;
       else mods[k] = (mods[k] ?? 1) * (1 + v);
     };
+    // Below the first tier the ship is under her own specification. This is
+    // the only place in the game that subtracts from a hull's own numbers, and
+    // it is cleared the moment the shakedown is complete.
+    if (this.tier < 1) {
+      for (const [k, v] of Object.entries(SHAKEDOWN.mods)) add(k, v);
+    }
     for (const step of this.earned) {
       for (const [k, v] of Object.entries(step.mods)) add(k, v);
     }
@@ -214,6 +245,7 @@ export class ShipMastery {
       next: this.next,
       slotOpen: this.slotOpen,
       trait: this.trait,
+      shakedown: this.tier < 1 ? SHAKEDOWN : null,
     };
   }
 
