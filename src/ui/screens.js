@@ -1363,6 +1363,30 @@ export function shipScreen(app) {
         text: `${Math.round(offer.hull)} hull against ${Math.round(g.ship.maxHull)}, `
           + `and ${offer.crew} aboard against ${g.ship.maxCrew}.`,
       }),
+      // The bays, before he says yes. A bigger ship is not bigger in every
+      // bay — a Nebula carries one fewer tactical console than an Excelsior —
+      // and a console that has no bay on the new hull goes into stores. That
+      // used to be discovered afterwards, on the ship screen, by a captain
+      // wondering where his phaser relay had gone.
+      ...(() => {
+        const now = g.ship?.cls?.slots ?? {};
+        const then = offer.slots ?? {};
+        const moved = ['tactical', 'engineering', 'science', 'device']
+          .map((s) => [s, (then[s] ?? 0) - (now[s] ?? 0)])
+          .filter(([, d]) => d !== 0)
+          .map(([s, d]) => `${d > 0 ? '+' : ''}${d} ${s}`);
+        if (!moved.length) return [el('p', { class: 'muted', text: 'The same bays, console for console.' })];
+        const losing = ['tactical', 'engineering', 'science', 'device']
+          .filter((s) => (then[s] ?? 0) < g.loadout.used(s));
+        return [el('p', {
+          class: 'muted',
+          text: `Bays: ${moved.join(', ')}.`
+            + (losing.length
+              ? ` She has fewer ${losing.join(' and ')} bays than you have consoles fitted; `
+                + 'the difference goes into stores.'
+              : ''),
+        })];
+      })(),
       el('p', {
         class: 'hint',
         text: spending > 0

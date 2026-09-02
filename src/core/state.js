@@ -21,6 +21,7 @@ import {
 import { ShipMastery } from '../sim/mastery.js';
 import {
   offerCommand, acceptCommandOffer, declineCommandOffer, takeCommandOf, replacementFor,
+  yardReport,
 } from '../sim/command.js';
 import { resolveHail, STANDING_EFFECTS, HAIL_ENDING } from '../sim/diplomacy.js';
 import { applyAbility, applySignature, applyDevice } from '../sim/powers.js';
@@ -413,6 +414,8 @@ export class Game {
       + 'Nobody aboard has worked this hull up yet.',
       'captain',
     );
+    const yard = yardReport(r, CONSOLES);
+    if (yard) this.pushLog(yard, 'engineering');
     return r;
   }
 
@@ -2468,6 +2471,8 @@ export class Game {
         + 'aboard has worked her up.',
         'captain',
       );
+      const yard = yardReport(took, CONSOLES);
+      if (yard) this.pushLog(yard, 'engineering');
       emit('ship:replaced', { ship: this.ship, lost });
       return null;
     }

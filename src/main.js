@@ -34,6 +34,7 @@ import { SKILLS } from './sim/skills.js';
 import { RNG } from './core/rng.js';
 import { FEAT_BY_ID, ABILITIES as ABILITY_LIST } from './rules/character.js';
 import { CONSOLES } from './sim/loadout.js';
+import { yardReport } from './sim/command.js';
 import { TIERS, TRAIT_LIST } from './sim/mastery.js';
 
 // TABS ARE FOR TEXT.
@@ -1091,14 +1092,17 @@ class App {
     const oldName = g.ship.name;
     const oldRegistry = g.ship.registry;
     g.ship = new Ship(classId, { name: oldName, registry: oldRegistry, faction: 'federation', isPlayer: true });
-    g.loadout.refitTo(g.ship.cls.slots);
+    const refit = g.loadout.refitTo(g.ship.cls.slots);
     g.applyAllMods();
     g.clock.advanceStardate(4);
     g.pushLog(`Transferred command to a ${g.ship.cls.name}.`, 'captain');
     audio.play('dock');
     this.showMessage('Change of Command', [
       `${oldName} is now a ${g.ship.cls.name}.`,
-      'Four days in the yard. Any consoles that no longer fit are in storage.',
+      // Naming the consoles rather than the generic "any consoles that no
+      // longer fit": the captain should not have to go and count bays to find
+      // out what the yard took out of his ship.
+      `Four days in the yard. ${yardReport(refit, CONSOLES) ?? 'Every console fitted before is still fitted.'}`,
     ]);
     this.render();
   }

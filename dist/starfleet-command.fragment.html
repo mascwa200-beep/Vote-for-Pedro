@@ -20989,14 +20989,44 @@ class Loadout {
     return true;
   }
 
-  /** Resize when changing ships. Anything that no longer fits goes to inventory. */
+  /**
+   * Resize when changing ships. Anything that no longer fits goes to inventory.
+   *
+   * The hull is the only source of slot counts — nothing in the game grants a
+   * bay that the class does not have — so this is the one place the two can be
+   * reconciled, and every path that puts the captain aboard a different ship
+   * has to come through it. Missing it was worth a great deal in both
+   * directions: a captain moved from a Constitution to a Constellation kept
+   * three tactical consoles firing on a hull with two bays, and a captain
+   * promoted to an Excelsior could never fill her third science bay because
+   * the loadout still believed it was flying a ship with two.
+   *
+   * Reports what happened rather than doing it quietly. Losing a console is
+   * the sort of thing a captain should be told at the moment it happens, and
+   * a bay opening up is the reason to go and look at the ship screen.
+   *
+   * What comes out when a bay is lost is the LAST thing fitted there. Not a
+   * judgement about which console is worth more — there is no honest way to
+   * weigh beam damage against shield capacity — but it is at least the rule a
+   * captain can predict and undo.
+   *
+   * @returns {{stowed: string[], gained: Record<string, number>}}
+   */
   refitTo(slots) {
+    const before = this.slots;
     this.slots = { tactical: 0, engineering: 0, science: 0, device: 0, ...slots };
+    const stowed = [];
+    const gained = {};
     for (const slot of Object.keys(this.equipped)) {
       while (this.used(slot) > this.capacity(slot)) {
-        this.inventory.push(this.equipped[slot].pop());
+        const out = this.equipped[slot].pop();
+        this.inventory.push(out);
+        stowed.push(out);
       }
+      const more = this.capacity(slot) - (before?.[slot] ?? 0);
+      if (more > 0) gained[slot] = more;
     }
+    return { stowed, gained };
   }
 
   save() {
@@ -21009,6 +21039,11 @@ class Loadout {
       l.equipped = { tactical: [], engineering: [], science: [], device: [], ...data.equipped };
       l.inventory = data.inventory ?? [];
     }
+    // The hull the captain is standing in wins over whatever the save says he
+    // had bays for. A save written before changing ships resized the loadout
+    // carries the old ship's counts, and loading it would have restored a
+    // Constitution's bays aboard a Constellation.
+    if (slots) l.refitTo(slots);
     return l;
   }
 }
@@ -23914,7 +23949,18 @@ function nameFor(game, avoid) {
  * with the shakedown penalty from §20 — and the old one still remembers, for a
  * captain who ever gets her back.
  *
- * @returns {{ok: boolean, ship?: Ship, previous?: string, reason?: string}}
+ * Nor do the bays. The consoles are the captain's, but the holes they go in
+ * belong to the ship, and this used to leave the loadout describing the hull
+ * he had just walked off. Every one of the seventy-two moves along the ladder
+ * was wrong in one direction or the other: a Constitution captain given a
+ * Constellation after a board of inquiry kept three tactical consoles firing
+ * on a hull with two bays, and a Constitution captain promoted to an Excelsior
+ * could never fill her third science bay, because the loadout still allowed
+ * two. So the bays are resized here, and what it cost is returned rather than
+ * discovered later on the ship screen.
+ *
+ * @returns {{ok: boolean, ship?: Ship, previous?: string, reason?: string,
+ *            stowed?: string[], gained?: Record<string, number>}}
  */
 function takeCommandOf(game, classId, { name = null } = {}) {
   const cls = getShipClass(classId);
@@ -23930,10 +23976,43 @@ function takeCommandOf(game, classId, { name = null } = {}) {
   // The track follows the captain, not the hull: the points already earned in
   // other classes stay in the map and are waiting if he ever flies one again.
   if (game.mastery) game.mastery.classId = classId;
+  // Before applyAllMods, which reads the loadout: a console in a bay the new
+  // hull does not have must not still be modifying her.
+  const refit = game.loadout?.refitTo(cls.slots) ?? { stowed: [], gained: {} };
   game.applyAllMods();
 
-  emit('command:changed', { ship: game.ship, previous, classId });
-  return { ok: true, ship: game.ship, previous };
+  emit('command:changed', { ship: game.ship, previous, classId, ...refit });
+  return { ok: true, ship: game.ship, previous, ...refit };
+}
+
+/**
+ * What the yard did to the loadout, in a sentence, or null if nothing changed.
+ *
+ * Shared by all three ways a captain ends up in a different hull — promotion,
+ * a board of inquiry, and the change-of-command screen — because the three had
+ * three different amounts to say about it, and two of them said nothing at all.
+ *
+ * @param {{stowed?: string[], gained?: Record<string, number>}} refit
+ */
+function yardReport(refit, consoleNames = {}) {
+  const stowed = refit?.stowed ?? [];
+  const gained = Object.entries(refit?.gained ?? {}).filter(([, n]) => n > 0);
+  const parts = [];
+  if (stowed.length) {
+    const names = stowed.map((id) => consoleNames[id]?.name ?? id);
+    parts.push(`She has no bay for ${listOf(names)} — ${stowed.length === 1 ? 'it is' : 'they are'} in stores.`);
+  }
+  if (gained.length) {
+    const bays = gained.map(([slot, n]) => `${n} ${slot}`);
+    parts.push(`She carries ${listOf(bays)} ${gained.length === 1 && gained[0][1] === 1 ? 'bay' : 'bays'} more than the old ship.`);
+  }
+  return parts.length ? parts.join(' ') : null;
+}
+
+/** "a", "a and b", "a, b and c" — the ship's computer does not use commas before "and". */
+function listOf(items) {
+  if (items.length <= 1) return items[0] ?? '';
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
 /**
@@ -23955,6 +24034,12 @@ function offerCommand(game) {
     // The cost, said out loud at the moment of the offer rather than discovered
     // afterwards. This is the whole decision.
     cost: game.mastery?.tier ?? 0,
+    // And the other half of it. A bigger ship is not bigger in every bay —
+    // an Excelsior carries one more of nearly everything than a Constitution,
+    // but a Nebula carries one FEWER tactical than an Excelsior, and a captain
+    // who has built his ship around a tactical console ought to know that
+    // before he says yes rather than after the console is in a crate.
+    slots: cls?.slots ?? null,
   };
   emit('command:offered', game.commandOffer);
   return game.commandOffer;
@@ -23971,7 +24056,7 @@ function acceptCommandOffer(game) {
   game.ledger?.record('command_accepted', {
     text: `Took command of ${game.ship.name}, a ${offer.name}`,
   });
-  return { ok: true, ship: game.ship, spent };
+  return { ok: true, ship: game.ship, spent, stowed: took.stowed, gained: took.gained };
 }
 
 /** @returns {{ok: boolean, reason?: string, kept?: string}} */
@@ -23993,6 +24078,7 @@ __exports.rungOf = rungOf;
 __exports.nextCommandFor = nextCommandFor;
 __exports.replacementFor = replacementFor;
 __exports.takeCommandOf = takeCommandOf;
+__exports.yardReport = yardReport;
 __exports.offerCommand = offerCommand;
 __exports.acceptCommandOffer = acceptCommandOffer;
 __exports.declineCommandOffer = declineCommandOffer;
@@ -27321,7 +27407,7 @@ const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
 const { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer, replaceLosses } = __require("src/sim/duty.js");
 const { ShipMastery } = __require("src/sim/mastery.js");
-const { offerCommand, acceptCommandOffer, declineCommandOffer, takeCommandOf, replacementFor } = __require("src/sim/command.js");
+const { offerCommand, acceptCommandOffer, declineCommandOffer, takeCommandOf, replacementFor, yardReport } = __require("src/sim/command.js");
 const { resolveHail, STANDING_EFFECTS, HAIL_ENDING } = __require("src/sim/diplomacy.js");
 const { applyAbility, applySignature, applyDevice } = __require("src/sim/powers.js");
 
@@ -27709,6 +27795,8 @@ class Game {
       + 'Nobody aboard has worked this hull up yet.',
       'captain',
     );
+    const yard = yardReport(r, CONSOLES);
+    if (yard) this.pushLog(yard, 'engineering');
     return r;
   }
 
@@ -29764,6 +29852,8 @@ class Game {
         + 'aboard has worked her up.',
         'captain',
       );
+      const yard = yardReport(took, CONSOLES);
+      if (yard) this.pushLog(yard, 'engineering');
       emit('ship:replaced', { ship: this.ship, lost });
       return null;
     }
@@ -31758,6 +31848,30 @@ function shipScreen(app) {
         text: `${Math.round(offer.hull)} hull against ${Math.round(g.ship.maxHull)}, `
           + `and ${offer.crew} aboard against ${g.ship.maxCrew}.`,
       }),
+      // The bays, before he says yes. A bigger ship is not bigger in every
+      // bay — a Nebula carries one fewer tactical console than an Excelsior —
+      // and a console that has no bay on the new hull goes into stores. That
+      // used to be discovered afterwards, on the ship screen, by a captain
+      // wondering where his phaser relay had gone.
+      ...(() => {
+        const now = g.ship?.cls?.slots ?? {};
+        const then = offer.slots ?? {};
+        const moved = ['tactical', 'engineering', 'science', 'device']
+          .map((s) => [s, (then[s] ?? 0) - (now[s] ?? 0)])
+          .filter(([, d]) => d !== 0)
+          .map(([s, d]) => `${d > 0 ? '+' : ''}${d} ${s}`);
+        if (!moved.length) return [el('p', { class: 'muted', text: 'The same bays, console for console.' })];
+        const losing = ['tactical', 'engineering', 'science', 'device']
+          .filter((s) => (then[s] ?? 0) < g.loadout.used(s));
+        return [el('p', {
+          class: 'muted',
+          text: `Bays: ${moved.join(', ')}.`
+            + (losing.length
+              ? ` She has fewer ${losing.join(' and ')} bays than you have consoles fitted; `
+                + 'the difference goes into stores.'
+              : ''),
+        })];
+      })(),
       el('p', {
         class: 'hint',
         text: spending > 0
@@ -33139,6 +33253,7 @@ const { SKILLS } = __require("src/sim/skills.js");
 const { RNG } = __require("src/core/rng.js");
 const { FEAT_BY_ID, ABILITIES: ABILITY_LIST } = __require("src/rules/character.js");
 const { CONSOLES } = __require("src/sim/loadout.js");
+const { yardReport } = __require("src/sim/command.js");
 const { TIERS, TRAIT_LIST } = __require("src/sim/mastery.js");
 
 // TABS ARE FOR TEXT.
@@ -34196,14 +34311,17 @@ class App {
     const oldName = g.ship.name;
     const oldRegistry = g.ship.registry;
     g.ship = new Ship(classId, { name: oldName, registry: oldRegistry, faction: 'federation', isPlayer: true });
-    g.loadout.refitTo(g.ship.cls.slots);
+    const refit = g.loadout.refitTo(g.ship.cls.slots);
     g.applyAllMods();
     g.clock.advanceStardate(4);
     g.pushLog(`Transferred command to a ${g.ship.cls.name}.`, 'captain');
     audio.play('dock');
     this.showMessage('Change of Command', [
       `${oldName} is now a ${g.ship.cls.name}.`,
-      'Four days in the yard. Any consoles that no longer fit are in storage.',
+      // Naming the consoles rather than the generic "any consoles that no
+      // longer fit": the captain should not have to go and count bays to find
+      // out what the yard took out of his ship.
+      `Four days in the yard. ${yardReport(refit, CONSOLES) ?? 'Every console fitted before is still fitted.'}`,
     ]);
     this.render();
   }
