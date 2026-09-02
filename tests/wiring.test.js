@@ -46,6 +46,7 @@ import { offerCommand, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.
 import { getShipClass } from '../src/world/ships.data.js';
 import { RANKS } from '../src/sim/skills.js';
 import { ROOMS } from '../src/world/interiors.data.js';
+import { STANDING_EFFECTS } from '../src/sim/diplomacy.js';
 import { checkGame } from '../src/sim/invariants.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { checkAll } from '../src/sim/invariants.js';
@@ -1707,6 +1708,33 @@ describe('every sound cue is reachable', () => {
       (c) => new RegExp(`['"\`]${c}['"\`]`).test(UI_SRC),
     );
     assert.deepEqual(stale, [], 'cues listed as reserved that the UI does play');
+  });
+
+  test('every standing effect the table names is one the game applies', () => {
+    // The same shape as the cue guards, on the other table that says what an
+    // act costs. Six of its eleven entries had no consumer at all, and three
+    // of those had drifted away from what the game does: `violated_border`
+    // said -14 where crossing the Neutral Zone costs -20, and
+    // `prime_directive_violation` said -6 where revealing the ship to a
+    // pre-warp culture costs -18 — the -6 belonging to a different act
+    // entirely. A named constant nothing reads is not a constant, it is a
+    // comment that can go stale, and two of them had.
+    const SRC = [];
+    const walk = (dir) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, e.name);
+        if (e.isDirectory()) { walk(path); continue; }
+        if (e.name.endsWith('.js') && !path.endsWith(join('sim', 'diplomacy.js'))) {
+          SRC.push(readFileSync(path, 'utf8'));
+        }
+      }
+    };
+    walk(join(HERE, '..', 'src'));
+    const source = SRC.join('\n');
+    const unread = Object.keys(STANDING_EFFECTS)
+      .filter((k) => !source.includes(`STANDING_EFFECTS.${k}`));
+    assert.deepEqual(unread, [],
+      `standing effects nothing reads, so nothing keeps them true: ${unread.join(', ')}`);
   });
 
   test('every cue the game asks for is a cue that exists', () => {

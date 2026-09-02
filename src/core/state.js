@@ -486,7 +486,7 @@ export class Game {
       return { crossed: true, sanctioned: true };
     }
 
-    this.ledger.adjustStanding('romulan', -20, 'Crossed the Romulan Neutral Zone');
+    this.ledger.adjustStanding('romulan', STANDING_EFFECTS.violated_border, 'Crossed the Romulan Neutral Zone');
     this.ledger.record('treaty_broken', {
       text: `Crossed into the Neutral Zone at ${this.location?.name ?? 'an unnamed system'}`,
       system: this.locationId,
@@ -1768,7 +1768,7 @@ export class Game {
             text: `First contact with the ${enc.speciesName}`, system: enc.system.id,
           });
           this.awardXP(900);
-          this.ledger.adjustStanding('federation', 12, 'First contact');
+          this.ledger.adjustStanding('federation', STANDING_EFFECTS.first_contact_peaceful, 'First contact');
           this.earnReputation('first_contact');
           out.messages.push(`Contact established with the ${enc.speciesName}. They are... cautious, but talking.`);
         } else {
@@ -1783,7 +1783,7 @@ export class Game {
         this.ledger.record('prime_directive_violation', {
           text: `Revealed the ship to a pre-warp culture at ${enc.system.name}`, system: enc.system.id,
         });
-        this.ledger.adjustStanding('federation', -18, 'Prime Directive violation');
+        this.ledger.adjustStanding('federation', STANDING_EFFECTS.prime_directive_violation, 'Prime Directive violation');
         out.messages.push('They have seen the ship. Whatever happens to that culture now, it happened because of this.');
         break;
       }
@@ -2579,7 +2579,7 @@ export class Game {
     }
     if (template.id === 'covert_landing' && outcome === 'failure') {
       // Being seen is the failure that matters here, and it is not free.
-      this.ledger.adjustStanding('federation', -6, 'Observed by a pre-warp culture');
+      this.ledger.adjustStanding('federation', STANDING_EFFECTS.observed_during_survey, 'Observed by a pre-warp culture');
       this.pushLog(
         'We were seen, Captain. That will be in the report to the Prime Directive board.',
         'science');

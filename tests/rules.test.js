@@ -25,6 +25,7 @@ import {
 import { findingFor, sitsAt, venueFor } from '../src/rules/inquiry.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { SYSTEMS } from '../src/world/systems.data.js';
+import { STANDING_EFFECTS } from '../src/sim/diplomacy.js';
 import { nextCommandFor, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { availableHails } from '../src/sim/diplomacy.js';
 import { rollEncounter } from '../src/world/encounters.js';
@@ -1781,4 +1782,102 @@ test('the briefing screen has both cases to handle, and the empty one is the com
   assert.ok(posting.length > 0, 'no system in the galaxy posts any orders at all');
   assert.ok(bare.length > posting.length,
     `${posting.length} systems post orders and only ${bare.length} do not`);
+});
+
+// ============================================ what an act actually costs you
+
+describe('the table of standing effects describes the game', () => {
+  // Eleven named constants, five read. Of the six nothing read, three had come
+  // to contradict what the game does — which is the thing a shared constant
+  // exists to prevent, and it had already happened twice. The reachability
+  // guard is in wiring.test.js; these measure the numbers.
+
+  /** Federation standing starts at 100, the ceiling, so a gain is clamped
+   *  away unless the captain has some ground to make up first. */
+  function withRoom(g, delta = -40) {
+    g.ledger.adjustStanding('federation', delta, 'test setup');
+    return g;
+  }
+
+  test('crossing a line somebody signed a treaty over costs what the table says', () => {
+    // Fails on the old code, where the table said -14 and the act cost -20.
+    const g = new Game({ seed: 11n, crewMode: 'original' });
+    g.locationId = SYSTEMS.find((s) => Game.insideTheZone(s)).id;
+    const before = g.ledger.standingOf('romulan');
+    const r = g.crossTheZone();
+    assert.equal(r?.crossed, true, 'the ship never crossed');
+    assert.equal(r.sanctioned, false, 'the crossing was sanctioned, so nothing is owed');
+    assert.equal(g.ledger.standingOf('romulan') - before, STANDING_EFFECTS.violated_border);
+  });
+
+  test('and revealing the ship to a pre-warp culture costs what the table says', () => {
+    // Fails on the old code, where the table said -6 and the act cost -18 —
+    // the -6 belonging to a different act, which is now named for itself.
+    const g = withRoom(new Game({ seed: 11n, crewMode: 'original' }));
+    const before = g.ledger.standingOf('federation');
+    g.beginEncounter({
+      kind: 'first_contact', system: g.location, hostile: false,
+      speciesName: 'Melkotian', title: 'First contact', text: 'x', preWarp: true,
+    });
+    g.resolveEncounter('contact_prewarp');
+    assert.equal(g.ledger.standingOf('federation') - before,
+      STANDING_EFFECTS.prime_directive_violation);
+  });
+
+  test('and being seen while trying not to be is the lesser of the two', () => {
+    // The covert survey's own consequence, which is a different act and now
+    // has a name of its own rather than sharing one that meant something else.
+    assert.ok(STANDING_EFFECTS.observed_during_survey > STANDING_EFFECTS.prime_directive_violation,
+      'being observed costs at least as much as walking up and saying hello');
+    // A fresh ship each time: sixty landing parties out of one crew leaves
+    // nobody fit to send, which is the away system working rather than this
+    // test finding anything.
+    let seen = 0;
+    for (let seed = 1n; seed <= 60n && !seen; seed++) {
+      const g = withRoom(new Game({ seed, crewMode: 'original' }));
+      g.locationId = 'deep_1';
+      assert.equal(g.enterOrbit().ok, true);
+      const before = g.ledger.standingOf('federation');
+      const r = g.awayMission('covert_landing');
+      assert.equal(r.ok, true, r.reason);
+      if (r.outcome !== 'failure') continue;
+      seen++;
+      assert.equal(g.ledger.standingOf('federation') - before,
+        STANDING_EFFECTS.observed_during_survey);
+    }
+    assert.ok(seen > 0, 'no covert survey in sixty attempts was ever botched');
+  });
+
+  test('and a peaceful first contact pays what the table says', () => {
+    // Passes either way: the constant was +12 and the literal was 12, agreeing
+    // by coincidence rather than by reference. It is here because the
+    // coincidence is what the change removes.
+    const g = withRoom(new Game({ seed: 11n, crewMode: 'original' }));
+    const deltas = new Set();
+    for (let i = 0; i < 40; i++) {
+      const before = g.ledger.standingOf('federation');
+      g.beginEncounter({
+        kind: 'first_contact', system: g.location, hostile: false,
+        speciesName: 'Melkotian', title: 'First contact', text: 'x', preWarp: false,
+      });
+      g.resolveEncounter('contact_peaceful');
+      const moved = g.ledger.standingOf('federation') - before;
+      deltas.add(moved);
+      g.ledger.adjustStanding('federation', -moved, 'reset');
+    }
+    assert.deepEqual([...deltas].sort((a, b) => a - b),
+      [0, STANDING_EFFECTS.first_contact_peaceful].sort((a, b) => a - b),
+      'first contact either succeeds for the table value or fails for nothing');
+  });
+
+  test('a captain at the ceiling is paid nothing for it, which is the clamp and not a bug', () => {
+    // Worth pinning down, because it is what made this look at first like a
+    // first contact that never succeeds: standing is clamped to 100 and a new
+    // captain starts there, so the most Star Trek act in the game moves
+    // nothing until he has something to make up.
+    const g = new Game({ seed: 11n, crewMode: 'original' });
+    assert.equal(g.ledger.standingOf('federation'), 100);
+    g.ledger.adjustStanding('federation', STANDING_EFFECTS.first_contact_peaceful, 'test');
+    assert.equal(g.ledger.standingOf('federation'), 100);
+  });
 });
