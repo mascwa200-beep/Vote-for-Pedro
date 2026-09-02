@@ -758,16 +758,38 @@ export class Ship {
     Object.assign(s, {
       hull: data.hull, shieldsUp: data.shieldsUp ?? true,
       crew: data.crew, injured: data.injured ?? 0,
-      torpedoes: data.torpedoes ?? s.torpedoes, antimatter: data.antimatter ?? 100,
+      torpedoes: data.torpedoes ?? s.torpedoes,
+      // `?? 100` does not catch a bad figure: `??` only sees null and
+      // undefined, so a NaN in the save loaded straight through — and NaN
+      // antimatter is the worst kind, because nothing downstream ever complains
+      // about it. `fuel > NaN` is false, so plotTransit approves every course
+      // at every warp factor; `Math.max(0, NaN - fuel)` is NaN, so the reserve
+      // never recovers; and the NaN is written back on the next save. Measured:
+      // a Constitution loaded from such a record flew Sol to Qo'noS at warp
+      // nine, a 63.2% burn, on a tank the game could not read.
+      antimatter: Number.isFinite(data.antimatter) ? clamp(data.antimatter, 0, 100) : 100,
       fires: data.fires ?? 0, coreEjected: data.coreEjected ?? false,
       breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
       destroyed: data.destroyed === true,
       destroyCause: data.destroyCause ?? null,
     });
+    // A core that has been ejected is not still breaching.
+    //
+    // `beginBreach` refuses when the core is gone and `ejectCore` clears the
+    // breach, so the two are mutually exclusive everywhere at runtime — but the
+    // save restores them as two independent flags, and a record carrying both
+    // loaded as a ship counting down to destruction with the one escape from
+    // that countdown already spent: `ejectCore()` returns false, because the
+    // core it would have thrown is not there. Resolve it the way ejecting it
+    // does, since ejecting it is what happened.
+    if (s.coreEjected) { s.breaching = false; s.breachTimer = 0; }
+
     // A record written before a breach was saved, restored onto a hull that is
     // already gone, would load as the very thing the invariant checker calls
     // `ship.zerohull.adrift` — dead, not dying, and on the board forever. Give
-    // it the countdown it should have had.
+    // it the countdown it should have had. (With the core already gone,
+    // `beginBreach` takes the other branch and finishes the ship, which is the
+    // same answer `ejectCore` gives a hull that is past saving.)
     if (s.hull <= 0 && !s.destroyed && !s.breaching) s.beginBreach();
     // Shield migration, from four facings to six.
     //
