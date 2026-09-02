@@ -993,3 +993,108 @@ describe('an order is said to somebody', () => {
     }
   });
 });
+
+// ================================== the words on the encounter buttons work
+
+describe('every encounter choice can be said', () => {
+  // Measured before any of this was written: of the twenty-one labels the
+  // encounter panel printed, THREE said what they did. The other eighteen were
+  // not merely unsayable — they were wired to something else.
+  //
+  //   "Engage"            asked which warp factor
+  //   "Withdraw"          broke off a fight that was not happening
+  //   "Decline"           refused a command nobody had offered
+  //   "Render assistance" was read as calling FOR help, the opposite
+  //   "Take us in close"  was read as taking standing orders
+  //
+  // The panel built its own buttons from a switch nothing else could see, so
+  // the list of choices and the list of phrases could not be compared. They
+  // come from `Game.encounterChoices` now, and this is the comparison.
+
+  /** Every encounter the game can put in front of a captain. */
+  const SHAPES = [
+    { label: 'a hostile', enc: { kind: 'patrol', hostile: true, factionId: 'klingon' } },
+    { label: 'a distress call', enc: { kind: 'distress', lives: 40 } },
+    { label: 'a derelict', enc: { kind: 'derelict', risk: 0.4 } },
+    { label: 'an anomaly', enc: { kind: 'anomaly', anomaly: { hazard: 0.3, name: 'Rift', value: 2 } } },
+    { label: 'a convoy', enc: { kind: 'convoy', escortReward: 400, factionId: 'independent' } },
+    { label: 'a first contact', enc: { kind: 'first_contact', preWarp: false, speciesName: 'Melkotian' } },
+    { label: 'a pre-warp contact', enc: { kind: 'first_contact', preWarp: true, speciesName: 'Melkotian' } },
+    { label: 'a patrol', enc: { kind: 'patrol', hailable: true, factionId: 'klingon' } },
+  ];
+
+  const at = (enc) => {
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    g.encounter = { system: g.location, title: 'x', text: 'y', hostile: false, ...enc };
+    return g;
+  };
+
+  test('every choice offers a phrase, and the phrase parses', () => {
+    const broken = [];
+    for (const { label, enc } of SHAPES) {
+      for (const c of at(enc).encounterChoices()) {
+        if (!c.say) { broken.push(`${label}/${c.id}: no phrase printed`); continue; }
+        const order = parseOrder(c.say);
+        if (order.unknown || order.error) {
+          broken.push(`${label}/${c.id}: "${c.say}" -> ${JSON.stringify(order).slice(0, 40)}`);
+        }
+      }
+    }
+    assert.deepEqual(broken, [], 'encounter choices whose printed phrase does not parse');
+  });
+
+  test('and saying it reaches that choice and no other', () => {
+    // The effect, not the label. `encounterChoiceFor` mirrors what the
+    // dispatcher does, so a phrase that parses but routes somewhere else is
+    // caught here rather than by a captain.
+    const route = (g, say) => {
+      const order = parseOrder(say);
+      const has = (id) => g.encounterChoices().some((c) => c.id === id);
+      return order.action === 'encounter_choice' ? order.choice
+        : order.action === 'warp_out' ? 'withdraw'
+        : order.action === 'fire' ? 'engage'
+        : order.action === 'scan' ? 'scan'
+        : order.action === 'hail' ? (has('hail') ? 'hail' : 'contact_peaceful')
+        : null;
+    };
+    const wrong = [];
+    for (const { label, enc } of SHAPES) {
+      const g = at(enc);
+      for (const c of g.encounterChoices()) {
+        if (!c.say) continue;
+        const got = route(g, c.say);
+        if (got !== c.id) wrong.push(`${label}: "${c.say}" should reach ${c.id}, reaches ${got}`);
+      }
+    }
+    assert.deepEqual(wrong, [], 'phrases printed on buttons that do something else');
+  });
+
+  test('the trapped encounter is sayable too, and has no withdraw to say', () => {
+    // The one shape with no way out but the three it offers. Saying "withdraw"
+    // here must not quietly do nothing, and must not break off a fight that is
+    // not happening either.
+    const g = at({ kind: 'trapped', trap: { device: 'hull_patch', powerChannel: 'auxiliary', waitHours: 6 } });
+    const ids = g.encounterChoices().map((c) => c.id);
+    assert.deepEqual(ids, ['trap_device', 'trap_power', 'trap_wait']);
+    assert.equal(ids.includes('withdraw'), false, 'a trap you can simply leave is not a trap');
+    for (const c of g.encounterChoices()) {
+      if (!c.say) continue;
+      assert.equal(parseOrder(c.say).choice, c.id, `"${c.say}" does not reach ${c.id}`);
+    }
+  });
+
+  test('the same word means the encounter while one is up, and the fight otherwise', () => {
+    // Passes either way — these three parses are exactly what they were, which
+    // is the point: routing an order to the encounter must not take it away
+    // from the fight. If this ever fails, "withdraw" has stopped breaking off
+    // a battle.
+    //
+    // "Withdraw" is the same word for breaking off a battle and for declining
+    // a convoy escort, and both are right. Which one it means is what is
+    // happening, which is why the routing is in the dispatcher and not the
+    // parser — the parser is not given the game.
+    assert.equal(parseOrder('withdraw').action, 'warp_out');
+    assert.equal(parseOrder('engage them').action, 'fire');
+    assert.equal(parseOrder('hail them').action, 'hail');
+  });
+});

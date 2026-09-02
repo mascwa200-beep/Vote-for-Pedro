@@ -1093,6 +1093,50 @@ export const INTENTS = [
     build: () => ({ action: 'repel_boarders' }),
   },
   {
+    // What to do about the thing in front of the ship.
+    //
+    // Of the twenty-one labels the encounter panel prints, three said what
+    // they did. The rest were wired to something else — "Engage" asked which
+    // warp factor, "Decline" refused a command nobody had offered, "Render
+    // assistance" was read as calling FOR help. This covers the choices that
+    // reached no order at all; the ones that already have an order
+    // ("withdraw", "hail them", "engage them", "scan it") keep it, and
+    // `executeOrder` routes them to the encounter while one is on the screen,
+    // because withdrawing from a convoy and breaking off a battle are the same
+    // word and the difference is what is happening.
+    id: 'encounter_choice',
+    help: 'Answer whatever is in front of the ship',
+    phrases: [
+      'render assistance', 'assist them', 'help them', 'go to their aid',
+      'ignore it', 'ignore them', 'continue on course', 'press on', 'leave them',
+      'board it', 'board the hulk', 'board the wreck',
+      'take us in close', 'close on it', 'take us alongside',
+      'provide escort', 'escort them', 'see them through',
+      'make contact anyway', 'make contact',
+      'use the device', 'everything to auxiliary', 'ride it out', 'sit it out',
+    ],
+    keywords: {
+      assistance: 2.6, escort: 2.6, aid: 2, ignore: 2.4, board: 1.8,
+      alongside: 2.2, ride: 1.6,
+    },
+    veto: ['course for', 'warp', 'drill', 'mission', 'orders'],
+    build: (c) => {
+      const t = c.text;
+      const map = [
+        [/\bassist|assistance|their aid|help them\b/, 'assist'],
+        [/\bignore|press on|continue on course|leave them\b/, 'ignore'],
+        [/\bboard|team across|team over\b/, 'board'],
+        [/\bclose on|in close|alongside\b/, 'approach'],
+        [/\bescort|see them through\b/, 'escort'],
+        [/\bmake contact\b/, 'contact_prewarp'],
+        [/\buse the device\b/, 'trap_device'],
+        [/\beverything to\b/, 'trap_power'],
+        [/\bride it out|sit it out\b/, 'trap_wait'],
+      ].find(([re]) => re.test(t));
+      return { action: 'encounter_choice', choice: map?.[1] ?? null };
+    },
+  },
+  {
     id: 'abandon_mission',
     help: 'Break off the episode you are in the middle of',
     phrases: [

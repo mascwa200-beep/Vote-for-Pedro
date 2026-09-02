@@ -28,7 +28,7 @@ import { SYSTEMS, systemDepth } from '../src/world/systems.data.js';
 import { STANDING_EFFECTS } from '../src/sim/diplomacy.js';
 import { nextCommandFor, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { availableHails } from '../src/sim/diplomacy.js';
-import { rollEncounter } from '../src/world/encounters.js';
+import { rollEncounter, SECTOR_PRESENCE } from '../src/world/encounters.js';
 import { getShipClass } from '../src/world/ships.data.js';
 import { Mission } from '../src/missions/engine.js';
 import { Ship } from '../src/sim/ship.js';
@@ -1990,5 +1990,88 @@ describe('the demilitarised zone is a different kind of line', () => {
     delete raw.inTheDMZ;
     raw.locationId = 'sol';
     assert.equal(Game.load(raw).inTheDMZ, false);
+  });
+});
+
+describe('an ambush belongs to the place the ship stops, not the place it was aimed', () => {
+  // Every adjacent pair whose sectors differ. Those are the lanes where the
+  // difference is visible: who lives at the far end is not who lives here.
+  function crossSectorLanes() {
+    const probe = new Game({ seed: 1n });
+    const lanes = [];
+    for (const s of probe.galaxy.systems) {
+      for (const n of probe.galaxy.neighbors(s.id)) {
+        if (n && n.sector !== s.sector) lanes.push([s.id, n.id]);
+      }
+    }
+    return lanes;
+  }
+
+  /** Fly a leg until it ends, and report any mid-course ambush it produced. */
+  function fly(seed, from, to) {
+    const g = new Game({ seed: `lane-${seed}`, startAt: from });
+    g.ship.antimatter = 100;
+    if (!g.setCourse(to, 6).ok) return null;
+    let ticks = 0;
+    while (g.transit && ticks++ < 40000) g.update(1 / 30);
+    if (!g.encounter?.system?.id) return null;
+    if (!g.log.some((l) => /forced out of warp/i.test(l.text ?? ''))) return null;
+    return g;
+  }
+
+  test('a mid-course ambush is never live in a system the ship is not in', () => {
+    const lanes = crossSectorLanes();
+    assert.ok(lanes.length > 20, `only ${lanes.length} cross-sector lanes to fly`);
+    let ambushes = 0;
+    const stranded = [];
+    for (let seed = 1; seed <= 900; seed++) {
+      const [from, to] = lanes[seed % lanes.length];
+      const g = fly(seed, from, to);
+      if (!g) continue;
+      ambushes++;
+      if (g.encounter.system.id !== g.locationId) {
+        stranded.push(`${g.encounter.system.id} while the ship is at ${g.locationId} (course ${from} → ${to})`);
+      }
+    }
+    // Enough flights were actually intercepted for the absence to mean
+    // something — otherwise this passes by never testing anything.
+    assert.ok(ambushes >= 40, `only ${ambushes} flights were ambushed mid-course`);
+    assert.deepEqual(stranded.slice(0, 5), [],
+      `${stranded.length} of ${ambushes} ambushes were live somewhere the ship was not`);
+  });
+
+  test('and whoever jumps you has a presence where you actually are', () => {
+    // The consequence the invariant does not catch. Rolling the ambush for the
+    // destination drew its faction from the DESTINATION's sector, because
+    // `rollEncounter` reads the presence table of the system it is handed: a
+    // course laid from Starbase 1 for the Neutral Zone, interrupted a
+    // light-year out, put a Romulan warbird inside the Sol system.
+    //
+    // Scoped to the kinds whose faction comes FROM that table. A distress call
+    // picks its attacker from a fixed list of raiders instead, wherever it
+    // happens — measured at 37 of 47 mid-course distress calls fielding
+    // somebody with no local presence, before this change and after it. That
+    // is not this defect and arguably not a defect at all: raiding is a thing
+    // you do where you do not live. It is left alone, and noted here so the
+    // next person to measure this does not read the two together and think
+    // the fix half-worked.
+    const lanes = crossSectorLanes();
+    let ambushes = 0;
+    const trespass = [];
+    for (let seed = 1; seed <= 900; seed++) {
+      const [from, to] = lanes[seed % lanes.length];
+      const g = fly(seed, from, to);
+      if (!g?.encounter.factionId) continue;
+      if (g.encounter.kind === 'distress') continue;
+      ambushes++;
+      const here = g.galaxy.get(g.locationId);
+      const presence = SECTOR_PRESENCE[here.sector] ?? { independent: 2 };
+      if (!presence[g.encounter.factionId]) {
+        trespass.push(`${g.encounter.factionId} at ${g.locationId} (${here.sector}) on a course to ${to}`);
+      }
+    }
+    assert.ok(ambushes >= 30, `only ${ambushes} presence-drawn ambushes to check`);
+    assert.deepEqual(trespass.slice(0, 5), [],
+      `${trespass.length} of ${ambushes} ambushes fielded somebody with no presence where the ship stopped`);
   });
 });
