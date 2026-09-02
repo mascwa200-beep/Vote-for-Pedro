@@ -15,6 +15,23 @@ export const SUBSYSTEM_LABEL = {
   auxiliary: 'Auxiliary',
 };
 
+/**
+ * What each channel actually buys, in the words an officer would use.
+ *
+ * Four unlabelled sliders told a captain nothing about what he was trading
+ * away, and the Auxiliary one was the worst of them: the parser calls that
+ * channel "sensors" and the preset above calls it Science, so the one thing a
+ * captain could reasonably infer from the screen was the one thing it did not
+ * do. These are read by the power panel and are the screen's half of the
+ * contract — if a line here stops being true, the effect it names has moved.
+ */
+export const SUBSYSTEM_EFFECT = {
+  weapons: 'Beam and cannon damage, and how fast the banks recharge.',
+  shields: 'How quickly the facings come back after a hit.',
+  engines: 'Impulse speed and how hard she turns.',
+  auxiliary: 'Sensor resolution, damage control, and fire suppression.',
+};
+
 export const PRESETS = {
   balanced: { id: 'balanced', label: 'Balanced', order: 'Standard distribution',
     levels: { weapons: 50, shields: 50, engines: 50, auxiliary: 50 } },

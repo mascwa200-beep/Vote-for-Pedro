@@ -383,9 +383,20 @@ test('a tour of duty: fight after fight, on one commission', () => {
           // Without it the tour fired twenty-one of the twenty-six and the
           // five it never reached were exactly the five that training exists
           // for — so the soak proved nothing at all about them.
+          //
+          // EVERY available officer, not the first one with something to
+          // learn. Stopping at the first made reaching any PARTICULAR rank-
+          // three ability a matter of which officer happened to come up
+          // trainable first, so the coverage below held by alignment rather
+          // than by construction: stepping the ship between fights changed how
+          // long the fights ran, the walk landed differently, and
+          // `ramming_speed` — helm and comms only, and the last thing either
+          // learns — stopped being reached. It trains and fires exactly as it
+          // did; the tour had simply stopped rolling it. Coverage that depends
+          // on luck is not coverage.
           for (const o of g.crew.available) {
             const next = g.trainableFor(o)[0];
-            if (next) { g.trainOfficer(o, next.id); return; }
+            if (next) g.trainOfficer(o, next.id);
           }
         },
       ];

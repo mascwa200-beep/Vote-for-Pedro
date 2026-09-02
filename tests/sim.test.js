@@ -2210,3 +2210,264 @@ test('the medical abilities are worth having, and act on people', () => {
     assert.ok(cost(true) < cost(false), 'casualty teams saved nobody');
   }
 });
+
+// ================================================== what the power grid buys
+
+// Four channels, four one-tap presets, and one of them was a lie. Auxiliary is
+// the sensor channel by every name the game gives it — the parser maps
+// "sensors", "science", "computer" and "transporter" onto it, and the preset is
+// labelled Science with the order phrase "power to auxiliary" — and it fed
+// nothing but damage control. So the Science posture made the ship no better at
+// science, which is the one thing its name promises.
+//
+// And the order that says "sensors" did not read the sensors either:
+// `scanSystem` in main.js returned a constant list of facts about the system
+// that no state of the array and no setting of the grid could change.
+
+/** A ship at a named posture, ready to be measured. */
+function atPosture(preset, { seed = 90n, systemId = 'devron' } = {}) {
+  const g = new Game({ seed, crewMode: 'original' });
+  g.locationId = systemId;
+  g.ship.power.applyPreset(preset);
+  // Levels ease toward the order at 55 units a second; measure the ship the
+  // captain actually gets, not the one he asked for a tick ago.
+  for (let i = 0; i < 30 * 10 && !g.ship.power.settled; i++) g.update(1 / 30);
+  return g;
+}
+
+test('nominal power leaves the sensors exactly where they were', () => {
+  // Not a guard: `sensorQuality` did not exist before, so this fails on the old
+  // code for the uninteresting reason. What it is for is the BALANCE promise —
+  // factor(50) is 1.0, so routing the sensor reading through the grid is free
+  // at the default distribution and a captain who never touches the sliders
+  // sees no difference at all. If it ever fails, that stopped being true.
+  const g = atPosture('balanced');
+  assert.equal(g.ship.power.factor('auxiliary'), 1);
+  assert.equal(g.sensorQuality, g.ship.subsystems.sensors);
+});
+
+test('power to auxiliary is power to the sensors', () => {
+  const balanced = atPosture('balanced');
+  const science = atPosture('science');
+  assert.ok(science.sensorQuality > balanced.sensorQuality * 1.2,
+    `science posture bought ${science.sensorQuality} against ${balanced.sensorQuality}`);
+  // And starving it costs.
+  const starved = atPosture('attack');
+  assert.ok(starved.sensorQuality < balanced.sensorQuality,
+    'auxiliary at 25 read the same as auxiliary at 50');
+});
+
+test('an anomaly resolves more often with the power behind it', () => {
+  // The effect, not the formula: run the same anomaly at both postures across
+  // many seeds and count how often the readings come back.
+  const resolved = (preset) => {
+    let hits = 0;
+    for (let seed = 1n; seed <= 120n; seed++) {
+      const g = atPosture(preset, { seed });
+      g.beginEncounter({
+        kind: 'anomaly', system: g.location, hostile: false,
+        anomaly: { id: 'protostar', name: 'Protostar', hazard: 0.25, value: 2 },
+        title: 'Anomaly', text: 'Something out there.',
+      });
+      const out = g.resolveEncounter('scan');
+      if (out.messages.some((m) => /catalogued/i.test(m))) hits++;
+    }
+    return hits;
+  };
+  const balanced = resolved('balanced');
+  const science = resolved('science');
+  assert.ok(science > balanced,
+    `science posture resolved ${science} of 120 against balanced ${balanced} — the same`);
+});
+
+test('a sensor sweep says more when the sensors have power behind them', () => {
+  const balanced = atPosture('balanced').sensorSweep();
+  const science = atPosture('science').sensorSweep();
+  assert.ok(science.length > balanced.length,
+    `a science-posture sweep returned ${science.length} lines, the same as balanced`);
+  assert.ok(science.some((l) => /on file/i.test(l)),
+    'a full sweep never said whether science had the system already');
+});
+
+test('and a broken array is reported, with the thing that would fix it', () => {
+  const g = atPosture('balanced');
+  g.ship.subsystems.sensors = 0.3;
+  const thin = g.sensorSweep();
+  assert.ok(thin.some((l) => /30 percent/.test(l)),
+    'a sensor array at a third of itself swept as if it were whole');
+
+  // A whole array with the power starved off it says the other thing.
+  const starved = atPosture('attack');
+  assert.ok(starved.sensorSweep().some((l) => /more power to auxiliary/i.test(l)),
+    'the sweep came back thin and never said why');
+});
+
+test('a bad reading never withholds what a captain needs to fly', () => {
+  // Fails on the old code only because `sensorSweep` did not exist, so it
+  // proves nothing about what was there before. It is here to hold a design
+  // line going forward: degrading a sweep into hiding the charted lanes or the
+  // hazard would be a worse game, not a deeper one. The reading ADDS at
+  // strength; it does not gate at weakness.
+  const g = atPosture('attack', { systemId: 'badlands_1' });
+  g.ship.subsystems.sensors = 0.1;
+  const lines = g.sensorSweep().join(' ');
+  assert.ok(/Charted lanes from here:/.test(lines), 'a poor reading lost the lanes');
+  assert.ok(/Hazard:/.test(lines), 'a poor reading lost the hazard warning');
+});
+
+test('every posture is better at the thing it is named for', () => {
+  // The guard that would have caught this. A preset called Science whose
+  // effect is not science is indistinguishable from a preset that does
+  // nothing, and nothing in the suite asked.
+  const base = atPosture('balanced');
+
+  const attack = atPosture('attack');
+  assert.ok(attack.ship.power.factor('weapons') > base.ship.power.factor('weapons'),
+    'Attack posture was no better at shooting');
+
+  const defense = atPosture('defense');
+  assert.ok(defense.ship.shieldRegen * defense.ship.power.factor('shields')
+    > base.ship.shieldRegen * base.ship.power.factor('shields'),
+  'Defense posture was no better at holding the shields');
+
+  const speed = atPosture('speed');
+  assert.ok(speed.ship.maxSpeed > base.ship.maxSpeed,
+    'Speed posture was no faster');
+
+  const science = atPosture('science');
+  assert.ok(science.sensorQuality > base.sensorQuality,
+    'Science posture was no better at science, which is the whole of its name');
+});
+
+// ============================================ the ship between the fights
+
+// `Ship.update` was reached from exactly one place — `Engagement.update` — so
+// outside a fight the player's ship was a frozen object. The power grid never
+// settled, fires burned forever and burned nothing, shields never came back,
+// buffs never expired and subsystems never mended. Every one of those
+// mechanics was written and none of them ran unless somebody was shooting.
+
+/** Bridge time, in seconds, with nobody on the board. */
+function onTheBridge(g, seconds) {
+  for (let i = 0; i < Math.round(seconds * 30); i++) g.update(1 / 30);
+  return g;
+}
+
+test('a power reroute on the bridge actually reaches the grid', () => {
+  const g = new Game({ seed: 90n, crewMode: 'original' });
+  g.ship.power.applyPreset('attack');
+  assert.equal(g.ship.power.target.weapons, 100, 'the order was not recorded at all');
+  onTheBridge(g, 10);
+  assert.equal(g.ship.power.levels.weapons, 100,
+    'the preset lit up green and the grid never moved');
+  assert.ok(g.ship.power.factor('weapons') > 1,
+    'the order reached the levels and changed nothing that reads them');
+});
+
+test('fires are fought when the shooting stops', () => {
+  const g = new Game({ seed: 90n, crewMode: 'original' });
+  g.ship.fires = 3;
+  onTheBridge(g, 60);
+  assert.equal(g.ship.fires, 0,
+    'a ship left a battle alight and was still alight a minute later');
+});
+
+test('and they cost her while they burn', () => {
+  const g = new Game({ seed: 90n, crewMode: 'original' });
+  const before = g.ship.hull;
+  g.ship.fires = 3;
+  onTheBridge(g, 60);
+  assert.ok(g.ship.hull < before,
+    'three fires burned themselves out without touching the hull');
+});
+
+test('shields come back between fights', () => {
+  const g = new Game({ seed: 90n, crewMode: 'original' });
+  for (const f of FACINGS) g.ship.shields[f] = 0;
+  onTheBridge(g, 90);
+  assert.ok(g.ship.shieldPct > 0.9,
+    `a facing beaten flat was still flat after a minute and a half (${g.ship.shieldPct})`);
+});
+
+test('and so do the subsystems, slowly', () => {
+  const g = new Game({ seed: 90n, crewMode: 'original' });
+  g.ship.subsystems.engines = 0.3;
+  onTheBridge(g, 10);
+  const after10 = g.ship.subsystems.engines;
+  assert.ok(after10 > 0.3, 'a damaged engine never mended at all');
+  assert.ok(after10 < 1, 'ten seconds put a wrecked engine back to new');
+});
+
+test('but the hull does not, which is what a starbase is for', () => {
+  // A guard, and it passed before the change too — the old code mended nothing
+  // out of combat because it stepped nothing. It is here because it is the
+  // line the change deliberately does not cross: time buys shields, fires and
+  // subsystems, and never buys hull.
+  const g = new Game({ seed: 90n, crewMode: 'original' });
+  g.ship.hull = g.ship.maxHull * 0.4;
+  const before = g.ship.hull;
+  onTheBridge(g, 120);
+  assert.equal(g.ship.hull, before, 'time alone put the hull back together');
+});
+
+test('a ship that limps away alight is not a ship condemned', () => {
+  // The survivability floor DAMAGE_CONTROL_OFF_ACTION stands for. At the
+  // in-action rate this ship burned to death on her own bridge in thirty-two
+  // seconds with no enemy on the board and no posture that changed it.
+  for (const preset of ['attack', 'balanced', 'science']) {
+    const g = new Game({ seed: 90n, crewMode: 'original' });
+    g.ship.hull = g.ship.maxHull * 0.15;
+    g.ship.fires = 4;
+    g.ship.power.applyPreset(preset);
+    onTheBridge(g, 120);
+    assert.equal(g.ship.destroyed, false,
+      `${preset} posture: she burned to death on the bridge`);
+    assert.equal(g.ship.fires, 0, `${preset} posture: still burning after two minutes`);
+  }
+});
+
+test('and the power she puts behind damage control decides what it costs her', () => {
+  const cost = (preset) => {
+    const g = new Game({ seed: 90n, crewMode: 'original' });
+    g.ship.hull = g.ship.maxHull * 0.5;
+    g.ship.fires = 4;
+    g.ship.power.applyPreset(preset);
+    const before = g.ship.hull;
+    onTheBridge(g, 120);
+    return before - g.ship.hull;
+  };
+  assert.ok(cost('science') < cost('attack'),
+    'power to auxiliary bought nothing against a fire');
+});
+
+test('the parties are thinner while the ship is still being fought', () => {
+  // Same fire, same power, the difference being whether anyone is shooting.
+  const burn = (inAction) => {
+    const g = new Game({ seed: 90n, crewMode: 'original' });
+    g.ship.fires = 4;
+    let t = 0;
+    while (g.ship.fires > 0 && t < 30 * 600) { g.ship.update(1 / 30, g.rng, { inAction }); t++; }
+    return t;
+  };
+  assert.ok(burn(true) > burn(false) * 2,
+    'a fire was no harder to fight with an enemy on the board');
+});
+
+test('the upkeep does not disturb the seeded world', () => {
+  // Passes on the old code too, where nothing was stepped and so nothing was
+  // drawn — it is a guard against a regression this change could have
+  // introduced rather than a proof about the old behaviour, and it caught one:
+  // `Ship.update` draws from the RNG it is handed, and it now draws on ticks it
+  // never used to. From `game.rng` that would shift every seeded outcome
+  // downstream — the same voyage going differently depending on whether the
+  // ship happened to be alight on the way out. It draws from `upkeepRng`.
+  const voyage = (burn) => {
+    const g = new Game({ seed: 4242n, crewMode: 'original' });
+    if (burn) { g.ship.fires = 4; onTheBridge(g, 40); }
+    g.setCourse('vulcan');
+    for (let i = 0; i < 30 * 2000 && g.transit; i++) g.update(1 / 30);
+    return { at: g.locationId, kind: g.encounter?.kind ?? null, title: g.encounter?.title ?? null };
+  };
+  assert.deepEqual(voyage(true), voyage(false),
+    'a fire on the way out changed what was waiting at the other end');
+});

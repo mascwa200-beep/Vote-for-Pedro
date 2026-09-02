@@ -1013,15 +1013,12 @@ class App {
   // ------------------------------------------------------------ game actions
 
   scanSystem() {
-    const g = this.game;
-    const sys = g.location;
-    const lines = [`${sys.name}. ${sys.description}`];
-    const neighbors = g.galaxy.neighbors(sys.id);
-    lines.push(`Charted lanes from here: ${neighbors.map((n) => n.name).join(', ') || 'none'}.`);
-    if (sys.hazard) lines.push(`Hazard: ${sys.hazard.replace(/_/g, ' ')}. Recommend we do not linger.`);
-    const missions = g.availableMissions();
-    if (missions.length) lines.push(`Standing orders available here: ${missions.map((m) => m.title).join(', ')}.`);
-    g.clock.advanceStardate(0.1);
+    // What the sensors SEE is in Game.sensorSweep, so the order can be given
+    // without a screen and the reading can depend on the ship — this used to
+    // be a constant list of facts about the system that no state of the array
+    // and no setting of the power grid could change. What is left here is the
+    // noise it makes.
+    const lines = this.game.sensorSweep();
     audio.play('scan_complete');
     return lines;
   }
