@@ -31,7 +31,9 @@ import { Game, MODES } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
 import {
   ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES, OUTCOMES,
+  Engagement, MAX_WEAPON_RANGE,
 } from '../src/sim/combat.js';
+import { RNG } from '../src/core/rng.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { ABILITIES } from '../src/sim/officers.js';
 
@@ -1899,4 +1901,109 @@ test('a subsystem cannot be damaged to nonsense', () => {
     assert.ok(g.ship.subsystems.engines >= 0 && g.ship.subsystems.engines <= 1);
   }
   assert.deepEqual(checkAll(g, OPTS), []);
+});
+
+// -------------------------------------------------------------------------
+// There are two ways to leave a fight.
+//
+// `destroyed` was checked everywhere and `withdrawn` nowhere, although the
+// combat log says out loud that the ship "has broken contact and gone to
+// warp". These are the consequences of that, each measured before it was
+// fixed.
+
+describe('a ship that broke contact is out of the fight for everyone', () => {
+  /** A fight with one hostile about to run and one that stays. */
+  const routed = () => {
+    const rng = new RNG(0x1701n);
+    const player = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    const ally = new Ship('constitution', { faction: 'federation', name: 'Potemkin' });
+    const runner = new Ship('bird_of_prey', { faction: 'klingon', name: 'Runner' });
+    const stayer = new Ship('bird_of_prey', { faction: 'klingon', name: 'Stayer' });
+    const eng = new Engagement(player, [runner, stayer], rng, { allies: [ally] });
+
+    ally.aiTarget = runner;
+    // The ally cannot shoot, so the runner lives long enough to get away.
+    ally.weapons = [];
+    player.x = 0; player.y = 0; player.z = 0;
+    ally.x = 0; ally.y = 200; ally.z = 0;
+    stayer.x = 300; stayer.y = 0; stayer.z = 0;
+    // Far enough from the player to count as clear, and fleeing already.
+    runner.x = MAX_WEAPON_RANGE * 3; runner.y = 0; runner.z = 0;
+    runner.fleeing = true;
+
+    let ticks = 0;
+    while (ticks < 900 && !runner.withdrawn && !eng.over) { eng.update(STEP); ticks++; }
+    assert.ok(runner.withdrawn, 'the runner never got away, so nothing below is being tested');
+    return { eng, player, ally, runner, stayer };
+  };
+
+  test("an allied captain's lock does not outlive the ship", () => {
+    const { ally, runner } = routed();
+    assert.notEqual(ally.aiTarget, runner,
+      'the ally is still locked on a ship that has left the fight');
+  });
+
+  test('and the ally goes back to fighting whoever is left', () => {
+    const { eng, ally, stayer } = routed();
+    for (let i = 0; i < 5 && !eng.over; i++) eng.update(STEP);
+    assert.equal(ally.aiTarget, stayer,
+      'the ally never re-acquired the hostile that was standing right there');
+  });
+
+  test('a ship that got away cannot be shot', () => {
+    const rng = new RNG(0x1701n);
+    const player = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    const gone = new Ship('bird_of_prey', { faction: 'klingon', name: 'Gone' });
+    const eng = new Engagement(player, [gone], rng);
+
+    gone.withdrawn = true;
+    gone.x = 200; gone.y = 0; gone.z = 0;
+    player.x = 0; player.y = 0; player.z = 0;
+    player.heading = 0; player.pitch = 0;
+
+    const before = gone.hull;
+    let fired = false;
+    for (const w of player.weapons) {
+      w.cooldown = 0;
+      if (eng.fireWeapon(player, w, gone)) fired = true;
+    }
+    assert.equal(fired, false, 'a weapon bore on a ship that has gone to warp');
+    assert.equal(gone.hull, before, 'a ship that escaped still took damage');
+  });
+
+  test('a torpedo already in flight cannot follow it to warp', () => {
+    const rng = new RNG(0x1701n);
+    const player = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    const gone = new Ship('bird_of_prey', { faction: 'klingon', name: 'Gone' });
+    const eng = new Engagement(player, [gone], rng);
+    gone.x = 300; gone.y = 0; gone.z = 0;
+    player.x = 0; player.y = 0; player.z = 0;
+
+    eng.projectiles.push({
+      kind: 'torpedo', attacker: player, target: gone, weapon: player.weapons[0],
+      x: 280, y: 0, z: 0, speed: 420, life: 6, subsystem: null,
+    });
+    gone.withdrawn = true;
+
+    const before = gone.hull;
+    eng.updateProjectiles(STEP);
+    assert.equal(gone.hull, before, 'a torpedo chased a ship to warp and hit it');
+  });
+
+  test('the invariant sweep can see a lock on a ship that has left', () => {
+    const rng = new RNG(0x1701n);
+    const player = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+    const ally = new Ship('constitution', { faction: 'federation', name: 'Potemkin' });
+    const gone = new Ship('bird_of_prey', { faction: 'klingon', name: 'Gone' });
+    const stayer = new Ship('bird_of_prey', { faction: 'klingon', name: 'Stayer' });
+    const eng = new Engagement(player, [gone, stayer], rng, { allies: [ally] });
+
+    assert.equal(checkCombat(eng, OPTS).some((v) => v.code === 'eng.aitarget.absent'), false,
+      'the sweep complained about a fight in which nothing is wrong');
+
+    gone.withdrawn = true;
+    ally.aiTarget = gone;
+    assert.ok(checkCombat(eng, OPTS).some((v) => v.code === 'eng.aitarget.absent'),
+      'nothing noticed a captain locked on a ship that is no longer in the fight');
+  });
 });

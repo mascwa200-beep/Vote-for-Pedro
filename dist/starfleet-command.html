@@ -20839,7 +20839,7 @@ __define("src/sim/ai.js", function (__exports, __require) {
 // really does hold at beam range and grind; Jem'Hadar really do ram.
 
 const { FACTIONS } = __require("src/world/factions.data.js");
-const { WEAPON_RANGE } = __require("src/sim/combat.js");
+const { WEAPON_RANGE, stillEngaged } = __require("src/sim/combat.js");
 
 const DECISION_INTERVAL = 0.5; // seconds between re-evaluations
 
@@ -20905,18 +20905,18 @@ function chooseAction(ship, engagement, dt, opts = {}) {
   const doctrine = FACTIONS[ship.faction]?.doctrine ?? 'balanced';
   const rng = engagement.rng;
 
-  // Pick a target.
-  if (!ship.aiTarget || ship.aiTarget.destroyed) {
+  // Pick a target — anything that is no longer in the fight is not one.
+  if (!stillEngaged(ship.aiTarget)) {
     if (opts.allyOf) {
       ship.aiTarget = engagement.liveHostiles[0] ?? null;
     } else {
-      const candidates = [engagement.player, ...engagement.allies].filter((s) => !s.destroyed);
+      const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
       // Prefer whoever is hurting them most, otherwise the player.
       ship.aiTarget = candidates.includes(engagement.player) ? engagement.player : candidates[0];
     }
   }
   const target = ship.aiTarget;
-  if (!target || target.destroyed) return;
+  if (!stillEngaged(target)) return;
 
   const distance = ship.distanceTo(target);
   const want = preferredRange(ship);
@@ -21102,6 +21102,28 @@ const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
 
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
+
+/**
+ * A ship anyone can still act on: present, alive, and not gone to warp.
+ *
+ * There are two ways to leave a fight and the code only ever remembered one of
+ * them. `destroyed` was checked in four places — the guns, the torpedoes
+ * already in flight, the player's lock and the AI's — and `withdrawn` in none
+ * of them, although the log says out loud that the ship "has broken contact
+ * and gone to warp".
+ *
+ * What that bought, measured: an allied captain whose target withdrew kept the
+ * lock forever, flew off after a ship that is no longer being simulated, and
+ * took no further part in the battle while a live hostile sat beside it. And a
+ * ship that got away could still be shot — 2600 hull down to 2588 on the first
+ * volley — so the escape it had just earned was not one.
+ *
+ * One predicate, used everywhere, so there is a single answer to whether a
+ * ship is still in the fight.
+ */
+function stillEngaged(ship) {
+  return !!ship && !ship.destroyed && !ship.withdrawn;
+}
 
 /** Damage falls off with range; cannons fall off hardest. */
 function rangeFactor(type, distance) {
@@ -21347,7 +21369,7 @@ class Engagement {
   }
 
   fireWeapon(attacker, weapon, target) {
-    if (!target || target.destroyed || attacker.destroyed) return false;
+    if (!stillEngaged(target) || attacker.destroyed) return false;
     if (weapon.cooldown > 0 || !weapon.enabled) return false;
     if (attacker.cloaked) return false;
     if (weapon.type === 'torpedo' && attacker.torpedoes <= 0) return false;
@@ -21518,7 +21540,7 @@ class Engagement {
    * rest of the engagement, with no indication that anything had happened.
    */
   validTarget(ship) {
-    return !!ship && !ship.destroyed && !ship.withdrawn
+    return stillEngaged(ship)
       && (this.hostiles.includes(ship) || this.allies.includes(ship));
   }
 
@@ -21667,7 +21689,9 @@ class Engagement {
   updateProjectiles(dt) {
     for (const p of this.projectiles) {
       p.life -= dt;
-      if (p.target.destroyed || p.life <= 0) { p.dead = true; continue; }
+      // A torpedo cannot follow a ship to warp any more than it can follow one
+      // into a fireball. Both are "the thing I was aimed at is not there".
+      if (!stillEngaged(p.target) || p.life <= 0) { p.dead = true; continue; }
       const dx = p.target.x - p.x;
       const dy = p.target.y - p.y;
       const dz = (p.target.z ?? 0) - (p.z ?? 0);
@@ -21819,6 +21843,14 @@ class Engagement {
       s.withdrawn = true;
       this.pushLog(`${s.name} has broken contact and gone to warp.`, 'tactical');
       if (this.target === s) this.target = this.liveHostiles[0] ?? null;
+      // And everyone else's lock. Only the player's was dropped here, so an
+      // allied captain went on chasing a ship that had gone — the lock is
+      // cleared rather than left for the AI to notice, because withdrawal is
+      // settled after the captains have already acted this tick, and a lock on
+      // a ship that has left the fight should not survive even that long.
+      for (const other of this.allShips) {
+        if (other.aiTarget === s) other.aiTarget = null;
+      }
     }
   }
 
@@ -21901,6 +21933,7 @@ __exports.WITHDRAW_SECONDS = WITHDRAW_SECONDS;
 __exports.ARENA_RADIUS = ARENA_RADIUS;
 __exports.OUTCOMES = OUTCOMES;
 __exports.DISENGAGE_RANGE = DISENGAGE_RANGE;
+__exports.stillEngaged = stillEngaged;
 __exports.rangeFactor = rangeFactor;
 __exports.Engagement = Engagement;
 __exports.HOSTILE_NAMES = HOSTILE_NAMES;
@@ -22821,6 +22854,20 @@ function checkCombat(eng, { arenaRadius = 2600 } = {}) {
         r.must(!eng.target.withdrawn, 'eng.target.withdrawn', 'error',
           `target ${eng.target.name ?? '?'} has already left the fight`, eng.target.name);
       }
+    }
+
+    // The same rule for everyone else's lock, which nothing was checking.
+    //
+    // The player's lock was re-acquired every tick and cleared on withdrawal;
+    // an AI captain's was neither. An ally whose target broke off went on
+    // chasing a ship that is no longer simulated and stopped fighting for the
+    // rest of the battle, with a live hostile alongside it. Nothing in the
+    // game could see that had happened.
+    for (const s of ships) {
+      if (!s?.aiTarget) continue;
+      r.must(seen.has(s.aiTarget), 'eng.aitarget.absent', 'error',
+        `${s.name ?? 'a ship'} is locked on ${s.aiTarget.name ?? '?'}, which has left the fight`,
+        s.name);
     }
 
     // ---- projectiles ----

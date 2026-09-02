@@ -47,6 +47,28 @@ export const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 export const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
 
+/**
+ * A ship anyone can still act on: present, alive, and not gone to warp.
+ *
+ * There are two ways to leave a fight and the code only ever remembered one of
+ * them. `destroyed` was checked in four places — the guns, the torpedoes
+ * already in flight, the player's lock and the AI's — and `withdrawn` in none
+ * of them, although the log says out loud that the ship "has broken contact
+ * and gone to warp".
+ *
+ * What that bought, measured: an allied captain whose target withdrew kept the
+ * lock forever, flew off after a ship that is no longer being simulated, and
+ * took no further part in the battle while a live hostile sat beside it. And a
+ * ship that got away could still be shot — 2600 hull down to 2588 on the first
+ * volley — so the escape it had just earned was not one.
+ *
+ * One predicate, used everywhere, so there is a single answer to whether a
+ * ship is still in the fight.
+ */
+export function stillEngaged(ship) {
+  return !!ship && !ship.destroyed && !ship.withdrawn;
+}
+
 /** Damage falls off with range; cannons fall off hardest. */
 export function rangeFactor(type, distance) {
   const max = WEAPON_RANGE[type] ?? 900;
@@ -292,7 +314,7 @@ export class Engagement {
   }
 
   fireWeapon(attacker, weapon, target) {
-    if (!target || target.destroyed || attacker.destroyed) return false;
+    if (!stillEngaged(target) || attacker.destroyed) return false;
     if (weapon.cooldown > 0 || !weapon.enabled) return false;
     if (attacker.cloaked) return false;
     if (weapon.type === 'torpedo' && attacker.torpedoes <= 0) return false;
@@ -463,7 +485,7 @@ export class Engagement {
    * rest of the engagement, with no indication that anything had happened.
    */
   validTarget(ship) {
-    return !!ship && !ship.destroyed && !ship.withdrawn
+    return stillEngaged(ship)
       && (this.hostiles.includes(ship) || this.allies.includes(ship));
   }
 
@@ -612,7 +634,9 @@ export class Engagement {
   updateProjectiles(dt) {
     for (const p of this.projectiles) {
       p.life -= dt;
-      if (p.target.destroyed || p.life <= 0) { p.dead = true; continue; }
+      // A torpedo cannot follow a ship to warp any more than it can follow one
+      // into a fireball. Both are "the thing I was aimed at is not there".
+      if (!stillEngaged(p.target) || p.life <= 0) { p.dead = true; continue; }
       const dx = p.target.x - p.x;
       const dy = p.target.y - p.y;
       const dz = (p.target.z ?? 0) - (p.z ?? 0);
@@ -764,6 +788,14 @@ export class Engagement {
       s.withdrawn = true;
       this.pushLog(`${s.name} has broken contact and gone to warp.`, 'tactical');
       if (this.target === s) this.target = this.liveHostiles[0] ?? null;
+      // And everyone else's lock. Only the player's was dropped here, so an
+      // allied captain went on chasing a ship that had gone — the lock is
+      // cleared rather than left for the AI to notice, because withdrawal is
+      // settled after the captains have already acted this tick, and a lock on
+      // a ship that has left the fight should not survive even that long.
+      for (const other of this.allShips) {
+        if (other.aiTarget === s) other.aiTarget = null;
+      }
     }
   }
 
