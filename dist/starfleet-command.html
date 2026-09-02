@@ -26123,6 +26123,9 @@ const FLEETS = {
 };
 
 /** Which factions patrol which sectors, and how heavily. */
+// Exported so a test can ask who is supposed to be somewhere. The table is the
+// definition of presence; a test that reads it is checking that the ships which
+// actually turn up are drawn from the right column, which is an effect.
 const SECTOR_PRESENCE = {
   sol: { federation: 8, independent: 2 },
   vulcan: { federation: 7, independent: 2 },
@@ -26505,6 +26508,7 @@ function environmentalHazard(system, ship, rng, dt) {
   }
 }
 
+__exports.SECTOR_PRESENCE = SECTOR_PRESENCE;
 __exports.ENCOUNTER_KINDS = ENCOUNTER_KINDS;
 __exports.SALVAGE_POOL = SALVAGE_POOL;
 __exports.rollEncounter = rollEncounter;
@@ -31577,10 +31581,25 @@ class Game {
           // forecast said "nothing waiting" and the ship met a distress call
           // it had been told nothing about, because the two rolls read the
           // same key with different options.
-          const enc = rollEncounter(this.rng, this.transit.to.id, { ledger: this.ledger, inTransit: true, ...this.encounterPerks(this.transit.to.id) });
+          // Rolled for where the ship will actually STOP, not for where it was
+          // pointed.
+          //
+          // This branch drops the ship at the nearest system on the route and
+          // then began an encounter built for the destination, so the encounter
+          // was live in a system it was never in — `game.encounter.elsewhere`,
+          // about one in thirteen mid-course ambushes. Two thirds of those
+          // fielded somebody with no presence where the ship had stopped:
+          // setting course from Starbase 1 for the Neutral Zone and being
+          // forced out of warp a light-year from Earth put a Romulan warbird
+          // in the Sol system. Whoever jumps you is a fact about where you are
+          // when they do it.
+          //
+          // `nearestSystem` reads position only, so it is the same answer
+          // before the interrupt as after it.
+          const near = this.transit.nearestSystem(this.galaxy);
+          const enc = rollEncounter(this.rng, near.id, { ledger: this.ledger, inTransit: true, ...this.encounterPerks(near.id) });
           if (enc && enc.hostile) {
             this.transit.interrupt('hostile contact');
-            const near = this.transit.nearestSystem(this.galaxy);
             this.locationId = near.id;
             this.transit = null;
             this.pushLog('We have been forced out of warp.', 'helm');

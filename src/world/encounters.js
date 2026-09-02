@@ -23,7 +23,10 @@ const FLEETS = {
 };
 
 /** Which factions patrol which sectors, and how heavily. */
-const SECTOR_PRESENCE = {
+// Exported so a test can ask who is supposed to be somewhere. The table is the
+// definition of presence; a test that reads it is checking that the ships which
+// actually turn up are drawn from the right column, which is an effect.
+export const SECTOR_PRESENCE = {
   sol: { federation: 8, independent: 2 },
   vulcan: { federation: 7, independent: 2 },
   andor: { federation: 6, klingon: 1, independent: 2 },
