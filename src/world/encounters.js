@@ -53,6 +53,17 @@ export const ENCOUNTER_KINDS = [
  * Roll one encounter for a location.
  * @returns {object|null} encounter descriptor, or null for an uneventful arrival
  */
+/**
+ * What a derelict can be carrying.
+ *
+ * Exported because the Ferengi "Salvage Contacts" perk draws a SECOND console
+ * from it, and a second private copy of this list is how a captain's contacts
+ * come to know about parts no derelict in the galaxy actually carries.
+ */
+export const SALVAGE_POOL = [
+  'phaser_relay', 'shield_capacitor', 'ablative_armor', 'sensor_array', 'eps_conduits',
+];
+
 export function rollEncounter(rng, systemId, { ledger, inTransit = false } = {}) {
   const system = SYSTEM_BY_ID[systemId];
   if (!system) return null;
@@ -237,7 +248,7 @@ function buildDerelict(rng, system) {
       'A drifting hulk. Something cut it open from the inside.',
       'An unregistered vessel, dark, tumbling slowly. Sensors read faint biosigns.',
     ]),
-    salvage: rng.pick(['phaser_relay', 'shield_capacitor', 'ablative_armor', 'sensor_array', 'eps_conduits']),
+    salvage: rng.pick(SALVAGE_POOL),
     risk: rng.range(0.15, 0.5),
     hostile: false,
   };

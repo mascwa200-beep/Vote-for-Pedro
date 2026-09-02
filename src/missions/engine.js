@@ -240,6 +240,17 @@ export class Mission {
       for (const f of [].concat(effects.flag)) g.ledger.setFlag(f);
     }
 
+    // "Silent Partnership — every mission reward is increased by half. They
+    // take their cut invisibly." Two hundred and eighty Bars of Latinum for
+    // nothing at all: the perk went into a Set no code read.
+    //
+    // The reward a mission pays is its experience — `item` is the only other
+    // thing an episode grants, and half a console is not a thing. Applied
+    // here rather than at each episode, so a new episode cannot forget it.
+    if (effects.xp && g.perk?.('ferengi_partner')) {
+      effects = { ...effects, xp: Math.round(effects.xp * 1.5) };
+    }
+
     if (effects.xp) {
       // `awardXP` carries out the promotion as well as recording it: the level,
       // the proficiency bonus and the banked feat used to happen in a listener
