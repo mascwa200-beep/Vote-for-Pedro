@@ -23510,17 +23510,32 @@ const TRAIT_LIST = Object.values(TRAITS);
 /**
  * What each thing that happens is worth, in points.
  *
- * These are the things that actually teach a crew a ship: time under way,
+ * These are the things that actually teach a crew a ship: distance under way,
  * fights, and missions seen through. Sitting at a starbase teaches nobody
- * anything, which is why docked hours are not on this list.
+ * anything, which is why docked time is not on this list.
+ *
+ * A voyage is measured in LIGHT YEARS and not in hours, which is the second
+ * version of this. Crediting hours meant the slower you flew the more your
+ * crew learned, because `travelHours` goes as the inverse cube of the warp
+ * factor: the same journey at warp 4 takes eight times as long as at warp 8
+ * and paid eight times as much. Measured over all 1,560 courses in the charts,
+ * a mean voyage was worth 335 points at warp 4 and 40 at warp 8 — so the way
+ * to master your ship was to crawl. What a crew learns from a voyage is the
+ * voyage, not how long the captain dawdled over it.
+ *
+ * The rates are set so a mean voyage of 48.9 light years, with a battle and an
+ * episode every third one, puts the shakedown behind you in about eight
+ * voyages and the top of the track at around a hundred and ten. Before this
+ * the whole track — five tiers, "five years in one hull", and the starship
+ * trait that is the entire decision in it — was reachable in FIFTEEN.
  */
 const EARNINGS = {
-  /** Per hour of campaign time under way. */
-  hour: 0.05,
+  /** Per light year under way. Warp-independent, unlike the hours. */
+  lightYear: 0.16,
   /** Per battle fought, whatever the outcome — losing teaches too. */
-  battle: 14,
+  battle: 8,
   /** Per episode finished. */
-  mission: 30,
+  mission: 15,
 };
 class ShipMastery {
   constructor(classId) {
@@ -23572,7 +23587,7 @@ class ShipMastery {
   /**
    * Credit something the crew learned from.
    *
-   * @param {'hour'|'battle'|'mission'} kind
+   * @param {'lightYear'|'battle'|'mission'} kind
    * @param {number} count how many of them
    * @returns {{gained: number, tierUp: object|null}} the tier crossed, if any
    */
@@ -28335,9 +28350,13 @@ class Game {
     if (!t) return;
     this.locationId = t.to.id;
     this.clock.advanceStardate(t.totalHours / 24);
-    // Hours under way are where a crew actually learn a ship. Docked hours are
+    // Distance under way is where a crew actually learn a ship. Docked time is
     // not credited, which is why this is here and not in the campaign sync.
-    this.creditMastery('hour', t.totalHours);
+    //
+    // The DISTANCE and not the hours: crediting hours paid eight times as much
+    // for the same journey at warp 4 as at warp 8, so the way to master your
+    // ship was to crawl. See EARNINGS in sim/mastery.js.
+    this.creditMastery('lightYear', t.route?.lightYears ?? 0);
     // A detail sent out before a two-day voyage is finished when you arrive.
     // The transit is where the bulk of a commission's hours actually pass, and
     // nothing aboard used to notice them going by.
@@ -31532,7 +31551,7 @@ function shipScreen(app) {
       masteryLines.push(el('p', {
         class: 'hint',
         text: `Next: ${m.next.name}, ${Math.ceil(m.next.remaining)} more to go. `
-          + 'Hours under way, battles fought and episodes seen through.',
+          + 'Light years under way, battles fought and episodes seen through.',
       }));
     }
     if (m.slotOpen) {

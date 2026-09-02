@@ -126,17 +126,32 @@ export const TRAIT_LIST = Object.values(TRAITS);
 /**
  * What each thing that happens is worth, in points.
  *
- * These are the things that actually teach a crew a ship: time under way,
+ * These are the things that actually teach a crew a ship: distance under way,
  * fights, and missions seen through. Sitting at a starbase teaches nobody
- * anything, which is why docked hours are not on this list.
+ * anything, which is why docked time is not on this list.
+ *
+ * A voyage is measured in LIGHT YEARS and not in hours, which is the second
+ * version of this. Crediting hours meant the slower you flew the more your
+ * crew learned, because `travelHours` goes as the inverse cube of the warp
+ * factor: the same journey at warp 4 takes eight times as long as at warp 8
+ * and paid eight times as much. Measured over all 1,560 courses in the charts,
+ * a mean voyage was worth 335 points at warp 4 and 40 at warp 8 — so the way
+ * to master your ship was to crawl. What a crew learns from a voyage is the
+ * voyage, not how long the captain dawdled over it.
+ *
+ * The rates are set so a mean voyage of 48.9 light years, with a battle and an
+ * episode every third one, puts the shakedown behind you in about eight
+ * voyages and the top of the track at around a hundred and ten. Before this
+ * the whole track — five tiers, "five years in one hull", and the starship
+ * trait that is the entire decision in it — was reachable in FIFTEEN.
  */
 export const EARNINGS = {
-  /** Per hour of campaign time under way. */
-  hour: 0.05,
+  /** Per light year under way. Warp-independent, unlike the hours. */
+  lightYear: 0.16,
   /** Per battle fought, whatever the outcome — losing teaches too. */
-  battle: 14,
+  battle: 8,
   /** Per episode finished. */
-  mission: 30,
+  mission: 15,
 };
 
 export class ShipMastery {
@@ -189,7 +204,7 @@ export class ShipMastery {
   /**
    * Credit something the crew learned from.
    *
-   * @param {'hour'|'battle'|'mission'} kind
+   * @param {'lightYear'|'battle'|'mission'} kind
    * @param {number} count how many of them
    * @returns {{gained: number, tierUp: object|null}} the tier crossed, if any
    */

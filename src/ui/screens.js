@@ -1288,7 +1288,7 @@ export function shipScreen(app) {
       masteryLines.push(el('p', {
         class: 'hint',
         text: `Next: ${m.next.name}, ${Math.ceil(m.next.remaining)} more to go. `
-          + 'Hours under way, battles fought and episodes seen through.',
+          + 'Light years under way, battles fought and episodes seen through.',
       }));
     }
     if (m.slotOpen) {
