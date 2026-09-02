@@ -937,6 +937,15 @@ test('a board of inquiry blocks the promotion and everything under it', () => {
   assert.equal(g.pendingFeats ?? 0, 0, 'the feat arrived anyway');
 });
 
+/** Fly to a system and arrive, the way the campaign does. */
+function arriveAt(g, systemId) {
+  g.ship.antimatter = 100;
+  g.locationId = systemId;
+  g.transit = { to: g.galaxy.get(systemId), route: { lightYears: 1 }, totalHours: 1 };
+  g.arrive();
+  return g;
+}
+
 describe('a reputation project that grants nothing', () => {
   /**
    * The perks no code anywhere reads.
@@ -975,7 +984,7 @@ describe('a reputation project that grants nothing', () => {
 
   // The ledger of what is still dead. It shrinks as perks are wired up, and a
   // twenty-sixth dead perk fails this rather than joining the pile quietly.
-  const STILL_UNWIRED = ['dmz_passage', 'romulan_accord'].sort();
+  const STILL_UNWIRED = ['dmz_passage'];
 
   test('the perks nothing reads are exactly the ones we know about', () => {
     assert.deepEqual(unwired(), STILL_UNWIRED,
@@ -1436,6 +1445,81 @@ describe('a reputation project that grants nothing', () => {
     g.galaxy.markVisited('vega');
     const second = g.encounterStream('vega', 1).float();
     assert.notEqual(first, second, 'every visit to Vega would meet the same thing forever');
+  });
+
+  test('crossing the Neutral Zone is the treaty violation the game says it is', () => {
+    // The game drew the line, said twice in its own text that crossing it is a
+    // violation — "Treaty says nobody crosses. Treaty is old." on the outposts,
+    // and the whole Kobayashi Maru briefing — and let a ship fly straight
+    // through with nothing happening. RESEARCH.md §23.
+    const cross = (perks) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      const before = g.ledger.standingOf('romulan');
+      arriveAt(g, 'devron');
+      return { before, after: g.ledger.standingOf('romulan'), broken: g.ledger.count('treaty_broken'), g };
+    };
+    const plain = cross([]);
+    assert.ok(plain.after < plain.before,
+      `flew into the Neutral Zone and the Romulans did not notice (${plain.before} -> ${plain.after})`);
+    assert.equal(plain.broken, 1, 'the crossing was not on the record');
+
+    // "Private Accord — the Neutral Zone opens to you. Officially, this never
+    // happened." It opened nothing, because nothing was shut.
+    const sanctioned = cross(['romulan_accord']);
+    assert.equal(sanctioned.after, sanctioned.before,
+      'a private accord did not stop the Romulans logging the crossing');
+    assert.equal(sanctioned.broken, 0, 'the sanctioned crossing went on the record anyway');
+  });
+
+  test('and it is charged once per crossing, not once per arrival', () => {
+    // The Romulans notice a ship coming over the line, not a ship sitting
+    // where it already is.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    arriveAt(g, 'devron');
+    arriveAt(g, 'devron');
+    assert.equal(g.ledger.count('treaty_broken'), 1, 'sitting still cost a second violation');
+    // Leaving and coming back is a second crossing, and does.
+    arriveAt(g, 'sol');
+    arriveAt(g, 'devron');
+    assert.equal(g.ledger.count('treaty_broken'), 2, 'going back over the line was free');
+  });
+
+  test('the outposts watching the Zone are not inside it', () => {
+    // Outpost 4 and Outpost 8 are Federation stations on the Federation side.
+    // Charging a captain for docking at his own listening post would be the
+    // mechanic misreading its own map.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    for (const id of ['neutral_zone_1', 'neutral_zone_2']) {
+      assert.equal(Game.insideTheZone(g.galaxy.get(id)), false,
+        `${g.galaxy.get(id).name} was counted as inside the Zone`);
+    }
+    assert.equal(Game.insideTheZone(g.galaxy.get('devron')), true,
+      'the Devron System is not counted as inside the Zone');
+    arriveAt(g, 'neutral_zone_1');
+    assert.equal(g.ledger.count('treaty_broken'), 0, 'putting in at Outpost 4 broke a treaty');
+  });
+
+  test('a captain is warned about the Zone before he crosses it', () => {
+    const warned = (perks) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      return /Neutral Zone/i.test(g.crossingWarningFor(g.galaxy.get('devron')) ?? '');
+    };
+    assert.equal(warned(['border_warning']), true,
+      'the Obsidian Order courtesy said nothing about an act of war');
+    assert.equal(warned(['border_warning', 'romulan_accord']), false,
+      'a captain with a private accord was warned about his own arrangement');
+  });
+
+  test('a save taken inside the Zone is not charged for arriving again', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    arriveAt(g, 'devron');
+    const restored = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(restored.inTheZone, true, 'the ship forgot it was over the line');
+    arriveAt(restored, 'devron');
+    assert.equal(restored.ledger.count('treaty_broken'), 1,
+      'reloading inside the Zone charged the crossing twice');
   });
 
   test('a cloaking device is not left behind with the old hull', () => {

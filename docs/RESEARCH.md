@@ -1166,6 +1166,49 @@ Sources: [Memory Alpha — Court Martial (episode)](https://memory-alpha.fandom.
 
 ---
 
+## 23. A line on the chart that is an act of war
+
+The game draws the Romulan Neutral Zone, says twice in its own text that
+crossing it is a treaty violation, and does not make it one. Two listening
+posts sit on the Federation side — "Treaty says nobody crosses. Treaty is
+old." — and the Kobayashi Maru briefing turns on the same fact: entering
+violates the treaty, not entering abandons three hundred and eighty-one
+people. A ship can presently fly straight through and nothing happens.
+
+The canon is unusually specific about why that matters.
+
+**The Zone was drawn by the treaty that ended the Earth-Romulan War, and
+entry by either side is an act of war.** "Balance of Terror" states this
+outright, and the episode is built on it: a Romulan ship crosses, destroys the
+outposts watching the border — Outpost 4 among them — and Kirk's problem
+throughout is that pursuing it means crossing too. The line is not a
+territorial nicety; it is the thing holding a war shut.
+
+**Crossing it deliberately requires a cover story.** In "The Enterprise
+Incident" Kirk takes the Enterprise into the Zone and the Federation's public
+position is that he has had a breakdown — the mission is deniable precisely
+because an admitted crossing would be an act of war. So the shape of a
+sanctioned crossing is not permission openly given; it is an arrangement
+nobody writes down, which is what the Romulan track's own project already
+says: "Officially, this never happened."
+
+The Treaty of Algeron is a **different** treaty and is about cloaking devices,
+not about the Zone. The game already cites it correctly when refusing a
+Federation captain a cloak, and the two should not be conflated.
+
+There is no Cardassian demilitarised zone anywhere in this galaxy's data — no
+sector, no systems, no border. That is a real absence rather than an oversight
+to paper over, and it is why the Cardassian "Standing Treaty Rider" is still
+unwired: giving a perk something to do by inventing the place it acts on is
+building the world backwards.
+
+Sources: [Memory Alpha — Romulan Neutral Zone](https://memory-alpha.fandom.com/wiki/Romulan_Neutral_Zone),
+[Memory Alpha — Balance of Terror](https://memory-alpha.fandom.com/wiki/Balance_of_Terror_(episode)),
+[Memory Alpha — The Enterprise Incident](https://memory-alpha.fandom.com/wiki/The_Enterprise_Incident_(episode)),
+[Memory Alpha — Treaty of Algeron](https://memory-alpha.fandom.com/wiki/Treaty_of_Algeron)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

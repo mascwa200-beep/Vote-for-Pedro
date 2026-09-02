@@ -28070,6 +28070,8 @@ class Game {
     // is what makes one a favour and the other a contract rather than buttons.
     this.klingonAnswered = false;
     this.marauderHired = false;
+    // Whether she is already over the line into the Neutral Zone.
+    this.inTheZone = false;
     // Explicitly false rather than undefined: `over` is read as a boolean all
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
@@ -28205,6 +28207,12 @@ class Game {
       return `A word before we go, Captain: ${dest.name} will not open a berth to us. `
         + `They want ${v} and our standing with them is ${Math.round(this.ledger.standingOf(f))}.`;
     }
+    // The line that matters most is the one that is an act of war. Said before
+    // the course is laid in, which is the only moment a warning helps.
+    if (Game.insideTheZone(dest) && !this.perk('romulan_accord')) {
+      return `A word before we go, Captain: ${dest.name} is inside the Neutral Zone. `
+        + 'Crossing is a treaty violation and the Romulans will log it.';
+    }
     const owner = dest.faction;
     if (owner && owner !== 'federation' && owner !== 'independent') {
       const standing = this.ledger.standingOf(owner);
@@ -28255,6 +28263,62 @@ class Game {
     return rollEncounter(this.encounterStream(systemId, 1), systemId, {
       ledger: this.ledger, ...this.encounterPerks(systemId),
     });
+  }
+
+  /** Inside the Zone: the `neutral` sector, minus the posts watching it. */
+  static insideTheZone(sys) {
+    return sys?.sector === 'neutral' && sys?.faction !== 'federation';
+  }
+
+  /**
+   * Crossing the Romulan Neutral Zone.
+   *
+   * The game drew this line, said twice in its own text that crossing it is a
+   * treaty violation — "Treaty says nobody crosses. Treaty is old." on the
+   * outposts, and the whole Kobayashi Maru briefing — and then let a ship fly
+   * straight through with nothing happening at all. RESEARCH.md §23: the Zone
+   * was drawn by the treaty that ended the Earth-Romulan War and entry by
+   * either side is an act of war, which is the thing "Balance of Terror" is
+   * built on.
+   *
+   * ONCE per crossing, not once per arrival: the Romulans notice a ship coming
+   * over the line, not a ship sitting where it already is. Leaving the Zone
+   * arms it again.
+   *
+   * The campaign sends you in — `devron_anomaly` is an act-3 episode inside
+   * the Zone — so this is a price on a thing worth doing, not a wall.
+   */
+  crossTheZone() {
+    const inside = Game.insideTheZone(this.location);
+    if (!inside) { this.inTheZone = false; return null; }
+    if (this.inTheZone) return null;
+    this.inTheZone = true;
+
+    // "Private Accord — the Neutral Zone opens to you. Officially, this never
+    // happened." Three hundred and twenty Tokens of Regard, and it opened
+    // nothing, because nothing was ever shut. An arrangement nobody writes
+    // down is exactly the shape of a sanctioned crossing (§23), so with it
+    // there is no violation to record.
+    if (this.perk('romulan_accord')) {
+      this.pushLog(
+        `Across the line, Captain. Nobody is hailing us and nobody will admit `
+        + 'to that. Officially, this never happened.',
+        'comms',
+      );
+      return { crossed: true, sanctioned: true };
+    }
+
+    this.ledger.adjustStanding('romulan', -20, 'Crossed the Romulan Neutral Zone');
+    this.ledger.record('treaty_broken', {
+      text: `Crossed into the Neutral Zone at ${this.location?.name ?? 'an unnamed system'}`,
+      system: this.locationId,
+    });
+    this.pushLog(
+      'We are inside the Zone, Captain. That is a treaty violation and they '
+      + 'will have logged it the moment we crossed.',
+      'comms',
+    );
+    return { crossed: true, sanctioned: false };
   }
 
   encounterPerks(systemId) {
@@ -29188,6 +29252,8 @@ class Game {
     for (const back of advanceAssignments(this, t.totalHours, this.rng)) {
       this.pushLog(`${back.assignment.name} finished on the way. ${back.text}`, 'comms');
     }
+
+    this.crossTheZone();
 
     // Putting in somewhere Starfleet keeps people makes up the ship's
     // complement of specialists. The roster could only ever shrink before
@@ -30783,6 +30849,10 @@ class Game {
       // between fights would have been a way to call the Empire again.
       klingonAnswered: this.klingonAnswered === true,
       marauderHired: this.marauderHired === true,
+      // Whether she is already over the line. Dropped on load, a save taken
+      // inside the Zone would be charged for the crossing again on the next
+      // arrival, without the ship having moved.
+      inTheZone: this.inTheZone === true,
 
       // Runtime flags. These are cheap to write and expensive to lose: the
       // promotion feat vanishes without `pendingFeats`, and the ion pod comes
@@ -31256,6 +31326,10 @@ class Game {
     g.shipsLost = g.over ? lost : Math.min(1, lost);
     g.klingonAnswered = data.klingonAnswered === true;
     g.marauderHired = data.marauderHired === true;
+    // The saved flag, but the ship's actual position wins: a record edited to
+    // claim she is over the line when she is not would otherwise let her cross
+    // for free on the way in.
+    g.inTheZone = data.inTheZone === true && Game.insideTheZone(g.location);
     // Only an offer of a hull that exists, so a hand-edited record cannot put
     // the captain aboard something the registry has never heard of.
     g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)
