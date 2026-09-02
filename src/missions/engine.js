@@ -29,14 +29,60 @@ export class Mission {
 
   get title() { return this.def.title; }
 
+  /**
+   * Where a stage happens.
+   *
+   * An episode declares the system it is set in. A stage inherits that unless
+   * it says otherwise: `system: 'alpha_centauri'` moves it, and
+   * `system: null` means it happens wherever the ship is — a conversation in
+   * the ready room, a decision about a report, an argument with a first
+   * officer.
+   *
+   * The key is `system` and NOT `where`, which is already taken and means
+   * something else entirely: the ROOM aboard ship a stage happens in, read by
+   * `stageIsHere` in the UI. Reusing it made the mission panel announce that
+   * they were waiting for the captain "in alpha_centauri" as though a star
+   * system were a compartment.
+   *
+   * Before this, nothing anywhere read the location. An episode set at Cestus
+   * III could be started, advanced and finished from Sol, which made the
+   * destination you flew to decoration and the galaxy a menu.
+   */
+  stageLocation(stage = this.stage) {
+    if (stage && Object.prototype.hasOwnProperty.call(stage, 'system')) return stage.system;
+    return this.def.system ?? null;
+  }
+
+  /**
+   * Is the ship where this stage happens?
+   *
+   * @returns {{ok: boolean, reason?: string, need?: string}}
+   */
+  testLocation(stage = this.stage) {
+    const need = this.stageLocation(stage);
+    if (!need) return { ok: true };
+    const at = this.ctx.game?.locationId;
+    // A game with no location at all — a test harness, a half-built state —
+    // is not somewhere else, it is nowhere, and refusing every choice there
+    // would strand a caller who never asked to be gated.
+    if (!at) return { ok: true };
+    if (at === need) return { ok: true };
+    const name = this.ctx.game?.galaxy?.get?.(need)?.name ?? need;
+    return { ok: false, need, reason: `We would have to be at ${name}, Captain.` };
+  }
+
   /** Choices the player can currently take, with locked ones explained. */
   choices() {
     const stage = this.stage;
     if (!stage?.choices) return [];
+    // The whole stage is somewhere, so this is tested once rather than per
+    // choice — every choice at a stage happens in the same place.
+    const here = this.testLocation(stage);
     return stage.choices
       .filter((c) => !c.hidden || this.test(c.hidden) === false)
       .map((c) => {
         const gate = c.requires ? this.testRequirement(c.requires) : { ok: true };
+        if (!here.ok) return { ...c, locked: true, lockReason: here.reason };
         return { ...c, locked: !gate.ok, lockReason: gate.reason };
       });
   }

@@ -13314,6 +13314,11 @@ const CORE_EPISODES = [
         ],
       },
       trials: {
+        // The orders say Alpha Centauri, so the trials happen at Alpha
+        // Centauri. A stage inherits its episode's system unless it says
+        // otherwise, and this one has to say otherwise or the fiction and the
+        // gate disagree with each other.
+        system: 'alpha_centauri',
         text: 'Engineering reports the core is holding at ninety-four percent efficiency. Your chief engineer wants to push it. Your first officer would prefer the manual’s numbers.',
         speaker: 'Bridge',
         choices: [
@@ -13325,17 +13330,22 @@ const CORE_EPISODES = [
         ],
       },
       push_good: {
+        system: 'alpha_centauri',
         text: 'She holds. Better than holds — the chief is grinning at a readout and says the intermix is cleaner than the yard predicted.',
         speaker: 'Engineering',
         choices: [{ id: 'ok', label: 'Log it', next: 'report', effects: { xp: 150, flag: 'core_tuned' } }],
       },
       push_bad: {
+        system: 'alpha_centauri',
         text: 'A plasma conduit lets go on deck eleven. Two injured, nothing worse, and a lecture from your chief engineer that you have earned.',
         speaker: 'Engineering',
         choices: [{ id: 'ok', label: 'Log it honestly', next: 'report',
           effects: { damage: 0.06, record: { lives_lost: 0 }, xp: 80 } }],
       },
       report: {
+        // A report is written wherever the ship is. `system: null` is a stage
+        // that happens on board rather than at a place.
+        system: null,
         text: 'The trials are done. What goes in the report?',
         speaker: 'Ready Room',
         choices: [
@@ -25173,14 +25183,60 @@ class Mission {
 
   get title() { return this.def.title; }
 
+  /**
+   * Where a stage happens.
+   *
+   * An episode declares the system it is set in. A stage inherits that unless
+   * it says otherwise: `system: 'alpha_centauri'` moves it, and
+   * `system: null` means it happens wherever the ship is — a conversation in
+   * the ready room, a decision about a report, an argument with a first
+   * officer.
+   *
+   * The key is `system` and NOT `where`, which is already taken and means
+   * something else entirely: the ROOM aboard ship a stage happens in, read by
+   * `stageIsHere` in the UI. Reusing it made the mission panel announce that
+   * they were waiting for the captain "in alpha_centauri" as though a star
+   * system were a compartment.
+   *
+   * Before this, nothing anywhere read the location. An episode set at Cestus
+   * III could be started, advanced and finished from Sol, which made the
+   * destination you flew to decoration and the galaxy a menu.
+   */
+  stageLocation(stage = this.stage) {
+    if (stage && Object.prototype.hasOwnProperty.call(stage, 'system')) return stage.system;
+    return this.def.system ?? null;
+  }
+
+  /**
+   * Is the ship where this stage happens?
+   *
+   * @returns {{ok: boolean, reason?: string, need?: string}}
+   */
+  testLocation(stage = this.stage) {
+    const need = this.stageLocation(stage);
+    if (!need) return { ok: true };
+    const at = this.ctx.game?.locationId;
+    // A game with no location at all — a test harness, a half-built state —
+    // is not somewhere else, it is nowhere, and refusing every choice there
+    // would strand a caller who never asked to be gated.
+    if (!at) return { ok: true };
+    if (at === need) return { ok: true };
+    const name = this.ctx.game?.galaxy?.get?.(need)?.name ?? need;
+    return { ok: false, need, reason: `We would have to be at ${name}, Captain.` };
+  }
+
   /** Choices the player can currently take, with locked ones explained. */
   choices() {
     const stage = this.stage;
     if (!stage?.choices) return [];
+    // The whole stage is somewhere, so this is tested once rather than per
+    // choice — every choice at a stage happens in the same place.
+    const here = this.testLocation(stage);
     return stage.choices
       .filter((c) => !c.hidden || this.test(c.hidden) === false)
       .map((c) => {
         const gate = c.requires ? this.testRequirement(c.requires) : { ok: true };
+        if (!here.ok) return { ...c, locked: true, lockReason: here.reason };
         return { ...c, locked: !gate.ok, lockReason: gate.reason };
       });
   }
@@ -31536,6 +31592,20 @@ function missionPanel(app) {
       el('p', { class: 'hint', text: 'An episode is something you are in, not something you read.' }),
     ]));
     return wrap;
+  }
+
+  // Where this is happening, when it is not happening here.
+  //
+  // The lock reason is on every button, but a captain reading four greyed-out
+  // orders should not have to infer the one thing they all have in common. It
+  // is one line, at the top, naming the system and saying to set a course.
+  const here = m.testLocation();
+  if (!here.ok) {
+    const name = g.galaxy?.get?.(here.need)?.name ?? here.need;
+    wrap.append(panel('Not here', [
+      el('p', { class: 'muted', text: `This is happening at ${name}, Captain. We are at ${g.galaxy?.get?.(g.locationId)?.name ?? g.locationId}.` }),
+      el('p', { class: 'hint', text: `Say "set course for ${name}".` }),
+    ]));
   }
 
   // Numbered, so they can be spoken. The parser cannot know what an episode

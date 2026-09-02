@@ -525,12 +525,19 @@ test('a mission runs to an ending and writes to the ledger', () => {
   assert.ok(mission);
 
   let guard = 0;
+  let flew = 0;
   while (!mission.complete && guard++ < 50) {
+    // A stage happens somewhere. The shakedown's orders say Alpha Centauri, so
+    // the trials are at Alpha Centauri and the ship has to actually go — which
+    // is the point of gating stages by location, and is asserted below.
+    const here = mission.testLocation();
+    if (!here.ok) { game.locationId = here.need; flew++; }
     const choices = mission.choices().filter((c) => !c.locked);
     assert.ok(choices.length, 'a stage must offer at least one open choice');
     mission.choose(choices[0].id);
   }
   assert.ok(mission.complete, 'the mission reached an ending');
+  assert.ok(flew > 0, 'the shakedown was completed without ever leaving Sol');
   assert.ok(game.ledger.entries.some((e) => e.kind === 'mission_complete'));
 });
 

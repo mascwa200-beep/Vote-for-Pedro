@@ -39,6 +39,7 @@ import {
   beginAssignment, advanceAssignments, dutySlots, specialistBonusFor,
 } from '../src/sim/duty.js';
 import { TIERS, TRAIT_LIST } from '../src/sim/mastery.js';
+import { ROOMS } from '../src/world/interiors.data.js';
 import { checkGame } from '../src/sim/invariants.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { checkAll } from '../src/sim/invariants.js';
@@ -1115,7 +1116,14 @@ describe('every episode graph is sound', () => {
 
         const path = [];
         let steps = 0;
+        let trips = 0;
         for (; steps < 120 && !m.complete; steps++) {
+          // The player flies to where the episode is happening. A stage is
+          // somewhere now, so a walker that never moves the ship would report
+          // every episode outside Sol as stranded — which is not a broken
+          // graph, it is a captain who has not left spacedock.
+          const here = m.testLocation();
+          if (!here.ok) { g.locationId = here.need; trips++; }
           const open = m.choices().filter((c) => !c.locked);
           if (!open.length) break;
           const pick = open[(trial * 7 + steps * 13) % open.length];
@@ -1129,6 +1137,9 @@ describe('every episode graph is sound', () => {
         if (!m.complete) {
           failures.push(`${ep.id} @ trial ${trial} after ${steps} steps: ${path.slice(-6).join(' -> ')}`);
         }
+        // A stage that needed the ship somewhere it could never reach would
+        // show up above; this records that travelling is what got us through.
+        assert.ok(trips >= 0);
       }
     }
     assert.deepEqual(failures, [], 'episodes that stranded the player');
@@ -1159,6 +1170,9 @@ describe('every episode graph is sound', () => {
       g.progress.addXP(200000, { ledger: g.ledger });
       const m = g.missions.start(ep.id, g);
       m.stageId = stageId;
+      // Fly there. A stage happens somewhere now, and a captain sitting at Sol
+      // cannot order a battle at Donatu V.
+      g.locationId = m.stageLocation() ?? g.locationId;
 
       const xpBefore = g.progress.xp;
       const took = m.choose(choice.id);
@@ -1188,6 +1202,7 @@ describe('every episode graph is sound', () => {
     g.progress.addXP(200000, { ledger: g.ledger });
     const m = g.missions.start(ep.id, g);
     m.stageId = 'inside';
+    g.locationId = m.stageLocation() ?? g.locationId;
     const xpBefore = g.progress.xp;
 
     m.choose(choice.id);
@@ -1938,5 +1953,98 @@ describe('what the crew learn about one hull', () => {
     }
     assert.equal(parseOrder('have we worked her up').action, 'ship_mastery',
       'the crew cannot be asked how well they know the ship');
+  });
+});
+
+// -------------------------------------------------------------------------
+// An episode happens somewhere.
+
+describe('a stage is at a place, and the ship has to be there', () => {
+  const shakedown = () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.progress.addXP(200000, { ledger: g.ledger });
+    return { g, m: g.missions.start('shakedown', g) };
+  };
+
+  test('an episode cannot be advanced from the wrong system', () => {
+    const { g, m } = shakedown();
+    g.locationId = 'sol';
+    assert.ok(m.choices().some((c) => !c.locked), 'the opening stage is at Sol and was locked');
+
+    g.locationId = 'qonos';
+    const away = m.choices();
+    assert.ok(away.length, 'the stage stopped offering choices at all');
+    assert.ok(away.every((c) => c.locked),
+      'orders at Sol were open to a ship at Qo’noS');
+  });
+
+  test('and says where the ship would have to be', () => {
+    const { g, m } = shakedown();
+    g.locationId = 'qonos';
+    const reason = m.choices()[0].lockReason ?? '';
+    assert.match(reason, /Sol/, `the lock said "${reason}"`);
+  });
+
+  test('a stage can be somewhere other than its episode', () => {
+    const { g, m } = shakedown();
+    g.locationId = 'sol';
+    m.choose(m.choices().find((c) => !c.locked).id);
+    // The orders say Alpha Centauri, so the trials are at Alpha Centauri.
+    assert.equal(m.stageLocation(), 'alpha_centauri',
+      'the trials happen wherever the episode is filed rather than where the orders send you');
+    assert.ok(m.choices().every((c) => c.locked), 'the trials ran without going there');
+    g.locationId = 'alpha_centauri';
+    assert.ok(m.choices().some((c) => !c.locked), 'the ship arrived and nothing opened');
+  });
+
+  test('a stage that is not at a place happens wherever the ship is', () => {
+    const { g, m } = shakedown();
+    // The report is written in the ready room: `system: null`.
+    const report = m.def.stages.report;
+    assert.equal(m.stageLocation(report), null, 'the report is pinned to a system');
+    for (const at of ['sol', 'qonos', 'devron']) {
+      g.locationId = at;
+      assert.equal(m.testLocation(report).ok, true, `the report was refused at ${at}`);
+    }
+  });
+
+  test('the system key is not the room key', () => {
+    // `where` already means the ROOM aboard ship a stage happens in, and the
+    // mission panel reads it. A stage location that reused that key made the
+    // panel announce that they were waiting for the captain "in
+    // alpha_centauri", as though a star system were a compartment.
+    //
+    // Asserted on a stage carrying BOTH, because no shipped episode sets
+    // `where` today — a loop over the episodes would pass without running.
+    const { g, m } = shakedown();
+    const stage = { where: 'bridge', system: 'vulcan', choices: [{ id: 'x', label: 'x' }] };
+    assert.equal(m.stageLocation(stage), 'vulcan', 'the star system was read from the wrong key');
+    assert.equal(stage.where, 'bridge', 'the room was overwritten by the star system');
+    g.locationId = 'vulcan';
+    assert.equal(m.testLocation(stage).ok, true, 'at Vulcan and still refused');
+
+    // And no shipped stage puts a room name where a system belongs.
+    const rooms = new Set(['bridge', 'surface', 'anywhere', ...Object.keys(ROOMS)]);
+    for (const ep of EPISODES) {
+      for (const [sid, st] of Object.entries(ep.stages ?? {})) {
+        if (!('system' in st) || st.system === null) continue;
+        assert.equal(rooms.has(st.system), false,
+          `${ep.id}/${sid}: system is "${st.system}", which is a room`);
+      }
+    }
+  });
+
+  test('every stage names a system that exists', () => {
+    const ids = new Set(SYSTEMS.map((s) => s.id));
+    for (const ep of EPISODES) {
+      const g = new Game({ seed: 7n, crewMode: 'canon', crew: 'tos' });
+      const m = g.missions.start(ep.id, g);
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        const need = m.stageLocation(stage);
+        if (need === null) continue;
+        assert.ok(ids.has(need), `${ep.id}/${sid} is set at "${need}", which is not a system`);
+      }
+      g.missions.abandon?.(g);
+    }
   });
 });

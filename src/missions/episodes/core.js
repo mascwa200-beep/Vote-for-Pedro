@@ -17,6 +17,11 @@ export const CORE_EPISODES = [
         ],
       },
       trials: {
+        // The orders say Alpha Centauri, so the trials happen at Alpha
+        // Centauri. A stage inherits its episode's system unless it says
+        // otherwise, and this one has to say otherwise or the fiction and the
+        // gate disagree with each other.
+        system: 'alpha_centauri',
         text: 'Engineering reports the core is holding at ninety-four percent efficiency. Your chief engineer wants to push it. Your first officer would prefer the manual’s numbers.',
         speaker: 'Bridge',
         choices: [
@@ -28,17 +33,22 @@ export const CORE_EPISODES = [
         ],
       },
       push_good: {
+        system: 'alpha_centauri',
         text: 'She holds. Better than holds — the chief is grinning at a readout and says the intermix is cleaner than the yard predicted.',
         speaker: 'Engineering',
         choices: [{ id: 'ok', label: 'Log it', next: 'report', effects: { xp: 150, flag: 'core_tuned' } }],
       },
       push_bad: {
+        system: 'alpha_centauri',
         text: 'A plasma conduit lets go on deck eleven. Two injured, nothing worse, and a lecture from your chief engineer that you have earned.',
         speaker: 'Engineering',
         choices: [{ id: 'ok', label: 'Log it honestly', next: 'report',
           effects: { damage: 0.06, record: { lives_lost: 0 }, xp: 80 } }],
       },
       report: {
+        // A report is written wherever the ship is. `system: null` is a stage
+        // that happens on board rather than at a place.
+        system: null,
         text: 'The trials are done. What goes in the report?',
         speaker: 'Ready Room',
         choices: [
