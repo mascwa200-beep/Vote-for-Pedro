@@ -25,7 +25,8 @@ import { Ship, FACINGS } from '../src/sim/ship.js';
 import { RNG } from '../src/core/rng.js';
 import { Character, CAREERS } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
-import { CONSOLES, Loadout, SET_LIST } from '../src/sim/loadout.js';
+import { CONSOLES, Loadout, SET_LIST, SETS } from '../src/sim/loadout.js';
+import { SHIP_CLASSES } from '../src/world/ships.data.js';
 import {
   RECIPES, MATERIAL_LIST, beginFabrication, advanceFabrication, salvageWreck,
 } from '../src/sim/fabrication.js';
@@ -2614,4 +2615,34 @@ describe('boarding a hulk', () => {
     assert.equal(availableAssignments(g).some((a) => a.id === 'salvage_party'), false,
       'a salvage party was offered with no hulk anywhere');
   });
+});
+
+test('a set that will not fit the starting hull is a fact, not a surprise', () => {
+  // The duotronic suite is three science consoles and a Constitution has two
+  // science slots, so its three-piece tier cannot be reached in the ship the
+  // campaign starts you in. That is allowed — a refit, an Oberth and an
+  // Excelsior all carry three — but the ship screen has to SAY so, because
+  // "Still wanted: <piece>" on its own told the captain to do something the
+  // loadout would silently refuse.
+  const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+  const needBySlot = (set) => {
+    const need = {};
+    for (const id of set.pieces) {
+      const slot = CONSOLES[id]?.slot;
+      if (slot) need[slot] = (need[slot] ?? 0) + 1;
+    }
+    return need;
+  };
+
+  const short = SET_LIST.filter((set) => Object.entries(needBySlot(set))
+    .some(([slot, n]) => g.loadout.capacity(slot) < n));
+  assert.equal(short.length, 1,
+    `${short.length} sets do not fit the starting hull: ${short.map((s) => s.name).join(', ')}`);
+  assert.equal(short[0].id, 'duotronic', `the set that does not fit is ${short[0].id}`);
+
+  // And it is genuinely reachable somewhere, rather than dead content.
+  const roomFor = Object.values(SHIP_CLASSES).filter((cls) => cls.slots
+    && Object.entries(needBySlot(SETS.duotronic)).every(([s, n]) => (cls.slots[s] ?? 0) >= n));
+  assert.ok(roomFor.length > 0,
+    'no hull in the game can carry the duotronic suite — it is dead content');
 });

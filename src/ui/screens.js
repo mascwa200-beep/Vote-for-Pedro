@@ -1262,6 +1262,39 @@ export function shipScreen(app) {
         class: 'hint',
         text: `Still wanted: ${missing.map((id) => CONSOLES[id]?.name ?? id).join(', ')}.`,
       }));
+      // And whether this hull can actually take it.
+      //
+      // "Still wanted" on its own was a message describing something the game
+      // would not let you do. The duotronic suite is three science consoles
+      // and a Constitution has two science slots, so a captain in the ship the
+      // campaign starts him in was told to fit a third one, tried, and was
+      // silently refused by `equip`. The set is real and reachable — a refit,
+      // an Oberth and an Excelsior all carry three — but not in the hull he
+      // was standing in, and nothing said so.
+      const need = {};
+      for (const id of set.pieces) {
+        const slot = CONSOLES[id]?.slot;
+        if (slot) need[slot] = (need[slot] ?? 0) + 1;
+      }
+      const impossible = Object.entries(need)
+        .filter(([slot, n]) => g.loadout.capacity(slot) < n)
+        .map(([slot, n]) => `${n} ${slot} slots and she has ${g.loadout.capacity(slot)}`);
+      const noRoom = [...new Set(missing.map((id) => CONSOLES[id]?.slot).filter(Boolean))]
+        .filter((slot) => g.loadout.free(slot) <= 0);
+
+      if (impossible.length) {
+        setLines.push(el('p', {
+          class: 'hint',
+          text: `Not on this hull: the set wants ${impossible.join(', ')}. `
+            + 'A bigger ship would carry it.',
+        }));
+      } else if (noRoom.length) {
+        setLines.push(el('p', {
+          class: 'hint',
+          text: `No room for it as she is fitted — take something out of `
+            + `${noRoom.join(' or ')} first.`,
+        }));
+      }
     }
   }
   if (setLines.length) root.append(panel('Installed together', setLines));

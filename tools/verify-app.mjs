@@ -2835,6 +2835,50 @@ try {
   await page.waitForTimeout(150);
   await page.screenshot({ path: join(SHOTS, '06b-equipment-sets.png') });
 
+  // ------------------------------------------------ a set this hull cannot take
+  //
+  // "Still wanted: <piece>" was printed whether or not the ship had a slot to
+  // put it in. The duotronic suite is three science consoles and a Constitution
+  // has two science slots, so the captain was told to fit a third, tried, and
+  // was silently refused. The set is real — a refit carries three — but not in
+  // the hull the campaign starts him in.
+  const tooBig = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const { SETS, CONSOLES } = await import('./src/sim/loadout.js');
+    const set = SETS.duotronic;
+
+    // Strip the science bay and fit as much of the suite as will go.
+    for (const id of [...g.loadout.equipped.science]) g.loadout.unequip(id);
+    let fittedCount = 0;
+    for (const id of set.pieces) {
+      g.loadout.inventory.push(id);
+      if (g.loadout.equip(id)) fittedCount += 1;
+    }
+    g.applyAllMods();
+    app.render();
+
+    const text = document.body.textContent ?? '';
+    return {
+      capacity: g.loadout.capacity('science'),
+      wants: set.pieces.length,
+      fittedCount,
+      saysStillWanted: /Still wanted/i.test(text),
+      saysWhyNot: /Not on this hull/i.test(text),
+    };
+  });
+  check('a set bigger than the hull is named as such',
+    tooBig.capacity < tooBig.wants && tooBig.saysStillWanted && tooBig.saysWhyNot,
+    JSON.stringify(tooBig));
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel')]
+      .find((el) => /installed together/i.test(el.textContent ?? ''));
+    head?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '06g-set-too-big.png') });
+
+
   // ------------------------------------------------ working her up
   //
   // The tiers are not a choice, so what has to be proved on screen is that
