@@ -36711,7 +36711,13 @@ class App {
       case 'force_channel': {
         const r = g.forceChannel();
         if (r.ok) {
-          audio.play('hail');
+          // `hail_incoming`, which is the cue that exists. This said `'hail'`,
+          // and `AudioEngine.play` returns silently on a name it does not know
+          // — so the opening move of the Kobayashi Maru, forcing a channel on
+          // people whose doctrine is to ignore hails, was the one dramatic
+          // moment in the game that made no sound at all. An ordinary incoming
+          // hail has had this cue since the beginning.
+          audio.play('hail_incoming');
           haptic('confirm');
           this.showMessage('Channel Forced', [
             'They are receiving. Whatever you say next, they will hear.',

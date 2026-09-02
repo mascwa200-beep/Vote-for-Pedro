@@ -3747,6 +3747,23 @@ try {
     for (let i = 0; i < 3; i++) g.ledger.record('ship_spared');
     const allowed = g.forceChannel();
 
+    // The same thing through the ORDER path, which is the only way the cue is
+    // reached: `forceChannel` is the model, `case 'force_channel'` in main.js
+    // is what a captain actually gives. It played `'hail'` — a name that is
+    // not in the cue table — and `AudioEngine.play` returns silently on one it
+    // does not know, so the opening move of the game's set piece made no sound
+    // at all while an ordinary incoming hail has had a cue since the
+    // beginning. Closed first, because it is already open by this line.
+    const a = globalThis.__audio;
+    const { parseOrder } = await import('./src/ui/orders.js');
+    g.gambitOpen = false;
+    g.parleyForced = false;
+    const cues = [];
+    const realPlay = a.play.bind(a);
+    a.play = (n, o) => { cues.push(n); return realPlay(n, o); };
+    globalThis.__app.executeOrder(parseOrder('force a channel'), 'force a channel');
+    a.play = realPlay;
+
     // With the channel open, the order line is not an order line.
     const outcome = g.makeAppeal(
       'This is Captain Okafor. You know my record. I spared three of your '
@@ -3759,6 +3776,9 @@ try {
       allowed: allowed.ok === true,
       won: outcome.success,
       recorded: (g.ledger.counters.kobayashi_maru_solved ?? 0) === 1,
+      orderOpened: g.gambitOpen === true || cues.length > 0,
+      cue: cues.includes('hail_incoming'),
+      ghostCue: cues.includes('hail'),
     };
 
     // Put the simulator away. `runKobayashiMaru` starts a real engagement and
@@ -3775,6 +3795,8 @@ try {
   check('an earned reputation can', km.allowed);
   check('what you type is judged against your record', km.won && km.recorded,
     JSON.stringify(km));
+  check('and forcing the channel makes a sound that exists',
+    km.cue && !km.ghostCue, JSON.stringify(km));
   await dismissModals(page);
 
   // ------------------------------------------------ character & reputation UI

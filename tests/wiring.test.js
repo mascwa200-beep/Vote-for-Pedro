@@ -1138,6 +1138,69 @@ describe('every episode graph is sound', () => {
     }
   });
 
+  test('every outcome a choice declares has an ending to land on', () => {
+    // Passes today, on every one of the sixteen episodes — a guard, not a fix,
+    // and worth having because the failure is silent. `Mission.finish` looks
+    // the outcome up in `def.endings` and, not finding it, takes the else
+    // branch: the episode still ends and the ledger still records it, so a
+    // captain would simply never see the ending the author wrote, and nothing
+    // anywhere would say why.
+    const orphans = [];
+    for (const ep of EPISODES) {
+      const endings = new Set(Object.keys(ep.endings ?? {}));
+      const declared = new Set();
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          if (!c.outcome) continue;
+          declared.add(c.outcome);
+          if (!endings.has(c.outcome)) orphans.push(`${ep.id}/${sid}/${c.id} -> "${c.outcome}"`);
+        }
+      }
+      // And the other way: an ending nothing can reach is writing nobody reads.
+      for (const e of endings) {
+        if (!declared.has(e)) orphans.push(`${ep.id}: ending "${e}" is unreachable`);
+      }
+    }
+    assert.deepEqual(orphans, [], 'outcomes with no ending, and endings with no outcome');
+  });
+
+  test('every gate a choice declares is one the engine actually tests', () => {
+    // Also passes today — the shipped episodes only use `skill`/`ranks`, and
+    // `testRequirement` supports six more. The failure this guards is silent
+    // in the dangerous direction: a key it does not know is not an error, it
+    // simply is not checked, so a choice meant to be locked is offered.
+    const SUPPORTED = new Set(['skill', 'ranks', 'standing', 'flag', 'notFlag', 'officer', 'var', 'torpedoes']);
+    const unknown = [];
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          for (const k of Object.keys(c.requires ?? {})) {
+            if (!SUPPORTED.has(k)) unknown.push(`${ep.id}/${sid}/${c.id}: requires.${k}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(unknown, [],
+      'requirement keys `testRequirement` does not read, so the gate is open');
+  });
+
+  test('and every branch names an arm the engine follows', () => {
+    // `choose` reads exactly two: `branch.success` and `branch.failure`. A
+    // third would be written, read by nothing, and send the player to
+    // `undefined` — which is the end of the episode by another door.
+    const stray = [];
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          for (const k of Object.keys(c.branch ?? {})) {
+            if (k !== 'success' && k !== 'failure') stray.push(`${ep.id}/${sid}/${c.id}: branch.${k}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(stray, [], 'branch arms the engine never follows');
+  });
+
   test('every episode can be played to an end, by any route', () => {
     // Random legal choices, thirty runs each. The engine has no loop guard, so
     // a cycle in the graph would hang the player rather than fail loudly.
@@ -1644,6 +1707,36 @@ describe('every sound cue is reachable', () => {
       (c) => new RegExp(`['"\`]${c}['"\`]`).test(UI_SRC),
     );
     assert.deepEqual(stale, [], 'cues listed as reserved that the UI does play');
+  });
+
+  test('every cue the game asks for is a cue that exists', () => {
+    // The mirror of the guard above, and the half that was missing. That one
+    // asks whether a synthesised cue is ever played; this asks whether a
+    // played cue was ever synthesised — and `AudioEngine.play` returns
+    // silently on a name it does not know (`const fn = CUES[cue]; if (!fn)
+    // return;`), so a typo is not an error, it is a silence.
+    //
+    // It found one: `force_channel` played `'hail'`, which is not in the
+    // table. The opening move of the Kobayashi Maru — forcing a channel on
+    // people whose doctrine is to ignore hails — made no sound, while an
+    // ordinary incoming hail had used `hail_incoming` since the beginning.
+    const cues = new Set([...SFX_SRC.matchAll(CUE_RE)].map((m) => m[1]));
+    const asked = new Set();
+    const walk = (dir) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, e.name);
+        if (e.isDirectory()) { walk(path); continue; }
+        if (!e.name.endsWith('.js')) continue;
+        for (const m of readFileSync(path, 'utf8').matchAll(/audio\.play\(\s*'([a-z_]+)'/g)) {
+          asked.add(m[1]);
+        }
+      }
+    };
+    walk(join(HERE, '..', 'src'));
+    assert.ok(asked.size > 20, `only found ${asked.size} play sites — has the call shape changed?`);
+    const ghosts = [...asked].filter((c) => !cues.has(c));
+    assert.deepEqual(ghosts, [],
+      `cues the game plays that nothing synthesises, so they are silence: ${ghosts.join(', ')}`);
   });
 
   test('the warp core breach is audible', () => {
