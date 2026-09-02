@@ -309,6 +309,23 @@ export class Game {
     return result;
   }
 
+  /**
+   * Does the captain hold this reputation perk?
+   *
+   * One door, because there was not one. Of the twenty-five perks the six
+   * reputation tracks sell, exactly ONE was ever read — `better_prices`, at a
+   * single inline call site — and `cloak` worked only through a special case
+   * inside `buyProject`. The other twenty-three were added to a Set that
+   * nothing ever asked. A captain could spend three hundred Commendations on
+   * "Flag Officer Authority" and receive a line in a list.
+   *
+   * Reading them through here means a perk that is granted and never checked
+   * is a grep away from being found, rather than invisible.
+   */
+  perk(id) {
+    return !!this.reputation?.has(id);
+  }
+
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
   applyAllMods() {
     // Reset to the class baseline, then reapply everything.
@@ -336,8 +353,18 @@ export class Game {
     // The biofunction monitor and a physician captain both reduce casualties
     // from hull hits, not merely on away missions.
     const crewProtect = this.loadout.special('crewProtect')
-      + (this.character?.mechanic('casualtyReduction') ?? 0);
+      + (this.character?.mechanic('casualtyReduction') ?? 0)
+      // "Fleet Medical Detachment — permanent 15% reduction in crew
+      // casualties." It said permanent and it did nothing at all.
+      + (this.perk('casualty_reduction') ? 0.15 : 0);
     if (crewProtect) this.ship.applyMods({ crewProtect });
+
+    // A cloaking device is fitted to the SHIP, and the ship changes. A captain
+    // who bought one for 130 Tokens of Regard and was then promoted, or lost
+    // his ship to a Klingon, found it quietly gone with the old hull: the flag
+    // is set on the Ship, and `takeCommandOf` builds a new one. The perk is the
+    // captain's, so it is reapplied wherever he is standing.
+    if (this.perk('cloak')) this.ship.cloakCapable = true;
 
     const eps = this.loadout.special('powerTransfer');
     if (eps) this.ship.power.transferRate = 55 + eps;
@@ -1410,7 +1437,7 @@ export class Game {
 
       case 'escort': {
         this.ledger.adjustStanding(enc.factionId ?? 'independent', STANDING_EFFECTS.completed_escort, 'Escort completed');
-        this.latinum += Math.round((enc.escortReward ?? 300) * (this.reputation.has('better_prices') ? 1.25 : 1));
+        this.latinum += Math.round((enc.escortReward ?? 300) * (this.perk('better_prices') ? 1.25 : 1));
         this.earnReputation('escort_completed');
         this.awardXP(280);
         this.clock.advanceStardate(0.8);
@@ -1605,11 +1632,34 @@ export class Game {
     this.character?.refresh();
 
     this.setAlert('red');
+    // "Standing Escort Authorisation — a Federation escort joins you in any
+    // engagement in Federation space." Bought for 180 Commendations, and no
+    // escort ever arrived: the perk went into a Set nothing read.
+    //
+    // A Miranda, not a sister ship — an escort is a light unit detached to
+    // stand with you, and a second Galaxy would decide the fight rather than
+    // help with it. `Engagement` has supported allies all along; nothing was
+    // ever putting one in.
+    const allies = [...(opts.allies ?? [])];
+    if (!opts.scripted && this.perk('ally_escort') && this.location?.faction === 'federation') {
+      // A DERIVED stream for her name. Drawing from `game.rng` to pick a name
+      // would shift every seeded outcome downstream of the fight, so the same
+      // battle would play out differently depending on whether an escort was
+      // authorised — which is a determinism bug hiding inside a cosmetic.
+      const named = new RNG(hashSeed(`escort:${this.seed}:${this.locationId}:${this.clock.stardate}`));
+      allies.push(new Ship('miranda', {
+        name: hostileName('federation', Math.floor(named.float() * 12)),
+        faction: 'federation',
+      }));
+    }
     // `onEnd` is how a fight settles itself the moment it ends, from wherever
     // it ends. See Engagement.end.
     this.engagement = new Engagement(this.ship, fleet, this.rng, {
-      ...opts, onEnd: () => this.resolveCombat(),
+      ...opts, allies, onEnd: () => this.resolveCombat(),
     });
+    if (allies.length > (opts.allies?.length ?? 0)) {
+      this.pushLog(`${allies[allies.length - 1].name} is closing to support us, Captain.`, 'comms');
+    }
     this.mode = MODES.COMBAT;
     // A new fight is a new call. Left set, the answer to "we need help" is
     // "we already asked" for the rest of the commission.
@@ -2357,8 +2407,18 @@ export class Game {
     for (const o of this.crew.officers) {
       if (o.injured) { o.injured = false; o.injurySeverity = 0; }
     }
-    this.clock.advanceStardate(damaged ? 2.5 : 0.5);
-    this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`, 'engineering');
+    // "Priority Yard Access — refits and repairs at any starbase cost no
+    // time." The whole of what that project sells is the stardate below, and
+    // it was charged in full to every captain who bought it.
+    //
+    // Not zero: the ship still has to be alongside. But the days in the yard
+    // are what the yard access buys, so a hull that came in shot to pieces is
+    // turned round in the same time as one that came in for stores.
+    const yard = this.perk('free_refit') ? 0.5 : (damaged ? 2.5 : 0.5);
+    this.clock.advanceStardate(yard);
+    this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`
+      + (this.perk('free_refit') && damaged ? ' Priority yard access — she was turned round overnight.' : ''),
+      'engineering');
     emit('docked', this.location);
     // A board of inquiry sits ashore, not on patrol (RESEARCH.md §22). This is
     // the only way one ever concludes: before this, the flag that suspends

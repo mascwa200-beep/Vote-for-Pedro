@@ -23,6 +23,8 @@ import {
   DIFFICULTIES, DifficultySettings, getDifficulty, DEFAULT_DIFFICULTY,
 } from '../src/rules/difficulty.js';
 import { findingFor, sitsAt, venueFor } from '../src/rules/inquiry.js';
+import { nextCommandFor, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
+import { Ship } from '../src/sim/ship.js';
 import { AwayTeam, CHECK_TYPES } from '../src/sim/away.js';
 import { Officer } from '../src/sim/officers.js';
 import { Ledger, assessmentOf } from '../src/core/ledger.js';
@@ -929,6 +931,129 @@ test('a board of inquiry blocks the promotion and everything under it', () => {
   assert.equal(g.progress.rankIndex, rank, 'the pip arrived anyway');
   assert.equal(g.character.level, level, 'the level arrived anyway');
   assert.equal(g.pendingFeats ?? 0, 0, 'the feat arrived anyway');
+});
+
+describe('a reputation project that grants nothing', () => {
+  /**
+   * The perks no code anywhere reads.
+   *
+   * Of the twenty-five the six tracks sell, exactly one — `better_prices` —
+   * was ever checked, and `cloak` worked only through a special case inside
+   * `buyProject`. The rest went into a Set that nothing asked. A captain could
+   * spend three hundred Commendations on "Flag Officer Authority" and receive
+   * a line in a list.
+   */
+  const unwired = () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    let source = '';
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) { walk(path); continue; }
+        if (!entry.name.endsWith('.js')) continue;
+        // reputation.js DEFINES the projects; mentioning a perk there is not
+        // reading it.
+        if (entry.name === 'reputation.js') continue;
+        source += readFileSync(path, 'utf8');
+      }
+    };
+    walk(root);
+    const dead = [];
+    for (const track of Object.values(REP_TRACKS)) {
+      for (const p of track.projects) {
+        const id = p.grant?.perk;
+        if (!id) continue;
+        if (!source.includes(`'${id}'`) && !source.includes(`"${id}"`)) dead.push(id);
+      }
+    }
+    return dead.sort();
+  };
+
+  // The ledger of what is still dead. It shrinks as perks are wired up, and a
+  // twenty-sixth dead perk fails this rather than joining the pile quietly.
+  const STILL_UNWIRED = [
+    'always_bribe', 'boarding_master', 'border_warning', 'cardassian_ally',
+    'cardassian_dock', 'crew_replacement', 'dmz_passage', 'ferengi_partner',
+    'first_strike', 'folk_hero', 'kdf_ally', 'klingon_passage',
+    'mercenary_escort', 'reduced_detection', 'romulan_accord', 'route_intel',
+    'salvage_bonus', 'see_all_encounters', 'universal_dock',
+  ].sort();
+
+  test('the perks nothing reads are exactly the ones we know about', () => {
+    assert.deepEqual(unwired(), STILL_UNWIRED,
+      'a reputation project changed what it grants, or a new dead perk appeared');
+  });
+
+  test('the Starfleet track now sells four things that happen', () => {
+    for (const id of ['casualty_reduction', 'free_refit', 'ally_escort', 'flag_authority']) {
+      assert.ok(!unwired().includes(id), `${id} is still granted and never read`);
+    }
+  });
+
+  test('a fleet medical detachment reduces casualties from hull hits', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    const before = g.ship.mod('crewProtect');
+    g.reputation.perks.add('casualty_reduction');
+    g.applyAllMods();
+    assert.ok(g.ship.mod('crewProtect') > before,
+      `"permanent 15% reduction in crew casualties" left crewProtect at ${before}`);
+  });
+
+  test('priority yard access is the days in the yard, and nothing else', () => {
+    const yardDays = (perks) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      const port = [...g.galaxy.systems.values()].find((s) => s.facilities?.includes('dock'));
+      g.locationId = port.id;
+      g.ship.hull = g.ship.maxHull * 0.2;
+      const before = g.clock.stardate;
+      g.dock();
+      return g.clock.stardate - before;
+    };
+    const paid = yardDays([]);
+    const free = yardDays(['free_refit']);
+    assert.ok(free < paid, `a shot-up hull took ${paid} days either way`);
+  });
+
+  test('a standing escort actually arrives, and only in Federation space', () => {
+    const allies = (perks, systemId) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      g.locationId = systemId;
+      g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS T' })]);
+      return g.engagement.allies.length;
+    };
+    assert.equal(allies([], 'sol'), 0, 'an escort turned up for a captain who never bought one');
+    assert.equal(allies(['ally_escort'], 'sol'), 1, 'no escort joined in Federation space');
+    assert.equal(allies(['ally_escort'], 'qonos'), 0,
+      'a Federation escort joined a fight in the Klingon capital');
+  });
+
+  test('flag authority lifts the rank gate on what you may be offered', () => {
+    const offered = (perks) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'fleet_captain');
+      return nextCommandFor(g)?.id ?? null;
+    };
+    const without = offered([]);
+    const with_ = offered(['flag_authority']);
+    assert.notEqual(with_, without,
+      `"requisition any hull in the fleet" still offered only a ${without}`);
+    assert.equal(with_, COMMAND_LADDER[COMMAND_LADDER.length - 1].id,
+      `the best hull in the fleet is a ${COMMAND_LADDER[COMMAND_LADDER.length - 1].id}, and he was offered a ${with_}`);
+  });
+
+  test('a cloaking device is not left behind with the old hull', () => {
+    // It is set on the Ship, and takeCommandOf builds a new one — so 130
+    // Tokens of Regard evaporated at the next promotion, silently.
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.reputation.perks.add('cloak');
+    g.applyAllMods();
+    assert.equal(g.ship.cloakCapable, true, 'the cloak was never fitted');
+    takeCommandOf(g, 'excelsior');
+    assert.equal(g.ship.cloakCapable, true, 'the cloak stayed with the ship he walked off');
+  });
 });
 
 describe('the board of inquiry actually sits', () => {

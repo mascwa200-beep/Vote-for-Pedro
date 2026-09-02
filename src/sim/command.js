@@ -68,7 +68,15 @@ export function rungOf(classId) {
  */
 export function nextCommandFor(game) {
   const here = rungOf(game.ship?.classId);
-  const tier = game.progress?.shipTier ?? 1;
+  // "Flag Officer Authority — you may requisition any hull in the fleet, and
+  // Starfleet stops second-guessing you." Three hundred Commendations, the top
+  // of the Starfleet track, and it did nothing whatever: the perk went into a
+  // Set that nothing in the game ever read. What it plainly means is that the
+  // rank gate below stops applying, so a Fleet Captain who has earned it can
+  // ask for a Galaxy.
+  const tier = game.perk?.('flag_authority')
+    ? COMMAND_LADDER[COMMAND_LADDER.length - 1].tier
+    : (game.progress?.shipTier ?? 1);
   const refusedAt = (game.declinedCommands ?? [])
     .reduce((hi, id) => Math.max(hi, rungOf(id)), -1);
   const floor = Math.max(here, refusedAt);

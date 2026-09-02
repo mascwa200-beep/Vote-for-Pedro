@@ -3341,6 +3341,48 @@ try {
   check('a reputation project can be bought from the UI',
     afterBuy.completed >= 1, JSON.stringify(afterBuy));
 
+  // And that buying one CHANGES something. Of the twenty-five perks the tracks
+  // sell, one was ever read; the rest went into a Set nothing asked. This
+  // drives the Starfleet track's escort authorisation through a real fight.
+  const perkBites = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    g.locationId = 'sol';
+    const without = (() => {
+      g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS A' })]);
+      const n = g.engagement.allies.length;
+      g.engagement.hostiles.forEach((s) => { s.destroyed = true; });
+      g.engagement = null; g.mode = 'bridge';
+      return n;
+    })();
+    g.reputation.perks.add('ally_escort');
+    g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS B' })]);
+    const withPerk = g.engagement.allies.length;
+    const escort = g.engagement.allies[0]?.name ?? null;
+    g.engagement.hostiles.forEach((s) => { s.destroyed = true; });
+    g.engagement = null; g.mode = 'bridge';
+    // And the screen says what is in force, rather than a bare green pill.
+    app.go('reputation');
+    app.render();
+    return {
+      without,
+      withPerk,
+      escort,
+      screenSaysInForce: /In force/i.test(document.body.textContent ?? ''),
+    };
+  });
+  check('a purchased perk changes the game — an escort joins the fight',
+    perkBites.without === 0 && perkBites.withPerk === 1, JSON.stringify(perkBites));
+  check('and the reputation screen says what is in force',
+    perkBites.screenSaysInForce, JSON.stringify(perkBites));
+  await page.screenshot({ path: join(SHOTS, '13b-in-force.png') });
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    g.reputation.perks.delete('ally_escort');
+    globalThis.__app.render();
+  });
+
   // ------------------------------------------------ signature power
   const signature = await page.evaluate(async () => {
     const app = globalThis.__app;
