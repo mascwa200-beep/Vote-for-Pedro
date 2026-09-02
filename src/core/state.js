@@ -2878,10 +2878,6 @@ export class Game {
       g.walk.x = sx;
       g.walk.z = sz;
     }
-    g.firstStrike = data.firstStrike === true;
-    // Set below, alongside the channel it belongs to.
-    // A forced channel does NOT survive a reload.
-    //
     // The engagement is not restored — a fight cannot be saved — so restoring
     // the flags that belong to it left the order line hijacked with nobody on
     // the other end. `finishCombat` closes the channel for exactly this reason
@@ -2890,6 +2886,17 @@ export class Game {
     // beaten by force-quitting it and then typing one sentence on an empty
     // bridge: a scoring appeal wrote `kobayashi_maru_solved` to the permanent
     // ledger and paid the reputation, with no Klingons and no freighter.
+    //
+    // `firstStrike` is one of those flags and was being restored one line
+    // above this comment. It is set by opening fire on an encounter that was
+    // not hostile and cleared by `finishCombat` beside the engagement itself,
+    // and `resolveHail` reads it to take a quarter off the chance of being
+    // heard — "you shot first; they remember". Carried across a reload with no
+    // fight to belong to, it made every later hail in the commission, against
+    // every faction, anywhere in the galaxy, an appeal by a captain who had
+    // fired on people who were never there. Nothing ever cleared it, because
+    // the only thing that clears it is the end of a fight that is not running.
+    g.firstStrike = false;
     g.gambitOpen = false;
     g.parleyForced = false;
     g.inKobayashi = false;

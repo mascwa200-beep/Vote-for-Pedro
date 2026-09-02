@@ -2118,3 +2118,32 @@ describe('the numbers a save can carry that nothing was reading', () => {
       'a countdown half a second past due went unreported');
   });
 });
+
+test('shooting first does not outlive the fight it happened in', () => {
+  // The flag is read by `resolveHail` to take a quarter off the chance of
+  // being heard. It is cleared by `finishCombat`, and by nothing else — so a
+  // fight that ends by being force-quit rather than finished used to leave it
+  // set for the rest of the commission.
+  const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+  g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Target' })]);
+  g.firstStrike = true;
+
+  // Legal while the fight is running: that is what the flag is for.
+  assert.equal(checkGame(g).some((v) => v.code === 'game.firstStrike.orphan'), false,
+    'the sweep complained about a captain who really had just fired first');
+
+  const resumed = Game.load(g.save());
+  assert.equal(resumed.engagement, null, 'a fight was somehow restored');
+  assert.equal(resumed.firstStrike, false,
+    'the next hail in the campaign is still an appeal by someone who shot first');
+  assert.equal(checkGame(resumed).some((v) => v.code === 'game.firstStrike.orphan'), false,
+    'the resumed game is in a state its own invariants forbid');
+});
+
+test('and the sweep can see the flag standing on its own', () => {
+  const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+  assert.equal(g.engagement, null, 'no fight should be running yet');
+  g.firstStrike = true;
+  assert.ok(checkGame(g).some((v) => v.code === 'game.firstStrike.orphan'),
+    'nothing noticed a first strike in a battle that is not running');
+});

@@ -483,6 +483,19 @@ export function checkGame(game) {
         'an episode is waiting on a battle that is neither running nor queued');
     }
 
+    // "You shot first" is something about a fight, and a fight is running or
+    // it is not.
+    //
+    // `firstStrike` is set by opening fire on an encounter that was not
+    // hostile, and cleared by `finishCombat` on the line after the engagement
+    // itself. Between those two moments a fight is always running — so this
+    // flag standing on its own means it has outlived the thing it describes,
+    // and `resolveHail` will go on taking a quarter off the chance of being
+    // heard for a shot fired at somebody who is no longer there. Nothing else
+    // in the game clears it.
+    r.must(!game.firstStrike || (!!eng && !eng.over), 'game.firstStrike.orphan', 'error',
+      'the captain is recorded as having fired first in a battle that is not running');
+
     // The duty roster, and the details that are out on it.
     //
     // These are people, and a fight can hurt them: somebody counted as both
