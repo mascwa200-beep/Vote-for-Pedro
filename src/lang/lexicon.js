@@ -1165,6 +1165,22 @@ export const INTENTS = [
     build: () => ({ action: 'take_command' }),
   },
   {
+    id: 'request_command',
+    help: 'Ask Starfleet whether there is a bigger ship going',
+    // NOT "request a transfer" or anything with "orders" in it: the intercom
+    // and the mission layer already own those shapes. The command-reference
+    // test in tests/lang.test.js checks every phrase parses as itself, and it
+    // caught exactly this class of collision twice while this was being built.
+    phrases: [
+      'ask starfleet for a new command', 'ask starfleet for another ship',
+      'is there another ship', 'is there a bigger ship going',
+      'request a new command', 'request another ship',
+      'put my name in for a command', 'i would like a new ship',
+    ],
+    keywords: { starfleet: 1.4, command: 1.8, another: 1.6, bigger: 1.4 },
+    build: () => ({ action: 'request_command' }),
+  },
+  {
     id: 'keep_command',
     help: 'Turn down the ship Starfleet is offering',
     phrases: [

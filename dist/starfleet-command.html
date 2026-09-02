@@ -17444,6 +17444,22 @@ const INTENTS = [
     build: () => ({ action: 'take_command' }),
   },
   {
+    id: 'request_command',
+    help: 'Ask Starfleet whether there is a bigger ship going',
+    // NOT "request a transfer" or anything with "orders" in it: the intercom
+    // and the mission layer already own those shapes. The command-reference
+    // test in tests/lang.test.js checks every phrase parses as itself, and it
+    // caught exactly this class of collision twice while this was being built.
+    phrases: [
+      'ask starfleet for a new command', 'ask starfleet for another ship',
+      'is there another ship', 'is there a bigger ship going',
+      'request a new command', 'request another ship',
+      'put my name in for a command', 'i would like a new ship',
+    ],
+    keywords: { starfleet: 1.4, command: 1.8, another: 1.6, bigger: 1.4 },
+    build: () => ({ action: 'request_command' }),
+  },
+  {
     id: 'keep_command',
     help: 'Turn down the ship Starfleet is offering',
     phrases: [
@@ -23714,16 +23730,37 @@ function rungOf(classId) {
 /**
  * The next command Starfleet would offer, or null.
  *
- * One rung at a time, and never above the captain's rank. A lieutenant does not
- * get a Galaxy because a Galaxy exists.
+ * The BEST hull the captain's rank allows above the one being flown — not the
+ * next one up the ladder. Taking the first match meant a rear admiral who had
+ * once turned down a refit was offered the same refit again, rather than the
+ * Galaxy his rank had since earned him: the offer never improved, however far
+ * the career went.
+ *
+ * Never above the rank, though. A lieutenant does not get a Galaxy because a
+ * Galaxy exists.
+ *
+ * Refusals are remembered, because a captain who has said no to a hull should
+ * not be asked about that same hull at every promotion for the rest of his
+ * career: it was put to him six times over the rank ladder before this.
+ *
+ * And nothing at or below a hull he has refused is offered either. Skipping
+ * only the exact class meant that turning down an Ambassador produced an offer
+ * of an Excelsior at the next promotion — four hundred tonnes SMALLER, as
+ * though Starfleet were haggling. Saying no to the best available ship does not
+ * make a worse one attractive; it means waiting until there is something better
+ * than the one refused.
  */
 function nextCommandFor(game) {
   const here = rungOf(game.ship?.classId);
   const tier = game.progress?.shipTier ?? 1;
-  for (let i = here + 1; i < COMMAND_LADDER.length; i++) {
-    if (COMMAND_LADDER[i].tier <= tier) return COMMAND_LADDER[i];
+  const refusedAt = (game.declinedCommands ?? [])
+    .reduce((hi, id) => Math.max(hi, rungOf(id)), -1);
+  const floor = Math.max(here, refusedAt);
+  let best = null;
+  for (let i = floor + 1; i < COMMAND_LADDER.length; i++) {
+    if (COMMAND_LADDER[i].tier <= tier) best = COMMAND_LADDER[i];
   }
-  return null;
+  return best;
 }
 
 /**
@@ -23827,6 +23864,8 @@ function declineCommandOffer(game) {
   const offer = game.commandOffer;
   if (!offer) return { ok: false, reason: 'There is nothing to turn down, Captain.' };
   game.commandOffer = null;
+  // Remembered, so the same hull is not put to him again at every promotion.
+  game.declinedCommands = [...new Set([...(game.declinedCommands ?? []), offer.classId])];
   game.ledger?.record('command_declined', {
     text: `Turned down a ${offer.name} to stay with ${game.ship.name}`,
   });
@@ -27290,6 +27329,7 @@ class Game {
     // Hulls this career has cost, and any standing offer of another.
     this.shipsLost = 0;
     this.commandOffer = null;
+    this.declinedCommands = [];
     this.ship = new Ship(classId, {
       name: options.shipName ?? 'Enterprise',
       registry: options.registry ?? FEDERATION_REGISTRIES[0],
@@ -27564,6 +27604,43 @@ class Game {
       this.pushLog(`We stay with ${r.kept}, Captain. Starfleet is informed.`, 'captain');
     }
     return r;
+  }
+
+  /**
+   * Ask Starfleet whether there is a ship going, after all.
+   *
+   * Refusing a command stops Starfleet raising it again, which is right — it
+   * was being put to the captain at every promotion for the rest of his career.
+   * But a captain who turns down the best hull his rank carries would then
+   * never be offered anything again for the whole commission, and a decision
+   * made once at Fleet Captain should not be binding at Admiral.
+   *
+   * So the refusals lapse when he asks. All of them, rather than some subtler
+   * subset: he has reopened the conversation, and a rule about which of his
+   * old refusals still counted would be impossible to explain on a screen.
+   *
+   * @returns {{ok: boolean, reason?: string, offer?: object}}
+   */
+  requestCommand() {
+    if (this.commandOffer) {
+      return {
+        ok: false,
+        reason: `Starfleet has already offered you a ${this.commandOffer.name}, Captain.`,
+      };
+    }
+    this.declinedCommands = [];
+    const offer = offerCommand(this);
+    if (!offer) {
+      return {
+        ok: false,
+        reason: `There is nothing above ${this.ship.name} that your rank would carry, Captain.`,
+      };
+    }
+    this.pushLog(
+      `Starfleet has a ${offer.name} going, Captain, and your name is on the list.`,
+      'comms',
+    );
+    return { ok: true, offer };
   }
 
   /**
@@ -29632,6 +29709,7 @@ class Game {
       // first ship or lose an offer that was made.
       shipsLost: this.shipsLost ?? 0,
       commandOffer: this.commandOffer ?? null,
+      declinedCommands: this.declinedCommands ?? [],
       assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
@@ -30110,6 +30188,11 @@ class Game {
     // the captain aboard something the registry has never heard of.
     g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)
       ? data.commandOffer : null;
+    // Hulls this captain has already turned down. Filtered to classes that
+    // exist, for the same reason the offer is: a record naming a ship the
+    // registry has never heard of would silently narrow what is offered.
+    g.declinedCommands = Array.isArray(data.declinedCommands)
+      ? data.declinedCommands.filter((id) => getShipClass(id)) : [];
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
 
@@ -31526,6 +31609,18 @@ function shipScreen(app) {
       button(`Stay with ${g.ship.name}`,
         tap(() => { g.declineCommand(); app.render(); }, 'ui_back'),
         { color: 'ghost', say: 'stay with this ship' }),
+    ]));
+  } else if ((g.declinedCommands ?? []).length) {
+    // Only once the captain has turned something down. Starfleet does not
+    // raise it again after a refusal — which is right, it was being put to him
+    // at every promotion — but a decision made once at Fleet Captain should not
+    // be binding at Admiral, so there has to be a way back to the conversation.
+    // Gated on his own refusal so this is not one more thing on the screen for
+    // a captain who has never been offered anything.
+    root.append(panel('', [
+      button('Ask Starfleet for a new command',
+        tap(() => { g.requestCommand(); app.render(); }, 'ui_select'),
+        { color: 'ghost', say: 'ask starfleet for a new command' }),
     ]));
   }
 
@@ -34549,6 +34644,13 @@ class App {
         if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
         audio.play('computer_ack');
         haptic('confirm');
+        this.render();
+        break;
+      }
+      case 'request_command': {
+        const r = g.requestCommand();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play('computer_ack');
         this.render();
         break;
       }

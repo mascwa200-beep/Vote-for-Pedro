@@ -1345,6 +1345,18 @@ export function shipScreen(app) {
         tap(() => { g.declineCommand(); app.render(); }, 'ui_back'),
         { color: 'ghost', say: 'stay with this ship' }),
     ]));
+  } else if ((g.declinedCommands ?? []).length) {
+    // Only once the captain has turned something down. Starfleet does not
+    // raise it again after a refusal — which is right, it was being put to him
+    // at every promotion — but a decision made once at Fleet Captain should not
+    // be binding at Admiral, so there has to be a way back to the conversation.
+    // Gated on his own refusal so this is not one more thing on the screen for
+    // a captain who has never been offered anything.
+    root.append(panel('', [
+      button('Ask Starfleet for a new command',
+        tap(() => { g.requestCommand(); app.render(); }, 'ui_select'),
+        { color: 'ghost', say: 'ask starfleet for a new command' }),
+    ]));
   }
 
   // --- Consoles ---
