@@ -60,9 +60,19 @@ export class Galaxy {
     this.byId = Object.fromEntries(this.systems.map((s) => [s.id, s]));
     this.adjacency = this.buildAdjacency();
     this.visited = new Set();
+    // How many times the ship has arrived at each system.
+    //
+    // `visited` is a Set and answers "has she ever been there". What is
+    // waiting when she arrives is now a function of the system and the number
+    // of the visit, so that it can be KNOWN before arriving — see
+    // Game.encounterStream. A boolean cannot say which visit this is.
+    this.visits = new Map();
     this.surveyed = new Set();
     this.notes = {};       // systemId -> discovered facts
   }
+
+  /** How many times the ship has arrived here. */
+  visitCount(id) { return this.visits.get(id) ?? 0; }
 
   /** Undirected lane graph — `links` in the data are declared one way. */
   buildAdjacency() {
@@ -134,6 +144,7 @@ export class Galaxy {
   markVisited(id) {
     const isNew = !this.visited.has(id);
     this.visited.add(id);
+    this.visits.set(id, this.visitCount(id) + 1);
     if (isNew) emit('galaxy:first-visit', this.byId[id]);
     return isNew;
   }
@@ -152,12 +163,21 @@ export class Galaxy {
   }
 
   save() {
-    return { visited: [...this.visited], surveyed: [...this.surveyed], notes: this.notes };
+    return {
+      visited: [...this.visited],
+      visits: [...this.visits],
+      surveyed: [...this.surveyed],
+      notes: this.notes,
+    };
   }
 
   load(data) {
     if (!data) return;
     this.visited = new Set(data.visited ?? []);
+    // A save from before the counter existed knows only that a system was
+    // visited. One visit is the honest reading of that, and it keeps the
+    // encounter stream stable across the upgrade for everywhere she has been.
+    this.visits = new Map(data.visits ?? [...this.visited].map((id) => [id, 1]));
     this.surveyed = new Set(data.surveyed ?? []);
     this.notes = data.notes ?? {};
   }

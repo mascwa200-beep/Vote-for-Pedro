@@ -1831,15 +1831,25 @@ test('devices are spent, and spending one does something', () => {
 // said "all stop", which at warp did something else entirely.
 
 test('a course can be broken off, and it puts the ship somewhere real', () => {
-  const g = new Game({ seed: 4801n, crewMode: 'original' });
-  const from = g.locationId;
-  const elsewhere = g.galaxy.systems.find((s) => s.id !== from).id;
-  assert.ok(g.setCourse(elsewhere, 6).ok);
-  const stardate = g.clock.stardate;
-
-  // Part way there, so the nearest system is a real choice.
-  for (let i = 0; i < 600 && g.transit; i++) g.update(1 / 30);
-  assert.ok(g.transit, 'the transit finished before it could be broken off');
+  // A flight that is still running after twenty seconds. About 7% of courses
+  // are interrupted by something finding the ship before then — measured at
+  // 7.0% before the encounter stream changed and 7.5% after, which is the same
+  // rate — so pinning one seed made this test's PRECONDITION a coin toss
+  // rather than making it test anything. The sibling test below already skips
+  // an interrupted flight for the same reason.
+  let g = null;
+  const stardateOf = (game) => game.clock.stardate;
+  let stardate = 0;
+  for (let seed = 4801; seed < 4830 && !g; seed++) {
+    const candidate = new Game({ seed: BigInt(seed), crewMode: 'original' });
+    const elsewhere = candidate.galaxy.systems.find((s) => s.id !== candidate.locationId).id;
+    if (!candidate.setCourse(elsewhere, 6).ok) continue;
+    stardate = stardateOf(candidate);
+    // Part way there, so the nearest system is a real choice.
+    for (let i = 0; i < 600 && candidate.transit; i++) candidate.update(1 / 30);
+    if (candidate.transit) g = candidate;
+  }
+  assert.ok(g, 'no seed in thirty gave a flight still running after twenty seconds');
 
   const r = g.dropOutOfWarp();
   assert.ok(r.ok, r.error);

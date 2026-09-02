@@ -975,9 +975,7 @@ describe('a reputation project that grants nothing', () => {
 
   // The ledger of what is still dead. It shrinks as perks are wired up, and a
   // twenty-sixth dead perk fails this rather than joining the pile quietly.
-  const STILL_UNWIRED = [
-    'dmz_passage', 'romulan_accord', 'see_all_encounters',
-  ].sort();
+  const STILL_UNWIRED = ['dmz_passage', 'romulan_accord'].sort();
 
   test('the perks nothing reads are exactly the ones we know about', () => {
     assert.deepEqual(unwired(), STILL_UNWIRED,
@@ -1379,6 +1377,65 @@ describe('a reputation project that grants nothing', () => {
     g.reputation.perks.add('folk_hero');
     assert.equal(g.buildAwayTeam(['tactical'], false, { boarding: true }).locals, 0,
       'the colony turned out to help storm a Klingon bridge');
+  });
+
+  test('what intelligence says is waiting is what is actually there', () => {
+    // The whole worth of this perk is that the peek is TRUE. A forecast that
+    // does not match the arrival is worse than no forecast, so this flies to
+    // the system and compares.
+    let checked = 0;
+    for (let seed = 900; seed < 940 && checked < 8; seed++) {
+      const g = new Game({ seed: BigInt(seed), crewMode: 'canon', crew: 'tos' });
+      g.reputation.perks.add('see_all_encounters');
+      g.ship.antimatter = 100;
+      const dest = g.galaxy.systems.find((s) => s.id !== g.locationId
+        && g.galaxy.plotCourse(g.locationId, s.id).charted);
+      if (!dest) continue;
+      const foretold = g.peekEncounter(dest.id);
+      if (!g.setCourse(dest.id, 8).ok) continue;
+      let ticks = 0;
+      while (g.transit && ticks++ < 40000) g.update(1 / 30);
+      // A flight interrupted on the way never reached the system the forecast
+      // was about, so it says nothing either way. Intelligence is about what
+      // is waiting AT the destination, not about who intercepts you getting
+      // there — those are different rolls on purpose.
+      if (g.locationId !== dest.id) continue;
+      if (g.log.some((l) => /forced out of warp/i.test(l.text ?? ''))) continue;
+      checked++;
+      const arrived = g.encounter;
+      assert.equal(arrived?.kind ?? 'quiet', foretold?.kind ?? 'quiet',
+        `intelligence said ${foretold?.kind} at ${dest.name} and the ship found ${arrived?.kind}`);
+    }
+    assert.ok(checked >= 3, `only ${checked} flights arrived where they were aimed`);
+  });
+
+  test('and without the perk the screen is told nothing', () => {
+    const g = new Game({ seed: 900n, crewMode: 'canon', crew: 'tos' });
+    const dest = g.galaxy.systems.find((s) => s.id !== g.locationId);
+    assert.equal(g.peekEncounter(dest.id), null, 'the galaxy map read Tal Shiar traffic for free');
+  });
+
+  test('what is waiting is a fact about the place and the visit, not the draw order', () => {
+    // It used to come off `game.rng`, so it was a function of every damage
+    // roll in every fight beforehand — which is exactly why it could not be
+    // known in advance. Two ships with the same seed that have done different
+    // things must still find the same thing waiting on their first visit.
+    const streamAt = (busy) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      // Burn a different number of draws from the main stream.
+      for (let i = 0; i < busy; i++) g.rng.float();
+      return g.encounterStream('vega', 1).float();
+    };
+    assert.equal(streamAt(0), streamAt(5000),
+      'what is waiting at Vega depended on how much the captain had rolled beforehand');
+  });
+
+  test('a second visit is not the same encounter as the first', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    const first = g.encounterStream('vega', 1).float();
+    g.galaxy.markVisited('vega');
+    const second = g.encounterStream('vega', 1).float();
+    assert.notEqual(first, second, 'every visit to Vega would meet the same thing forever');
   });
 
   test('a cloaking device is not left behind with the old hull', () => {

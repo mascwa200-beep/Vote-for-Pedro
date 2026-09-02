@@ -986,6 +986,21 @@ export function systemDetail(app, sys) {
   if (!here) {
     nodes.push(el('p', { class: 'hint', text: `${ly.toFixed(1)} ly direct · ${route.lightYears.toFixed(1)} ly by ${route.charted ? 'charted lanes' : 'uncharted course'} · ${route.path.length - 1} leg${route.path.length > 2 ? 's' : ''}` }));
 
+    // "Intelligence Sharing — you know what is waiting before you arrive."
+    // The last of the twenty-five perks to do nothing, and the only one that
+    // could not simply be wired to something already there: the encounter had
+    // to become knowable before the arrival that used to decide it.
+    const waiting = g.peekEncounter(sys.id);
+    if (waiting) {
+      nodes.push(el('p', {
+        class: waiting.hostile ? 'warn' : 'muted',
+        text: waiting.kind === 'quiet'
+          ? 'Tal Shiar intelligence: nothing waiting there.'
+          : `Tal Shiar intelligence: ${waiting.title ?? waiting.kind.replace(/_/g, ' ')}`
+            + `${waiting.hostile ? ' — hostile.' : '.'}`,
+      }));
+    }
+
     // Warp factor picker with real time and fuel costs.
     const maxWarp = Math.floor(g.ship.cls.maxWarp);
     const factors = [4, 6, 8, maxWarp].filter((f, i, a) => f <= maxWarp && a.indexOf(f) === i);

@@ -24968,9 +24968,19 @@ class Galaxy {
     this.byId = Object.fromEntries(this.systems.map((s) => [s.id, s]));
     this.adjacency = this.buildAdjacency();
     this.visited = new Set();
+    // How many times the ship has arrived at each system.
+    //
+    // `visited` is a Set and answers "has she ever been there". What is
+    // waiting when she arrives is now a function of the system and the number
+    // of the visit, so that it can be KNOWN before arriving — see
+    // Game.encounterStream. A boolean cannot say which visit this is.
+    this.visits = new Map();
     this.surveyed = new Set();
     this.notes = {};       // systemId -> discovered facts
   }
+
+  /** How many times the ship has arrived here. */
+  visitCount(id) { return this.visits.get(id) ?? 0; }
 
   /** Undirected lane graph — `links` in the data are declared one way. */
   buildAdjacency() {
@@ -25042,6 +25052,7 @@ class Galaxy {
   markVisited(id) {
     const isNew = !this.visited.has(id);
     this.visited.add(id);
+    this.visits.set(id, this.visitCount(id) + 1);
     if (isNew) emit('galaxy:first-visit', this.byId[id]);
     return isNew;
   }
@@ -25060,12 +25071,21 @@ class Galaxy {
   }
 
   save() {
-    return { visited: [...this.visited], surveyed: [...this.surveyed], notes: this.notes };
+    return {
+      visited: [...this.visited],
+      visits: [...this.visits],
+      surveyed: [...this.surveyed],
+      notes: this.notes,
+    };
   }
 
   load(data) {
     if (!data) return;
     this.visited = new Set(data.visited ?? []);
+    // A save from before the counter existed knows only that a system was
+    // visited. One visit is the honest reading of that, and it keeps the
+    // encounter stream stable across the upgrade for everywhere she has been.
+    this.visits = new Map(data.visits ?? [...this.visited].map((id) => [id, 1]));
     this.surveyed = new Set(data.surveyed ?? []);
     this.notes = data.notes ?? {};
   }
@@ -28175,6 +28195,47 @@ class Game {
     return null;
   }
 
+  /**
+   * What is waiting at a system, as a stream of its own.
+   *
+   * The encounter used to be drawn from `game.rng`, which made it a function
+   * of everything the captain had done beforehand — every damage roll in every
+   * fight shifted what was waiting at the next system. That is fine until
+   * something has to KNOW what is waiting before arriving, and then it is
+   * impossible: the state of the main stream at the moment of arrival is not
+   * knowable in advance.
+   *
+   * Keyed by the seed, the system and WHICH VISIT this is, so it is a fact
+   * about a place and a moment rather than about the draw order. Measured
+   * before changing it: the whole suite and the whole browser harness pass
+   * either way, so nothing depended on encounters consuming the main stream.
+   *
+   * `ahead` looks one visit further on, which is what a peek needs: `arrive`
+   * calls `markVisited` before it rolls, so the roll for the visit now
+   * beginning already counts it.
+   */
+  encounterStream(systemId, ahead = 0) {
+    const n = this.galaxy.visitCount(systemId) + ahead;
+    return new RNG(hashSeed(`encounter:${this.seed}:${systemId}:${n}`));
+  }
+
+  /**
+   * "Intelligence Sharing — you know what is waiting before you arrive."
+   *
+   * Two hundred Tokens of Regard, and it was the last of the twenty-five
+   * perks to do nothing. It could not have been wired to the old encounter
+   * roll at all, which is why it waited: see `encounterStream`.
+   *
+   * @returns {object|null} the encounter that will be there, or null.
+   */
+  peekEncounter(systemId) {
+    if (!this.perk('see_all_encounters')) return null;
+    if (systemId === this.locationId) return null;
+    return rollEncounter(this.encounterStream(systemId, 1), systemId, {
+      ledger: this.ledger, ...this.encounterPerks(systemId),
+    });
+  }
+
   encounterPerks(systemId) {
     return {
       quietInHostileSpace: this.perk('reduced_detection'),
@@ -29082,7 +29143,7 @@ class Game {
     emit('arrived', { system: near, isNew, aborted: true });
 
     // Stopping in the middle of nowhere is exactly when something finds you.
-    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
+    const enc = rollEncounter(this.encounterStream(this.locationId), this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
     if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
     return { ok: true, system: near, isNew };
   }
@@ -29158,7 +29219,7 @@ class Game {
     }
     emit('arrived', { system: t.to, isNew });
 
-    const enc = rollEncounter(this.rng, this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
+    const enc = rollEncounter(this.encounterStream(this.locationId), this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
     if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
   }
 
@@ -30498,6 +30559,15 @@ class Game {
         if (state === 'arrived') this.arrive();
         else if (this.rng.chance(0.02 * dt) && !this.transit.interrupted) {
           // Something drops us out of warp mid-course.
+          //
+          // On the MAIN stream, unlike the arrival roll. Being intercepted is
+          // a random event in time and in the space between two systems; what
+          // is waiting AT a system is a fact about that place and that visit.
+          // Sharing one key between them made intelligence about the
+          // destination describe the ambush on the way to it instead — the
+          // forecast said "nothing waiting" and the ship met a distress call
+          // it had been told nothing about, because the two rolls read the
+          // same key with different options.
           const enc = rollEncounter(this.rng, this.transit.to.id, { ledger: this.ledger, inTransit: true, ...this.encounterPerks(this.transit.to.id) });
           if (enc && enc.hostile) {
             this.transit.interrupt('hostile contact');
@@ -32236,6 +32306,21 @@ function systemDetail(app, sys) {
 
   if (!here) {
     nodes.push(el('p', { class: 'hint', text: `${ly.toFixed(1)} ly direct · ${route.lightYears.toFixed(1)} ly by ${route.charted ? 'charted lanes' : 'uncharted course'} · ${route.path.length - 1} leg${route.path.length > 2 ? 's' : ''}` }));
+
+    // "Intelligence Sharing — you know what is waiting before you arrive."
+    // The last of the twenty-five perks to do nothing, and the only one that
+    // could not simply be wired to something already there: the encounter had
+    // to become knowable before the arrival that used to decide it.
+    const waiting = g.peekEncounter(sys.id);
+    if (waiting) {
+      nodes.push(el('p', {
+        class: waiting.hostile ? 'warn' : 'muted',
+        text: waiting.kind === 'quiet'
+          ? 'Tal Shiar intelligence: nothing waiting there.'
+          : `Tal Shiar intelligence: ${waiting.title ?? waiting.kind.replace(/_/g, ' ')}`
+            + `${waiting.hostile ? ' — hostile.' : '.'}`,
+      }));
+    }
 
     // Warp factor picker with real time and fuel costs.
     const maxWarp = Math.floor(g.ship.cls.maxWarp);
