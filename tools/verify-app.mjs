@@ -3292,6 +3292,142 @@ try {
     app.render();
   });
 
+  // ------------------------------------- the ship between the fights
+  //
+  // `Ship.update` was reached from `Engagement.update` and nowhere else, so
+  // outside a fight the player's ship was a frozen object. On the screen that
+  // meant a captain could tap Attack posture, watch the button go green and
+  // the slider move, and have nothing whatever change — the grid only caught
+  // up one tick into the NEXT battle. Driven here rather than in the unit
+  // suite because the frozen half of it was the half a player could see.
+  await nav(page, 'Bridge');
+  const upkeep = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    g.ship.power.applyPreset('balanced');
+    for (let i = 0; i < 30 * 10; i++) g.update(1 / 30);
+
+    // The distribution panel lives on the tactical plot and on the engineering
+    // console, so out of combat the console is where a captain reaches it.
+    app.openConsole('power', 'engineering');
+    app.render();
+    const btn = [...document.querySelectorAll('.btn')].find((b) => /^Attack/i.test(b.textContent ?? ''));
+    btn?.click();
+    const ordered = g.ship.power.target.weapons;
+    // Ten seconds of standing on the bridge. Nobody is shooting.
+    for (let i = 0; i < 30 * 10; i++) g.update(1 / 30);
+    app.render();
+    const text = document.body.textContent ?? '';
+
+    // And a fire, which the old code left burning for the rest of the
+    // commission with the damage report saying so.
+    g.ship.fires = 3;
+    const hullBefore = g.ship.hull;
+    for (let i = 0; i < 30 * 60; i++) g.update(1 / 30);
+
+    // And what the SCREEN says about it. A console is only rebuilt when
+    // something marks it dirty, and only `executeOrder` ever did — so pressing
+    // the console's own button changed the grid and left the panel showing the
+    // distribution it had replaced. Read off the rendered controls, because
+    // the model was never the half that was wrong.
+    const shown = () => {
+      const rows = [...document.querySelectorAll('.power-row')]
+        .map((r) => [r.querySelector('.label')?.textContent?.trim(), r.querySelector('input')?.value]);
+      // The label is a bare text node followed by the <small> that prints the
+      // phrase, so `textContent` reads "Attack“attack posture”" — take the
+      // first child, and only from this panel.
+      const box = [...document.querySelectorAll('.panel')]
+        .find((x) => /Power Distribution/i.test(x.querySelector('h2')?.textContent ?? ''));
+      const lit = [...(box?.querySelectorAll('.btn.green') ?? [])]
+        .map((b) => (b.childNodes[0]?.textContent ?? '').trim());
+      return { weapons: rows.find(([l]) => l === 'Weapons')?.[1] ?? null, lit };
+    };
+    const panel = shown();
+
+    return {
+      pressed: !!btn,
+      ordered,
+      reached: g.ship.power.levels.weapons,
+      factor: g.ship.power.factor('weapons'),
+      // The screen says what each channel buys, which it never did.
+      namesTheEffect: /Sensor resolution, damage control/i.test(text),
+      sliderShows: panel.weapons,
+      litPreset: panel.lit.find((l) => /^(Balanced|Attack|Defense|Speed|Science)$/i.test(l)) ?? null,
+      firesOut: g.ship.fires,
+      burned: hullBefore - g.ship.hull,
+      alive: !g.ship.destroyed,
+    };
+  });
+  check('and the panel redraws when its own button is the thing that changed it',
+    upkeep.sliderShows === '100' && /^Attack$/i.test(upkeep.litPreset ?? ''),
+    JSON.stringify(upkeep));
+  check('the power screen says what each channel buys',
+    upkeep.pressed && upkeep.namesTheEffect, JSON.stringify(upkeep));
+  check('a posture ordered on the bridge actually reaches the grid',
+    upkeep.ordered === 100 && upkeep.reached === 100 && upkeep.factor > 1,
+    JSON.stringify(upkeep));
+  check('a fire is fought once the shooting stops, and costs her while it burns',
+    upkeep.firesOut === 0 && upkeep.burned > 0 && upkeep.alive, JSON.stringify(upkeep));
+
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel h2')]
+      .find((x) => /Power Distribution/i.test(x.textContent ?? ''));
+    head?.closest('.panel')?.scrollIntoView({ block: 'start' });
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(SHOTS, '06i-power-distribution.png') });
+
+  // A sensor sweep is a reading now, not a constant. Spoken, because the
+  // button and the phrase have to do the same thing.
+  await dismissModals(page);
+  await page.fill('.orderbar input', 'science, scan the system');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(300);
+  const sweep = await page.evaluate(() => {
+    const g = window.__app.game;
+    const shown = document.querySelector('.modal .body')?.textContent ?? '';
+    // The same order with the array beaten down and the power taken off it.
+    const strong = g.sensorSweep();
+    const wasSensors = g.ship.subsystems.sensors;
+    // Settle the grid FIRST and beat the array down after: passive repair is
+    // one of the things this change switched on, so ten seconds of bridge time
+    // mends the very array the check is about.
+    g.ship.power.applyPreset('attack');
+    for (let i = 0; i < 30 * 10; i++) g.update(1 / 30);
+    g.ship.subsystems.sensors = 0.3;
+    const weak = g.sensorSweep();
+    g.ship.subsystems.sensors = wasSensors;
+    return {
+      onScreen: /Charted lanes from here/i.test(shown),
+      // Content, not line count: a thin sweep drops a line of detail and gains
+      // a line saying why, so the totals match and the count says nothing.
+      strongPicksItApart: strong.some((l) => /make orbit|nothing here but the primary/i.test(l)),
+      weakPicksItApart: weak.some((l) => /make orbit|nothing here but the primary/i.test(l)),
+      saysWhy: weak.some((l) => /30 percent/.test(l)),
+      keptTheLanes: weak.some((l) => /Charted lanes from here/i.test(l)),
+    };
+  });
+  check('a sensor sweep is on the screen when it is ordered by voice',
+    sweep.onScreen, JSON.stringify(sweep));
+  check('and it reads worse with the array beaten down, and says why',
+    sweep.strongPicksItApart && !sweep.weakPicksItApart && sweep.saysWhy,
+    JSON.stringify(sweep));
+  check('and never withholds what a captain needs to fly',
+    sweep.keptTheLanes, JSON.stringify(sweep));
+
+  // Put the ship back on her feet: the checks below inherit whatever state
+  // this one leaves, and a beaten sensor array with the power off it is not
+  // the bridge the next section expects.
+  await dismissModals(page);
+  await page.evaluate(() => {
+    const g = window.__app.game;
+    g.ship.power.applyPreset('balanced');
+    g.ship.subsystems.sensors = 1;
+    g.ship.fires = 0;
+    for (let i = 0; i < 30 * 10; i++) g.update(1 / 30);
+    window.__app.render();
+  });
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {

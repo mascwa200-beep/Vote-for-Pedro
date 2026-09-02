@@ -90,6 +90,16 @@ export class Game {
   constructor(options = {}) {
     this.seed = options.seed ?? hashSeed(String(Date.now()));
     this.rng = new RNG(this.seed);
+    // Housekeeping aboard the ship between fights — fires being fought, crew
+    // lost to them — on a stream of its own.
+    //
+    // `Ship.update` draws from the RNG it is handed, and stepping the ship
+    // outside combat means it draws on ticks it never used to. From
+    // `this.rng` that would shift every seeded outcome downstream of it: the
+    // same battle would play out differently depending on whether the ship
+    // happened to be alight on the way there. Same reasoning as `derived()`
+    // below, but persistent, because this one is drawn from every tick.
+    this.upkeepRng = new RNG(hashSeed(`upkeep:${this.seed}`));
 
     // ---- difficulty ----
     // Read by combat, the dice, and the economy, so it is established first.
@@ -764,6 +774,92 @@ export class Game {
   get location() { return this.galaxy.get(this.locationId); }
 
   get stardate() { return this.clock.format(); }
+
+  // ------------------------------------------------------------------ sensors
+
+  /**
+   * How well the sensors are working right now.
+   *
+   * The array's health times the power behind it. Auxiliary is the sensor
+   * channel by every name the game gives it — the parser maps "sensors",
+   * "science", "computer" and "transporter" onto it, and the one-tap preset
+   * is labelled Science with the order phrase "power to auxiliary" — and it
+   * fed nothing but damage control. So the Science posture made the ship no
+   * better at science, which is the one thing its name promises.
+   *
+   * Nominal is 1.0 and that is deliberate: at balanced power this is exactly
+   * `subsystems.sensors`, so nothing that reads it changes at the default
+   * distribution. Spending power is what buys the difference — 1.5 at
+   * auxiliary 100, 0.4 at auxiliary 0.
+   */
+  get sensorQuality() {
+    return this.ship.subsystems.sensors * this.ship.power.factor('auxiliary');
+  }
+
+  /**
+   * What the sensors make of the system the ship is sitting in.
+   *
+   * This lived in main.js and read no ship state at all: a ship with her
+   * sensor array blown to a fifth read a system exactly as well as one fresh
+   * out of the yard, and the auxiliary power the order line calls "sensors"
+   * made no difference to the order that says "sensors". It is simulation, so
+   * it belongs here where it can be run without a screen — the same reason
+   * the abilities live in src/sim/powers.js.
+   *
+   * Nothing a captain needs to navigate is ever withheld: the lanes and the
+   * hazard are safety information and print at any reading. A better reading
+   * ADDS, it does not gate — and a poor one names the thing that would fix it,
+   * because an order that quietly returns less is indistinguishable from an
+   * order that is broken.
+   */
+  sensorSweep() {
+    const sys = this.location;
+    const q = this.sensorQuality;
+    const lines = [`${sys.name}. ${sys.description}`];
+
+    const neighbors = this.galaxy.neighbors(sys.id);
+    lines.push(`Charted lanes from here: ${neighbors.map((n) => n.name).join(', ') || 'none'}.`);
+    if (sys.hazard) lines.push(`Hazard: ${sys.hazard.replace(/_/g, ' ')}. Recommend we do not linger.`);
+
+    const missions = this.availableMissions();
+    if (missions.length) {
+      lines.push(`Standing orders available here: ${missions.map((m) => m.title).join(', ')}.`);
+    }
+
+    // A working array picks the system apart: what is down there to stand on,
+    // and whether anything is adrift. Both are already in the model and
+    // neither was ever reported.
+    if (q >= 1) {
+      const worlds = vista(sys.id, sys.type).bodies.filter((b) => b.kind !== 'star');
+      lines.push(worlds.length
+        ? `${worlds.length} bod${worlds.length === 1 ? 'y' : 'ies'} in the system. We can make orbit.`
+        : 'Nothing here but the primary. Nowhere to put a landing party.');
+      if (this.wreckHere) {
+        lines.push(`Something is adrift out there — ${this.wreckHere.name}. Salvage teams could cross.`);
+      }
+    }
+
+    // And an array with real power behind it says whether science already has
+    // this one on file, which is the difference between surveying a system and
+    // surveying it twice.
+    if (q >= 1.25) {
+      lines.push(this.galaxy.surveyed.has(sys.id)
+        ? 'Science has this system on file. Nothing new to catalogue.'
+        : 'Nothing on file for this system. Anything we find here is new.');
+    }
+
+    // Under nominal the sweep is thin, and the captain is told why rather than
+    // left to wonder whether the order works.
+    if (q < 1) {
+      lines.push(this.ship.subsystems.sensors < 0.9
+        ? `The array is at ${Math.round(this.ship.subsystems.sensors * 100)} percent, Captain. `
+          + 'These readings are the best it will give us until it is repaired.'
+        : 'The readings are thin, Captain. More power to auxiliary and I can do better.');
+    }
+
+    this.clock.advanceStardate(0.1);
+    return lines;
+  }
 
   // ------------------------------------------------------------------ log
 
@@ -1587,7 +1683,10 @@ export class Game {
         break;
 
       case 'scan': {
-        const quality = 0.5 + this.progress.scanBonus + this.ship.subsystems.sensors * 0.3;
+        // `sensorQuality` rather than the array's health alone: auxiliary is
+        // the sensor channel, and at balanced power the two are identical, so
+        // this is a nominal no-op that pays a captain who spends the power.
+        const quality = 0.5 + this.progress.scanBonus + this.sensorQuality * 0.3;
         const success = this.rng.chance(quality);
         if (success) {
           this.ledger.record('anomaly_catalogued', {
@@ -2802,6 +2901,37 @@ export class Game {
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
     this.updateWalk(dt);
+
+    // The ship is alive whether or not anyone is shooting at her.
+    //
+    // `Ship.update` was reached from exactly one place — `Engagement.update`
+    // in src/sim/combat.js — so outside a fight the player's ship was a frozen
+    // object. Everything that file steps stopped at the moment the last
+    // hostile left the board:
+    //
+    //   The power grid never settled. "Power to shields" on the bridge moved
+    //   `target` and never moved `levels`, so the preset lit up green, the
+    //   slider stayed where the captain put it, and every `factor()` reading
+    //   in the game went on describing the distribution he had replaced. The
+    //   order took effect one tick into the NEXT battle.
+    //
+    //   Fires burned forever and burned nothing. Damage control is in that
+    //   method, so a ship that left a battle alight kept "2 fires still
+    //   burning" on her engineering report for the rest of the commission —
+    //   a damage report that was permanently and visibly wrong.
+    //
+    //   Shields never came back. A facing beaten flat stayed flat across
+    //   every transit until the ship either docked or found another fight.
+    //
+    //   Buffs never expired, subsystems never mended, and a warp core left
+    //   counting down stopped counting.
+    //
+    // The hull is deliberately NOT in that list: nothing in `Ship.update`
+    // repairs hull, so a starbase and the machine shop are still the only
+    // things that put a ship back together. What time buys is her shields,
+    // her subsystems and the fires — which is the line the game already drew
+    // everywhere else.
+    if (this.mode !== MODES.COMBAT) this.ship.update(dt, this.upkeepRng);
     // Keep the ledger's clock current, so anything recorded during this tick is
     // stamped without every caller having to remember to pass a date.
     this.ledger.stardate = this.clock.stardate;
@@ -2983,6 +3113,7 @@ export class Game {
       version: 2,
       seed: this.seed.toString(),
       rng: this.rng.save(),
+      upkeepRng: this.upkeepRng.save(),
       captain: this.captain,
       character: this.character.save(),
       reputation: this.reputation.save(),
@@ -3440,6 +3571,9 @@ export class Game {
       now: opts.now,
     });
     g.rng = RNG.load(data.rng);
+    // Older records predate the upkeep stream; a fresh one from the seed is
+    // right for them, because nothing in the world was ever drawn from it.
+    g.upkeepRng = data.upkeepRng ? RNG.load(data.upkeepRng) : new RNG(hashSeed(`upkeep:${g.seed}`));
     g.captain = { ...g.captain, ...data.captain };
     g.crew = Crew.load(data.crew);
     g.ship = Ship.load(data.ship);

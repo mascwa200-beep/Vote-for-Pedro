@@ -1196,8 +1196,17 @@ function shieldDiagram(ship) {
   ]);
 }
 
-/** A power distribution slider. */
-function powerSlider(label, value, onInput) {
+/**
+ * A power distribution slider.
+ *
+ * `onSettled` fires on `change` rather than `input` — when the finger lifts,
+ * not while it drags. Moving one channel steals from the others, so the rest
+ * of the panel is stale the moment this one moves; but rebuilding it mid-drag
+ * would detach the control from under the finger, which is the failure the
+ * console-refresh comment in main.js is about. Optional: the throttle slider
+ * has nothing else to redraw.
+ */
+function powerSlider(label, value, onInput, onSettled = null) {
   const val = el('div', { class: 'val', text: String(Math.round(value)) });
   const input = el('input', {
     type: 'range', min: '0', max: '100', step: '5', value: String(Math.round(value)),
@@ -1205,6 +1214,7 @@ function powerSlider(label, value, onInput) {
       val.textContent = e.target.value;
       onInput(parseInt(e.target.value, 10));
     },
+    ...(onSettled ? { onchange: () => onSettled() } : {}),
   });
   return el('div', { class: 'power-row' }, [
     el('div', { class: 'label', text: label }), input, val,
@@ -4129,6 +4139,23 @@ const SUBSYSTEM_LABEL = {
   engines: 'Engines',
   auxiliary: 'Auxiliary',
 };
+
+/**
+ * What each channel actually buys, in the words an officer would use.
+ *
+ * Four unlabelled sliders told a captain nothing about what he was trading
+ * away, and the Auxiliary one was the worst of them: the parser calls that
+ * channel "sensors" and the preset above calls it Science, so the one thing a
+ * captain could reasonably infer from the screen was the one thing it did not
+ * do. These are read by the power panel and are the screen's half of the
+ * contract — if a line here stops being true, the effect it names has moved.
+ */
+const SUBSYSTEM_EFFECT = {
+  weapons: 'Beam and cannon damage, and how fast the banks recharge.',
+  shields: 'How quickly the facings come back after a hit.',
+  engines: 'Impulse speed and how hard she turns.',
+  auxiliary: 'Sensor resolution, damage control, and fire suppression.',
+};
 const PRESETS = {
   balanced: { id: 'balanced', label: 'Balanced', order: 'Standard distribution',
     levels: { weapons: 50, shields: 50, engines: 50, auxiliary: 50 } },
@@ -4284,6 +4311,7 @@ class PowerGrid {
 
 __exports.SUBSYSTEMS = SUBSYSTEMS;
 __exports.SUBSYSTEM_LABEL = SUBSYSTEM_LABEL;
+__exports.SUBSYSTEM_EFFECT = SUBSYSTEM_EFFECT;
 __exports.PRESETS = PRESETS;
 __exports.PRESET_LIST = PRESET_LIST;
 __exports.effectiveness = effectiveness;
@@ -4870,6 +4898,25 @@ const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'cr
 const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /**
+ * How much better the crew fight a fire when nobody is shooting at them.
+ *
+ * During an action the damage-control parties are whoever can be spared while
+ * the ship maneuvers and takes hits; the moment the shooting stops the whole
+ * watch is on it. So the fire is not weaker off action — the response to it is
+ * far stronger, which is the difference this number stands for.
+ *
+ * It is a survivability floor as much as a flavour note. Fires cost six hull a
+ * second each and are the only damage in the game applied outside
+ * `takeDamage`; at the in-action rate, a ship that limped away from a fight at
+ * fifteen per cent hull with four of them burned to death on her own bridge in
+ * thirty-two seconds, with no enemy on the board and no posture that changed
+ * the outcome. At this rate the same ship puts them out having lost about
+ * four per cent — a real price for leaving a battle alight, and one a captain
+ * can cut further with power to auxiliary or the damage-control party.
+ */
+const DAMAGE_CONTROL_OFF_ACTION = 8;
+
+/**
  * Which shield facing covers a direction, given in ship-local coordinates.
  *
  * The dominant axis wins. This is the six-sided generalisation of the old
@@ -5171,7 +5218,13 @@ class Ship {
 
   // ---------------- per-step update ----------------
 
-  update(dt, rng) {
+  /**
+   * @param {number} dt
+   * @param {RNG} [rng]
+   * @param {{inAction?: boolean}} [opts] `inAction` is true while the ship is
+   *   being fought — see DAMAGE_CONTROL_OFF_ACTION.
+   */
+  update(dt, rng, { inAction = false } = {}) {
     if (this.destroyed) return;
 
     this.power.update(dt);
@@ -5265,8 +5318,11 @@ class Ship {
       // condition line — read nonsense until the breach timer finally ran out.
       this.hull = Math.max(0, this.hull - this.fires * 6 * dt);
       if (rng && rng.chance(0.4 * dt)) this.crew = Math.max(0, this.crew - 1);
-      // Auxiliary power runs damage control.
-      const control = 0.06 * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
+      // Auxiliary power runs damage control — and how much of it there is to
+      // run depends on whether the ship is still being fought. See
+      // DAMAGE_CONTROL_OFF_ACTION.
+      const control = 0.06 * (inAction ? 1 : DAMAGE_CONTROL_OFF_ACTION)
+        * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
       if (rng && rng.chance(control)) this.fires--;
       if (this.hull <= 0) this.beginBreach();
     }
@@ -5621,6 +5677,7 @@ __exports.FACING_AXIS = FACING_AXIS;
 __exports.bearingToDirection = bearingToDirection;
 __exports.ADDITIVE_MODS = ADDITIVE_MODS;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
+__exports.DAMAGE_CONTROL_OFF_ACTION = DAMAGE_CONTROL_OFF_ACTION;
 __exports.facingForDirection = facingForDirection;
 __exports.facingForBearing = facingForBearing;
 __exports.inArc = inArc;
@@ -22003,7 +22060,10 @@ class Engagement {
   step(dt) {
     this.time += dt;
 
-    for (const s of this.allShips) s.update(dt, this.rng);
+    // `inAction`: the parties fighting a fire are whoever can be spared while
+    // the ship is being fought. Off action the whole watch is on it — see
+    // DAMAGE_CONTROL_OFF_ACTION in src/sim/ship.js.
+    for (const s of this.allShips) s.update(dt, this.rng, { inAction: true });
 
     // Whatever died on that step gets its explosion before anything else acts.
     this.reportDeaths();
@@ -27990,6 +28050,16 @@ class Game {
   constructor(options = {}) {
     this.seed = options.seed ?? hashSeed(String(Date.now()));
     this.rng = new RNG(this.seed);
+    // Housekeeping aboard the ship between fights — fires being fought, crew
+    // lost to them — on a stream of its own.
+    //
+    // `Ship.update` draws from the RNG it is handed, and stepping the ship
+    // outside combat means it draws on ticks it never used to. From
+    // `this.rng` that would shift every seeded outcome downstream of it: the
+    // same battle would play out differently depending on whether the ship
+    // happened to be alight on the way there. Same reasoning as `derived()`
+    // below, but persistent, because this one is drawn from every tick.
+    this.upkeepRng = new RNG(hashSeed(`upkeep:${this.seed}`));
 
     // ---- difficulty ----
     // Read by combat, the dice, and the economy, so it is established first.
@@ -28664,6 +28734,92 @@ class Game {
   get location() { return this.galaxy.get(this.locationId); }
 
   get stardate() { return this.clock.format(); }
+
+  // ------------------------------------------------------------------ sensors
+
+  /**
+   * How well the sensors are working right now.
+   *
+   * The array's health times the power behind it. Auxiliary is the sensor
+   * channel by every name the game gives it — the parser maps "sensors",
+   * "science", "computer" and "transporter" onto it, and the one-tap preset
+   * is labelled Science with the order phrase "power to auxiliary" — and it
+   * fed nothing but damage control. So the Science posture made the ship no
+   * better at science, which is the one thing its name promises.
+   *
+   * Nominal is 1.0 and that is deliberate: at balanced power this is exactly
+   * `subsystems.sensors`, so nothing that reads it changes at the default
+   * distribution. Spending power is what buys the difference — 1.5 at
+   * auxiliary 100, 0.4 at auxiliary 0.
+   */
+  get sensorQuality() {
+    return this.ship.subsystems.sensors * this.ship.power.factor('auxiliary');
+  }
+
+  /**
+   * What the sensors make of the system the ship is sitting in.
+   *
+   * This lived in main.js and read no ship state at all: a ship with her
+   * sensor array blown to a fifth read a system exactly as well as one fresh
+   * out of the yard, and the auxiliary power the order line calls "sensors"
+   * made no difference to the order that says "sensors". It is simulation, so
+   * it belongs here where it can be run without a screen — the same reason
+   * the abilities live in src/sim/powers.js.
+   *
+   * Nothing a captain needs to navigate is ever withheld: the lanes and the
+   * hazard are safety information and print at any reading. A better reading
+   * ADDS, it does not gate — and a poor one names the thing that would fix it,
+   * because an order that quietly returns less is indistinguishable from an
+   * order that is broken.
+   */
+  sensorSweep() {
+    const sys = this.location;
+    const q = this.sensorQuality;
+    const lines = [`${sys.name}. ${sys.description}`];
+
+    const neighbors = this.galaxy.neighbors(sys.id);
+    lines.push(`Charted lanes from here: ${neighbors.map((n) => n.name).join(', ') || 'none'}.`);
+    if (sys.hazard) lines.push(`Hazard: ${sys.hazard.replace(/_/g, ' ')}. Recommend we do not linger.`);
+
+    const missions = this.availableMissions();
+    if (missions.length) {
+      lines.push(`Standing orders available here: ${missions.map((m) => m.title).join(', ')}.`);
+    }
+
+    // A working array picks the system apart: what is down there to stand on,
+    // and whether anything is adrift. Both are already in the model and
+    // neither was ever reported.
+    if (q >= 1) {
+      const worlds = vista(sys.id, sys.type).bodies.filter((b) => b.kind !== 'star');
+      lines.push(worlds.length
+        ? `${worlds.length} bod${worlds.length === 1 ? 'y' : 'ies'} in the system. We can make orbit.`
+        : 'Nothing here but the primary. Nowhere to put a landing party.');
+      if (this.wreckHere) {
+        lines.push(`Something is adrift out there — ${this.wreckHere.name}. Salvage teams could cross.`);
+      }
+    }
+
+    // And an array with real power behind it says whether science already has
+    // this one on file, which is the difference between surveying a system and
+    // surveying it twice.
+    if (q >= 1.25) {
+      lines.push(this.galaxy.surveyed.has(sys.id)
+        ? 'Science has this system on file. Nothing new to catalogue.'
+        : 'Nothing on file for this system. Anything we find here is new.');
+    }
+
+    // Under nominal the sweep is thin, and the captain is told why rather than
+    // left to wonder whether the order works.
+    if (q < 1) {
+      lines.push(this.ship.subsystems.sensors < 0.9
+        ? `The array is at ${Math.round(this.ship.subsystems.sensors * 100)} percent, Captain. `
+          + 'These readings are the best it will give us until it is repaired.'
+        : 'The readings are thin, Captain. More power to auxiliary and I can do better.');
+    }
+
+    this.clock.advanceStardate(0.1);
+    return lines;
+  }
 
   // ------------------------------------------------------------------ log
 
@@ -29487,7 +29643,10 @@ class Game {
         break;
 
       case 'scan': {
-        const quality = 0.5 + this.progress.scanBonus + this.ship.subsystems.sensors * 0.3;
+        // `sensorQuality` rather than the array's health alone: auxiliary is
+        // the sensor channel, and at balanced power the two are identical, so
+        // this is a nominal no-op that pays a captain who spends the power.
+        const quality = 0.5 + this.progress.scanBonus + this.sensorQuality * 0.3;
         const success = this.rng.chance(quality);
         if (success) {
           this.ledger.record('anomaly_catalogued', {
@@ -30702,6 +30861,37 @@ class Game {
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
     this.updateWalk(dt);
+
+    // The ship is alive whether or not anyone is shooting at her.
+    //
+    // `Ship.update` was reached from exactly one place — `Engagement.update`
+    // in src/sim/combat.js — so outside a fight the player's ship was a frozen
+    // object. Everything that file steps stopped at the moment the last
+    // hostile left the board:
+    //
+    //   The power grid never settled. "Power to shields" on the bridge moved
+    //   `target` and never moved `levels`, so the preset lit up green, the
+    //   slider stayed where the captain put it, and every `factor()` reading
+    //   in the game went on describing the distribution he had replaced. The
+    //   order took effect one tick into the NEXT battle.
+    //
+    //   Fires burned forever and burned nothing. Damage control is in that
+    //   method, so a ship that left a battle alight kept "2 fires still
+    //   burning" on her engineering report for the rest of the commission —
+    //   a damage report that was permanently and visibly wrong.
+    //
+    //   Shields never came back. A facing beaten flat stayed flat across
+    //   every transit until the ship either docked or found another fight.
+    //
+    //   Buffs never expired, subsystems never mended, and a warp core left
+    //   counting down stopped counting.
+    //
+    // The hull is deliberately NOT in that list: nothing in `Ship.update`
+    // repairs hull, so a starbase and the machine shop are still the only
+    // things that put a ship back together. What time buys is her shields,
+    // her subsystems and the fires — which is the line the game already drew
+    // everywhere else.
+    if (this.mode !== MODES.COMBAT) this.ship.update(dt, this.upkeepRng);
     // Keep the ledger's clock current, so anything recorded during this tick is
     // stamped without every caller having to remember to pass a date.
     this.ledger.stardate = this.clock.stardate;
@@ -30883,6 +31073,7 @@ class Game {
       version: 2,
       seed: this.seed.toString(),
       rng: this.rng.save(),
+      upkeepRng: this.upkeepRng.save(),
       captain: this.captain,
       character: this.character.save(),
       reputation: this.reputation.save(),
@@ -31340,6 +31531,9 @@ class Game {
       now: opts.now,
     });
     g.rng = RNG.load(data.rng);
+    // Older records predate the upkeep stream; a fresh one from the seed is
+    // right for them, because nothing in the world was ever drawn from it.
+    g.upkeepRng = data.upkeepRng ? RNG.load(data.upkeepRng) : new RNG(hashSeed(`upkeep:${g.seed}`));
     g.captain = { ...g.captain, ...data.captain };
     g.crew = Crew.load(data.crew);
     g.ship = Ship.load(data.ship);
@@ -31515,7 +31709,7 @@ const { DIVISIONS, SPECIALITIES, ASSIGNMENTS, availableAssignments, dutySlots } 
 const { SCENARIO: KOBAYASHI, GAMBIT_TIER } = __require("src/missions/kobayashi.js");
 
 const { MODES } = __require("src/core/state.js");
-const { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } = __require("src/sim/power.js");
+const { SUBSYSTEMS, SUBSYSTEM_LABEL, SUBSYSTEM_EFFECT, PRESET_LIST } = __require("src/sim/power.js");
 const { SKILLS, BRANCHES, BRANCH_LABEL, RANKS } = __require("src/sim/skills.js");
 const { findingFor, venueFor, sitsAt } = __require("src/rules/inquiry.js");
 const { CONSOLES, SET_LIST } = __require("src/sim/loadout.js");
@@ -32307,39 +32501,47 @@ function signaturePanel(app) {
 }
 function powerPanel(app) {
   const g = app.game;
+  // This panel is also a CONSOLE, and a console is only rebuilt when something
+  // marks it dirty — otherwise it would be a fresh set of DOM nodes several
+  // times a second and every control would detach from under the finger. Only
+  // `executeOrder` ever set that flag, so a TYPED "attack posture" redrew the
+  // panel and PRESSING the Attack button on it did not: the grid changed
+  // underneath, the green highlight stayed where it was, and all four sliders
+  // went on showing the distribution the captain had just replaced. Caught by
+  // looking at the screenshot, which is the only way it could have been.
+  const redraw = () => { app.consoleDirty = true; app.render(); };
+  const preset = (p) => button(p.label, tap(() => {
+    g.ship.power.applyPreset(p.id);
+    audio.play('power_reroute');
+    redraw();
+  }), {
+    color: g.ship.power.preset === p.id ? 'green' : 'blue',
+    say: `${p.id} posture`,
+  });
   return panel('Power Distribution', [
     // Every preset carries the phrase that sets it. `PRESETS[id].order` is
     // already the words an officer would use — "power to weapons" — so the
     // button and the order line say the same thing by construction rather than
     // by two lists being kept in step by hand.
-    el('div', { class: 'grid-3' }, PRESET_LIST.slice(0, 3).map((p) =>
-      button(p.label, tap(() => {
-        g.ship.power.applyPreset(p.id);
-        audio.play('power_reroute');
-        app.render();
-      }), {
-        color: g.ship.power.preset === p.id ? 'green' : 'blue',
-        say: `${p.id} posture`,
-      }))),
-    el('div', { class: 'grid-2' }, PRESET_LIST.slice(3).map((p) =>
-      button(p.label, tap(() => {
-        g.ship.power.applyPreset(p.id);
-        audio.play('power_reroute');
-        app.render();
-      }), {
-        color: g.ship.power.preset === p.id ? 'green' : 'blue',
-        say: `${p.id} posture`,
-      }))),
-    ...SUBSYSTEMS.map((s) => powerSlider(SUBSYSTEM_LABEL[s], g.ship.power.target[s], (v) => {
-      g.ship.power.set(s, v);
-      audio.play('ui_tap', { throttle: 80 });
-    })),
+    el('div', { class: 'grid-3' }, PRESET_LIST.slice(0, 3).map(preset)),
+    el('div', { class: 'grid-2' }, PRESET_LIST.slice(3).map(preset)),
+    // Each slider says what it buys. Four bare labels told a captain nothing
+    // about what he was trading away, and Auxiliary was the worst of them —
+    // the order line calls that channel "sensors" and the preset above calls
+    // it Science, so the only thing the screen let you infer was wrong.
+    ...SUBSYSTEMS.flatMap((s) => [
+      powerSlider(SUBSYSTEM_LABEL[s], g.ship.power.target[s], (v) => {
+        g.ship.power.set(s, v);
+        audio.play('ui_tap', { throttle: 80 });
+      }, redraw),
+      el('p', { class: 'hint', text: SUBSYSTEM_EFFECT[s] }),
+    ]),
     el('p', { class: 'hint', text: `Total ${Math.round(g.ship.power.total)} of ${g.ship.power.cap}. Levels settle over a few seconds — the EPS grid is not instant.` }),
     // The engineering console is where a diagnostic is actually run from.
     button('Run a diagnostic', tap(() => {
       const r = g.diagnostic(1);
       audio.play(r.clean ? 'computer_ack' : 'ui_deny');
-      app.render();
+      redraw();
     }), {
       color: 'ghost',
       sub: 'Level one — every system, by hand',
@@ -35308,15 +35510,12 @@ class App {
   // ------------------------------------------------------------ game actions
 
   scanSystem() {
-    const g = this.game;
-    const sys = g.location;
-    const lines = [`${sys.name}. ${sys.description}`];
-    const neighbors = g.galaxy.neighbors(sys.id);
-    lines.push(`Charted lanes from here: ${neighbors.map((n) => n.name).join(', ') || 'none'}.`);
-    if (sys.hazard) lines.push(`Hazard: ${sys.hazard.replace(/_/g, ' ')}. Recommend we do not linger.`);
-    const missions = g.availableMissions();
-    if (missions.length) lines.push(`Standing orders available here: ${missions.map((m) => m.title).join(', ')}.`);
-    g.clock.advanceStardate(0.1);
+    // What the sensors SEE is in Game.sensorSweep, so the order can be given
+    // without a screen and the reading can depend on the ship — this used to
+    // be a constant list of facts about the system that no state of the array
+    // and no setting of the power grid could change. What is left here is the
+    // noise it makes.
+    const lines = this.game.sensorSweep();
     audio.play('scan_complete');
     return lines;
   }

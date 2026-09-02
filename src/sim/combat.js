@@ -554,7 +554,10 @@ export class Engagement {
   step(dt) {
     this.time += dt;
 
-    for (const s of this.allShips) s.update(dt, this.rng);
+    // `inAction`: the parties fighting a fire are whoever can be spared while
+    // the ship is being fought. Off action the whole watch is on it — see
+    // DAMAGE_CONTROL_OFF_ACTION in src/sim/ship.js.
+    for (const s of this.allShips) s.update(dt, this.rng, { inAction: true });
 
     // Whatever died on that step gets its explosion before anything else acts.
     this.reportDeaths();

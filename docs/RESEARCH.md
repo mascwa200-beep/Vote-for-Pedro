@@ -1207,6 +1207,48 @@ Sources: [Memory Alpha — Romulan Neutral Zone](https://memory-alpha.fandom.com
 [Memory Alpha — The Enterprise Incident](https://memory-alpha.fandom.com/wiki/The_Enterprise_Incident_(episode)),
 [Memory Alpha — Treaty of Algeron](https://memory-alpha.fandom.com/wiki/Treaty_of_Algeron)
 
+## 24. What the four power channels are for
+
+The game has had a four-channel power grid since the beginning, with the four
+names Star Trek Online uses — weapons, shields, engines, auxiliary — and a
+one-tap preset for each. Three of the four did what their names say. The fourth
+did not, and this is what it should have been doing.
+
+**Auxiliary is the science channel.** In Star Trek Online, the auxiliary
+subsystem is the one that drives science: the strength of science bridge-officer
+abilities scales off it, and so does how well the ship sees — stealth detection
+and sensor performance both improve as auxiliary power rises. It is also the
+channel that feeds the ship's own repair and hull-healing abilities. The reason
+players run an "aux-heavy" build is precisely that it buys sensing and support
+rather than damage. Its opposite is equally established: dropping auxiliary is
+the standard cost paid for an attack or speed configuration, and the ship gets
+worse at seeing and mending in exchange.
+
+That is a mechanic, not a piece of dialogue, so it is reproducible in my own
+terms: **the channel a ship calls auxiliary is the one that powers the sensors
+and the repair parties, and spending it elsewhere costs her both.** The game's
+own parser already agreed — it maps "sensors", "science", "computer" and
+"transporter" onto auxiliary — and the preset already said "Science" on the
+button. Only the effect was missing.
+
+**Damage control is what the crew can spare.** Firefighting aboard a warship is
+not a fixed rate. During an action the parties are whoever can be spared while
+the ship is manoeuvring and taking hits; once the shooting stops, the whole
+watch turns to. Naval damage-control practice is organised exactly this way —
+repair parties are stationed for battle and then reinforced from the rest of
+the crew once the immediate threat has passed. That is the difference the game
+now models: the fire is not weaker after the battle, the response to it is very
+much stronger.
+
+Both of these are about the same idea, which is why they are one entry: a
+starship is a set of finite resources a captain allocates, and the allocation
+has to be visible in what she can do. A slider that changes nothing a player
+can observe is not a decision.
+
+Sources: [Star Trek Online Wiki — Power levels](https://stowiki.net/wiki/Power_level),
+[Star Trek Online Wiki — Auxiliary power](https://stowiki.net/wiki/Auxiliary_power),
+[Memory Alpha — Damage control](https://memory-alpha.fandom.com/wiki/Damage_control)
+
 ---
 
 ## Attribution

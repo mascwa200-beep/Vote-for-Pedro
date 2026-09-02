@@ -65,6 +65,25 @@ export const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResis
 export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /**
+ * How much better the crew fight a fire when nobody is shooting at them.
+ *
+ * During an action the damage-control parties are whoever can be spared while
+ * the ship maneuvers and takes hits; the moment the shooting stops the whole
+ * watch is on it. So the fire is not weaker off action — the response to it is
+ * far stronger, which is the difference this number stands for.
+ *
+ * It is a survivability floor as much as a flavour note. Fires cost six hull a
+ * second each and are the only damage in the game applied outside
+ * `takeDamage`; at the in-action rate, a ship that limped away from a fight at
+ * fifteen per cent hull with four of them burned to death on her own bridge in
+ * thirty-two seconds, with no enemy on the board and no posture that changed
+ * the outcome. At this rate the same ship puts them out having lost about
+ * four per cent — a real price for leaving a battle alight, and one a captain
+ * can cut further with power to auxiliary or the damage-control party.
+ */
+export const DAMAGE_CONTROL_OFF_ACTION = 8;
+
+/**
  * Which shield facing covers a direction, given in ship-local coordinates.
  *
  * The dominant axis wins. This is the six-sided generalisation of the old
@@ -367,7 +386,13 @@ export class Ship {
 
   // ---------------- per-step update ----------------
 
-  update(dt, rng) {
+  /**
+   * @param {number} dt
+   * @param {RNG} [rng]
+   * @param {{inAction?: boolean}} [opts] `inAction` is true while the ship is
+   *   being fought — see DAMAGE_CONTROL_OFF_ACTION.
+   */
+  update(dt, rng, { inAction = false } = {}) {
     if (this.destroyed) return;
 
     this.power.update(dt);
@@ -461,8 +486,11 @@ export class Ship {
       // condition line — read nonsense until the breach timer finally ran out.
       this.hull = Math.max(0, this.hull - this.fires * 6 * dt);
       if (rng && rng.chance(0.4 * dt)) this.crew = Math.max(0, this.crew - 1);
-      // Auxiliary power runs damage control.
-      const control = 0.06 * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
+      // Auxiliary power runs damage control — and how much of it there is to
+      // run depends on whether the ship is still being fought. See
+      // DAMAGE_CONTROL_OFF_ACTION.
+      const control = 0.06 * (inAction ? 1 : DAMAGE_CONTROL_OFF_ACTION)
+        * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
       if (rng && rng.chance(control)) this.fires--;
       if (this.hull <= 0) this.beginBreach();
     }

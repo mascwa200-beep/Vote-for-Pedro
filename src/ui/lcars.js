@@ -100,8 +100,17 @@ export function shieldDiagram(ship) {
   ]);
 }
 
-/** A power distribution slider. */
-export function powerSlider(label, value, onInput) {
+/**
+ * A power distribution slider.
+ *
+ * `onSettled` fires on `change` rather than `input` — when the finger lifts,
+ * not while it drags. Moving one channel steals from the others, so the rest
+ * of the panel is stale the moment this one moves; but rebuilding it mid-drag
+ * would detach the control from under the finger, which is the failure the
+ * console-refresh comment in main.js is about. Optional: the throttle slider
+ * has nothing else to redraw.
+ */
+export function powerSlider(label, value, onInput, onSettled = null) {
   const val = el('div', { class: 'val', text: String(Math.round(value)) });
   const input = el('input', {
     type: 'range', min: '0', max: '100', step: '5', value: String(Math.round(value)),
@@ -109,6 +118,7 @@ export function powerSlider(label, value, onInput) {
       val.textContent = e.target.value;
       onInput(parseInt(e.target.value, 10));
     },
+    ...(onSettled ? { onchange: () => onSettled() } : {}),
   });
   return el('div', { class: 'power-row' }, [
     el('div', { class: 'label', text: label }), input, val,
