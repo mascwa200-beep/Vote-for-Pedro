@@ -4,7 +4,7 @@
 // the ledger already records. A captain with a reputation for firing first
 // meets more people willing to fire first.
 
-import { SYSTEM_BY_ID } from './systems.data.js';
+import { SYSTEM_BY_ID, SECTORS } from './systems.data.js';
 import { FACTIONS, isHostile } from './factions.data.js';
 import { Ship } from '../sim/ship.js';
 import { buildHostiles } from '../sim/combat.js';
@@ -36,6 +36,9 @@ const SECTOR_PRESENCE = {
   bajor: { federation: 4, cardassian: 3, independent: 3 },
   cardassia: { cardassian: 9 },
   badlands: { cardassian: 3, independent: 3, orion: 2 },
+  // Both governments patrol the zone and neither runs it, and the people
+  // who actually live there are a third of the traffic. RESEARCH.md §25.
+  dmz: { cardassian: 4, federation: 3, independent: 3 },
   tholia: { tholian: 8 },
   frontier: { independent: 2, klingon: 2, romulan: 2 },
   deepspace: { independent: 1, borg: 1 },
@@ -66,11 +69,16 @@ export const SALVAGE_POOL = [
 
 export function rollEncounter(rng, systemId, {
   ledger, inTransit = false, quietInHostileSpace = false, halveHostile = false,
-  distressSooner = false,
+  distressSooner = false, challengeBy = null,
 } = {}) {
   const system = SYSTEM_BY_ID[systemId];
   if (!system) return null;
   const presence = SECTOR_PRESENCE[system.sector] ?? { independent: 2 };
+
+  // A warship in a demilitarised zone is not rolled for. Somebody comes and
+  // asks about it — see RESEARCH.md §25, and `Game.enterTheDMZ`, which is what
+  // decides that this is one of those arrivals.
+  if (challengeBy) return buildChallenge(rng, system, challengeBy, ledger);
 
   // Safe space is mostly quiet; the frontier is not.
   let danger = system.faction === 'federation' && !system.contested ? 0.18
@@ -170,6 +178,33 @@ function buildPatrol(rng, system, presence, ledger) {
     text: hostile
       ? `${FACTIONS[factionId].adjective} vessels closing on an intercept course. They are arming weapons.`
       : `${article(FACTIONS[factionId].adjective)} ${FACTIONS[factionId].adjective} patrol is holding position and scanning us. No weapons charged — yet.`,
+  };
+}
+
+/**
+ * Being asked what a warship is doing here.
+ *
+ * A patrol with a reason, rather than a patrol that happened. Their manner is
+ * `buildPatrol`'s: a government that already dislikes you arrives on an
+ * intercept course, one that tolerates you holds station and scans. What is
+ * different is that they say why they have stopped you, and that the answer to
+ * it — the treaty rider the Cardassian track sells — is a thing a captain can
+ * go and earn.
+ */
+function buildChallenge(rng, system, factionId, ledger) {
+  const patrol = buildPatrol(rng, system, { [factionId]: 1 }, ledger);
+  const adj = FACTIONS[factionId]?.adjective ?? 'Unknown';
+  return {
+    ...patrol,
+    challenge: true,
+    hailable: FACTIONS[factionId]?.hailable ?? false,
+    title: `Challenged in the ${SECTORS[system.sector]?.name ?? 'zone'}`,
+    text: patrol.hostile
+      ? `${adj} warships are closing, and they are not asking. This is a `
+        + 'demilitarised zone and we are the largest weapon in it.'
+      : `${article(adj)} ${adj} patrol has put itself across our bow and is `
+        + 'asking, politely, what a starship of this tonnage is doing inside a '
+        + 'demilitarised zone.',
   };
 }
 

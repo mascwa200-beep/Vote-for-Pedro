@@ -1249,6 +1249,62 @@ Sources: [Star Trek Online Wiki — Power levels](https://stowiki.net/wiki/Power
 [Star Trek Online Wiki — Auxiliary power](https://stowiki.net/wiki/Auxiliary_power),
 [Memory Alpha — Damage control](https://memory-alpha.fandom.com/wiki/Damage_control)
 
+## 25. The other line on the chart, and why it is a different kind of line
+
+§23 established the Romulan Neutral Zone and noted, at the end, that there is
+no Cardassian demilitarised zone anywhere in this galaxy's data — and that
+inventing the place a perk acts on, so the perk has something to do, is
+building the world backwards. This is the place, so that it can be built the
+right way round.
+
+**The zone came out of a treaty that ended a war, and it was drawn badly on
+purpose.** The Federation and the Cardassian Union fought a long border war
+and settled it; the border settlement that followed established a
+demilitarised zone along the new line. The line did not follow where people
+actually lived. Federation colonies ended up on the Cardassian side of it and
+Cardassian colonies on the Federation side, and the treaty's answer was that
+the colonists could relocate or stay and live under the other government. Some
+of them refused to do either, and the ones who stayed and armed themselves
+became the Maquis. That is a border drawn by negotiators over the heads of the
+people standing on it, which is a more interesting place than a wall.
+
+**What makes it mechanically different from the Neutral Zone is one clause.**
+The Romulan Neutral Zone is a place neither side may ENTER: "Balance of Terror"
+turns on the fact that crossing it at all is an act of war. The Cardassian
+zone is a place both sides may enter and neither may MILITARISE — that is what
+demilitarised means, and it is the term the treaty is named for. People live
+there. Freighters cross it. What does not belong there is a warship.
+
+So the two lines want two different mechanics, and copying the first onto the
+second would be wrong:
+
+  Crossing the Neutral Zone is the violation, and it is charged once, on the
+  crossing.
+
+  Being in the demilitarised zone is not a violation. Being in it in a heavy
+  cruiser is a thing the other side will come and ask you about.
+
+That second shape is a challenge rather than a penalty, which is also what
+makes the Cardassian reputation track's own tier-4 project fit it exactly:
+"Standing Treaty Rider — free movement through the demilitarised zone." A
+rider is an amendment to a treaty. It does not forgive a violation; it is the
+paper that makes your presence lawful, which is a thing you produce when
+somebody asks.
+
+**Setlik III and the Badlands are already on this chart and are already the
+right furniture.** Setlik III carries a massacre in its description and a
+garrison that never stood down — the Federation-Cardassian war is what that
+is about. The Badlands are a plasma-storm region on the same frontier and are
+where the Maquis hid from both governments, because a region no navigator
+wants to enter is exactly where an insurgency goes. The zone belongs in the
+gap between them, and needed nothing invented to justify its position.
+
+Sources: [Memory Alpha — Demilitarized Zone](https://memory-alpha.fandom.com/wiki/Demilitarized_Zone),
+[Memory Alpha — Federation-Cardassian Treaty of 2370](https://memory-alpha.fandom.com/wiki/Federation-Cardassian_Treaty_of_2370),
+[Memory Alpha — Maquis](https://memory-alpha.fandom.com/wiki/Maquis),
+[Memory Alpha — Badlands](https://memory-alpha.fandom.com/wiki/Badlands),
+[Memory Alpha — Setlik III massacre](https://memory-alpha.fandom.com/wiki/Setlik_III_massacre)
+
 ---
 
 ## Attribution
