@@ -1697,6 +1697,21 @@ class App {
         ack('engineering', `Standing doctrine is ${r.trait.name}, Captain. ${r.trait.text}`);
         break;
       }
+      case 'take_command': {
+        const r = g.acceptCommand();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play('computer_ack');
+        haptic('confirm');
+        this.render();
+        break;
+      }
+      case 'keep_command': {
+        const r = g.declineCommand();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play('computer_ack');
+        this.render();
+        break;
+      }
       case 'salvage': {
         const r = g.stripWreck();
         if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }

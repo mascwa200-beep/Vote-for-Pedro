@@ -1833,9 +1833,16 @@ describe('the game survives being called wrongly', () => {
         if (threw.length > 3) break;
       }
       // A dead captain stops the sweep testing anything; put the ship back.
+      //
+      // The whole game-over has to be undone, not just the flag. A career now
+      // ends on the SECOND hull lost, so leaving the count behind meant every
+      // resurrection after that was a commission running with more ships lost
+      // than a commission can have — which the sweep rightly complained about,
+      // for a state only this harness can produce.
       if (g.over) {
         g.over = false;
         g.overReason = null;
+        g.shipsLost = 0;
         g.ship.restore();
         g.ship.crew = g.ship.maxCrew;
       }

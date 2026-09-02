@@ -1314,6 +1314,39 @@ export function shipScreen(app) {
     root.append(panel('Her own ship', masteryLines));
   }
 
+  // --- A bigger command, and the right to say no ---
+  //
+  // Promotion is how you stop being a starship captain (RESEARCH.md §21). So
+  // this is an offer with its cost written on it, not a reward that happens to
+  // you: what you would be giving up is everything the crew have learned about
+  // the hull you are standing in.
+  const offer = g.commandOffer;
+  if (offer) {
+    const spending = g.mastery?.tier ?? 0;
+    root.append(panel('Starfleet offers you a command', [
+      el('h3', { text: offer.name }),
+      el('p', {
+        class: 'muted',
+        text: `${Math.round(offer.hull)} hull against ${Math.round(g.ship.maxHull)}, `
+          + `and ${offer.crew} aboard against ${g.ship.maxCrew}.`,
+      }),
+      el('p', {
+        class: 'hint',
+        text: spending > 0
+          ? `${g.ship.name} would go to another captain, and the ${spending} `
+            + `${spending === 1 ? 'tier' : 'tiers'} your crew have earned in her would stay with her. `
+            + 'Nobody aboard would have worked the new hull up.'
+          : `${g.ship.name} would go to another captain. Nobody aboard has worked `
+            + 'either hull up yet, so there is nothing to lose but her name.',
+      }),
+      button('Take her', tap(() => { g.acceptCommand(); app.render(); }, 'ui_confirm'),
+        { color: 'orange', say: 'take the new command' }),
+      button(`Stay with ${g.ship.name}`,
+        tap(() => { g.declineCommand(); app.render(); }, 'ui_back'),
+        { color: 'ghost', say: 'stay with this ship' }),
+    ]));
+  }
+
   // --- Consoles ---
   for (const slot of ['tactical', 'engineering', 'science', 'device']) {
     const cap = g.loadout.capacity(slot);
