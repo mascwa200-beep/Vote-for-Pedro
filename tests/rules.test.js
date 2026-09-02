@@ -26,6 +26,7 @@ import { findingFor, sitsAt, venueFor } from '../src/rules/inquiry.js';
 import { nextCommandFor, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { availableHails } from '../src/sim/diplomacy.js';
 import { rollEncounter } from '../src/world/encounters.js';
+import { getShipClass } from '../src/world/ships.data.js';
 import { Mission } from '../src/missions/engine.js';
 import { Ship } from '../src/sim/ship.js';
 import { AwayTeam, CHECK_TYPES } from '../src/sim/away.js';
@@ -975,8 +976,7 @@ describe('a reputation project that grants nothing', () => {
   // The ledger of what is still dead. It shrinks as perks are wired up, and a
   // twenty-sixth dead perk fails this rather than joining the pile quietly.
   const STILL_UNWIRED = [
-    'border_warning', 'cardassian_ally', 'dmz_passage', 'folk_hero',
-    'romulan_accord', 'see_all_encounters',
+    'dmz_passage', 'romulan_accord', 'see_all_encounters',
   ].sort();
 
   test('the perks nothing reads are exactly the ones we know about', () => {
@@ -1296,6 +1296,89 @@ describe('a reputation project that grants nothing', () => {
     const nebula = arriveAt(['crew_replacement'], 'anomaly');
     assert.equal(nebula.after, nebula.before,
       `volunteers came aboard at ${nebula.where}, which has nobody in it`);
+  });
+
+  test('a Galor stands off your beam in Cardassian space, and nowhere else', () => {
+    const escortIn = (perks, systemId) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      g.locationId = systemId;
+      g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS T' })]);
+      return g.engagement.allies;
+    };
+    assert.equal(escortIn([], 'cardassia_prime').length, 0, 'a Galor turned up unbought');
+    const escorted = escortIn(['cardassian_ally'], 'cardassia_prime');
+    assert.equal(escorted.length, 1, 'no Galor joined in Cardassian space');
+    assert.equal(escorted[0].faction, 'cardassian',
+      `a ${escorted[0].faction} ship answered a Cardassian treaty`);
+    assert.equal(escortIn(['cardassian_ally'], 'sol').length, 0,
+      'a Galor escorted the ship through Federation space');
+  });
+
+  test('the three escorts are one table, not three copies', () => {
+    // The third of these was where the pattern earned a table. Each names the
+    // space it covers and whether it is a standing authorisation or a favour
+    // spent once a voyage, which is what the three projects' own wording says.
+    const perks = Game.ESCORTS.map((e) => e.perk);
+    assert.deepEqual(perks, ['ally_escort', 'mercenary_escort', 'cardassian_ally']);
+    for (const e of Game.ESCORTS) {
+      assert.ok(getShipClass(e.classId), `${e.perk} sends a ${e.classId}, which is not a class`);
+      assert.equal(getShipClass(e.classId).faction, e.faction,
+        `${e.perk} flies a ${e.classId} under ${e.faction} colours`);
+      if (e.oncePerVoyage) assert.ok(e.flag, `${e.perk} is once per voyage with no flag to spend`);
+    }
+  });
+
+  test('you are warned before you cross a line that matters, and not otherwise', () => {
+    const courseTo = (perks, dest) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      g.ship.antimatter = 100;
+      const before = g.log.length;
+      g.setCourse(dest, 6);
+      return g.log.slice(before).map((e) => e.text ?? '').join(' ');
+    };
+    assert.doesNotMatch(courseTo([], 'qonos'), /A word before we go/,
+      'the ship was warned about Qo’noS without the courtesy being bought');
+    assert.match(courseTo(['border_warning'], 'qonos'), /A word before we go/,
+      '"you are warned before you cross a line that matters" said nothing about Qo’noS');
+    // And it does not cry wolf. Vulcan is Federation space with a berth.
+    assert.doesNotMatch(courseTo(['border_warning'], 'vulcan'), /A word before we go/,
+      'the Obsidian Order warned the ship about Vulcan');
+  });
+
+  test('a name they know brings the calls sooner and the locals out', () => {
+    const distressRate = (opts) => {
+      let n = 0;
+      for (let i = 0; i < 3000; i++) {
+        if (rollEncounter(new RNG(BigInt(i + 1)), 'sol', opts)?.kind === 'distress') n++;
+      }
+      return n / 3000;
+    };
+    const plain = distressRate({});
+    const known = distressRate({ distressSooner: true });
+    assert.ok(known > plain * 1.2,
+      `"distress calls reach you sooner": ${(plain * 100).toFixed(1)}% -> ${(known * 100).toFixed(1)}%`);
+
+    const teamMod = (perks, systemId) => {
+      const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+      for (const p of perks) g.reputation.perks.add(p);
+      g.locationId = systemId;
+      return g.buildAwayTeam().modifierFor('science').total;
+    };
+    assert.ok(teamMod(['folk_hero'], 'sol') > teamMod([], 'sol'),
+      '"civilians will risk themselves for you" changed nothing about a landing party');
+    const nebula = [...new Game({ seed: 1n, crewMode: 'canon', crew: 'tos' }).galaxy.systems.values()]
+      .find((s) => s.type === 'anomaly');
+    assert.equal(teamMod(['folk_hero'], nebula.id), teamMod([], nebula.id),
+      `locals turned out to help at ${nebula.name}, which has nobody in it`);
+  });
+
+  test('and the boarding party gets no locals — they are the ones being boarded', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.reputation.perks.add('folk_hero');
+    assert.equal(g.buildAwayTeam(['tactical'], false, { boarding: true }).locals, 0,
+      'the colony turned out to help storm a Klingon bridge');
   });
 
   test('a cloaking device is not left behind with the old hull', () => {

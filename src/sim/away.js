@@ -40,6 +40,11 @@ export class AwayTeam {
     this.character = opts.character ?? null;
     this.difficulty = opts.difficulty ?? null;
     this.security = opts.security ?? 4;   // they die first, and it matters
+    // "A Name They Know — civilians will risk themselves for you." People who
+    // know the ship turn out to help, and a landing party with the locals
+    // alongside is a different party. Set by the caller, which is the only
+    // place that knows whether there are any locals to turn out.
+    this.locals = opts.locals ?? 0;
     this.casualties = [];
     this.rolls = [];                      // full audit trail for the UI
   }
@@ -90,6 +95,11 @@ export class AwayTeam {
         total -= 2;
         parts.push({ source: 'wounded', value: -2 });
       }
+    }
+
+    if (this.locals) {
+      total += this.locals;
+      parts.push({ source: 'locals lending a hand', value: this.locals });
     }
 
     // A larger security detail helps with anything physical.
