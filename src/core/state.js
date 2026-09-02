@@ -354,10 +354,40 @@ export class Game {
    * lanes are charted from the start, so reading it that way would have made
    * "in charted space" mean "everywhere" and the perk a flat halving.
    */
+  /**
+   * The warning the Obsidian Order would give, or null if the course is clean.
+   *
+   * Reads the same two facts the game already enforces — `requiresStanding`,
+   * which decides whether a system will berth you, and the faction's standing,
+   * which decides who shoots — rather than inventing a third notion of a
+   * border. A warning about a line the game does not actually draw would be
+   * worse than no warning.
+   */
+  crossingWarningFor(dest) {
+    if (!dest) return null;
+    const shut = Object.entries(dest.requiresStanding ?? {})
+      .filter(([f, v]) => this.ledger.standingOf(f) < v && !this.perk(Game.PASSAGE_PERKS[f]));
+    if (shut.length) {
+      const [f, v] = shut[0];
+      return `A word before we go, Captain: ${dest.name} will not open a berth to us. `
+        + `They want ${v} and our standing with them is ${Math.round(this.ledger.standingOf(f))}.`;
+    }
+    const owner = dest.faction;
+    if (owner && owner !== 'federation' && owner !== 'independent') {
+      const standing = this.ledger.standingOf(owner);
+      if (standing < 0) {
+        return `A word before we go, Captain: ${dest.name} is ${owner} space and they `
+          + `have us at ${Math.round(standing)}. We will not be made welcome.`;
+      }
+    }
+    return null;
+  }
+
   encounterPerks(systemId) {
     return {
       quietInHostileSpace: this.perk('reduced_detection'),
       halveHostile: this.perk('route_intel') && this.galaxy.visited.has(systemId),
+      distressSooner: this.perk('folk_hero'),
     };
   }
 
@@ -1216,6 +1246,18 @@ export class Game {
     const dest = this.galaxy.get(destinationId);
     this.officerSays('helm', `Course laid in for ${dest.name}, warp ${plan.factor.toFixed(0)}.`);
     this.pushLog(`Engaged at warp ${plan.factor.toFixed(0)} for ${dest.name}.`, 'captain');
+    // "Obsidian Order Courtesy — you are warned before you cross a line that
+    // matters." A hundred and twenty Writs of Accord, and no warning was ever
+    // given about anything: the perk went into a Set nothing read.
+    //
+    // A line that matters is one the ship cannot cross without consequence:
+    // a border into space whose owner will not have you, or a system that
+    // will turn you away at the door. Said when the course is laid in, which
+    // is the only moment a warning is worth anything.
+    if (this.perk('border_warning')) {
+      const warning = this.crossingWarningFor(dest);
+      if (warning) this.officerSays('comms', warning, 'warn');
+    }
     emit('transit:begin', { transit: this.transit, destination: dest });
     return { ok: true, transit: this.transit, hours: plan.hours, fuel: plan.fuel };
   }
@@ -1699,43 +1741,32 @@ export class Game {
     this.character?.refresh();
 
     this.setAlert('red');
-    // "Standing Escort Authorisation — a Federation escort joins you in any
-    // engagement in Federation space." Bought for 180 Commendations, and no
-    // escort ever arrived: the perk went into a Set nothing read.
+    // The escorts a reputation buys.
     //
-    // A Miranda, not a sister ship — an escort is a light unit detached to
-    // stand with you, and a second Galaxy would decide the fight rather than
-    // help with it. `Engagement` has supported allies all along; nothing was
-    // ever putting one in.
+    // Three of these now, so they are a table rather than a third copy of the
+    // same twenty lines. Each was sold and none of them ever arrived: the
+    // perks went into a Set nothing in the game read, and `Engagement` has
+    // supported `opts.allies` the whole time with nothing putting one in.
+    //
+    // LIGHT units, every one — an escort is a ship detached to stand with you,
+    // and a second Galaxy would decide the fight rather than help with it.
+    //
+    // Names come from a DERIVED stream. Drawing from `game.rng` for a name
+    // would shift every seeded outcome downstream of the fight, so the same
+    // battle would play out differently depending on which perks were held.
     const allies = [...(opts.allies ?? [])];
-    if (!opts.scripted && this.perk('ally_escort') && this.location?.faction === 'federation') {
-      // A DERIVED stream for her name. Drawing from `game.rng` to pick a name
-      // would shift every seeded outcome downstream of the fight, so the same
-      // battle would play out differently depending on whether an escort was
-      // authorised — which is a determinism bug hiding inside a cosmetic.
-      allies.push(new Ship('miranda', {
-        name: hostileName('federation', Math.floor(this.derived('escort').float() * 12)),
-        faction: 'federation',
-      }));
-    }
-    // "Marauder Contract — a hired Marauder joins one engagement per voyage."
-    //
-    // Anywhere, unlike the Starfleet escort: money does not care whose space
-    // this is, which is the whole difference between the two contracts and the
-    // reason a captain might buy both. Once per VOYAGE and reset at the next
-    // berth, because that is what the description says and because a hired
-    // ship in every fight is a second ship, not a contract.
-    if (!opts.scripted && this.perk('mercenary_escort') && !this.marauderHired) {
-      this.marauderHired = true;
-      allies.push(new Ship('marauder', {
-        name: hostileName('ferengi', Math.floor(this.derived('marauder').float() * 12)),
-        faction: 'ferengi',
-      }));
-      this.pushLog(
-        'The Marauder is answering, Captain. They want it noted that this is '
-        + 'the contracted engagement.',
-        'comms',
-      );
+    if (!opts.scripted) {
+      for (const e of Game.ESCORTS) {
+        if (!this.perk(e.perk)) continue;
+        if (e.space && this.location?.faction !== e.space) continue;
+        if (e.oncePerVoyage && this[e.flag]) continue;
+        if (e.oncePerVoyage) this[e.flag] = true;
+        allies.push(new Ship(e.classId, {
+          name: hostileName(e.faction, Math.floor(this.derived(e.perk).float() * 12)),
+          faction: e.faction,
+        }));
+        if (e.line) this.pushLog(e.line, 'comms');
+      }
     }
     // "Battle Doctrine Exchange — you always fire first in an engagement."
     //
@@ -2132,6 +2163,11 @@ export class Game {
       // taking a bridge and the officers are further back in the queue when
       // somebody has to be hit.
       ...(opts.boarding && this.perk('boarding_master') ? { security: 8 } : {}),
+      // People who know the ship turn out to help — where there are people.
+      // Not on a boarding action: the locals aboard a hostile cruiser are the
+      // ones being boarded.
+      locals: !opts.boarding && this.perk('folk_hero') && Game.INHABITED.has(this.location?.type)
+        ? 2 : 0,
     });
     return this.awayTeam;
   }
@@ -2543,6 +2579,35 @@ export class Game {
 
   /** Somewhere with people in it — a "Safe Harbour" is not an anomaly. */
   static INHABITED = new Set(['core', 'colony', 'homeworld', 'starbase', 'outpost', 'station']);
+
+  /**
+   * Ships a reputation brings to a fight.
+   *
+   * `space` is the faction whose territory the perk covers, or null for
+   * anywhere. `oncePerVoyage` spends a flag that `dock()` clears — the
+   * difference between a standing authorisation and a favour or a contract,
+   * and it is what each project's own wording says.
+   */
+  static ESCORTS = [
+    {
+      perk: 'ally_escort', classId: 'miranda', faction: 'federation', space: 'federation',
+    },
+    {
+      // Money does not care whose space this is, which is the whole difference
+      // between this and the Starfleet escort and the reason to buy both.
+      perk: 'mercenary_escort', classId: 'marauder', faction: 'ferengi', space: null,
+      oncePerVoyage: true, flag: 'marauderHired',
+      line: 'The Marauder is answering, Captain. They want it noted that this is '
+        + 'the contracted engagement.',
+    },
+    {
+      // "A Galor escorts you through Cardassian space, watching very
+      // carefully." Watching you, is the implication, and they come anyway.
+      perk: 'cardassian_ally', classId: 'galor', faction: 'cardassian', space: 'cardassian',
+      line: 'A Galor is standing off our beam, Captain. Union colours. '
+        + 'They are watching us at least as closely as they are watching them.',
+    },
+  ];
 
   canDock() {
     const sys = this.location;

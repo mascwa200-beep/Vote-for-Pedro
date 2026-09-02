@@ -66,6 +66,7 @@ export const SALVAGE_POOL = [
 
 export function rollEncounter(rng, systemId, {
   ledger, inTransit = false, quietInHostileSpace = false, halveHostile = false,
+  distressSooner = false,
 } = {}) {
   const system = SYSTEM_BY_ID[systemId];
   if (!system) return null;
@@ -95,7 +96,10 @@ export function rollEncounter(rng, systemId, {
 
   const table = [
     { kind: 'patrol', weight: 30 },
-    { kind: 'distress', weight: system.faction === 'federation' ? 22 : 14 },
+    // "A Name They Know — distress calls reach you sooner." A ship people
+    // have heard of is the one they call, and they call it earlier; this is
+    // the weight of somebody needing you rather than something else happening.
+    { kind: 'distress', weight: (system.faction === 'federation' ? 22 : 14) * (distressSooner ? 2 : 1) },
     { kind: 'derelict', weight: 10 },
     { kind: 'anomaly', weight: system.anomalous ? 30 : 12 },
     { kind: 'ambush', weight: system.contested || system.border ? 24 : 8 },
