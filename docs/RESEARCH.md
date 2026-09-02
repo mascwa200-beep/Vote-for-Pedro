@@ -1121,6 +1121,51 @@ Sources: [Memory Alpha — Star Trek IV: The Voyage Home](https://memory-alpha.f
 
 ---
 
+## 22. What a board of inquiry actually is
+
+§21 established that losing a ship costs something. This is about the shape of
+the costing, because the game already prints the words "there will be a board
+of inquiry" and then holds no board.
+
+Starfleet's disciplinary procedure, as the series shows it, has three features
+worth building on.
+
+**It convenes at a starbase, not in the field.** When Kirk is accused over the
+death of his records officer in *Court Martial*, the proceedings are held at
+Starbase 11 — the ship puts in, the officers are ashore, and the board sits in
+a room. The same pattern recurs: a hearing needs a facility and a panel of
+senior officers, and neither exists aboard a ship on patrol. So a board opened
+in deep space is a thing hanging over a captain until he next makes port,
+which is exactly the interval the campaign needs it to be.
+
+**The ship's own record is the evidence.** The central device of *Court
+Martial* is that the computer log is treated as incontrovertible, and Kirk's
+defence is that the log has been falsified. The finding turns on the record,
+not on the personalities in the room. The game already keeps a service record
+with a weighted score, and that number currently does nothing but print itself
+on a screen — so reading the verdict off it is not a mechanic invented for the
+occasion; it is the mechanic the record was always for.
+
+**The worst finding costs a rank, and the career continues.** Kirk's
+court-martial after the Genesis affair (§21) ends in a guilty plea to
+disobeying a superior officer and a reduction in rank from Admiral to Captain
+— and the reduction is what puts him back on a ship. So the ceiling on a bad
+verdict is a demotion rather than an ending, and a demotion is not a defeat
+state: he goes on to command for years afterwards. A board that could end a
+career at the first bad week would be a harsher service than the one depicted.
+
+The corollary matters for the game's floor. A reduction that took a captain
+below Captain would take away the starship, which the campaign is entirely
+about; Kirk is reduced *to* Captain and no further, and that is where the
+mechanic should stop too.
+
+Sources: [Memory Alpha — Court Martial (episode)](https://memory-alpha.fandom.com/wiki/Court_Martial_(episode)),
+[Memory Alpha — Starbase 11](https://memory-alpha.fandom.com/wiki/Starbase_11),
+[Memory Alpha — court martial](https://memory-alpha.fandom.com/wiki/Court_martial),
+[Memory Alpha — James T. Kirk](https://memory-alpha.fandom.com/wiki/James_T._Kirk)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

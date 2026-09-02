@@ -47,6 +47,7 @@ import { EPISODES } from '../missions/episodes/index.js';
 import { Character, FEAT_BY_ID } from '../rules/character.js';
 import { Reputation, REP_TRACKS } from '../rules/reputation.js';
 import { DifficultySettings, DEFAULT_DIFFICULTY } from '../rules/difficulty.js';
+import { convene, findingFor } from '../rules/inquiry.js';
 import { CampaignClock, absenceReport, COMMISSION_DAYS } from '../campaign/clock.js';
 
 /**
@@ -377,6 +378,24 @@ export class Game {
    */
   awardXP(amount, { silent = false } = {}) {
     const promo = this.progress.addXP(amount, { ledger: this.ledger });
+    // A promotion earned and held is worth saying. `addXP` has always returned
+    // {blocked: true} and nobody read it, so a captain under inquiry simply saw
+    // his rank stop moving with no explanation offered anywhere.
+    //
+    // Once, not on every award: xp arrives from combat, missions and duty
+    // details, and repeating it would be a log full of the same sentence.
+    if (promo?.blocked) {
+      if (!this.promotionHeld) {
+        this.promotionHeld = true;
+        const would = findingFor(this.ledger);
+        this.pushLog(
+          'You have earned the next rank, Captain, and the board of inquiry is '
+          + `holding it. On the record as it stands the finding would be: ${would.label.toLowerCase()}.`,
+          'comms',
+        );
+      }
+      return promo;
+    }
     if (!promo?.promoted) return promo ?? null;
 
     this.character?.levelUp();
@@ -2341,7 +2360,26 @@ export class Game {
     this.clock.advanceStardate(damaged ? 2.5 : 0.5);
     this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`, 'engineering');
     emit('docked', this.location);
-    return { ok: true };
+    // A board of inquiry sits ashore, not on patrol (RESEARCH.md §22). This is
+    // the only way one ever concludes: before this, the flag that suspends
+    // promotion was set in one place and cleared in none, so three Prime
+    // Directive violations froze the rank ladder for the rest of a five-year
+    // commission — under a screen promising it lasted only until the board
+    // concluded.
+    const finding = convene(this);
+    if (finding) {
+      // A rank held by a closed board can be earned again, and should be said
+      // again if a second board ever holds it.
+      this.promotionHeld = false;
+      // Two days for it. A hearing is not a formality you attend between
+      // resupply and departure.
+      this.clock.advanceStardate(2);
+      this.pushLog(finding.text, 'comms');
+      if (finding.reducedTo) {
+        this.pushLog(`Your rank is now ${finding.reducedTo}.`, 'captain');
+      }
+    }
+    return { ok: true, finding: finding ?? null };
   }
 
   // ------------------------------------------------------------------ tick
@@ -2458,10 +2496,15 @@ export class Game {
         system: this.locationId,
       });
       // The reckoning, and it costs something real before the ship arrives.
-      this.ledger.adjustStanding('federation', -12, 'Board of inquiry: loss of a starship');
+      this.ledger.adjustStanding('federation', -12, 'Loss of a starship');
+      // And an actual board, which this used to promise in the next line and
+      // never convene: the flag was never set, so a captain could lose the
+      // Enterprise and be promoted to Fleet Captain the same day. It sits when
+      // he next makes port (RESEARCH.md §22).
+      this.ledger.openInquiry(`the loss of ${lost}`);
       this.pushLog(
-        `${lost} is gone, Captain. There will be a board of inquiry, and it is `
-        + 'already on your record.',
+        `${lost} is gone, Captain. There will be a board of inquiry when we next `
+        + 'put in, and it is already on your record.',
         'comms',
       );
       const took = takeCommandOf(this, board.id);

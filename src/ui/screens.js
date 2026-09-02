@@ -22,6 +22,7 @@ import { SCENARIO as KOBAYASHI, GAMBIT_TIER } from '../missions/kobayashi.js';
 import { MODES } from '../core/state.js';
 import { SUBSYSTEMS, SUBSYSTEM_LABEL, PRESET_LIST } from '../sim/power.js';
 import { SKILLS, BRANCHES, BRANCH_LABEL, RANKS } from '../sim/skills.js';
+import { findingFor, venueFor, sitsAt } from '../rules/inquiry.js';
 import { CONSOLES, SET_LIST } from '../sim/loadout.js';
 import { TIERS, TRAIT_LIST } from '../sim/mastery.js';
 import { ABILITIES } from '../sim/officers.js';
@@ -289,8 +290,19 @@ export function chairConsole(app) {
     actions.push(button('Request docking', tap(() => {
       const r = g.dock();
       if (r.ok) { audio.play('dock'); haptic('confirm'); }
+      // A board of inquiry concluding is not a thing to leave in the log
+      // strip. It can cost a rank.
+      if (r.finding) app.showMessage('Board of Inquiry', [r.finding.text].concat(r.finding.reducedTo ? [`Your rank is now ${r.finding.reducedTo}.`] : []));
       app.render();
-    }, 'ui_confirm'), { say: 'request docking', color: 'green', sub: 'Full repair, resupply, and crew replacement' }));
+    }, 'ui_confirm'), {
+      say: 'request docking',
+      color: 'green',
+      // The board sits ashore, so putting in is what convenes it. Said on the
+      // button, because a captain choosing to dock is choosing to be tried.
+      sub: g.ledger.inquiryOpen && sitsAt(g.location)
+        ? `Full repair and resupply — and the board of inquiry sits. Likely finding: ${findingFor(g.ledger).label.toLowerCase()}.`
+        : 'Full repair, resupply, and crew replacement',
+    }));
   }
   actions.push(button('Set course', tap(() => app.go('galaxy')), { color: 'blue', sub: 'Plot a course to another system' }));
   actions.push(button('Long-range scan', tap(() => {
@@ -1170,9 +1182,32 @@ export function captainScreen(app) {
         g.ledger.serviceScore() >= 20 ? 'green' : g.ledger.serviceScore() < -20 ? 'red' : ''),
       pill(`Score ${g.ledger.serviceScore()}`),
     ]),
-    g.ledger.inquiryOpen
-      ? el('p', { class: 'muted', text: 'A board of inquiry is open. Promotion is suspended until it concludes.' })
-      : null,
+    // What the board is about, where it sits, and what it would find on the
+    // record as it stands. It used to say only that promotion was suspended
+    // "until it concludes" — and nothing in the game concluded one, so the
+    // sentence was a promise the game would not keep and the rank ladder was
+    // frozen for the rest of the commission. RESEARCH.md §22.
+    ...(g.ledger.inquiryOpen ? [
+      el('p', {
+        class: 'muted',
+        text: `A board of inquiry into ${g.ledger.inquiryReason ?? 'your command record'} is open. `
+          + 'Promotion is suspended until it sits, and it sits when you put in at '
+          + `${venueFor(g)?.name ?? 'a Federation starbase'}.`,
+      }),
+      el('p', {
+        class: 'hint',
+        text: `On the record as it stands the finding would be: ${findingFor(g.ledger).label.toLowerCase()}.`
+          + (findingFor(g.ledger).verdict === 'reduced'
+            ? ' A better record between now and then is the only thing that changes it.'
+            : ''),
+      }),
+    ] : []),
+    // And the findings of boards already held, because an exoneration is worth
+    // having on paper too.
+    ...(g.ledger.findings ?? []).slice(-3).map((f) => el('p', {
+      class: 'muted',
+      text: `Board of inquiry into ${f.reason}: ${f.label}.`,
+    })),
   ], g.ledger.inquiryOpen ? 'danger' : 'accent'));
 
   // --- Skills ---

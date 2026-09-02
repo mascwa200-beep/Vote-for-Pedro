@@ -3220,6 +3220,100 @@ try {
   check('the character sheet lists all six abilities', sheetAbilities === 6, `${sheetAbilities}`);
   await page.screenshot({ path: join(SHOTS, '12-character-sheet.png') });
 
+  // ------------------------------------------------ the board of inquiry
+  //
+  // Losing a ship printed "there will be a board of inquiry" and held none,
+  // while the one flag that did open a board was cleared nowhere — so the
+  // screen's "suspended until it concludes" froze the rank ladder for the rest
+  // of a commission. Both halves are driven here, through the real screens.
+  const boardOpened = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { RANKS } = await import('./src/sim/skills.js');
+    // A commodore with a poor record, so the board has a rank to take.
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'commodore');
+    for (let i = 0; i < 4; i++) g.ledger.record('prime_directive_violation', { text: 'v' });
+    g.loseTheShip();
+    // The Service Record lives under 'Record', not 'Captain' — that tab is the
+    // character sheet.
+    app.go('captain');
+    app.render();
+    const { venueFor, sitsAt } = await import('./src/rules/inquiry.js');
+    const venue = venueFor(g);
+    const text = document.body.textContent ?? '';
+    return {
+      open: g.ledger.inquiryOpen,
+      rank: g.progress.rank.name,
+      venue: venue?.name ?? null,
+      namesTheBoard: /board of inquiry into/i.test(text),
+      saysWhereItSits: new RegExp(`put in at ${venue?.name}`, 'i').test(text),
+      warnsOfTheFinding: /the finding would be/i.test(text),
+      // The summons has ordered captains to Starbase 11 since long before any
+      // board could sit; it must name somewhere the board will actually be.
+      summonsNamesVenue: sitsAt(venue)
+        && new RegExp(`ordered to ${venue.name}`, 'i').test(text),
+    };
+  });
+  check('losing a ship opens a board of inquiry the screen names',
+    boardOpened.open && boardOpened.namesTheBoard, JSON.stringify(boardOpened));
+  check('and the screen says where it sits and what it would find',
+    boardOpened.saysWhereItSits && boardOpened.warnsOfTheFinding, JSON.stringify(boardOpened));
+  check('and Starfleet orders him to a starbase that will actually hear him',
+    boardOpened.summonsNamesVenue, JSON.stringify(boardOpened));
+  // The summons covers the panel, so it is read first and dismissed before the
+  // photograph — a screenshot of a modal is not a photograph of the record.
+  await dismissModals(page);
+  await page.screenshot({ path: join(SHOTS, '12b-board-of-inquiry.png') });
+
+  // Sitting it, by SAYING it — the board convenes ashore, so docking is the
+  // whole interaction and there is no button of its own to speak.
+  const boardSat = await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    const { venueFor } = await import('./src/rules/inquiry.js');
+    const port = venueFor(g);
+    g.locationId = port.id;
+    g.ship.hull = g.ship.maxHull;
+    // The docking button is on the chair console — the captain's own station,
+    // not the bridge view.
+    globalThis.__app.go('chair');
+    globalThis.__app.render();
+    return { port: port.name, warnsOnTheButton: /the board of inquiry sits/i.test(document.body.textContent ?? '') };
+  });
+  check('and the docking button says the board will sit',
+    boardSat.warnsOnTheButton, JSON.stringify(boardSat));
+  await page.fill('.orderbar input', 'request docking');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(400);
+  const verdict = await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    return {
+      stillOpen: g.ledger.inquiryOpen,
+      findings: g.ledger.findings.length,
+      verdict: g.ledger.findings[0]?.verdict ?? null,
+      rank: g.progress.rank.name,
+      onScreen: /Board of Inquiry/i.test(document.body.textContent ?? ''),
+    };
+  });
+  check('putting in sits the board and it concludes',
+    !verdict.stillOpen && verdict.findings === 1, JSON.stringify(verdict));
+  check('and a captain found against loses the rank, on a screen of its own',
+    verdict.verdict === 'reduced' && verdict.rank === 'Fleet Captain' && verdict.onScreen,
+    JSON.stringify(verdict));
+  await page.screenshot({ path: join(SHOTS, '12c-the-finding.png') });
+  await dismissModals(page);
+  // Put the captain back: a check that leaves the bridge changed breaks its
+  // neighbours, which is how the main-viewer threshold was tripped earlier.
+  await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    const { RANKS } = await import('./src/sim/skills.js');
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'captain');
+    g.ledger.counters.prime_directive_violation = 0;
+    g.ledger.counters.ship_lost = 0;
+    g.ledger.findings = [];
+    g.shipsLost = 0;
+    globalThis.__app.render();
+  });
+
   await nav(page, 'Rep');
   const repPanels = await page.locator('.panel').count();
   check('the reputation screen renders every track', repPanels >= 6, `${repPanels} panels`);
