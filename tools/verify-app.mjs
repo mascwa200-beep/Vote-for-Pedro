@@ -2282,6 +2282,22 @@ try {
   await dismissModals(page);
 
   // Exercise real tactical controls.
+  //
+  // Make sure there is a fight to exercise them in. The engagement these
+  // checks use was started some six hundred lines earlier, and everything
+  // between here and there keeps the clock running — so whether it was still
+  // alive at this point came down to how that fight happened to go. When it
+  // had already ended, `g.engagement` was null, the targeting order landed
+  // nowhere, and the check reported `undefined` for reasons that had nothing
+  // to do with targeting. It failed on one run and passed on the next with the
+  // identical build, which is the shape of a flake and not of a bug.
+  await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    if (g.engagement && !g.engagement.over) return;
+    const { Ship } = await import('./src/sim/ship.js');
+    g.startCombat([new Ship('d7', { name: 'Klingon cruiser' })], { relentless: true });
+  });
+  await page.waitForTimeout(200);
   await page.evaluate(() => globalThis.__app.executeOrder(
     { action: 'target_subsystem', subsystem: 'engines' }, 'target their engines'));
   await page.evaluate(() => globalThis.__app.executeOrder({ action: 'preset', preset: 'attack' }, 'attack power'));
@@ -3002,6 +3018,46 @@ try {
     refused.offerGone && refused.stillHers === command.was.name
       && refused.tier === command.was.tier,
     `${JSON.stringify(refused)} vs ${JSON.stringify(command.was)}`);
+
+  // And a refusal is not binding for the rest of the commission. Starfleet
+  // stops raising it; the captain can raise it again himself.
+  const reopened = await page.evaluate(() => {
+    window.__app.render();
+    return { buttonOffered: /Ask Starfleet for a new command/i.test(document.body.textContent ?? '') };
+  });
+  check('after refusing, the screen offers a way back to the conversation',
+    reopened.buttonOffered, JSON.stringify(reopened));
+
+  await page.fill('.orderbar input', 'ask starfleet for a new command');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(200);
+  await nav(page, 'Ship');
+  const asked = await page.evaluate(() => {
+    const g = window.__app.game;
+    window.__app.render();
+    return {
+      offer: g.commandOffer?.name ?? null,
+      onScreen: /Starfleet offers you a command/i.test(document.body.textContent ?? ''),
+      refusalsCleared: (g.declinedCommands ?? []).length === 0,
+    };
+  });
+  check('and asking for one brings the offer back',
+    !!asked.offer && asked.onScreen && asked.refusalsCleared, JSON.stringify(asked));
+  await page.evaluate(() => {
+    const head = [...document.querySelectorAll('.panel')]
+      .find((el) => /Starfleet offers you a command/i.test(el.textContent ?? ''));
+    head?.scrollIntoView({ block: 'center' });
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '06f-asked-again.png') });
+  // Put the bridge back: a check that leaves the world changed breaks its
+  // neighbours, which is how the main-viewer threshold was tripped earlier.
+  await page.evaluate(() => {
+    const g = window.__app.game;
+    g.commandOffer = null;
+    g.declinedCommands = [];
+    window.__app.render();
+  });
 
   // NOW put the bridge back the way it was found. A check that leaves the ship
   // four light years from where the next one expects it breaks its neighbours,

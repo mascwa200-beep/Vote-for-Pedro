@@ -46,16 +46,37 @@ export function rungOf(classId) {
 /**
  * The next command Starfleet would offer, or null.
  *
- * One rung at a time, and never above the captain's rank. A lieutenant does not
- * get a Galaxy because a Galaxy exists.
+ * The BEST hull the captain's rank allows above the one being flown — not the
+ * next one up the ladder. Taking the first match meant a rear admiral who had
+ * once turned down a refit was offered the same refit again, rather than the
+ * Galaxy his rank had since earned him: the offer never improved, however far
+ * the career went.
+ *
+ * Never above the rank, though. A lieutenant does not get a Galaxy because a
+ * Galaxy exists.
+ *
+ * Refusals are remembered, because a captain who has said no to a hull should
+ * not be asked about that same hull at every promotion for the rest of his
+ * career: it was put to him six times over the rank ladder before this.
+ *
+ * And nothing at or below a hull he has refused is offered either. Skipping
+ * only the exact class meant that turning down an Ambassador produced an offer
+ * of an Excelsior at the next promotion — four hundred tonnes SMALLER, as
+ * though Starfleet were haggling. Saying no to the best available ship does not
+ * make a worse one attractive; it means waiting until there is something better
+ * than the one refused.
  */
 export function nextCommandFor(game) {
   const here = rungOf(game.ship?.classId);
   const tier = game.progress?.shipTier ?? 1;
-  for (let i = here + 1; i < COMMAND_LADDER.length; i++) {
-    if (COMMAND_LADDER[i].tier <= tier) return COMMAND_LADDER[i];
+  const refusedAt = (game.declinedCommands ?? [])
+    .reduce((hi, id) => Math.max(hi, rungOf(id)), -1);
+  const floor = Math.max(here, refusedAt);
+  let best = null;
+  for (let i = floor + 1; i < COMMAND_LADDER.length; i++) {
+    if (COMMAND_LADDER[i].tier <= tier) best = COMMAND_LADDER[i];
   }
-  return null;
+  return best;
 }
 
 /**
@@ -159,6 +180,8 @@ export function declineCommandOffer(game) {
   const offer = game.commandOffer;
   if (!offer) return { ok: false, reason: 'There is nothing to turn down, Captain.' };
   game.commandOffer = null;
+  // Remembered, so the same hull is not put to him again at every promotion.
+  game.declinedCommands = [...new Set([...(game.declinedCommands ?? []), offer.classId])];
   game.ledger?.record('command_declined', {
     text: `Turned down a ${offer.name} to stay with ${game.ship.name}`,
   });

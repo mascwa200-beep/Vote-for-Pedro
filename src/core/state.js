@@ -146,6 +146,7 @@ export class Game {
     // Hulls this career has cost, and any standing offer of another.
     this.shipsLost = 0;
     this.commandOffer = null;
+    this.declinedCommands = [];
     this.ship = new Ship(classId, {
       name: options.shipName ?? 'Enterprise',
       registry: options.registry ?? FEDERATION_REGISTRIES[0],
@@ -420,6 +421,43 @@ export class Game {
       this.pushLog(`We stay with ${r.kept}, Captain. Starfleet is informed.`, 'captain');
     }
     return r;
+  }
+
+  /**
+   * Ask Starfleet whether there is a ship going, after all.
+   *
+   * Refusing a command stops Starfleet raising it again, which is right — it
+   * was being put to the captain at every promotion for the rest of his career.
+   * But a captain who turns down the best hull his rank carries would then
+   * never be offered anything again for the whole commission, and a decision
+   * made once at Fleet Captain should not be binding at Admiral.
+   *
+   * So the refusals lapse when he asks. All of them, rather than some subtler
+   * subset: he has reopened the conversation, and a rule about which of his
+   * old refusals still counted would be impossible to explain on a screen.
+   *
+   * @returns {{ok: boolean, reason?: string, offer?: object}}
+   */
+  requestCommand() {
+    if (this.commandOffer) {
+      return {
+        ok: false,
+        reason: `Starfleet has already offered you a ${this.commandOffer.name}, Captain.`,
+      };
+    }
+    this.declinedCommands = [];
+    const offer = offerCommand(this);
+    if (!offer) {
+      return {
+        ok: false,
+        reason: `There is nothing above ${this.ship.name} that your rank would carry, Captain.`,
+      };
+    }
+    this.pushLog(
+      `Starfleet has a ${offer.name} going, Captain, and your name is on the list.`,
+      'comms',
+    );
+    return { ok: true, offer };
   }
 
   /**
@@ -2488,6 +2526,7 @@ export class Game {
       // first ship or lose an offer that was made.
       shipsLost: this.shipsLost ?? 0,
       commandOffer: this.commandOffer ?? null,
+      declinedCommands: this.declinedCommands ?? [],
       assignments: this.assignments ?? [],
       devices: this.devices,
       kobayashiRuns: this.kobayashiRuns ?? 0,
@@ -2966,6 +3005,11 @@ export class Game {
     // the captain aboard something the registry has never heard of.
     g.commandOffer = data.commandOffer?.classId && getShipClass(data.commandOffer.classId)
       ? data.commandOffer : null;
+    // Hulls this captain has already turned down. Filtered to classes that
+    // exist, for the same reason the offer is: a record naming a ship the
+    // registry has never heard of would silently narrow what is offered.
+    g.declinedCommands = Array.isArray(data.declinedCommands)
+      ? data.declinedCommands.filter((id) => getShipClass(id)) : [];
     g.devices = data.devices ?? {};
     g.kobayashiRuns = data.kobayashiRuns ?? 0;
 

@@ -39,7 +39,7 @@ import {
   beginAssignment, advanceAssignments, dutySlots, specialistBonusFor,
 } from '../src/sim/duty.js';
 import { TIERS, TRAIT_LIST, SHAKEDOWN } from '../src/sim/mastery.js';
-import { offerCommand, COMMAND_LADDER } from '../src/sim/command.js';
+import { offerCommand, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { getShipClass } from '../src/world/ships.data.js';
 import { RANKS } from '../src/sim/skills.js';
 import { ROOMS } from '../src/world/interiors.data.js';
@@ -2232,5 +2232,140 @@ describe('losing her, and being taken off her', () => {
   test('both halves are sayable', () => {
     assert.equal(parseOrder('take the new command').action, 'take_command');
     assert.equal(parseOrder('stay with this ship').action, 'keep_command');
+  });
+});
+
+describe('Starfleet does not ask the same question twice', () => {
+  const commissioned = () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'captain');
+    return g;
+  };
+
+  test('a hull that was turned down is not offered again', () => {
+    const g = commissioned();
+    const first = offerCommand(g);
+    assert.ok(first, 'a captain was offered nothing');
+    g.declineCommand();
+    // Same rank, asked again: there is nothing new to say.
+    assert.equal(offerCommand(g)?.classId, undefined,
+      'the same ship was put to him again at the same rank');
+  });
+
+  test('and neither is a smaller one', () => {
+    // Turning down an Ambassador used to produce an Excelsior at the next
+    // promotion — four hundred tonnes smaller, as though Starfleet were
+    // haggling.
+    const g = commissioned();
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'fleet_captain');
+    const offered = offerCommand(g);
+    assert.ok(offered, 'a fleet captain was offered nothing');
+    g.declineCommand();
+    const next = offerCommand(g);
+    if (next) {
+      assert.ok(getShipClass(next.classId).hull > getShipClass(offered.classId).hull,
+        `turned down a ${offered.name} and was offered a ${next.name}`);
+    }
+  });
+
+  test('but a better one still comes when the rank earns it', () => {
+    const g = commissioned();
+    const first = offerCommand(g);
+    g.declineCommand();
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'rear_admiral');
+    const later = offerCommand(g);
+    assert.ok(later, 'a rear admiral who once said no was never asked again');
+    assert.ok(getShipClass(later.classId).hull > getShipClass(first.classId).hull,
+      `refused a ${first.name} and was later offered a ${later.name}`);
+  });
+
+  test('a whole career of refusals is three questions, not six', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    const seen = [];
+    for (let i = 0; i < RANKS.length; i++) {
+      g.progress.rankIndex = i;
+      const o = offerCommand(g);
+      if (!o) continue;
+      seen.push(o.classId);
+      g.declineCommand();
+    }
+    assert.equal(new Set(seen).size, seen.length, `the same hull twice: ${seen.join(', ')}`);
+    assert.ok(seen.length <= 4, `${seen.length} offers across one career: ${seen.join(', ')}`);
+    // And each one bigger than the last.
+    for (let i = 1; i < seen.length; i++) {
+      assert.ok(getShipClass(seen[i]).hull > getShipClass(seen[i - 1]).hull,
+        `${seen[i - 1]} then ${seen[i]}`);
+    }
+  });
+
+  test('refusals survive a save', () => {
+    const g = commissioned();
+    offerCommand(g);
+    g.declineCommand();
+    const loaded = Game.load(g.save());
+    assert.deepEqual(loaded.declinedCommands, g.declinedCommands, 'the refusal was forgotten');
+    assert.equal(offerCommand(loaded), null, 'the loaded game asked again immediately');
+  });
+
+  test('and a record cannot name a hull that does not exist', () => {
+    const g = commissioned();
+    const record = g.save();
+    record.declinedCommands = ['galaxy', 'not_a_real_class'];
+    const loaded = Game.load(record);
+    assert.deepEqual(loaded.declinedCommands, ['galaxy'], 'an invented class was kept');
+  });
+
+  // A refusal stops Starfleet asking. It does not bind the captain forever.
+
+  test('a captain can reopen a conversation he closed', () => {
+    const g = commissioned();
+    const refused = offerCommand(g);
+    g.declineCommand();
+    assert.equal(offerCommand(g), null, 'Starfleet raised it again on its own');
+
+    const r = g.requestCommand();
+    assert.ok(r.ok, r.reason);
+    assert.ok(g.commandOffer, 'asking produced no offer');
+    assert.equal(g.commandOffer.classId, refused.classId,
+      'asking at the same rank produced something other than the best available');
+  });
+
+  test('and what comes back is the best his rank carries, not the one refused', () => {
+    const g = commissioned();
+    const refused = offerCommand(g);
+    g.declineCommand();
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'rear_admiral');
+
+    assert.ok(g.requestCommand().ok, 'a rear admiral was told there was nothing');
+    assert.ok(
+      getShipClass(g.commandOffer.classId).hull > getShipClass(refused.classId).hull,
+      `refused a ${refused.name} and asking got a ${g.commandOffer.name}`,
+    );
+  });
+
+  test('asking twice is not a way to reroll the offer', () => {
+    const g = commissioned();
+    offerCommand(g);
+    const standing = g.commandOffer.classId;
+    const r = g.requestCommand();
+    assert.equal(r.ok, false, 'asked again over a standing offer');
+    assert.match(r.reason ?? '', /already offered/i, `the refusal said "${r.reason}"`);
+    assert.equal(g.commandOffer.classId, standing, 'the standing offer changed');
+  });
+
+  test('and a captain already flying the best available is told so', () => {
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    // Top of the ladder, top of the rank: there is nothing above her.
+    g.progress.rankIndex = RANKS.findIndex((r) => r.id === 'admiral');
+    takeCommandOf(g, 'galaxy');
+    const r = g.requestCommand();
+    assert.equal(r.ok, false, 'was offered something above a Galaxy');
+    assert.match(r.reason ?? '', new RegExp(g.ship.name, 'i'),
+      `the refusal did not name the ship: "${r.reason}"`);
+  });
+
+  test('the whole conversation is sayable', () => {
+    assert.equal(parseOrder('ask starfleet for a new command').action, 'request_command');
+    assert.equal(parseOrder('is there another ship').action, 'request_command');
   });
 });

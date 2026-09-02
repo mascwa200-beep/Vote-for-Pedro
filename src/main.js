@@ -1705,6 +1705,13 @@ class App {
         this.render();
         break;
       }
+      case 'request_command': {
+        const r = g.requestCommand();
+        if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
+        audio.play('computer_ack');
+        this.render();
+        break;
+      }
       case 'keep_command': {
         const r = g.declineCommand();
         if (!r.ok) { audio.play('ui_deny'); ack('comms', r.reason); break; }
