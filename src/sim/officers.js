@@ -106,7 +106,14 @@ export const ABILITIES = {
   brace_for_impact: {
     id: 'brace_for_impact', dept: 'command', rank: 1, name: 'Brace for Impact',
     order: 'All hands brace for impact', cooldown: 40, duration: 12,
-    mods: { damageResist: 0.25 }, special: 'brace',
+    // No `special`. It carried one — 'brace' — that nothing anywhere read, and
+    // the ability was fine without it: the damage resistance applies through
+    // the generic mods path. A tag that means nothing is how `multitarget`
+    // went unnoticed on Fire at Will, where the missing handler cost the
+    // captain 20% of his gunnery for nothing. `tests/wiring.test.js` now fails
+    // if any declared special has no handler, and this had to go for that to
+    // be true.
+    mods: { damageResist: 0.25 },
     say: 'All hands, brace for impact!',
   },
   rally_crew: {

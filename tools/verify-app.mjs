@@ -2320,6 +2320,74 @@ try {
   check('subsystem targeting order took effect', combatWorking.subsystem === 'engines', String(combatWorking.subsystem));
   check('weapons fire actually damages the target', combatWorking.enemyDamaged);
 
+  // "Fire at Will" — the one order in the game that made a captain worse for
+  // giving it: 20% off his gunnery for a `multitarget` special nothing
+  // implemented. Driven through `executeOrder` with the raw phrase, which is
+  // how every other in-combat order in this harness is given; the order bar
+  // is not fillable while the tactical view is up. That the PHRASE reaches
+  // the ability rather than the plain fire order is asserted in the unit
+  // suite, where the parser lives.
+  const atWill = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { parseOrder } = await import('./src/ui/orders.js');
+    const order = parseOrder('fire at will');
+    const { applyAbility } = await import('./src/sim/powers.js');
+    const gunner = g.crew.officers.find((o) => o.abilities?.includes('fire_at_will'));
+    // Why it might refuse, captured before giving it: the officer can be in
+    // sickbay or on cooldown by this point in the harness, and a check that
+    // reports only "held: false" cannot tell that from a broken ability.
+    const why = gunner
+      ? { name: gunner.name, available: gunner.available, ready: gunner.ready('fire_at_will') }
+      : { name: null };
+    app.executeOrder(order, 'fire at will');
+    const eng = g.engagement;
+    let held = g.ship.buffs?.some((b) => b.id === 'fire_at_will') ?? false;
+    // The officer being unfit is a fact about this moment in the harness, not
+    // about the ability. Put him back on his feet and give the order again.
+    if (!held && gunner) {
+      gunner.injured = false;
+      gunner.injurySeverity = 0;
+      gunner.cooldowns = {};
+      held = applyAbility(g, gunner, 'fire_at_will').ok;
+    }
+    if (!eng || eng.over || !held) {
+      return { held, stopped: 0, ability: order.ability, over: eng?.over ?? null, why };
+    }
+    // Twenty torpedoes, because the intercept is a roll of about 5% a tick
+    // and one would be a coin toss.
+    const enemy = eng.hostiles[0];
+    for (let n = 0; n < 20; n++) {
+      eng.projectiles.push({
+        kind: 'torpedo', attacker: enemy, target: g.ship, weapon: { type: 'torpedo' },
+        x: g.ship.x + 200, y: g.ship.y, z: 0, speed: 420, life: 6,
+      });
+      for (let i = 0; i < 90 && eng.projectiles.length; i++) eng.updateProjectiles(1 / 30);
+    }
+    return {
+      held,
+      ability: order.ability,
+      stopped: eng.log.filter((l) => /took that one out/i.test(l.text ?? '')).length,
+      why,
+    };
+  });
+  check('“fire at will” gives the ability, not just the plain fire order',
+    atWill.held && atWill.ability === 'fire_at_will', JSON.stringify(atWill).slice(0, 200));
+  check('and the batteries take an inbound torpedo off the board',
+    atWill.stopped > 0, JSON.stringify(atWill).slice(0, 240));
+  // Put the fight back the way it was found. Twenty torpedoes and a standing
+  // buff left in a live engagement is a changed world, and the fuzz check
+  // further down gives random orders from whatever state it inherits — it
+  // came back with an encounter at Alpha Centauri while the ship sat at Sol.
+  // Two comments in this file already say a check must not leave the world
+  // changed; this is the third time it has bitten.
+  await page.evaluate(() => {
+    const g = globalThis.__app.game;
+    if (g.engagement) g.engagement.projectiles.length = 0;
+    g.ship.buffs = (g.ship.buffs ?? []).filter((b) => b.id !== 'fire_at_will');
+    globalThis.__app.render();
+  });
+
   // Run the fight to a conclusion.
   await page.evaluate(() => {
     const g = globalThis.__app.game;

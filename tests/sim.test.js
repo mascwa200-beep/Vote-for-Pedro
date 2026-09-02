@@ -14,6 +14,7 @@ import {
 import { CaptainProgress, RANKS } from '../src/sim/skills.js';
 import { Loadout, startingLoadout } from '../src/sim/loadout.js';
 import { Ledger } from '../src/core/ledger.js';
+import { on } from '../src/core/events.js';
 import { Galaxy, warpSpeed, travelHours, fuelCost, plotTransit } from '../src/world/galaxy.js';
 import { rollEncounter } from '../src/world/encounters.js';
 import { Mission, MissionBook } from '../src/missions/engine.js';
@@ -278,6 +279,114 @@ test('combat is reproducible from the same seed', () => {
     return { outcome: eng.outcome, hull: player.hull, enemyHull: enemy.hull };
   };
   assert.deepEqual(run(), run());
+});
+
+// ---- Fire at Will: the order that used to punish you for giving it --------
+//
+// It declared `special: 'multitarget'`, which nothing implemented, and carried
+// `mods: { damage: 0.8 }` — the PRICE of the spreading that never happened. So
+// the game's rank-1 tactical order was a 20% gunnery penalty and nothing else.
+
+/** A player under fire from one torpedo-armed hostile, at point-blank. */
+function torpedoDuel({ atWill, seed = 0x5150n }) {
+  const rng = new RNG(seed);
+  const player = new Ship('constitution', { isPlayer: true });
+  const enemy = new Ship('d7', { faction: 'klingon', name: 'IKS T' });
+  const eng = new Engagement(player, [enemy], rng);
+  if (atWill) {
+    player.addBuff({ id: 'fire_at_will', label: 'Fire at Will', until: 999, mods: {} });
+  }
+  return { eng, player, enemy };
+}
+
+test('“fire at will” reaches the ability, not the plain fire order', () => {
+  // The phrase is in the lexicon for the generic `fire` order as well, so the
+  // one a captain would actually say for this ability could have gone to
+  // plain firing instead. Abilities take precedence, with plain fire as the
+  // fallback — this is what says so.
+  const order = parseOrder('fire at will');
+  assert.equal(order.action, 'ability');
+  assert.equal(order.ability, 'fire_at_will');
+  assert.equal(order.fallback?.action, 'fire', 'the plain fire order is no longer the fallback');
+});
+
+test('point defence takes an inbound torpedo off the board', () => {
+  // Counted through the event, and the shot must never LAND. The first version
+  // of this test asserted only that the projectile was gone and the hull was
+  // whole — which a torpedo satisfies by arriving and being stopped by the
+  // screens, so it passed on code that had no point defence at all.
+  // Twenty torpedoes, not one. The intercept is a roll — about 5% a tick, and
+  // a torpedo crosses the envelope in nine — so a single-torpedo test is a
+  // coin toss dressed as an assertion, and the first version of this one
+  // failed on working code for that reason alone.
+  let stopped = 0;
+  let landed = 0;
+  const offA = on('combat:point-defence', () => { stopped++; });
+  const offB = on('combat:torpedo-impact', () => { landed++; });
+  for (let n = 0; n < 20; n++) {
+    const { eng, player, enemy } = torpedoDuel({ atWill: true, seed: 0x5150n + BigInt(n) });
+    eng.projectiles.push({
+      kind: 'torpedo', attacker: enemy, target: player, weapon: { type: 'torpedo' },
+      x: player.x + 200, y: player.y, z: 0, speed: 420, life: 6,
+    });
+    for (let i = 0; i < 90 && eng.projectiles.length; i++) eng.updateProjectiles(1 / 30);
+    assert.equal(eng.projectiles.length, 0, 'a torpedo is still out there');
+  }
+  offA?.(); offB?.();
+  assert.ok(stopped > 0, 'the batteries never engaged a single torpedo in twenty');
+  assert.equal(stopped + landed, 20,
+    `${stopped} stopped and ${landed} landed, of twenty fired`);
+});
+
+test('and without the order the same torpedo arrives', () => {
+  // Counted through the event rather than by looking for hull damage: a
+  // torpedo that arrives may be stopped by the screens, which is the shields
+  // doing their job and not the point defence doing anything.
+  const { eng, player, enemy } = torpedoDuel({ atWill: false });
+  let stopped = 0;
+  const off = on('combat:point-defence', () => { stopped++; });
+  eng.projectiles.push({
+    kind: 'torpedo', attacker: enemy, target: player, weapon: { type: 'torpedo' },
+    x: player.x + 120, y: player.y, z: 0, speed: 420, life: 6,
+  });
+  for (let i = 0; i < 60 && eng.projectiles.length; i++) eng.updateProjectiles(1 / 30);
+  off?.();
+  assert.equal(stopped, 0, 'point defence fired without the order being given');
+  assert.equal(eng.projectiles.length, 0, 'the torpedo never got anywhere');
+});
+
+test('point defence never touches the ship’s own torpedoes', () => {
+  // The batteries are swatting at what is coming IN. A spread of ours passing
+  // the saucer on its way out is not a threat.
+  const { eng, player, enemy } = torpedoDuel({ atWill: true });
+  let stopped = 0;
+  const off = on('combat:point-defence', () => { stopped++; });
+  eng.projectiles.push({
+    kind: 'torpedo', attacker: player, target: enemy, weapon: { type: 'torpedo' },
+    x: player.x + 60, y: player.y, z: 0, speed: 420, life: 6,
+  });
+  for (let i = 0; i < 60; i++) eng.updateProjectiles(1 / 30);
+  off?.();
+  assert.equal(stopped, 0, 'the ship shot down its own torpedo');
+});
+
+test('and it takes nothing away from the ship you are shooting at', () => {
+  // This is why point defence is the reading that works. Three others were
+  // built — dividing the banks between ships, and releasing out-of-arc banks
+  // with and without the damage penalty — and all three measured WORSE than
+  // not giving the order, because `fireWeapon` puts a bank on cooldown and a
+  // shot at a secondary steals a future shot at the primary.
+  const shotsIn = (atWill) => {
+    const rng = new RNG(0x2001n);
+    const player = new Ship('constitution', { isPlayer: true });
+    const enemy = new Ship('d7', { faction: 'klingon' });
+    const eng = new Engagement(player, [enemy], rng);
+    if (atWill) player.addBuff({ id: 'fire_at_will', label: 'FAW', until: 999, mods: {} });
+    for (let i = 0; i < 600 && !eng.over; i++) eng.update(1 / 30);
+    return eng.shotsFired;
+  };
+  assert.equal(shotsIn(true), shotsIn(false),
+    'giving the order changed how many shots the ship put out');
 });
 
 test('a weapon out of arc does not fire', () => {
