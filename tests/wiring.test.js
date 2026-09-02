@@ -11,7 +11,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -26,6 +26,7 @@ import { RNG } from '../src/core/rng.js';
 import { Character, CAREERS } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { CONSOLES, Loadout, SET_LIST, SETS } from '../src/sim/loadout.js';
+import { ABILITIES } from '../src/sim/officers.js';
 import { SHIP_CLASSES } from '../src/world/ships.data.js';
 import {
   RECIPES, MATERIAL_LIST, beginFabrication, advanceFabrication, salvageWreck,
@@ -1471,6 +1472,35 @@ describe('fabrication accounting', () => {
         assert.ok(Number.isFinite(g.stores[m]), `${m} = ${g.stores[m]} after ${recipe.id}`);
       }
     }
+  });
+
+  test('every ability special has something that reads it', () => {
+    // The guard that would have caught Fire at Will years earlier. It declared
+    // `special: 'multitarget'` and nothing anywhere implemented it, while its
+    // `mods: { damage: 0.8 }` — the PRICE of the spreading that never happened
+    // — applied through the generic path. So the game's rank-1 tactical order
+    // was a 20% gunnery penalty and nothing else: 0.28 kills against two D7s
+    // without it, 0.15 with.
+    //
+    // Same shape as the reputation ledger in rules.test.js: a thing declared
+    // in a table and connected to nothing.
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    let source = '';
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) { walk(path); continue; }
+        if (!entry.name.endsWith('.js')) continue;
+        // officers.js DECLARES the specials; naming one there is not reading it.
+        if (entry.name === 'officers.js') continue;
+        source += readFileSync(path, 'utf8');
+      }
+    };
+    walk(root);
+    const dead = [...new Set(Object.values(ABILITIES).map((a) => a.special).filter(Boolean))]
+      .filter((s) => !source.includes(`'${s}'`) && !source.includes(`"${s}"`));
+    assert.deepEqual(dead, [],
+      `abilities declare specials nothing implements: ${dead.join(', ')}`);
   });
 
   test('every device in the game can actually be had', () => {
