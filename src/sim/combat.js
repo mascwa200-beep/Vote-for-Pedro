@@ -70,7 +70,16 @@ export const POINT_DEFENCE_PER_SECOND = 1.6;
 export const ARENA_RADIUS = 2600;
 
 /** Every way a fight can finish. `end` accepts nothing else. */
-export const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+// `interrupted` is not something the simulation decides — it is what happens
+// when the game is SAVED with a fight still running. The autosave fires when
+// the app is backgrounded, which on a phone is a call arriving, and a fight
+// cannot be resumed from a save: Game.load says so out loud and means it.
+//
+// It is an ending rather than a special case because the alternative is what
+// used to happen. The engagement was simply not serialised, so the enemy
+// stopped existing while the hull kept every point of damage the fight had
+// cost, at normal alert, with no record that a battle had been fought at all.
+export const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed', 'interrupted'];
 
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 export const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
