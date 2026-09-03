@@ -13,7 +13,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 import { Game } from '../src/core/state.js';
 import { on } from '../src/core/events.js';
@@ -27,6 +27,7 @@ import { Character, CAREERS } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { CONSOLES, Loadout, SET_LIST, SETS } from '../src/sim/loadout.js';
 import { ABILITIES } from '../src/sim/officers.js';
+import { OUTCOMES } from '../src/sim/combat.js';
 import { SHIP_CLASSES } from '../src/world/ships.data.js';
 import {
   RECIPES, MATERIAL_LIST, beginFabrication, advanceFabrication, salvageWreck,
@@ -3134,5 +3135,74 @@ describe('every symbol the renderer exports is one something imports', () => {
     }
     assert.deepEqual(orphans, [],
       `${orphans.length} of ${total} exports under src/gfx have no importer anywhere`);
+  });
+});
+
+describe('the tests agree with combat about how a fight can end', () => {
+  // `OUTCOMES` in src/sim/combat.js is the list of endings a fight can have,
+  // and it is exported precisely so nothing has to restate it. Five places
+  // restated it anyway, four of them incompletely — including the file that
+  // imports the real one at the top and then declares its own copy further
+  // down, and a test whose comment promises to cover "however they reach it"
+  // while iterating four of the five.
+  //
+  // Same shape as DRAWN_EFFECTS before the cloak fix: a second list that has
+  // to be remembered, and is not.
+
+  const ROOT = join(HERE, '..');
+  const OUTCOME_FILES = [join(ROOT, 'src'), join(ROOT, 'tests'), join(ROOT, 'tools')];
+
+  const sources = (dir, out = []) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) sources(path, out);
+      else if (/\.(js|mjs)$/.test(entry.name)) out.push(path);
+    }
+    return out;
+  };
+
+  test('nobody keeps their own copy of the list of endings', () => {
+    const found = [];
+    for (const dir of OUTCOME_FILES) {
+      for (const file of sources(dir)) {
+        readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+          for (const m of line.matchAll(/\[([^\][]*)\]/g)) {
+            const quoted = [...m[1].matchAll(/['"]([a-z_]+)['"]/g)].map((q) => q[1]);
+            if (!quoted.length) continue;
+            // Only a literal made ENTIRELY of ending names is a copy of the
+            // list. A deliberate subset is written as a comparison in this
+            // project — `outcome === 'victory' || outcome === 'routed'`, three
+            // times in src/ — and never reaches this scrape at all, which is
+            // why a rule this blunt has no false positives to excuse.
+            if (!quoted.every((q) => OUTCOMES.includes(q))) continue;
+            // Two names is a pair being tested, not the list being copied.
+            if (quoted.length < 3) continue;
+            // Relative to the repo root, not carved out of the absolute path.
+            //
+            // This hunted for the string "Pedro" in the path and cut after the
+            // next slash, which works from a checkout at ~/Vote-for-Pedro and
+            // fails on CI, where the runner checks out to
+            // .../work/Vote-for-Pedro/Vote-for-Pedro/ — the first match is the
+            // wrong one, every path came out with a leading `Vote-for-Pedro/`,
+            // and the guard's own "did the scrape find the definition" check
+            // then failed on green code. A test that only passes from one
+            // directory is not a test.
+            found.push({ where: `${relative(ROOT, file)}:${i + 1}`, names: quoted });
+          }
+        });
+      }
+    }
+
+    // The definition itself has to be in there, or the scrape is broken rather
+    // than the code — this is the positive case that makes an empty result
+    // mean something.
+    const definition = found.filter((f) => f.where.startsWith('src/sim/combat.js'));
+    assert.equal(definition.length, 1, `the scrape did not find OUTCOMES where it is declared: ${JSON.stringify(found)}`);
+
+    const copies = found
+      .filter((f) => !f.where.startsWith('src/sim/combat.js'))
+      .map((f) => `${f.where} [${f.names.join(', ')}]`);
+    assert.deepEqual(copies, [],
+      `${copies.length} places keep their own copy of OUTCOMES instead of importing it`);
   });
 });

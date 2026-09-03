@@ -15322,6 +15322,19 @@ class Ship {
   }
 
   repair(amount) {
+    // A wreck is not a repair job.
+    //
+    // This added hull to any ship it was called on, a destroyed one included,
+    // so anything still running damage control on a dead hull produced a ship
+    // flagged `destroyed` with hull left — the exact state
+    // `ship.destroyed.hull` exists to forbid, and the one the comment on that
+    // rule calls "a wreck the AI still considers a threat". Worse, it
+    // persisted: the broken ship saved and loaded back in one piece, which is
+    // how the fuzzer found it — "a save loaded broken".
+    //
+    // `destroy()` is one-way on purpose. `restore()` is how a ship comes back,
+    // and it clears the flag; this never did.
+    if (this.destroyed) return this.hull;
     // Guarded, and never negative: `repair(-Infinity)` used to drive the hull
     // to -Infinity, which is a destroyed ship the game does not know is dead.
     const healed = clamp(amount, 0, this.maxHull);

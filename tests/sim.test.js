@@ -266,7 +266,7 @@ test('an engagement resolves to a decision and never hangs', () => {
   let steps = 0;
   while (!eng.over && steps < 30000) { eng.update(1 / 30); steps++; }
   assert.ok(eng.over, 'the engagement ended');
-  assert.ok(['victory', 'destroyed', 'routed', 'escaped'].includes(eng.outcome));
+  assert.ok(OUTCOMES.includes(eng.outcome), `'${eng.outcome}' is not an ending`);
 });
 
 test('combat is reproducible from the same seed', () => {
@@ -1210,6 +1210,33 @@ test('damage and repair cannot be poisoned by a bad number', () => {
     shipIsSane(b.ship, `repair(${v})`);
     assert.ok(b.ship.hull <= b.ship.maxHull + 1e-9, `repair(${v}) overfilled the hull`);
   }
+});
+
+test('a wreck cannot be repaired back into a ship', () => {
+  // Found by widening the API fuzzer to end fights every legal way rather than
+  // three of the five. `repair()` added hull to whatever it was called on, so
+  // a destroyed hull under damage control came back flagged `destroyed` with
+  // hull left — the one state `ship.destroyed.hull` exists to forbid, and the
+  // fuzzer's report was blunter than that: "a save loaded broken".
+  const s = new Ship('constitution', { isPlayer: true, name: 'Enterprise' });
+  s.destroy('test');
+  assert.equal(s.hull, 0, 'destroy() left hull behind');
+
+  s.repair(7);
+  assert.ok(s.destroyed, 'a repair un-destroyed the ship');
+  assert.equal(s.hull, 0, `repair() gave a wreck ${s.hull} hull back`);
+
+  // And it stays broken through the save, which is what made this more than a
+  // tidy-up: the corrupt ship persisted into the record.
+  const reloaded = Ship.load(s.save());
+  assert.ok(!(reloaded.destroyed && reloaded.hull > 1e-6),
+    `a destroyed ship saved with ${reloaded.hull} hull`);
+
+  // `restore()` is the way back, and it clears the flag rather than papering
+  // over it — the distinction the repair guard depends on.
+  s.restore();
+  assert.ok(!s.destroyed, 'restore() left the ship flagged destroyed');
+  assert.equal(s.hull, s.maxHull);
 });
 
 test('shield reinforcement cannot be poisoned by a bad number', () => {
