@@ -53,6 +53,46 @@ for (const list of Object.values(STATION_AFFINITY)) list.push('intercom');
  */
 
 /** @type {Intent[]} */
+/**
+ * Which of the three weapon types an order is asking for.
+ *
+ * ONE reader, because there were two. Either layer of the parser can be the one
+ * that hears "fire the forward phaser banks" — the regex table in
+ * src/ui/orders.js or this file's `fire` intent — and each carried its own copy
+ * of this. The table's own comment said what it wanted: "Guessing consistently
+ * is better than guessing differently in two places." The two places guessed
+ * differently, on seven of the fleet's forty-seven weapon names, and each was
+ * right about three of them. The table knew `disruptor`; this one knew
+ * `launcher`, `emitters`, `arrays` and the plurals. Neither knew both.
+ *
+ * CANNON IS READ FIRST. It is the only one of the three whose word is
+ * unambiguous across the fleet, and every cannon-type weapon in the game has
+ * "cannon", "pulse" or "lance" in its name. Read after `phaser`, the Defiant's
+ * primary armament — a pair of Pulse Phaser Cannons — fired the beam arrays
+ * instead, which is worse than not understanding, because it shoots.
+ *
+ * THE PLURALS ARE NOT DECORATION. `\bbeam\b` does not match "beams", and six
+ * hulls mount weapons named "... Beams".
+ *
+ * AND ONE IT CANNOT GET RIGHT. `disruptor`, `polaron`, `plasma` and `phaser`
+ * each name more than one weapon TYPE across the fleet, so a reader that only
+ * sees the words cannot resolve every case: the raider's "Salvaged Disruptors"
+ * are cannons and read as beams. Resolving that needs to know which ship is
+ * firing, and the parser is given the crew, not the ship. Guessing the same way
+ * everywhere is the part that is worth having.
+ *
+ * @param {string} text a normalised order line
+ * @returns {'torpedo'|'cannon'|'beam'|'all'}
+ */
+export function readWeaponType(text = '') {
+  if (/\b(?:torpedoe?s?|photons?|spread|launche?r?s?)\b/.test(text)) return 'torpedo';
+  if (/\b(?:cannons?|pulse|lance)\b/.test(text)) return 'cannon';
+  if (/\b(?:phasers?|beams?|lasers?|disruptors?|batter(?:y|ies)|arrays?|emitters?)\b/.test(text)) {
+    return 'beam';
+  }
+  return 'all';
+}
+
 export const INTENTS = [
   // ------------------------------------------------------------------
   // Navigation
@@ -560,25 +600,8 @@ export const INTENTS = [
       'build', 'fabricate', 'replicate', 'improvise', 'machine', 'salvage'],
     build: (c) => ({
       action: 'fire',
-      // Three weapon types, and this used to read two.
-      //
-      // `cannon` is in WEAPON_RANGE alongside beam and torpedo, and seven
-      // hulls mount one — the Defiant's primary armament is a pair of Pulse
-      // Phaser Cannons. There was no phrase that fired them: "fire cannons"
-      // fell through to `all`, and "fire the pulse phaser cannons" — the
-      // weapon's own NAME — matched `phaser` and fired the beam arrays
-      // instead, which is worse than not understanding, because it shoots.
-      //
-      // So cannon is read FIRST: it is the only one of the three whose word
-      // is unambiguous across the fleet, and every cannon-type weapon in the
-      // game has "cannon", "pulse" or "lance" in its name.
-      //
-      // The plurals are not decoration. `\bbeam\b` does not match "beams",
-      // and six hulls mount weapons named "... Beams".
-      weaponType: /\b(?:torpedoe?s?|photons?|spread|launche?r?s?)\b/.test(c.text) ? 'torpedo'
-        : /\b(?:cannons?|pulse|lance)\b/.test(c.text) ? 'cannon'
-        : /\b(?:phasers?|beams?|lasers?|batter(?:y|ies)|arrays?|emitters?)\b/.test(c.text) ? 'beam'
-        : 'all',
+      // See `readWeaponType`, which is the one copy of this rule.
+      weaponType: readWeaponType(c.text),
     }),
   },
   {
