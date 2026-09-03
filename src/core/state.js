@@ -3400,6 +3400,12 @@ export class Game {
       latinum: this.latinum,
       log: this.log.slice(-80),
       over: this.over ?? false,
+      // The alert condition is an order with a price on it, not a colour.
+      // `effectRepairs` pays `blue ? 0.18 : 0.12` of the hull and `blue ? 0.6
+      // : 0.8` stardate, so a captain who called maintenance stations and then
+      // closed the app came back at normal with every later repair worth a
+      // third less, and nothing to say why.
+      alert: this.alert,
       // The after-action record. Its own comment says it "survives the fight,
       // which is what an after-action report is for" — and it did not survive
       // a save, because nothing wrote it down. The panel that reads it in
@@ -3893,6 +3899,13 @@ export class Game {
     g.latinum = data.latinum ?? 500;
     g.log = data.log ?? [];
     g.over = data.over ?? false;
+    // The condition the captain left the ship in — unless the record caught a
+    // fight, in which case that fight is over by the time anyone reads this
+    // and battle stations with nobody to fight is worse than losing the order.
+    // The helm stands down with it, for the same reason.
+    g.alert = data.interruptedCombat ? 'normal' : (data.alert ?? 'normal');
+    if (data.interruptedCombat) g.ship.evasive = false;
+
     // A record written mid-battle wakes up with the battle accounted for. The
     // fight is not resumed — see the mode comment below — but the captain is
     // told the action was broken off rather than finding the enemy simply

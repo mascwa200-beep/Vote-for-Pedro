@@ -15363,6 +15363,15 @@ class Ship {
       // — undamaged by anything that followed, and never destroyed.
       breaching: this.breaching, breachTimer: this.breachTimer,
       destroyed: this.destroyed, destroyCause: this.destroyCause ?? null,
+      // The helm's standing orders, for the same reason the breach above is
+      // here: they are state, not decoration. Evasive multiplies the turn rate
+      // and buys 0.16 of a dodge, and an elevation order is the difference
+      // between coming at somebody from above and flying level. Both were
+      // given by the captain and neither survived a save, so closing the app
+      // quietly levelled the ship off and stopped it evading.
+      evasive: this.evasive,
+      desiredPitch: this.desiredPitch,
+      pitch: this.pitch,
       power: this.power.save(),
     };
   }
@@ -15378,6 +15387,9 @@ class Ship {
     }
 
     Object.assign(s, {
+      evasive: data.evasive ?? false,
+      desiredPitch: data.desiredPitch ?? 0,
+      pitch: data.pitch ?? 0,
       hull: data.hull, shieldsUp: data.shieldsUp ?? true,
       crew: data.crew, injured: data.injured ?? 0,
       torpedoes: data.torpedoes ?? s.torpedoes,
@@ -32229,6 +32241,12 @@ class Game {
       latinum: this.latinum,
       log: this.log.slice(-80),
       over: this.over ?? false,
+      // The alert condition is an order with a price on it, not a colour.
+      // `effectRepairs` pays `blue ? 0.18 : 0.12` of the hull and `blue ? 0.6
+      // : 0.8` stardate, so a captain who called maintenance stations and then
+      // closed the app came back at normal with every later repair worth a
+      // third less, and nothing to say why.
+      alert: this.alert,
       // The after-action record. Its own comment says it "survives the fight,
       // which is what an after-action report is for" — and it did not survive
       // a save, because nothing wrote it down. The panel that reads it in
@@ -32722,6 +32740,13 @@ class Game {
     g.latinum = data.latinum ?? 500;
     g.log = data.log ?? [];
     g.over = data.over ?? false;
+    // The condition the captain left the ship in — unless the record caught a
+    // fight, in which case that fight is over by the time anyone reads this
+    // and battle stations with nobody to fight is worse than losing the order.
+    // The helm stands down with it, for the same reason.
+    g.alert = data.interruptedCombat ? 'normal' : (data.alert ?? 'normal');
+    if (data.interruptedCombat) g.ship.evasive = false;
+
     // A record written mid-battle wakes up with the battle accounted for. The
     // fight is not resumed — see the mode comment below — but the captain is
     // told the action was broken off rather than finding the enemy simply

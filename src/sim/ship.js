@@ -871,6 +871,15 @@ export class Ship {
       // — undamaged by anything that followed, and never destroyed.
       breaching: this.breaching, breachTimer: this.breachTimer,
       destroyed: this.destroyed, destroyCause: this.destroyCause ?? null,
+      // The helm's standing orders, for the same reason the breach above is
+      // here: they are state, not decoration. Evasive multiplies the turn rate
+      // and buys 0.16 of a dodge, and an elevation order is the difference
+      // between coming at somebody from above and flying level. Both were
+      // given by the captain and neither survived a save, so closing the app
+      // quietly levelled the ship off and stopped it evading.
+      evasive: this.evasive,
+      desiredPitch: this.desiredPitch,
+      pitch: this.pitch,
       power: this.power.save(),
     };
   }
@@ -886,6 +895,9 @@ export class Ship {
     }
 
     Object.assign(s, {
+      evasive: data.evasive ?? false,
+      desiredPitch: data.desiredPitch ?? 0,
+      pitch: data.pitch ?? 0,
       hull: data.hull, shieldsUp: data.shieldsUp ?? true,
       crew: data.crew, injured: data.injured ?? 0,
       torpedoes: data.torpedoes ?? s.torpedoes,

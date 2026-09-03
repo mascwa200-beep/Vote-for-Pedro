@@ -2574,3 +2574,72 @@ describe('a fight interrupted by the phone is still a fight that happened', () =
       'the after-action record did not survive the save');
   });
 });
+
+describe('the conditions a captain sets outlive the app being closed', () => {
+  // The serializer is hand-written in both directions, so a field is carried
+  // only because somebody listed it twice. A round-trip diff of a lived-in
+  // game found three that nobody did — and all three are orders with
+  // mechanical weight, not decoration.
+  //
+  // The alert is the one that costs something. `effectRepairs` pays
+  // `blue ? 0.18 : 0.12` of the hull and `blue ? 0.6 : 0.8` stardate, so a
+  // captain who limps in, calls blue alert for maintenance stations and then
+  // takes a phone call comes back at normal — with every later repair worth a
+  // third less, silently, until they think to call it again.
+  //
+  // The mode reset beside these is deliberate and documented at length. These
+  // three were not documented at all, which is the difference between a
+  // decision and an oversight.
+
+  test('an alert condition, an evasive order and an elevation all come back', () => {
+    const g = new Game({ seed: 909n, crewMode: 'original' });
+    g.setAlert('blue');
+    g.ship.evasive = true;
+    g.ship.desiredPitch = -12;
+    for (let i = 0; i < 60; i++) g.update(STEP);
+
+    // The orders have to have taken, or the round trip proves nothing.
+    assert.equal(g.alert, 'blue', 'the alert was never set');
+    assert.equal(g.ship.evasive, true);
+    assert.equal(g.ship.desiredPitch, -12);
+    assert.ok(!g.engagement, 'no fight here — that case is the test below');
+
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(back.alert, 'blue', 'the ship stood down from maintenance stations by itself');
+    assert.equal(back.ship.evasive, true, 'the helm stopped evading without being told to');
+    assert.equal(back.ship.desiredPitch, -12, 'the helm levelled off without being told to');
+  });
+
+  test('and blue alert is worth something, which is why losing it matters', () => {
+    // The assertion that makes the one above more than bookkeeping. If these
+    // ever pay the same, the alert is decoration and the round trip is a
+    // preference rather than a defect.
+    const at = (level) => {
+      const g = new Game({ seed: 909n, crewMode: 'original' });
+      g.ship.hull = g.ship.maxHull * 0.5;
+      g.setAlert(level);
+      const r = g.effectRepairs();
+      return r.after - r.before;
+    };
+    assert.ok(at('blue') > at('normal'),
+      'blue alert repairs no better than normal, so the condition carries nothing');
+  });
+
+  test('but a fight cut short by the save stands down instead of resuming', () => {
+    // #101 made a save taken mid-battle wake with the action broken off. Red
+    // alert and an evasive helm restored for a fight that is over would be
+    // worse than losing them: battle stations with nobody to fight.
+    const g = new Game({ seed: 909n, crewMode: 'original' });
+    g.startCombat([new Ship('d7', { name: 'IKS Standing' })], { relentless: true });
+    g.setAlert('red');
+    g.ship.evasive = true;
+    for (let i = 0; i < 300; i++) g.update(STEP);
+    assert.equal(g.alert, 'red', 'the fight did not put the ship at battle stations');
+    assert.ok(g.engagement && !g.engagement.over, 'the fight ended before the save');
+
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.ok(back.lastCombat, 'the interrupted fight was not recorded');
+    assert.equal(back.alert, 'normal', 'still at battle stations with nobody to fight');
+    assert.equal(back.ship.evasive, false, 'still evading a fight that is over');
+  });
+});
