@@ -3626,3 +3626,180 @@ describe('the last battle is reported against the ship that fought it', () => {
     assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS }), []);
   });
 });
+
+// ========================================= an encounter you fly away from
+
+describe('an encounter is over when the ship leaves', () => {
+  // `setCourse` clears the orbit and lays in the course. It did not clear the
+  // ENCOUNTER, and `arrive` only overwrites one — and only when the arrival roll
+  // produces something that is not quiet, which most of the time it does not.
+  // So whatever was on the viewer when the captain said "set course for Sol"
+  // was still live, in a system the ship was no longer anywhere near.
+  //
+  // Measured over 60 single hops: 39 arrivals produced an encounter, and 15 of
+  // those were still live after flying away.
+  //
+  //   seed 1   anomaly at alpha_centauri -> ship at sol
+  //   seed 13  trapped at utopia         -> ship at sol
+  //
+  // The checker already calls this illegal — `game.encounter.elsewhere` in
+  // src/sim/invariants.js — and its comment describes the consequence. Nothing
+  // had ever flown away from an encounter to trip it, because until this suite
+  // nothing flew anywhere with something on the viewer.
+  //
+  // It is reachable from the order line. `App.executeOrder` intercepts only the
+  // orders an encounter itself offers — `encounter_choice`, `warp_out`, `fire`,
+  // `scan`, `hail` — so "helm, set course for Sol" falls straight through to the
+  // course arm with a derelict still on screen.
+
+  /** Fly one hop and stop wherever something is waiting. */
+  const flyUntilSomethingIsWaiting = (seed) => {
+    const g = new Game({ seed: BigInt(seed) });
+    g.ship.antimatter = g.ship.maxAntimatter;
+    const near = g.galaxy.neighbors(g.locationId);
+    const to = near[seed % near.length];
+    if (!g.setCourse(to.id).ok) return null;
+    for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(STEP);
+    return g.encounter ? g : null;
+  };
+
+  test('flying a leg really does turn something up', () => {
+    // The positive case. If arrivals stop producing encounters this suite is
+    // testing an empty room and should say so.
+    let found = 0;
+    for (let s = 1; s <= 60; s++) if (flyUntilSomethingIsWaiting(s)) found++;
+    assert.ok(found >= 10, `only ${found} of 60 legs had anything waiting at the far end`);
+  });
+
+  test('and leaving it behind does not leave it live', () => {
+    const stale = [];
+    for (let s = 1; s <= 60; s++) {
+      const g = flyUntilSomethingIsWaiting(s);
+      if (!g) continue;
+      const kind = g.encounter.kind;
+      const left = g.locationId;
+      g.ship.antimatter = g.ship.maxAntimatter;
+      const on = g.galaxy.neighbors(g.locationId)[0];
+      if (!g.setCourse(on.id).ok) continue;
+      for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(STEP);
+      const broke = checkAll(g, { arenaRadius: ARENA_RADIUS })
+        .filter((v) => v.code === 'game.encounter.elsewhere');
+      if (broke.length) stale.push(`seed ${s}: ${kind} left at ${left}, ship at ${g.locationId}`);
+    }
+    assert.deepEqual(stale.slice(0, 6), [],
+      `${stale.length} encounters were still live in a system the ship had left`);
+  });
+
+  test('and the alert it raised stands down with it', () => {
+    // Flying away IS withdrawing, so it must go through the same door: the
+    // alert stands down and `encounter:end` is emitted. A bare `encounter =
+    // null` would clear the state and leave the ship at yellow for the rest of
+    // the commission with nothing to be at yellow about.
+    let checked = 0;
+    for (let s = 1; s <= 60 && checked < 3; s++) {
+      const g = flyUntilSomethingIsWaiting(s);
+      if (!g || g.alert === 'normal' || g.alert === 'red') continue;
+      checked++;
+      g.ship.antimatter = g.ship.maxAntimatter;
+      const on = g.galaxy.neighbors(g.locationId)[0];
+      if (!g.setCourse(on.id).ok) { checked--; continue; }
+      assert.equal(g.encounter, null, 'the course was laid in and the encounter is still there');
+      assert.equal(g.alert, 'normal',
+        `left an encounter behind and the ship is still at ${g.alert}`);
+    }
+    assert.ok(checked >= 1, 'no encounter in 60 legs ever raised an alert to stand down');
+  });
+
+  test('but a course that is refused leaves the encounter alone', () => {
+    // Must not misfire. A course the helm rejects is not a departure, and the
+    // thing on the viewer is still in front of the ship.
+    let checked = 0;
+    for (let s = 1; s <= 60 && checked < 3; s++) {
+      const g = flyUntilSomethingIsWaiting(s);
+      if (!g) continue;
+      g.ship.antimatter = 0;                       // nothing is affordable
+      const on = g.galaxy.neighbors(g.locationId)[0];
+      const r = g.setCourse(on.id);
+      if (r.ok) continue;                          // it went anyway; not this case
+      checked++;
+      assert.ok(g.encounter, 'a refused course threw away the encounter anyway');
+    }
+    assert.ok(checked >= 1, 'no course was ever refused, so this proves nothing');
+  });
+});
+
+// ================================= a hulk you left is lost however you left
+
+describe('a wreck is lost when the ship leaves, whichever way it leaves', () => {
+  // `arrive` has this clause and says exactly why: "`finishCombat` describes the
+  // salvage as a choice — strip it, or leave the system and lose it — and
+  // leaving did not lose it… A wreck could be banked for the whole five years
+  // and cashed in whenever the machine shop ran dry, which is not a choice at
+  // all."
+  //
+  // `dropOutOfWarp` sets `locationId`, `transit`, `orbit` and `mode`, and does
+  // not have that clause. So the choice is not a choice: break off the course
+  // instead of completing it and the hulk is banked anyway.
+  //
+  //   positive case      -> outcome: victory | wreck: sol
+  //   arrived at vulcan  -> wreck: (gone, as arrive intends)
+  //   dropped out vulcan -> wreck: sol            <- still held
+  //
+  // Two paths reach the same state — the ship is in a different system from the
+  // hulk — and only one of them applied the rule. Same shape as the border
+  // check, which had the same problem on the same two paths.
+
+  /** A fight that actually leaves a hulk behind. */
+  const aWreckAtSol = (seed = 4n) => {
+    const g = new Game({ seed });
+    g.ship.antimatter = g.ship.maxAntimatter;
+    // `relentless`, because an ordinary hostile breaks off before it dies and
+    // a routed ship leaves nothing. Without this the probe measures an empty
+    // system and every assertion below passes for the wrong reason.
+    g.startCombat([new Ship('d7', { name: 'IKS Something', faction: 'klingon' })], { relentless: true });
+    for (const h of g.engagement.hostiles) { h.hull = 1; h.destroyed = false; }
+    for (let i = 0; i < 30 * 600 && g.engagement && !g.engagement.over; i++) g.update(STEP);
+    for (let i = 0; i < 200; i++) g.update(STEP);
+    return g;
+  };
+
+  test('a fight really does leave a hulk', () => {
+    // The positive case, and it needed `relentless` to exist at all.
+    const g = aWreckAtSol();
+    assert.equal(g.lastCombat?.outcome, 'victory', 'nothing was destroyed, so there is no hulk');
+    assert.ok(g.wreck, 'the fight left no wreck to lose');
+    assert.equal(g.wreck.systemId, g.locationId);
+  });
+
+  test('and flying the course to its end loses it', () => {
+    // The rule as `arrive` already applies it — the baseline the other path
+    // must agree with.
+    const g = aWreckAtSol();
+    g.ship.antimatter = g.ship.maxAntimatter;
+    assert.ok(g.setCourse(g.galaxy.neighbors(g.locationId)[0].id).ok);
+    for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(STEP);
+    assert.equal(g.wreck, null, 'arriving somewhere else kept the hulk');
+  });
+
+  test('and so does breaking the course off part way', () => {
+    const g = aWreckAtSol();
+    const left = g.locationId;
+    g.ship.antimatter = g.ship.maxAntimatter;
+    assert.ok(g.setCourse(g.galaxy.neighbors(g.locationId)[0].id).ok);
+    while (g.transit && g.transit.progress < 0.9) g.update(STEP);
+    assert.ok(g.transit, 'the course finished before it could be broken off');
+    assert.ok(g.dropOutOfWarp().ok, 'the order to break off was refused');
+    assert.notEqual(g.locationId, left, 'coasted back to where it started; this proves nothing');
+    assert.equal(g.wreck, null,
+      `broke off a course and the hulk is still banked at ${g.wreck?.systemId}`);
+  });
+
+  test('but a hulk in the system the ship is in is still there', () => {
+    // Must not misfire. The whole point of a wreck is that you can strip it
+    // while you are standing over it.
+    const g = aWreckAtSol();
+    for (let i = 0; i < 600; i++) g.update(STEP);
+    assert.ok(g.wreck, 'the hulk vanished without the ship going anywhere');
+    assert.ok(g.wreckHere, 'the hulk is here and the ship cannot see it');
+  });
+});
