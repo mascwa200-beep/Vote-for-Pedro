@@ -2834,3 +2834,78 @@ describe('a commission that cannot go on ends, rather than sitting there', () =>
     assert.equal(g.over, false, 'a fuelled ship at Sol was declared stranded');
   });
 });
+
+describe('a ship lost where nobody was shooting is still a ship lost', () => {
+  // `loseTheShip` is the game's whole policy for losing a hull: difficulty
+  // decides whether it can happen at all, the first loss costs standing and
+  // gets you a board and a replacement, and the second ends the career because
+  // Starfleet does not hand out a third. It was called from exactly one place
+  // — `finishCombat` — so it only ever ran when the ship died in a fight.
+  //
+  // A ship can die outside one. A plasma storm in the Badlands does 40 to 130
+  // damage a second through `takeDamage`, which destroys the hull like anything
+  // else: parked there at 6% the ship breaches at about the fiftieth second.
+  // Nothing noticed. The captain was left in command of a destroyed ship —
+  // hull at zero, still on the bridge, no replacement offered, no ending, and
+  // the invariant checker quiet because the ship IS correctly flagged
+  // destroyed.
+
+  /** A weakened ship somewhere that will finish it off. */
+  const inTheStorm = () => {
+    const g = new Game({ seed: 5150n, crewMode: 'original' });
+    const storm = g.galaxy.systems.find((s) => s.hazard === 'plasma_storm');
+    assert.ok(storm, 'the charts no longer have a plasma storm to be caught in');
+    g.locationId = storm.id;
+    g.ship.hull = g.ship.maxHull * 0.06;
+    g.ship.shieldsUp = false;
+    for (const f of Object.keys(g.ship.shields)) g.ship.shields[f] = 0;
+    return g;
+  };
+
+  test('the hazard really does destroy a ship outside a fight', () => {
+    // The positive case. If the storm ever stops being able to kill, the test
+    // below proves nothing and should say so rather than passing quietly.
+    const g = inTheStorm();
+    let destroyed = false;
+    for (let i = 0; i < 40000 && !destroyed; i++) {
+      g.update(STEP);
+      destroyed = g.ship.destroyed;
+    }
+    assert.ok(destroyed, 'a 6% hull sat in a plasma storm and survived');
+    assert.ok(!g.engagement, 'something started a fight — this is the out-of-combat path');
+  });
+
+  test('and losing it there costs what losing it in a fight costs', () => {
+    const g = inTheStorm();
+    const before = g.ship.name;
+    for (let i = 0; i < 40000 && !g.ship.destroyed; i++) g.update(STEP);
+    // A few more ticks for the consequence to land.
+    for (let i = 0; i < 60; i++) g.update(STEP);
+
+    assert.equal(g.shipsLost, 1, 'the ship was destroyed and the record does not show it lost');
+    assert.ok(g.ledger.entries.some((e) => e.kind === 'ship_lost'),
+      'no ledger entry for a ship lost');
+    // Either a new command or a finished career — never a destroyed ship the
+    // captain is still standing on.
+    assert.ok(g.over || !g.ship.destroyed,
+      `still in command of ${before}, which is destroyed, with the game running`);
+  });
+
+  test('and a second loss ends the career, wherever it happens', () => {
+    const g = inTheStorm();
+    g.shipsLost = 1;   // one already gone, as after a fight
+    for (let i = 0; i < 40000 && !g.ship.destroyed; i++) g.update(STEP);
+    for (let i = 0; i < 60; i++) g.update(STEP);
+    assert.equal(g.over, true, 'a second ship was lost and the commission continued');
+  });
+
+  test('but a ship that is merely damaged is left alone', () => {
+    // The half that must not misfire: hazards hurt, and being hurt is not
+    // being lost.
+    const g = new Game({ seed: 5150n, crewMode: 'original' });
+    g.ship.hull = g.ship.maxHull * 0.4;
+    for (let i = 0; i < 3000; i++) g.update(STEP);
+    assert.equal(g.over, false, 'a damaged but living ship ended the commission');
+    assert.ok(!g.shipsLost, 'a damaged ship was recorded as lost');
+  });
+});
