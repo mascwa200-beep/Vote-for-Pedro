@@ -1430,6 +1430,14 @@ export const INTENTS = [
       'break out a hull patch', 'use a hull patch', 'emergency hull patch',
       'crack open a battery', 'break out a battery', 'use a battery',
       'get the batteries out', 'we have a patch for that',
+      // The probe was in the locker and addressable by nothing. Every wording
+      // of it — its own name included — was swallowed by `scan`, which is a
+      // reasonable thing for the word to mean and the wrong thing for the one
+      // device in the locker you launch. These are the phrasings that say
+      // LAUNCH rather than look.
+      'launch a probe', 'launch the probe', 'send a probe', 'send out a probe',
+      'deploy a probe', 'fire a probe', 'put a probe on it', 'probe it',
+      'launch a class four probe', 'get a probe out there',
     ],
     keywords: { battery: 3, batteries: 3 },
     // Building a patch in the machine shop is a different order that shares
@@ -1437,11 +1445,12 @@ export const INTENTS = [
     veto: ['fabricate', 'build', 'make me', 'reroute', 'divert'],
     build: (c) => {
       const t = c.text;
-      const device = /\bshield/.test(t) ? 'shield_battery'
-        : /\bweapon/.test(t) ? 'weapons_battery'
-          : /\bengine|\bimpulse/.test(t) ? 'engine_battery'
-            : /\bhull|\bpatch/.test(t) ? 'hull_patch'
-              : null;
+      const device = /\bprobe\b/.test(t) ? 'probe'
+        : /\bshield/.test(t) ? 'shield_battery'
+          : /\bweapon/.test(t) ? 'weapons_battery'
+            : /\bengine|\bimpulse/.test(t) ? 'engine_battery'
+              : /\bhull|\bpatch/.test(t) ? 'hull_patch'
+                : null;
       return { action: 'device', device };
     },
   },

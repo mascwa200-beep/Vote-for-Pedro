@@ -714,6 +714,20 @@ export class Game {
 
   /** Take the bigger ship. Spends what the crew knew about this one. */
   acceptCommand() {
+    // Not while people are shooting at you.
+    //
+    // Taking a new hull builds a new Ship and points `game.ship` at it, and the
+    // running engagement went on holding the OLD object: the enemy kept firing
+    // at a ship you no longer commanded while your orders went to one that was
+    // not in the battle. That is `game.engagement.ship`, which the watchdog
+    // rates FATAL, and it is reachable from the order line with one phrase in
+    // the middle of a firefight.
+    //
+    // Losing the ship is a different matter and is left alone — that hands you
+    // a replacement after the battle has ended, not during it.
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, reason: 'Not in the middle of an engagement, Captain.' };
+    }
     const before = this.ship?.name;
     const r = acceptCommandOffer(this);
     if (!r.ok) return r;

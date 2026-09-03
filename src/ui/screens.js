@@ -707,7 +707,7 @@ export function tacticalScreen(app) {
       button('Come about', tap(() => eng.comeAboutTo(eng.target)), { say: 'come about', color: 'blue' }),
       button(g.ship.evasive ? 'Evasive: on' : 'Evasive', tap(() => {
         eng.evasive(!g.ship.evasive); app.render();
-      }), { color: g.ship.evasive ? 'green' : 'blue' }),
+      }), { say: 'evasive', color: g.ship.evasive ? 'green' : 'blue' }),
     ]),
     powerSlider('Throttle', g.ship.throttle * 100, (v) => { g.ship.throttle = v / 100; }),
     // Elevation. The third axis is what the 3D simulation is for, and the
@@ -752,13 +752,13 @@ export function tacticalScreen(app) {
         g.pushLog('Core ejected. We are on impulse power.', 'engineering');
       }
       app.render();
-    }, 'ui_deny', 'explosion'), { color: 'red' }));
+    }, 'ui_deny', 'explosion'), { say: 'eject the core', color: 'red' }));
   }
   for (const id of g.loadout.equipped.device) {
     dc.push(button(CONSOLES[id]?.name ?? id, tap(() => {
       app.useDevice(id);
       app.render();
-    }), { color: 'amber', sub: CONSOLES[id]?.description }));
+    }), { say: CONSOLES[id]?.say, color: 'amber', sub: CONSOLES[id]?.description }));
   }
   if (dc.length) side.append(panel('Damage Control', dc, 'danger'));
 
@@ -828,6 +828,7 @@ function signaturePanel(app) {
   const used = c.signatureUsed;
   return panel('Captain', [
     button(career.signature, used ? null : tap(() => app.useSignature(), 'ui_confirm'), {
+      say: used ? '' : 'use my signature',
       color: used ? 'ghost' : 'peach',
       sub: used ? 'Already used this engagement.' : career.signatureText,
       disabled: used,

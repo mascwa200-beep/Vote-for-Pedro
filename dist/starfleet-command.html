@@ -15280,11 +15280,17 @@ function chairPanel(app) {
   const alerts = ALERTS
     .filter((a) => !(a.level === 'blue' && inCombat))
     .map((a) => button(a.label, press(app, { action: 'alert', level: a.level, chairLabel: a.label }), {
+      // Every chair control already carried the exact words it logs as the
+      // captain's line — and printed none of them. `say` is read off the SAME
+      // `chairLabel` the order carries, so the button and the log cannot drift
+      // apart: what it prints is literally what pressing it says.
+      say: a.label.toLowerCase(),
       color: g.alert === a.level ? 'green' : a.color,
       sub: g.alert === a.level ? 'Current condition' : a.sub,
     }));
 
   const pod = button('Jettison ion pod', press(app, { action: 'jettison_pod', chairLabel: 'jettison the pod' }, 'ui_deny', 'deny'), {
+    say: 'jettison the pod',
     color: 'peach',
     sub: inCombat ? 'Decoy — reads like us for about a minute' : 'Nothing to gain outside a fight',
     disabled: !inCombat || g.podJettisoned,
@@ -15293,10 +15299,12 @@ function chairPanel(app) {
   // ---- Left arm: viewscreen, hailing frequencies, shuttle bay ----
   const left = [
     button('On screen', press(app, { action: 'viewscreen', chairLabel: 'on screen' }, 'ui_tap'), {
+      say: 'on screen',
       color: 'ice',
       sub: app.screen === 'viewscreen' ? 'Screen off' : 'The forward view from the bridge',
     }),
     button('Hailing frequencies', press(app, { action: 'hail', chairLabel: 'hailing frequencies open' }), {
+      say: 'hailing frequencies open',
       color: 'blue',
       sub: 'Open a channel',
     }),
@@ -15331,13 +15339,23 @@ function chairPanel(app) {
     el('div', { class: 'chair-intercom' }, [
       el('div', { class: 'label', text: 'Intercom' }),
       el('div', { class: 'chair-stations' }, INTERCOM_STATIONS.map((s) =>
-        button(s.label, press(app, { action: 'intercom', dept: s.id, chairLabel: `${s.label}, report` }, 'computer_query'), {
+        // No comma.
+        //
+        // The chair logged `${s.label}, report` as the captain's line, and that
+        // phrase does not do this. "engineering, report" reads the comma as an
+        // address and the rest as a request for a damage report — it parses to
+        // `status`. Without it, "engineering report" is the intercom call the
+        // button makes. The log has been quoting the captain saying a thing
+        // that would have done something else, and printing it on the button is
+        // what made that visible.
+        button(s.label, press(app, { action: 'intercom', dept: s.id, chairLabel: `${s.label} report` }, 'computer_query'), {
+          say: `${s.label.toLowerCase()} report`,
           color: 'ghost',
         }))),
     ]),
     el('div', { class: 'chair-recorder' }, [
       logInput,
-      button('Record', record, { color: 'amber' }),
+      button('Record', record, { color: 'amber', say: 'captain\u2019s log, supplemental' }),
     ]),
   ], 'chair');
 }
@@ -18137,6 +18155,14 @@ const INTENTS = [
       'break out a hull patch', 'use a hull patch', 'emergency hull patch',
       'crack open a battery', 'break out a battery', 'use a battery',
       'get the batteries out', 'we have a patch for that',
+      // The probe was in the locker and addressable by nothing. Every wording
+      // of it — its own name included — was swallowed by `scan`, which is a
+      // reasonable thing for the word to mean and the wrong thing for the one
+      // device in the locker you launch. These are the phrasings that say
+      // LAUNCH rather than look.
+      'launch a probe', 'launch the probe', 'send a probe', 'send out a probe',
+      'deploy a probe', 'fire a probe', 'put a probe on it', 'probe it',
+      'launch a class four probe', 'get a probe out there',
     ],
     keywords: { battery: 3, batteries: 3 },
     // Building a patch in the machine shop is a different order that shares
@@ -18144,11 +18170,12 @@ const INTENTS = [
     veto: ['fabricate', 'build', 'make me', 'reroute', 'divert'],
     build: (c) => {
       const t = c.text;
-      const device = /\bshield/.test(t) ? 'shield_battery'
-        : /\bweapon/.test(t) ? 'weapons_battery'
-          : /\bengine|\bimpulse/.test(t) ? 'engine_battery'
-            : /\bhull|\bpatch/.test(t) ? 'hull_patch'
-              : null;
+      const device = /\bprobe\b/.test(t) ? 'probe'
+        : /\bshield/.test(t) ? 'shield_battery'
+          : /\bweapon/.test(t) ? 'weapons_battery'
+            : /\bengine|\bimpulse/.test(t) ? 'engine_battery'
+              : /\bhull|\bpatch/.test(t) ? 'hull_patch'
+                : null;
       return { action: 'device', device };
     },
   },
@@ -18564,9 +18591,26 @@ const RECIPE_WORDS = RECIPES.map((r) => ({
     .toLowerCase()
     .split(/[\s-]+/)
     .filter((w) => w.length > 3),
+  // The short words, kept separately and used ONLY to break a tie.
+  //
+  // "kit" is three letters and was dropped, and it is the only thing telling
+  // "Hull patch" from "Hull patch kit": both scored identically on [hull,
+  // patch], the tie went to whichever came first in the table, and the kit
+  // could not be built by name at all — asking for one got the plain patch.
+  //
+  // They are not worth a point in the main scoring, though. Lowering the
+  // filter to `> 2` outright puts "rig" into the vocabulary (from "Coolant
+  // purge rig"), and "rig for battle" is an ordinary English order that then
+  // stopped selecting the attack posture. Short words decide between two
+  // recipes that are otherwise indistinguishable; they do not decide whether
+  // a sentence is about recipes at all.
+  short: `${r.name} ${r.id.replace(/_/g, ' ')}`
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .filter((w) => w.length === 3),
 }));
 function findRecipe(text) {
-  let best = null;
+  const scored = [];
   let bestScore = 0;
   for (const r of RECIPE_WORDS) {
     let score = 0;
@@ -18574,9 +18618,22 @@ function findRecipe(text) {
       if (text.includes(w)) score += w.length;
       else if (text.includes(w.replace(/s$/, ''))) score += w.length - 1;
     }
-    if (score > bestScore) { bestScore = score; best = r.id; }
+    if (score > 0) scored.push({ id: r.id, score, short: r.short });
+    if (score > bestScore) bestScore = score;
   }
-  return best;
+  if (!bestScore) return null;
+
+  const top = scored.filter((r) => r.score === bestScore);
+  if (top.length === 1) return top[0].id;
+
+  // Two recipes the long words cannot tell apart. Ask the short ones.
+  let best = top[0];
+  let bestExtra = -1;
+  for (const r of top) {
+    const extra = r.short.filter((w) => text.includes(w)).length;
+    if (extra > bestExtra) { bestExtra = extra; best = r; }
+  }
+  return best.id;
 }
 
 /** Which faction is being talked about. */
@@ -21449,15 +21506,27 @@ const CONSOLES = {
     mods: {}, special: 'crewProtect', value: 0.35, description: 'Fewer crew casualties from hull hits.' },
 
   // --- Devices (consumable, one use per engagement) ---
+  // `say` is the phrase that reaches the device from the order line, declared
+  // here so the button prints it and a test checks it from ONE source.
+  //
+  // It is not derivable from the name, which is why it is written down: saying
+  // "Hull Patch Kit" reads as the watch bill, and "Class-IV Probe" — like every
+  // other wording of the probe — used to be swallowed by `scan`, leaving the
+  // one device in the locker you LAUNCH addressable by nothing at all.
   shield_battery: { id: 'shield_battery', slot: 'device', name: 'Shield Battery', consumable: true,
+    say: 'shield battery',
     description: 'Instantly restores 40% shields to all facings.' },
   weapons_battery: { id: 'weapons_battery', slot: 'device', name: 'Weapons Battery', consumable: true,
+    say: 'weapons battery',
     description: 'Weapon power to maximum for 20 seconds.' },
   engine_battery: { id: 'engine_battery', slot: 'device', name: 'Engine Battery', consumable: true,
+    say: 'engine battery',
     description: 'Engine power to maximum for 20 seconds.' },
   hull_patch: { id: 'hull_patch', slot: 'device', name: 'Hull Patch Kit', consumable: true,
+    say: 'use a hull patch',
     description: 'Restores 20% hull and extinguishes all fires.' },
   probe: { id: 'probe', slot: 'device', name: 'Class-IV Probe', consumable: true,
+    say: 'launch a probe',
     description: 'Full scan of a system or anomaly without approaching it.' },
 };
 const CONSOLE_LIST = Object.values(CONSOLES);
@@ -29314,6 +29383,20 @@ class Game {
 
   /** Take the bigger ship. Spends what the crew knew about this one. */
   acceptCommand() {
+    // Not while people are shooting at you.
+    //
+    // Taking a new hull builds a new Ship and points `game.ship` at it, and the
+    // running engagement went on holding the OLD object: the enemy kept firing
+    // at a ship you no longer commanded while your orders went to one that was
+    // not in the battle. That is `game.engagement.ship`, which the watchdog
+    // rates FATAL, and it is reachable from the order line with one phrase in
+    // the middle of a firefight.
+    //
+    // Losing the ship is a different matter and is left alone — that hands you
+    // a replacement after the battle has ended, not during it.
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, reason: 'Not in the middle of an engagement, Captain.' };
+    }
     const before = this.ship?.name;
     const r = acceptCommandOffer(this);
     if (!r.ok) return r;
@@ -33276,7 +33359,7 @@ function tacticalScreen(app) {
       button('Come about', tap(() => eng.comeAboutTo(eng.target)), { say: 'come about', color: 'blue' }),
       button(g.ship.evasive ? 'Evasive: on' : 'Evasive', tap(() => {
         eng.evasive(!g.ship.evasive); app.render();
-      }), { color: g.ship.evasive ? 'green' : 'blue' }),
+      }), { say: 'evasive', color: g.ship.evasive ? 'green' : 'blue' }),
     ]),
     powerSlider('Throttle', g.ship.throttle * 100, (v) => { g.ship.throttle = v / 100; }),
     // Elevation. The third axis is what the 3D simulation is for, and the
@@ -33321,13 +33404,13 @@ function tacticalScreen(app) {
         g.pushLog('Core ejected. We are on impulse power.', 'engineering');
       }
       app.render();
-    }, 'ui_deny', 'explosion'), { color: 'red' }));
+    }, 'ui_deny', 'explosion'), { say: 'eject the core', color: 'red' }));
   }
   for (const id of g.loadout.equipped.device) {
     dc.push(button(CONSOLES[id]?.name ?? id, tap(() => {
       app.useDevice(id);
       app.render();
-    }), { color: 'amber', sub: CONSOLES[id]?.description }));
+    }), { say: CONSOLES[id]?.say, color: 'amber', sub: CONSOLES[id]?.description }));
   }
   if (dc.length) side.append(panel('Damage Control', dc, 'danger'));
 
@@ -33397,6 +33480,7 @@ function signaturePanel(app) {
   const used = c.signatureUsed;
   return panel('Captain', [
     button(career.signature, used ? null : tap(() => app.useSignature(), 'ui_confirm'), {
+      say: used ? '' : 'use my signature',
       color: used ? 'ghost' : 'peach',
       sub: used ? 'Already used this engagement.' : career.signatureText,
       disabled: used,
@@ -36685,6 +36769,14 @@ class App {
 
   changeShip(classId) {
     const g = this.game;
+    // Same reason as `Game.acceptCommand`: swapping the hull mid-battle leaves
+    // the engagement fighting the ship you just left.
+    if (g.engagement && !g.engagement.over) {
+      audio.play('ui_deny');
+      g.officerSays('engineering', 'Not in the middle of an engagement, Captain.', 'object');
+      this.render();
+      return;
+    }
     const oldName = g.ship.name;
     const oldRegistry = g.ship.registry;
     g.ship = new Ship(classId, { name: oldName, registry: oldRegistry, faction: 'federation', isPlayer: true });

@@ -3835,6 +3835,58 @@ try {
   check('and "withdraw" still breaks off a fight when there is one to break off',
     stillWarpsOut.warping, JSON.stringify(stillWarpsOut));
 
+  // ------------------------------------------------ the chair prints its words
+  //
+  // Every control on the captain's chair already carried the exact phrase it
+  // logs as the captain's line, in `chairLabel`, and printed none of them:
+  // sixteen controls whose words were proven to work and invisible.
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+  // The chair is its own SCREEN (`chairConsole`), not a panel on the bridge —
+  // which is why an earlier version of this check found nothing at all, and
+  // reported that rather than passing. That is the whole reason `found` is
+  // asserted before anything is concluded about what it contains.
+  await page.evaluate(() => {
+    window.__app.go('chair');
+    window.__app.render();
+  });
+  await page.waitForTimeout(150);
+  const chair = await page.evaluate(() => {
+    // Located by the class the chair panel is built with, not by its heading —
+    // `.chair` is what `chairPanel` passes as the panel variant, and the
+    // existing intercom check already finds its controls that way.
+    const panel = document.querySelector('.panel.chair');
+    if (!panel) {
+      return {
+        found: false,
+        screen: window.__app.screen,
+        walking: window.__app.game.walk?.roomId ?? null,
+        panels: [...document.querySelectorAll('.panel')]
+          .map((p) => p.querySelector('h2')?.textContent ?? '(untitled)').slice(0, 10),
+      };
+    }
+    panel.scrollIntoView({ block: 'center' });
+    const btns = [...panel.querySelectorAll('.btn')];
+    return {
+      found: true,
+      total: btns.length,
+      printed: btns.filter((b) => b.querySelector('.say')).length,
+      // A phrase that is clipped to nothing is not printed either.
+      clipped: btns.filter((b) => {
+        const say = b.querySelector('.say');
+        return say && (say.scrollWidth > say.clientWidth + 2 || say.clientHeight < 6);
+      }).map((b) => b.querySelector('.say').textContent),
+    };
+  });
+  check('the command chair is on the bridge', chair.found === true, JSON.stringify(chair));
+  check('and every control on it prints the phrase that presses it',
+    chair.total > 8 && chair.printed === chair.total,
+    JSON.stringify({ total: chair.total, printed: chair.printed }));
+  check('and none of those phrases is clipped away to nothing',
+    (chair.clipped ?? []).length === 0, JSON.stringify(chair.clipped));
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(SHOTS, '06r-the-chair.png') });
+
   // ------------------------------------------------ repairing where you stand
   //
   // `effectRepairs` was reachable by NO phrase: every wording was read as a
