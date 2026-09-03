@@ -220,6 +220,45 @@ class App {
 
   saveSettings() { persistSettings(this.settings); }
 
+  /**
+   * Give the tactical display a canvas that has never been spoken to.
+   *
+   * A canvas can only ever have ONE context type. Once `getContext('webgl')`
+   * has succeeded on a node, `getContext('2d')` returns null on that node for
+   * as long as it exists — and `#tactical` is deliberately a singleton, kept
+   * and moved between screens because GL contexts are expensive and browsers
+   * cap how many may exist at once.
+   *
+   * So the flat plot could never have been switched TO at runtime. It worked
+   * only when it was chosen first, before GL had touched the canvas, which is
+   * the one case the old dead `render3d` flag could not produce. Turning the
+   * setting on for real means the mode change has to bring its own canvas.
+   */
+  replaceTacticalCanvas() {
+    const host = this.tacticalHost;
+    const old = this.tacticalCanvas;
+    if (!host || !old) return;
+
+    this.fpv?.dispose?.();
+    this.fpv = null;
+    this.fpvCanvas = null;
+    this.tactical?.dispose?.();
+    this.tactical = null;
+    this.tacticalViewCanvas = null;
+    // The GL context belongs to the node being thrown away. Let it go, or the
+    // browser holds it against the cap for nothing.
+    this.renderer?.dispose?.();
+    this.renderer = null;
+    this.rendererCanvas = null;
+
+    const fresh = el('canvas', { id: 'tactical' });
+    old.replaceWith(fresh);
+    this.tacticalCanvas = fresh;
+    // Label overlays are created by the 3D view against the old canvas. Any
+    // that outlived their view would paint over the new one.
+    for (const stale of host.querySelectorAll('canvas.tactical-labels')) stale.remove();
+  }
+
   // ------------------------------------------------------------ events
 
   wireEvents() {
@@ -601,11 +640,30 @@ class App {
       // is not a stub — it is the display this game shipped with, and it stays
       // complete, because "no WebGL" must mean a different picture and not a
       // broken game.
-      if (!this.tactical || this.tacticalViewCanvas !== this.tacticalCanvas) {
+      // The third clause is what makes the setting a setting. The rebuild used
+      // to fire only on a new canvas, so flipping the flag changed nothing
+      // until something else happened to swap the DOM — a control that works
+      // eventually is worse than one that does not work at all, because you
+      // cannot tell which you have.
+      //
+      // It compares against what was ASKED for and not against `renderMode`,
+      // which is what was achieved. On a device with no WebGL those differ
+      // permanently: the request is 3D, the result is 2D, and comparing the
+      // two would rebuild the view and retry the context on every single
+      // render — a rebuild loop on exactly the hardware least able to afford
+      // one.
+      const want3d = this.settings.render3d !== false;
+      if (this.tactical && this.renderWanted !== undefined && want3d !== this.renderWanted) {
+        this.replaceTacticalCanvas();
+      }
+      if (!this.tactical
+        || this.tacticalViewCanvas !== this.tacticalCanvas
+        || want3d !== this.renderWanted) {
+        this.renderWanted = want3d;
         this.tactical?.dispose?.();
-        this.tactical = (this.settings.render3d === false
-          ? null
-          : TacticalView3D.create(this.tacticalCanvas, this.sharedRenderer()))
+        this.tactical = (want3d
+          ? TacticalView3D.create(this.tacticalCanvas, this.sharedRenderer())
+          : null)
           ?? new TacticalView(this.tacticalCanvas);
         this.tacticalViewCanvas = this.tacticalCanvas;
         this.renderMode = this.tactical instanceof TacticalView3D ? '3d' : '2d';

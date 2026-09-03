@@ -1771,6 +1771,22 @@ export function optionsScreen(app) {
     button(s.reduceMotion ? 'Reduce motion: on' : 'Reduce motion: off', tap(() => {
       s.reduceMotion = !s.reduceMotion; app.applySettings(); app.render();
     }), { color: s.reduceMotion ? 'green' : 'ghost' }),
+    // No `say:` here, and none on the three above it. Everything the crew can
+    // be told to do is sayable; a device preference is not an order to the
+    // crew, and making this the one settable-by-voice setting would be the
+    // inconsistency rather than the fix.
+    button(s.render3d !== false ? '3D view: on' : '3D view: off', tap(() => {
+      s.render3d = s.render3d === false;
+      // `applySettings` persists on its way out, which is why the three
+      // toggles above do not call `saveSettings` either.
+      app.applySettings();
+      app.render();
+    }), {
+      color: s.render3d !== false ? 'green' : 'ghost',
+      sub: s.render3d !== false
+        ? 'Solid hulls and a lit bridge, where the device can'
+        : 'The flat plot this game shipped with. Cheaper, and always available.',
+    }),
     field('Text size', select([
       { value: 'normal', label: 'Normal' },
       { value: 'large', label: 'Large' },

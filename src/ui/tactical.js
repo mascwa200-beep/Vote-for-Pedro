@@ -5,7 +5,6 @@
 // on the screen it is in the sim.
 
 import { fitCanvas, attachPanZoom } from './touch.js';
-import { FACINGS } from '../sim/ship.js';
 import { FACTIONS } from '../world/factions.data.js';
 
 const HULL_SHAPES = {
@@ -164,14 +163,30 @@ export class TacticalView {
     // Shield arcs, drawn only where there is shield left to draw.
     if (ship.shieldsUp && !ship.cloaked) {
       const radius = 30 * scale;
+      // Four arcs, and the loop reads THIS table rather than `FACINGS`.
+      //
+      // Shields have six facings; a plan view has room for four. Dorsal and
+      // ventral are "over the top of us" and "under us", which a top-down plot
+      // cannot point at — the six-facing readout lives on the tactical panel,
+      // where it has a middle column to put them in.
+      //
+      // This loop used to iterate `FACINGS` and index into these four, so the
+      // moment shields gained a third axis it destructured `undefined` and
+      // threw on the first ship with its shields up. Nothing caught it because
+      // nothing could reach this view: `settings.render3d` was never written,
+      // so the flat plot was unreachable except on a real WebGL failure. It has
+      // been throwing ever since, behind a door with no handle.
+      //
+      // Iterating the table is what stops that happening again: a facing this
+      // projection cannot draw is simply not in it, and there is no second list
+      // to keep in step.
       const arcs = {
         fore: [-45, 45], starboard: [45, 135], aft: [135, 225], port: [225, 315],
       };
       ctx.lineWidth = 5 / this.view.scale + 1.5;
-      for (const f of FACINGS) {
+      for (const [f, [a0, a1]] of Object.entries(arcs)) {
         const pct = ship.shieldPctOf(f);
         if (pct <= 0.02) continue;
-        const [a0, a1] = arcs[f];
         ctx.strokeStyle = `rgba(120,180,255,${0.18 + pct * 0.5})`;
         ctx.beginPath();
         ctx.arc(0, 0, radius,

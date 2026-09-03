@@ -31,7 +31,7 @@ import {
   WARP_LENGTH, VOLUME,
 } from '../src/gfx/scene.js';
 import {
-  vistaFor, bearingOf, fovFor, horizontalFov, noseOf, worldLabel, joltShake, joltTint,
+  vistaFor, bearingOf, fovFor, horizontalFov, noseOf, worldLabel, joltShake, joltTint, VISTA_DRAW_CAP,
 } from '../src/gfx/vista.js';
 import {
   orbitFrame, orbitPeriod, rotationPeriod, angularRadius, orbitAxis, ORBIT_ALTITUDE,
@@ -733,8 +733,9 @@ describe('the view out of the window', () => {
     // caps the rest at six. The harness holds the whole frame to 8,000
     // triangles with a starfield and six hostiles already in it, so this is
     // the headroom that cap has to fit inside.
-    // Mirrors VISTA_DRAW_CAP in ui/tactical3d.js, which node cannot import.
-    const CAP = 4;
+    // The real constant, imported. It used to be a copy of the number with a
+    // comment saying so — two values that had to agree and nothing making them.
+    const CAP = VISTA_DRAW_CAP;
     const kinds = new Set();
     for (const type of ['core', 'homeworld', 'colony', 'station', 'outpost', 'anomaly', 'deadspace']) {
       for (const b of vistaFor(`b:${type}`, type).bodies) kinds.add(b.kind);
