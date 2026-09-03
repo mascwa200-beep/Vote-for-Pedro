@@ -1319,22 +1319,27 @@ class App {
     this.needsRender = true;
   }
 
-  /** More than one place to send them: let the captain say which. */
-  chooseAwayMission(options) {
+  /**
+   * More than one place to send them: let the captain say which.
+   *
+   * `opts` carries whether the captain said they were going down with them, so
+   * "away team, I'll lead" survives the question about where.
+   */
+  chooseAwayMission(options, opts = {}) {
     audio.play('ui_select');
     this.modalHandle = this.raiseModal('Where To, Captain?', [
       el('p', { class: 'muted', text: 'A landing party can be sent to more than one place from here.' }),
       ...options.map((t) => button(t.title, () => {
         this.closeModal();
-        this.runAwayMission(t.id);
+        this.runAwayMission(t.id, opts);
       }, { say: t.id === 'boarding_action' ? 'board them' : 'send an away team', color: 'ice' })),
     ], [button('Belay that', () => this.closeModal(), { color: 'ghost' })]);
     this.needsRender = true;
   }
 
   /** Run one, and show what came back. */
-  runAwayMission(id) {
-    const r = this.game.awayMission(id);
+  runAwayMission(id, opts = {}) {
+    const r = this.game.awayMission(id, opts);
     if (!r.ok) {
       audio.play('ui_deny');
       this.game.pushLog(r.reason, 'transporter');
@@ -1348,6 +1353,11 @@ class App {
         class: st.success ? '' : 'muted',
         text: `${st.success ? '\u2713' : '\u2717'} ${st.text}${st.officer ? ` — ${st.officer}` : ''}`,
       })),
+      // Said on the report as well as in the log: a captain carried off their
+      // own landing party should not have to read the ship's log to find out.
+      r.captainWounded
+        ? el('p', { class: 'muted', text: 'You were hit. The party broke off and brought you back.' })
+        : null,
       el('p', {}, [el('b', {
         text: `${r.passed} of ${r.of} objectives.`
           + (r.lost ? ` We lost ${r.lost}.` : ''),
@@ -2147,8 +2157,9 @@ class App {
           ? options.find((t) => t.id === 'boarding_action' || t.id === 'derelict_search')
           : null;
         const pick = wanted ?? (options.length === 1 ? options[0] : null);
-        if (!pick) { this.chooseAwayMission(options); break; }
-        this.runAwayMission(pick.id);
+        const lead = { captainLeads: !!order.captainLeads };
+        if (!pick) { this.chooseAwayMission(options, lead); break; }
+        this.runAwayMission(pick.id, lead);
         break;
       }
       case 'mission_choice': {

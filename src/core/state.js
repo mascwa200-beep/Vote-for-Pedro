@@ -2775,7 +2775,7 @@ export class Game {
    * four went right and we lost a man doing it" is the kind of result this
    * game is about and a pass/fail is not.
    */
-  awayMission(templateId) {
+  awayMission(templateId, opts = {}) {
     if (this.ashore) {
       return { ok: false, reason: 'You are already on the surface, Captain.' };
     }
@@ -2794,14 +2794,20 @@ export class Game {
     const stations = template.id === 'boarding_action'
       ? ['tactical', 'medical', 'engineering']
       : ['science', 'medical', 'tactical'];
-    const team = this.buildAwayTeam(stations, false,
+    // Whether the captain goes down with them. `captainLeads` was hard-coded
+    // false here, so the one branch that ever honoured "I'll lead" was the one
+    // that says there is nowhere to send anybody — the order was understood by
+    // two parsers and then dropped on every path that actually ran a mission.
+    const team = this.buildAwayTeam(stations, !!opts.captainLeads,
       { boarding: template.id === 'boarding_action' });
     if (!team.members.length) {
       return { ok: false, reason: 'There is nobody fit to send, Captain.' };
     }
 
-    this.pushLog(`${template.title}. Landing party is away.`, 'transporter');
+    this.pushLog(`${template.title}${opts.captainLeads ? ', with the captain leading' : ''}. `
+      + 'Landing party is away.', 'transporter');
     const steps = [];
+    let captainWounded = false;
     for (const step of template.steps) {
       const r = team.check(this.rng, step.check, {
         dc: step.dc, hazard: template.hazard, label: step.text,
@@ -2810,30 +2816,53 @@ export class Game {
       if (r.killed) this.pushLog(`We lost ${r.killed.name}.`, 'medical');
       else if (r.injured) this.pushLog(`${r.injured.name} is hurt.`, 'medical');
       steps.push({ text: step.text, success: r.success, officer: r.officer?.name ?? null });
+      // The captain going down ends the landing party, for the same reason a
+      // team with nobody left standing does: whoever is still on their feet is
+      // carrying somebody. That is the price of the +2 for leading, and it was
+      // not being charged — `captainWounded` was set and read by nobody.
+      if (r.captainWounded) {
+        captainWounded = true;
+        this.pushLog(
+          'You are hit, Captain. The party is breaking off and carrying you back to the ship.',
+          'medical',
+        );
+        this.ledger.record('captain_wounded', {
+          text: `Wounded leading ${template.title.toLowerCase()} at `
+            + `${this.location?.name ?? this.locationId}`,
+          system: this.locationId,
+        });
+        break;
+      }
       // A team that has nobody left standing does not carry on.
       if (!team.members.length) break;
     }
 
+    // Measured against the objectives the mission HAD, not the ones it got to.
+    // With `steps.length` as the denominator a party that broke off after one
+    // success out of three read as a clean sweep — already true for a wiped-out
+    // team, and the captain going down is a second way to break off.
+    const total = template.steps.length;
     const won = steps.filter((s) => s.success).length;
-    const outcome = won === steps.length ? 'success'
+    const outcome = won === total ? 'success'
       : won === 0 ? 'failure' : 'partial';
     const lost = team.casualties.filter((c) => c.killed).length;
 
-    this.applyAwayOutcome(template, outcome, won, steps.length);
+    this.applyAwayOutcome(template, outcome, won, total);
 
     const report = {
       ok: true, id: template.id, title: template.title, outcome,
-      steps, passed: won, of: steps.length,
+      steps, passed: won, of: total, captainWounded,
       casualties: team.casualties.slice(), lost,
     };
     this.lastAway = report;
     this.ledger.record('away_mission', {
-      text: `${template.title}: ${won} of ${steps.length} objectives`
-        + (lost ? `, ${lost} lost` : ''),
+      text: `${template.title}: ${won} of ${total} objectives`
+        + (lost ? `, ${lost} lost` : '')
+        + (captainWounded ? ', broken off with the captain wounded' : ''),
       system: this.locationId,
     });
     this.pushLog(
-      `Landing party is back aboard. ${won} of ${steps.length} objectives.`
+      `Landing party is back aboard. ${won} of ${total} objectives.`
       + (lost ? ` We lost ${lost}.` : ''),
       'transporter',
     );
