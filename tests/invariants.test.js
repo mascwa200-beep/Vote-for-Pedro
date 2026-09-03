@@ -2643,3 +2643,113 @@ describe('the conditions a captain sets outlive the app being closed', () => {
     assert.equal(back.ship.evasive, false, 'still evading a fight that is over');
   });
 });
+
+describe('asking the same question twice gives the same ship', () => {
+  // `applyAllMods` resets ship.mods to the class baseline and then applies
+  // every source of modifiers in turn — progress, loadout, mastery, character,
+  // difficulty. Each of those calls ends in `recomputeDerived`, which rescales
+  // the current hull and shields by `newMax / prevMax` so that raising a
+  // maximum does not leave the ship reading as pre-damaged.
+  //
+  // Done five times in a row, that sends the hull down to the unmodded scale
+  // and back up, and 4588 * (4200/4620) * (4620/4200) is not 4588. It is
+  // called on construction, on load, on promotion, on equipping a console and
+  // on a difficulty change, and it returned a slightly different ship each
+  // time it was asked the same question.
+
+  test('applying every modifier twice changes nothing the second time', () => {
+    const g = new Game({ seed: 909n, crewMode: 'original' });
+    g.ship.takeDamage(400, { facing: 'port' });
+    // A damaged ship, because the rescale only shows on a hull that is not
+    // full: at 100% the clamp to maxHull hides the drift completely.
+    assert.ok(g.ship.hull < g.ship.maxHull, 'the ship took no damage, so nothing can drift');
+
+    const shape = () => JSON.stringify({
+      hull: g.ship.hull,
+      maxHull: g.ship.maxHull,
+      shields: { ...g.ship.shields },
+      maxShield: g.ship.maxShield,
+      mods: { ...g.ship.mods },
+    });
+
+    g.applyAllMods();
+    const once = shape();
+    g.applyAllMods();
+    assert.equal(shape(), once, 'the ship changed between two identical applications');
+    for (let i = 0; i < 8; i++) g.applyAllMods();
+    assert.equal(shape(), once, 'the ship drifted over repeated applications');
+  });
+
+  test('and a maximum that goes up still does not read as damage', () => {
+    // What the rescale is for, and what the fix must not break. Raising
+    // `hullMax` on a half-dead ship has to keep the PERCENTAGE, not the
+    // absolute hull — otherwise fitting a console reads as taking a hit.
+    const g = new Game({ seed: 909n, crewMode: 'original' });
+    g.ship.hull = g.ship.maxHull * 0.5;
+    const before = g.ship.hullPct;
+    g.ship.applyMods({ hullMax: 1.25 });
+    assert.ok(Math.abs(g.ship.hullPct - before) < 1e-9,
+      `fitting a bigger hull moved the reading from ${before} to ${g.ship.hullPct}`);
+    assert.ok(g.ship.maxHull > 0);
+  });
+});
+
+describe('a reloaded game runs the same game', () => {
+  // Nothing in the suite checked this, and it is the claim the whole project
+  // rests on: the simulation is deterministic, so a record written and read
+  // back has to carry on exactly where it left off.
+
+  /** Everything that would betray a divergence, including the RNG's position. */
+  const fingerprint = (g) => JSON.stringify({
+    stardate: g.clock.stardate,
+    hull: g.ship.hull,
+    shields: { ...g.ship.shields },
+    antimatter: g.ship.antimatter,
+    locationId: g.locationId,
+    crew: g.ship.crew,
+    logs: g.log.length,
+    ledger: g.ledger.entries.length,
+    rng: g.rng.save(),
+  });
+
+  test('saved outside a fight, it continues identically', () => {
+    const a = new Game({ seed: 4242n, crewMode: 'original' });
+    // Damaged BEFORE the save, and this is not incidental. At full hull
+    // `recomputeDerived` clamps to maxHull, which hides the rescale
+    // completely — the first version of this test passed against the very
+    // drift it was written to catch, because the ship it saved was unhurt.
+    a.ship.takeDamage(400, { facing: 'port' });
+    const to = a.galaxy.systems.find((s) => s.id !== a.locationId);
+    a.setCourse(to.id, 7);
+    // A voyage, so the encounter and upkeep streams are actually drawing.
+    for (let i = 0; i < 1200; i++) { a.update(STEP); if (a.engagement) a.engagement.end('routed'); }
+    assert.ok(!a.engagement, 'a fight was running — that is the case below');
+    assert.ok(Number(a.rng.save().count) > 0, 'the RNG was never drawn from, so this proves nothing');
+    assert.ok(a.ship.hull < a.ship.maxHull, 'the ship healed up, so the clamp hides everything');
+
+    const b = Game.load(JSON.parse(JSON.stringify(a.save())));
+    const run = (g) => {
+      for (let i = 0; i < 3000; i++) { g.update(STEP); if (g.engagement) g.engagement.end('routed'); }
+    };
+    run(a); run(b);
+    assert.equal(fingerprint(b), fingerprint(a),
+      'a reloaded game drifted away from the one it was copied from');
+  });
+
+  test('but a fight caught by the save is EXPECTED to diverge, and why', () => {
+    // Not a defect, and recorded here so nobody reads it as one. A save taken
+    // mid-battle wakes with the action broken off rather than resuming it —
+    // deliberate, and the reason Game.load gives for waking on the bridge. The
+    // two copies are therefore facing different futures on purpose: one still
+    // has a hostile in front of it and the other does not.
+    const a = new Game({ seed: 4242n, crewMode: 'original' });
+    a.startCombat([new Ship('d7', { name: 'IKS Diverge' })], { relentless: true });
+    for (let i = 0; i < 300; i++) a.update(STEP);
+    assert.ok(a.engagement && !a.engagement.over, 'the fight ended before the save');
+
+    const b = Game.load(JSON.parse(JSON.stringify(a.save())));
+    assert.equal(b.engagement, null, 'the fight resumed, which it must not');
+    assert.equal(b.lastCombat?.outcome, 'interrupted',
+      'the interrupted fight was not recorded, which is what makes the divergence honest');
+  });
+});
