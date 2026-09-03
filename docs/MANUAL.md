@@ -98,9 +98,17 @@ likely to miss. Outside a fight there is nothing to gain and a pod to lose, so
 the answer is no. You carry one.
 
 Every one of these controls emits the same order object the parser produces from
-typed text — so `"engineering, report"` and tapping **Engineering** are the same
+typed text — so `engineering report` and tapping **Engineering** are the same
 code path, and anything that breaks, breaks in both places at once, where a test
 can see it.
+
+Note the missing comma, which is not a typo. `engineering, report` reads the
+comma as an address and the rest as a request for a damage report, so it is a
+`status` order and not an intercom call. The chair used to log exactly that as
+the captain's line — six of the seven stations quoted him asking for something
+he had not asked for — and this page documented it. `tests/docs.test.js` now
+parses every phrase printed here and checks it reaches the order it is filed
+under, so the manual cannot drift away from the parser again.
 
 ### Navigation
 

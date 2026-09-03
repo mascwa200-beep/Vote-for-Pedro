@@ -91,9 +91,9 @@ read that as X — confirm?"*; when it is lost it says so and offers the nearest
 readings, rather than doing something you did not ask for.
 
 It is not a language model and it does not understand English — it recognises
-orders, from a lexicon of 530 phrasings and 138 weighted keywords across
-30 intents. The honest
-measure is `tests/corpus/orders.txt`: 545 hand-written paraphrases, deliberately
+orders, from a lexicon of 1489 phrasings and 310 weighted keywords across
+69 intents. The honest
+measure is `tests/corpus/orders.txt`: 610 hand-written paraphrases, deliberately
 hostile — typos, phonetic spelling, panic, politeness — with CI failing below
 95%. It currently sits at 100%, and the fallback exists for the sentences the
 corpus has not thought of yet.
@@ -273,16 +273,16 @@ src/ui/       LCARS kit, screens, tactical and map renderers, order parser
 android/      WebView shell, manifest, resources for the APK
 ```
 
-**Content:** 40 star systems, 31 ship classes, 16 authored episodes, 12
-species, 12 difficulties, 6 reputation tracks, 37 synthesized sound cues, and
-a command lexicon of 530 phrasings tested against a 545-order corpus,
+**Content:** 43 star systems, 31 ship classes, 16 authored episodes, 12
+species, 12 difficulties, 6 reputation tracks, 38 synthesized sound cues, and
+a command lexicon of 1489 phrasings tested against a 610-order corpus,
 and 31 procedurally generated hulls averaging 230 triangles each.
 
 ## Development
 
 ```sh
 npm start      # serve at http://localhost:8099
-npm test       # 281 tests — RNG determinism, combat maths, dice, saves, balance
+npm test       # 1000+ tests — RNG determinism, combat maths, dice, saves, balance
 npm run build  # regenerate dist/starfleet-command.html
 
 ANDROID_HOME=/path/to/android-sdk ./tools/build-apk.sh   # build the APK
