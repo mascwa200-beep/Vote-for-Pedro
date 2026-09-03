@@ -3443,3 +3443,96 @@ describe('an episode is settled by its own fight and no other', () => {
     assert.ok(checked >= 3, `only ${checked} episodes were left waiting across a save`);
   });
 });
+
+// ==================================================== what the watch holds on to
+
+describe('a watch report is something a captain can actually hear', () => {
+  // `conLines` is what the officer with the con is holding to tell you when you
+  // are next on the bridge, and nothing ever emptied it except `takeCon`. Every
+  // resume off the bridge, and every fight, pushed more on.
+  //
+  // Measured, a captain off the bridge across a five-year commission — away
+  // twelve hours at a time, twice a day:
+  //
+  //   resumes    10 | conLines    10 | save  10KB
+  //   resumes   500 | conLines   500 | save  43KB
+  //   resumes  3650 | conLines  3650 | save 206KB
+  //
+  // Two things wrong with that and they have one fix. The save grows without
+  // bound — 206KB, and the autosave ring keeps three of them, on a phone. And
+  // the report is unusable: the watch officer hands back 3,652 lines, when the
+  // entire point of the handover is that it is what you come back to.
+  //
+  // `pushLog` has capped the ship's log at 400 since it was written, and
+  // `MAX_ABSENCE_HOURS` is the same idea applied to time. This is that rule
+  // applied to the one list that never had it.
+
+  /** A commission resumed `n` times with the captain somewhere else. */
+  const awayFromTheBridge = (n) => {
+    let t = 1_700_000_000_000;
+    const g = new Game({ seed: 3n, now: () => t });
+    g.walk.roomId = 'sickbay';       // what `onBridge` actually reads
+    assert.equal(g.onBridge, false, 'the probe never got the captain off the bridge');
+    for (let i = 0; i < n; i++) {
+      t += 12 * 3600 * 1000;
+      g.syncCampaign();
+    }
+    return g;
+  };
+
+  test('the watch really does hold a report for a captain who is elsewhere', () => {
+    // The positive case, and it needed proving twice: `mode = 'walk'` does not
+    // put the captain off the bridge — `onBridge` reads `walk.roomId` — and the
+    // first version of this measured a parked ship that wrote nothing at all.
+    const g = awayFromTheBridge(10);
+    assert.ok(g.conLines.length > 0, 'ten absences and the watch has nothing to say');
+    assert.ok(g.conOfficer, 'nobody took the con while the captain was off the bridge');
+  });
+
+  test('and it stays a report rather than becoming an archive', () => {
+    const g = awayFromTheBridge(3650);
+    assert.ok(g.conLines.length <= Game.MAX_CON_LINES,
+      `the watch officer is holding ${g.conLines.length} lines to read out`);
+  });
+
+  test('so the record does not grow without bound behind the captain', () => {
+    const short = JSON.stringify(awayFromTheBridge(10).save()).length;
+    const long = JSON.stringify(awayFromTheBridge(3650).save()).length;
+    assert.ok(long < short * 4,
+      `the save went from ${(short / 1024).toFixed(0)}KB to ${(long / 1024).toFixed(0)}KB `
+      + 'over one commission spent off the bridge');
+    assert.ok(long < 60 * 1024, `${(long / 1024).toFixed(0)}KB of save after five years`);
+  });
+
+  test('and what it could not keep is said, not silently dropped', () => {
+    const g = awayFromTheBridge(3650);
+    g.walk.roomId = 'bridge';
+    const { lines } = g.takeCon();
+    assert.ok(lines.length <= Game.MAX_CON_LINES + 3,
+      `the handback was ${lines.length} lines long`);
+    assert.ok(lines.some((l) => /earlier/i.test(l)),
+      'thousands of entries were dropped and the report does not mention them');
+  });
+
+  test('but a short watch reports everything, and says nothing about earlier ones', () => {
+    // Must not misfire: the ordinary case is a captain who stepped out for an
+    // afternoon, and every line of that belongs in the handover.
+    const g = awayFromTheBridge(3);
+    const held = g.conLines.length;
+    assert.ok(held > 0 && held < Game.MAX_CON_LINES, `held ${held} lines after three absences`);
+    g.walk.roomId = 'bridge';
+    const { lines } = g.takeCon();
+    assert.ok(lines.length >= held, 'a short watch dropped part of its own report');
+    assert.ok(!lines.some((l) => /earlier/i.test(l)),
+      'a short watch claimed there were earlier entries it could not keep');
+  });
+
+  test('and taking the con still empties it', () => {
+    const g = awayFromTheBridge(3650);
+    g.walk.roomId = 'bridge';
+    g.takeCon();
+    assert.equal(g.conLines.length, 0, 'the con was taken back and the watch is still holding lines');
+    const after = JSON.stringify(g.save()).length;
+    assert.ok(after < 30 * 1024, `${(after / 1024).toFixed(0)}KB of save after the report was given`);
+  });
+});

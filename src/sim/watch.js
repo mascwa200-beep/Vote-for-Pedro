@@ -143,7 +143,7 @@ export function assignWatches(crew) {
  * game telling you what happened, and this is a person telling you what they
  * did about it while you were not there.
  */
-export function handbackReport(officer, hours, lines = []) {
+export function handbackReport(officer, hours, lines = [], dropped = 0) {
   if (!officer) return lines;
   const span = hours < 1 ? 'the last hour'
     : hours < 24 ? `the last ${Math.round(hours)} hours`
@@ -151,5 +151,12 @@ export function handbackReport(officer, hours, lines = []) {
   const opener = lines.length
     ? `${officer.rank} ${officer.name}: I had the con for ${span}.`
     : `${officer.rank} ${officer.name}: I had the con for ${span}. Nothing to report.`;
-  return [opener, ...lines, `${officer.rank} ${officer.name}: You have the con, Captain.`];
+  // What the watch could not hold is said rather than quietly missing. A
+  // handover that silently drops most of itself is a handover the captain
+  // cannot tell from a quiet watch.
+  const older = dropped > 0
+    ? [`${officer.rank} ${officer.name}: ${dropped} earlier ${dropped === 1 ? 'entry is' : 'entries are'} `
+      + 'too far back to read out. This is the recent watch.']
+    : [];
+  return [opener, ...older, ...lines, `${officer.rank} ${officer.name}: You have the con, Captain.`];
 }
