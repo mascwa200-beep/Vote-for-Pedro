@@ -28,15 +28,17 @@ import {
   starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh,
   dropLineMesh, bodyMesh, VOLUME,
 } from '../gfx/scene.js';
-import { vista, bearingOf, fovFor, noseOf } from '../gfx/vista.js';
+import { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } from '../gfx/vista.js';
 import { drawCombatEffects } from '../gfx/effects.js';
 import { fitCanvas } from './touch.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const DEG = Math.PI / 180;
 
-/** How many scenery bodies may be drawn in one frame. See `drawVista`. */
-export const VISTA_DRAW_CAP = 4;
+// Defined in gfx/vista.js and re-exported here, where it is enforced, so that
+// node — which cannot import this file — can assert the budget against the one
+// definition instead of a copy of the number.
+export { VISTA_DRAW_CAP };
 
 /**
  * Simulation space is currently a plane: ships carry x, y and a heading in

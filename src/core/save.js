@@ -227,6 +227,14 @@ const DEFAULT_SETTINGS = {
   muted: false,
   voice: true, haptics: true, autoFire: true, wakeLock: true,
   textSize: 'normal', reduceMotion: false, orders: 'both',
+  // Three dimensions, when the device can.
+  //
+  // This existed as a read in main.js and nothing else: not a default, not a
+  // control, never written. `undefined === false` is false, so the 3D path was
+  // always taken and the 2D view — the display this game shipped with — was
+  // reachable only by a real WebGL failure, which meant it was also never
+  // exercised by anything. A seam nobody can move is not a seam.
+  render3d: true,
   // The commission runs in real time. This is the escape hatch, and it is
   // labelled honestly in Options for what it forfeits.
   compression: 1,

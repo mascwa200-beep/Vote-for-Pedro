@@ -30,6 +30,19 @@
 import { vec3 } from './math.js';
 import { hashSeed } from '../core/rng.js';
 
+/**
+ * How many scenery bodies may be drawn in one frame. See `drawVista` in
+ * ui/tactical3d.js, which enforces it.
+ *
+ * It lives HERE, rather than beside the code that uses it, for one reason:
+ * this module is the vista maths node can import, and `ui/tactical3d.js` is
+ * not. The budget test in tests/gfx.test.js used to carry its own `const CAP =
+ * 4` with a comment admitting it was a copy — two numbers that had to agree
+ * and nothing making them. The same shape as the button-phrase list that got
+ * deleted for the same reason.
+ */
+export const VISTA_DRAW_CAP = 4;
+
 const DEG = Math.PI / 180;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 

@@ -1721,6 +1721,7 @@ try {
   await goTo(page, 'tactical');
   check('tactical canvas is present', await page.locator('#tactical').isVisible());
 
+
   // The tactical canvas is WebGL when the device can manage it and 2D when it
   // cannot, so "did it draw anything" has to be asked in a way that works for
   // both. Reading back GL pixels needs preserveDrawingBuffer, which costs
@@ -4981,6 +4982,167 @@ try {
   const realConsole = consoleErrors.filter((t) => !ignorable(t));
   check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
   check('no console errors', realConsole.length === 0, realConsole.slice(0, 5).join(' | '));
+
+  // ------------------------------------------------ the 2D display, on purpose
+  //
+  // `settings.render3d` was a read and nothing else — never written, absent
+  // from the defaults, no control. `undefined === false` is false, so the 3D
+  // path was always taken and the flat plot this game shipped with was
+  // reachable only by a real WebGL failure. Which meant the `renderMode ===
+  // '2d'` branch below has never once run: in headless Chromium the mode is
+  // always '3d', so the check that samples the 2D canvas has been dead since it
+  // was written.
+  //
+  // Now the setting is real, so ask for it and look.
+  //
+  // This runs LAST, after every other check on the main page, because it is
+  // the one check that throws the GL canvas away: a canvas can only ever have
+  // one context type, so changing mode means changing canvas, and the renderer
+  // every earlier check reads is bound to the old one. Run early it left the
+  // shared renderer reporting zero frames to everything downstream. The
+  // harness already isolates its disruptive checks this way — the single-file
+  // and APK passes below each get their own browser context.
+  // Driven through `go` rather than the nav bar: this block runs after the
+  // offline-reload proof, and the nav button it used to click is not on the
+  // page at that point. The click simply timed out and took the whole harness
+  // with it.
+  await dismissModals(page);
+  await page.evaluate(() => { window.__app.go('tactical'); window.__app.render(); });
+  await page.waitForTimeout(300);
+  const flat = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const before = app.settings.render3d;
+
+    // Put something on the plot first.
+    //
+    // An empty plot draws an empty plot, which is correct and tells this check
+    // nothing: the first version of it sampled a peacetime canvas at the end of
+    // the run and reported zero lit pixels out of 1.8 million, which is the
+    // display working exactly as intended. Give it two ships to draw, the same
+    // way the framing checks above do, and never step the sim — this is a
+    // photograph, not a battle.
+    const { Ship } = await import('./src/sim/ship.js');
+    const a = new Ship('d7', { faction: 'klingon', name: 'IKS Flat' });
+    const b = new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Plot' });
+    g.startCombat([a, b], { name: 'Flat plot', relentless: true });
+    a.x = 500; a.y = -260; a.z = 0;
+    b.x = -420; b.y = 300; b.z = 0;
+
+    app.settings.render3d = false;
+    app.render();
+    await new Promise((r) => setTimeout(r, 400));
+    // Draw it ourselves rather than waiting for the animation loop.
+    //
+    // `app.render()` rebuilds the DOM; the canvas is painted by the RAF frame
+    // loop, which is not running at this point in the harness. Sampling after
+    // it left both halves of the comparison reading one stale image — 72,841
+    // lit pixels with the hostiles and 72,841 without, identical to the pixel,
+    // which is the signature of a canvas nobody repainted. Calling the view's
+    // own render is what the frame loop does, and it measures the display
+    // instead of measuring whatever was last left on the canvas.
+    const paint = () => app.tactical?.render?.(g.engagement, 0, 1 / 30);
+    paint();
+
+    const c = document.getElementById('tactical');
+    const ctx = c.getContext('2d');
+    // A canvas with no backing store reads back as zero pixels, and a loop over
+    // zero pixels finds zero lit ones and calls that a pass. Report the size so
+    // the check can refuse to conclude anything from an empty sample.
+    const sampled = c.width * c.height;
+    let lit = 0;
+    if (sampled) {
+      const data = ctx.getImageData(0, 0, c.width, c.height).data;
+      for (let i = 3; i < data.length; i += 4 * 97) if (data[i] > 8) lit++;
+    }
+    // "Something is lit" is satisfied by the GRID. Looking at the screenshot
+    // showed a plot with range rings and no obvious hostiles on it, which the
+    // pixel count could not tell apart from a working display — so ask the
+    // question that distinguishes them: take the hostiles away, redraw, and see
+    // whether the picture actually loses anything.
+    // EVERY pixel, not every 97th.
+    //
+    // The coarse stride above is fine for "is anything lit at all", and useless
+    // for this: three ship markers are about 0.065% of a 1.8-megapixel canvas,
+    // so a 1-in-97 sample expects to catch three of them and can easily catch
+    // none. Run at that stride the with/without comparison came back identical
+    // at 737 both ways, which says nothing about the ships and everything about
+    // the sampling. Counting all of them costs a few milliseconds once.
+    const countAll = () => {
+      if (!sampled) return 0;
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 8) n++;
+      return n;
+    };
+    const withShips = countAll();
+    const keptHostiles = g.engagement.hostiles;
+    g.engagement.hostiles = [];
+    paint();
+    const litEmpty = countAll();
+    g.engagement.hostiles = keptHostiles;
+    paint();
+
+    const out = {
+      mode: app.renderMode,
+      is2d: app.tactical?.constructor?.name ?? null,
+      selectable: typeof app.tactical?.onSelect === 'function',
+      drew: app.tactical?.lastShips?.length ?? 0,
+      sampled,
+      lit,
+      withShips,
+      litEmpty,
+      // The 3D renderer must be gone, not merely unused: a live GL context
+      // behind a 2D display is the leak this project has fixed twice.
+      glFrames: app.tactical?.stats?.frames ?? null,
+    };
+
+    out.before = before;
+    return out;
+  });
+  check('asking for the flat plot gets the flat plot',
+    flat.mode === '2d' && flat.is2d === 'TacticalView', JSON.stringify(flat));
+  check('and the sample looked at a canvas with pixels in it',
+    flat.sampled > 10000, `${flat.sampled} pixels`);
+  check('and the flat plot actually draws',
+    flat.lit > 50, `lit samples: ${flat.lit} of ${flat.sampled} pixels`);
+  check('and it draws the SHIPS, not just the grid',
+    flat.drew === 3 && flat.withShips > flat.litEmpty,
+    JSON.stringify({ recorded: flat.drew, litWithShips: flat.withShips,
+      litWithoutHostiles: flat.litEmpty, difference: flat.withShips - flat.litEmpty }));
+  check('and ships are still selectable on it', flat.selectable === true);
+
+  // Look at it. This display has never been seen: the branch that draws it has
+  // not run in this harness since it was written.
+  await page.screenshot({ path: join(SHOTS, '06s-the-flat-plot.png') });
+
+  const backTo3d = await page.evaluate(async (before) => {
+    const app = window.__app;
+    const g = app.game;
+    // Put the display back FIRST, and read it while the ship is still in the
+    // fight and still on the plot. Ending the engagement is what moves it:
+    // `end('escaped')` runs `escapeToWarp`, which lays in a course and puts the
+    // game into transit, so the tactical rebuild never runs and the mode stays
+    // whatever it was. Read first, tear down second.
+    app.settings.render3d = before;
+    app.render();
+    await new Promise((r) => setTimeout(r, 400));
+    const mode = app.renderMode;
+
+    // Now the fight, and the state ending it leaves behind.
+    g.engagement?.end?.('escaped');
+    g.update(1 / 30);
+    g.transit = null;
+    g.encounter = null;
+    g.mode = 'bridge';
+    g.ship.restore?.();
+    app.render();
+    return { mode, fightCleared: !g.engagement || g.engagement.over };
+  }, flat.before);
+  check('and turning it back on restores the 3D view',
+    backTo3d.mode === '3d', JSON.stringify(backTo3d));
+  check('and the fight staged for it is put away again',
+    backTo3d.fightCleared === true, JSON.stringify(backTo3d));
 
   // ------------------------------------------------ the single-file build
   // Opened straight off the filesystem, the way it will be on the phone if

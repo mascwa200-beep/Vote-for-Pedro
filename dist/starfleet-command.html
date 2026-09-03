@@ -4126,1718 +4126,6 @@ __exports.audio = audio;
 
 });
 
-__define("src/core/num.js", function (__exports, __require) {
-// Numeric guards for the simulation's edges.
-//
-// The clamps in this game were all written as `Math.max(lo, Math.min(hi, v))`,
-// which is correct for every number except the ones that matter: `Math.min(1,
-// NaN)` is NaN, and `Math.max(0, NaN)` is NaN. A single bad value therefore
-// walked straight through every clamp in the sim and poisoned whatever it
-// touched — and NaN is contagious. Once a ship's position is NaN, every
-// subsequent update multiplies NaN by a heading and stores NaN back. Nothing
-// recovers it: not repair, not warping out, not ending the engagement. It is
-// the most complete soft-lock the game can reach, and it is one guard away
-// from being impossible.
-//
-// Fuzzing the parser with 20,000 hostile inputs produced no non-finite values,
-// so this is not defending against typed orders. It is defending against saves,
-// arithmetic edge cases, and every future caller — the sim should not be one
-// bad number away from unusable.
-
-/**
- * Coerce anything to a finite number.
- *
- * NaN, both infinities, and non-numeric values become `fallback`. This is the
- * gate: put it in front of a clamp rather than trusting the clamp.
- *
- * @param {*} v
- * @param {number} fallback  used when `v` is not a finite number
- */
-function finite(v, fallback = 0) {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-/**
- * Clamp to a range, NaN-safe.
- *
- * A non-finite input lands on `lo` rather than propagating, because every
- * caller here is clamping a quantity where the low end is the safe answer:
- * no throttle, no power, no damage.
- */
-function clamp(v, lo, hi) {
-  const n = finite(v, lo);
-  return n < lo ? lo : n > hi ? hi : n;
-}
-
-/** Wrap a bearing into 0..360, NaN-safe. */
-function wrapDegrees(v) {
-  const n = finite(v, 0) % 360;
-  return n < 0 ? n + 360 : n;
-}
-
-__exports.finite = finite;
-__exports.clamp = clamp;
-__exports.wrapDegrees = wrapDegrees;
-
-});
-
-__define("src/sim/power.js", function (__exports, __require) {
-// Power distribution — the STO model.
-//
-// Four subsystems draw from a fixed pool. Each level above/below the 50 nominal
-// scales that subsystem's output. Presets are one tap; the sliders underneath
-// are the real control, and they're what a captain actually orders.
-
-const { clamp } = __require("src/core/num.js");
-const SUBSYSTEMS = ['weapons', 'shields', 'engines', 'auxiliary'];
-const SUBSYSTEM_LABEL = {
-  weapons: 'Weapons',
-  shields: 'Shields',
-  engines: 'Engines',
-  auxiliary: 'Auxiliary',
-};
-
-/**
- * What each channel actually buys, in the words an officer would use.
- *
- * Four unlabelled sliders told a captain nothing about what he was trading
- * away, and the Auxiliary one was the worst of them: the parser calls that
- * channel "sensors" and the preset above calls it Science, so the one thing a
- * captain could reasonably infer from the screen was the one thing it did not
- * do. These are read by the power panel and are the screen's half of the
- * contract — if a line here stops being true, the effect it names has moved.
- */
-const SUBSYSTEM_EFFECT = {
-  weapons: 'Beam and cannon damage, and how fast the banks recharge.',
-  shields: 'How quickly the facings come back after a hit.',
-  engines: 'Impulse speed and how hard she turns.',
-  auxiliary: 'Sensor resolution, damage control, and fire suppression.',
-};
-const PRESETS = {
-  balanced: { id: 'balanced', label: 'Balanced', order: 'Standard distribution',
-    levels: { weapons: 50, shields: 50, engines: 50, auxiliary: 50 } },
-  attack: { id: 'attack', label: 'Attack', order: 'Power to weapons',
-    levels: { weapons: 100, shields: 40, engines: 35, auxiliary: 25 } },
-  defense: { id: 'defense', label: 'Defense', order: 'Power to shields',
-    levels: { weapons: 40, shields: 100, engines: 35, auxiliary: 25 } },
-  speed: { id: 'speed', label: 'Speed', order: 'Power to engines',
-    levels: { weapons: 35, shields: 40, engines: 100, auxiliary: 25 } },
-  science: { id: 'science', label: 'Science', order: 'Power to auxiliary',
-    levels: { weapons: 30, shields: 45, engines: 25, auxiliary: 100 } },
-};
-const PRESET_LIST = Object.values(PRESETS);
-
-/** A subsystem at `level` performs at this multiple of nominal. */
-function effectiveness(level) {
-  // 50 -> 1.0, 100 -> 1.5, 25 -> 0.75, 0 -> 0.4 (never fully dead from power alone)
-  if (level >= 50) return 1 + (level - 50) * 0.01;
-  return Math.max(0.4, 1 - (50 - level) * 0.012);
-}
-class PowerGrid {
-  /**
-   * @param {number} cap total distributable power (ship's powerCap)
-   */
-  constructor(cap = 200) {
-    this.cap = cap;
-    this.levels = { ...PRESETS.balanced.levels };
-    this.preset = 'balanced';
-    // Rebalancing is not instant — the EPS grid takes a moment to settle.
-    this.target = { ...this.levels };
-    this.transferRate = 55; // power units per second
-    // Balanced is 50 to each of four subsystems, which is 200 — and plenty of
-    // hulls have a smaller grid than that. A Bird-of-Prey has a cap of 190, so
-    // it was built drawing 200 and was over its own budget from the first tick
-    // of its existence, with every `factor()` reading computed off a
-    // distribution the ship could not actually supply.
-    this.normalize();
-    this.levels = { ...this.target };
-  }
-
-  get total() {
-    return SUBSYSTEMS.reduce((n, s) => n + this.target[s], 0);
-  }
-
-  /** Apply a named preset. */
-  applyPreset(id) {
-    const p = PRESETS[id];
-    if (!p) return false;
-    this.target = { ...p.levels };
-    this.preset = id;
-    this.normalize();
-    return true;
-  }
-
-  /**
-   * Set one subsystem, stealing from or giving back to the others so the
-   * total stays within cap. This is what "divert power to shields" does.
-   */
-  set(subsystem, value) {
-    if (!SUBSYSTEMS.includes(subsystem)) return false;
-    // Rounded after the guard: Math.round(NaN) is NaN, and a NaN power level
-    // silently disables the subsystem it was meant to boost.
-    this.target[subsystem] = Math.round(clamp(value, 0, 100));
-    this.preset = 'custom';
-    this.normalize(subsystem);
-    return true;
-  }
-
-  /** Shift `amount` into a subsystem, drawn evenly from the rest. */
-  divert(subsystem, amount = 25) {
-    return this.set(subsystem, this.target[subsystem] + amount);
-  }
-
-  /** Keep the sum at or under cap by draining the others proportionally. */
-  normalize(protectedSub = null) {
-    const budget = this.cap;
-    let total = this.total;
-    if (total <= budget) return;
-
-    let excess = total - budget;
-    const donors = SUBSYSTEMS.filter((s) => s !== protectedSub && this.target[s] > 0);
-    // Drain proportional to how much each donor has above zero.
-    for (let pass = 0; pass < 4 && excess > 0.01; pass++) {
-      const pool = donors.reduce((n, s) => n + this.target[s], 0);
-      if (pool <= 0) break;
-      for (const s of donors) {
-        const share = (this.target[s] / pool) * excess;
-        const taken = Math.min(this.target[s], share);
-        this.target[s] -= taken;
-      }
-      excess = this.total - budget;
-    }
-    for (const s of SUBSYSTEMS) this.target[s] = Math.max(0, Math.round(this.target[s]));
-
-    // The protected subsystem is protected from being DRAINED, not exempt from
-    // the cap. With the donors emptied and the total still over budget it was
-    // simply left there — so after ejecting the warp core, which cuts the cap
-    // to 45 per cent, asking for 100 to weapons kept 100 to weapons and the
-    // whole point of the ejection penalty went away.
-    if (protectedSub && this.total > budget) {
-      const others = SUBSYSTEMS.reduce((n, s) => (s === protectedSub ? n : n + this.target[s]), 0);
-      this.target[protectedSub] = Math.max(0, Math.round(budget - others));
-    }
-
-    // Rounding four numbers up can put the total back over the cap by a couple
-    // of points, which is how a grid at 92 of 90 survived a function whose
-    // entire job is "keep the sum at or under cap". Shave the largest until it
-    // does not.
-    let over = this.total - budget;
-    while (over > 0) {
-      const biggest = SUBSYSTEMS.reduce((a, b) => (this.target[a] >= this.target[b] ? a : b));
-      if (this.target[biggest] <= 0) break;
-      const take = Math.min(over, this.target[biggest]);
-      this.target[biggest] -= take;
-      over -= take;
-    }
-  }
-
-  /** Ease actual levels toward target. Called every sim step. */
-  update(dt) {
-    for (const s of SUBSYSTEMS) {
-      const diff = this.target[s] - this.levels[s];
-      if (Math.abs(diff) < 0.01) { this.levels[s] = this.target[s]; continue; }
-      const step = Math.sign(diff) * Math.min(Math.abs(diff), this.transferRate * dt);
-      this.levels[s] += step;
-    }
-  }
-
-  /** Effectiveness multiplier for a subsystem right now. */
-  factor(subsystem) {
-    return effectiveness(this.levels[subsystem] ?? 50);
-  }
-
-  /** True once actual levels have caught up with the order. */
-  get settled() {
-    return SUBSYSTEMS.every((s) => Math.abs(this.target[s] - this.levels[s]) < 0.5);
-  }
-
-  save() {
-    return { cap: this.cap, levels: this.levels, target: this.target, preset: this.preset };
-  }
-
-  static load(data, cap = 200) {
-    const g = new PowerGrid(data?.cap ?? cap);
-    if (data) {
-      g.levels = { ...g.levels, ...data.levels };
-      g.target = { ...g.target, ...data.target };
-      g.preset = data.preset ?? 'custom';
-    }
-    return g;
-  }
-}
-
-__exports.SUBSYSTEMS = SUBSYSTEMS;
-__exports.SUBSYSTEM_LABEL = SUBSYSTEM_LABEL;
-__exports.SUBSYSTEM_EFFECT = SUBSYSTEM_EFFECT;
-__exports.PRESETS = PRESETS;
-__exports.PRESET_LIST = PRESET_LIST;
-__exports.effectiveness = effectiveness;
-__exports.PowerGrid = PowerGrid;
-
-});
-
-__define("src/world/ships.data.js", function (__exports, __require) {
-// Ship classes — player-commandable and otherwise.
-//
-// Every number here feeds the simulation directly. `tier` gates availability by
-// rank; `slots` are the loadout hardpoints (see sim/loadout.js).
-
-/** Weapon mounts. arc is degrees of firing coverage centred on `facing`. */
-const arc = (facing, degrees) => ({ facing, degrees });
-const SHIP_CLASSES = {
-  // ---------- Player-commandable ----------
-  constitution: {
-    id: 'constitution', name: 'Constitution class', faction: 'federation',
-    tier: 3, role: 'cruiser',
-    hull: 4200, shields: 3400, shieldRegen: 42,
-    crew: 430, mass: 1.0,
-    impulse: 0.72, turnRate: 9.0, maxWarp: 8.0, warpEfficiency: 1.0,
-    powerCap: 200,
-    weapons: [
-      { id: 'phaser_bank_fwd', type: 'beam', name: 'Forward Phaser Banks', damage: 168, cycle: 3.2, ...arc(0, 250) },
-      { id: 'phaser_bank_aft', type: 'beam', name: 'Aft Phaser Banks', damage: 120, cycle: 3.2, ...arc(180, 200) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Photon Tubes', damage: 420, cycle: 7.5, ...arc(0, 90) },
-    ],
-    slots: { tactical: 3, engineering: 3, science: 2, device: 2 },
-    boffSeats: [
-      { dept: 'tactical', rank: 3 }, { dept: 'engineering', rank: 3 },
-      { dept: 'science', rank: 2 }, { dept: 'universal', rank: 2 },
-    ],
-    description: 'Heavy cruiser. Twelve ships in the fleet, five-year missions, no support within a month at warp.',
-  },
-  constitution_refit: {
-    id: 'constitution_refit', name: 'Constitution class (Refit)', faction: 'federation',
-    tier: 4, role: 'cruiser', refitOf: 'constitution',
-    hull: 5100, shields: 4400, shieldRegen: 55,
-    crew: 430, mass: 1.05,
-    impulse: 0.78, turnRate: 9.5, maxWarp: 9.0, warpEfficiency: 1.15,
-    powerCap: 220,
-    weapons: [
-      { id: 'phaser_bank_fwd', type: 'beam', name: 'Forward Phaser Banks', damage: 196, cycle: 3.0, ...arc(0, 250) },
-      { id: 'phaser_bank_aft', type: 'beam', name: 'Aft Phaser Banks', damage: 140, cycle: 3.0, ...arc(180, 200) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Torpedo Bay', damage: 430, cycle: 6.8, ...arc(0, 90) },
-      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Photon Tube', damage: 340, cycle: 8.0, ...arc(180, 90) },
-    ],
-    slots: { tactical: 4, engineering: 3, science: 3, device: 2 },
-    boffSeats: [
-      { dept: 'tactical', rank: 3 }, { dept: 'engineering', rank: 3 },
-      { dept: 'science', rank: 3 }, { dept: 'universal', rank: 2 },
-    ],
-    description: 'The full rebuild. New warp geometry, new phasers drawing straight off the engines.',
-  },
-  miranda: {
-    id: 'miranda', name: 'Miranda class', faction: 'federation',
-    tier: 2, role: 'light cruiser',
-    hull: 3100, shields: 2600, shieldRegen: 38,
-    crew: 220, mass: 0.8,
-    impulse: 0.8, turnRate: 12.0, maxWarp: 8.0, warpEfficiency: 1.1,
-    powerCap: 180,
-    weapons: [
-      { id: 'phaser_bank_fwd', type: 'beam', name: 'Phaser Banks', damage: 132, cycle: 3.2, ...arc(0, 250) },
-      { id: 'torpedo_roll', type: 'torpedo', name: 'Rollbar Torpedo Pod', damage: 320, cycle: 7.0, ...arc(0, 180) },
-    ],
-    slots: { tactical: 2, engineering: 2, science: 2, device: 1 },
-    boffSeats: [
-      { dept: 'tactical', rank: 2 }, { dept: 'engineering', rank: 2 }, { dept: 'science', rank: 2 },
-    ],
-    description: 'Workhorse. Survey, escort, courier — whatever the sector needs that week.',
-  },
-  oberth: {
-    id: 'oberth', name: 'Oberth class', faction: 'federation',
-    tier: 2, role: 'science vessel',
-    hull: 2400, shields: 2900, shieldRegen: 62,
-    crew: 80, mass: 0.6,
-    impulse: 0.68, turnRate: 14.0, maxWarp: 7.5, warpEfficiency: 1.3,
-    powerCap: 190, auxBonus: 25,
-    weapons: [
-      { id: 'phaser_light', type: 'beam', name: 'Light Phaser Emitters', damage: 90, cycle: 3.5, ...arc(0, 300) },
-    ],
-    slots: { tactical: 1, engineering: 2, science: 4, device: 2 },
-    boffSeats: [
-      { dept: 'science', rank: 3 }, { dept: 'science', rank: 2 }, { dept: 'engineering', rank: 2 },
-    ],
-    description: 'A laboratory with a warp drive. Sensors that see everything, guns that deter nothing.',
-  },
-  excelsior: {
-    id: 'excelsior', name: 'Excelsior class', faction: 'federation',
-    tier: 5, role: 'heavy cruiser',
-    hull: 6400, shields: 5200, shieldRegen: 60,
-    crew: 750, mass: 1.35,
-    impulse: 0.75, turnRate: 7.5, maxWarp: 9.2, warpEfficiency: 1.25,
-    powerCap: 240,
-    weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 244, cycle: 3.0, ...arc(0, 250) },
-      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 168, cycle: 3.0, ...arc(180, 250) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 545, cycle: 6.5, ...arc(0, 90) },
-      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 400, cycle: 7.2, ...arc(180, 90) },
-    ],
-    slots: { tactical: 4, engineering: 4, science: 3, device: 3 },
-    boffSeats: [
-      { dept: 'tactical', rank: 3 }, { dept: 'engineering', rank: 4 },
-      { dept: 'science', rank: 3 }, { dept: 'universal', rank: 3 },
-    ],
-    description: 'The transwarp experiment failed; the spaceframe did not. Still the fleet backbone.',
-  },
-  constellation: {
-    id: 'constellation', name: 'Constellation class', faction: 'federation',
-    tier: 3, role: 'explorer',
-    hull: 3800, shields: 3200, shieldRegen: 44,
-    crew: 535, mass: 1.0,
-    impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 1.35,
-    powerCap: 200,
-    weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Banks', damage: 152, cycle: 3.2, ...arc(0, 270) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 360, cycle: 7.2, ...arc(0, 120) },
-    ],
-    slots: { tactical: 2, engineering: 3, science: 3, device: 3 },
-    boffSeats: [
-      { dept: 'engineering', rank: 3 }, { dept: 'science', rank: 3 },
-      { dept: 'tactical', rank: 2 }, { dept: 'universal', rank: 2 },
-    ],
-    description: 'Four nacelles for range. Built to be away from resupply longer than anything else in the fleet.',
-  },
-
-  // ---------- Klingon ----------
-  bird_of_prey: {
-    id: 'bird_of_prey', name: 'B’rel-class Bird-of-Prey', faction: 'klingon',
-    tier: 3, role: 'raider',
-    hull: 2600, shields: 2000, shieldRegen: 34,
-    crew: 36, mass: 0.55,
-    impulse: 0.95, turnRate: 18.0, maxWarp: 8.5, warpEfficiency: 1.0,
-    powerCap: 190, cloak: true,
-    weapons: [
-      { id: 'disruptor_fwd', type: 'cannon', name: 'Forward Disruptor Cannons', damage: 138, cycle: 2.4, ...arc(0, 45) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Torpedo', damage: 330, cycle: 8.0, ...arc(0, 45) },
-    ],
-    description: 'Fast, cloaked, and fragile. It must decloak to fire, and it knows exactly when to.',
-  },
-  d7: {
-    id: 'd7', name: 'D7-class Battlecruiser', faction: 'klingon',
-    tier: 4, role: 'battlecruiser',
-    hull: 4600, shields: 3600, shieldRegen: 40,
-    crew: 400, mass: 1.1,
-    impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 0.95,
-    powerCap: 210,
-    weapons: [
-      { id: 'disruptor_fwd', type: 'beam', name: 'Forward Disruptors', damage: 136, cycle: 3.0, ...arc(0, 200) },
-      { id: 'disruptor_aft', type: 'beam', name: 'Aft Disruptors', damage: 104, cycle: 3.2, ...arc(180, 160) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 420, cycle: 7.5, ...arc(0, 90) },
-    ],
-    description: 'The Empire’s line ship. Built to trade damage until one side stops.',
-  },
-
-  // ---------- Romulan ----------
-  warbird: {
-    id: 'warbird', name: 'D’deridex-class Warbird', faction: 'romulan',
-    tier: 6, role: 'warbird',
-    hull: 7800, shields: 6200, shieldRegen: 58,
-    crew: 1500, mass: 1.8,
-    impulse: 0.62, turnRate: 5.5, maxWarp: 9.0, warpEfficiency: 1.0,
-    powerCap: 250, cloak: true,
-    weapons: [
-      { id: 'disruptor_fwd', type: 'beam', name: 'Forward Disruptor Array', damage: 190, cycle: 3.2, ...arc(0, 220) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Plasma Torpedo', damage: 640, cycle: 9.0, ...arc(0, 90) },
-    ],
-    description: 'Twice your mass and in no hurry. It decloaks when the geometry already favours it.',
-  },
-  scoutship: {
-    id: 'scoutship', name: 'Romulan Scout', faction: 'romulan',
-    tier: 2, role: 'scout',
-    hull: 1800, shields: 1600, shieldRegen: 44,
-    crew: 24, mass: 0.5,
-    impulse: 1.0, turnRate: 20.0, maxWarp: 8.0, warpEfficiency: 1.2,
-    powerCap: 170, cloak: true,
-    weapons: [
-      { id: 'disruptor', type: 'cannon', name: 'Disruptor Cannon', damage: 84, cycle: 2.6, ...arc(0, 60) },
-    ],
-    description: 'Sent to look, not to fight. It will run the moment looking becomes expensive.',
-  },
-
-  // ---------- Cardassian ----------
-  galor: {
-    id: 'galor', name: 'Galor-class Cruiser', faction: 'cardassian',
-    tier: 4, role: 'cruiser',
-    hull: 4400, shields: 3800, shieldRegen: 48,
-    crew: 300, mass: 1.05,
-    impulse: 0.74, turnRate: 9.0, maxWarp: 9.0, warpEfficiency: 1.05,
-    powerCap: 205,
-    weapons: [
-      { id: 'spiral_fwd', type: 'beam', name: 'Spiral-Wave Disruptors', damage: 144, cycle: 2.9, ...arc(0, 240) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Launcher', damage: 380, cycle: 7.0, ...arc(0, 120) },
-    ],
-    description: 'Disciplined, well-drilled, and patient. It will wear your shields down by the numbers.',
-  },
-
-  // ---------- Others ----------
-  marauder: {
-    id: 'marauder', name: 'D’Kora-class Marauder', faction: 'ferengi',
-    tier: 3, role: 'marauder',
-    hull: 3400, shields: 3000, shieldRegen: 46,
-    crew: 450, mass: 1.0,
-    impulse: 0.78, turnRate: 10.0, maxWarp: 9.2, warpEfficiency: 1.2,
-    powerCap: 195,
-    weapons: [
-      { id: 'plasma_fwd', type: 'beam', name: 'Plasma Emitters', damage: 112, cycle: 3.4, ...arc(0, 260) },
-    ],
-    description: 'Armed enough to intimidate freighters, and entirely willing to be bought off.',
-  },
-  orion_raider: {
-    id: 'orion_raider', name: 'Orion Raider', faction: 'orion',
-    tier: 2, role: 'raider',
-    hull: 1900, shields: 1500, shieldRegen: 32,
-    crew: 60, mass: 0.6,
-    impulse: 0.92, turnRate: 16.0, maxWarp: 8.0, warpEfficiency: 1.0,
-    powerCap: 170,
-    weapons: [
-      { id: 'disruptor', type: 'cannon', name: 'Salvaged Disruptors', damage: 76, cycle: 2.5, ...arc(0, 70) },
-    ],
-    description: 'Whatever they could bolt to a hull. Dangerous in threes, worthless alone.',
-  },
-  tholian_web_spinner: {
-    id: 'tholian_web_spinner', name: 'Tholian Web Spinner', faction: 'tholian',
-    tier: 4, role: 'interceptor',
-    hull: 2200, shields: 4200, shieldRegen: 70,
-    crew: 12, mass: 0.5,
-    impulse: 1.05, turnRate: 22.0, maxWarp: 8.0, warpEfficiency: 1.0,
-    powerCap: 200, websAfter: 45,
-    weapons: [
-      { id: 'lance', type: 'cannon', name: 'Thermionic Lance', damage: 130, cycle: 2.8, ...arc(0, 90) },
-    ],
-    description: 'It is not trying to destroy you. It is trying to finish the web before you leave.',
-  },
-  jem_hadar_attack: {
-    id: 'jem_hadar_attack', name: 'Jem’Hadar Attack Ship', faction: 'dominion',
-    tier: 5, role: 'attack ship',
-    hull: 3000, shields: 2400, shieldRegen: 40,
-    crew: 50, mass: 0.7,
-    impulse: 1.1, turnRate: 19.0, maxWarp: 9.0, warpEfficiency: 1.0,
-    powerCap: 220, ramsWhenDoomed: true,
-    weapons: [
-      { id: 'polaron_fwd', type: 'cannon', name: 'Polaron Cannons', damage: 176, cycle: 2.2, ...arc(0, 60) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Launcher', damage: 420, cycle: 7.0, ...arc(0, 60) },
-    ],
-    description: 'Crewed by soldiers who were never told retreat exists. Below 20% hull, it will ram.',
-  },
-  borg_cube: {
-    id: 'borg_cube', name: 'Borg Cube', faction: 'borg',
-    tier: 10, role: 'cube',
-    hull: 42000, shields: 30000, shieldRegen: 260,
-    crew: 64000, mass: 12.0,
-    impulse: 0.55, turnRate: 3.0, maxWarp: 9.6, warpEfficiency: 2.0,
-    powerCap: 400, adapts: true, regenerates: 180,
-    weapons: [
-      { id: 'cutting_beam', type: 'beam', name: 'Cutting Beam', damage: 520, cycle: 3.0, ...arc(0, 360) },
-      { id: 'torpedo', type: 'torpedo', name: 'Plasma Projector', damage: 1100, cycle: 8.0, ...arc(0, 360) },
-    ],
-    description: 'It has no front. It adapts to your weapon frequencies. You are not expected to win this.',
-  },
-
-  // ---------- Player-commandable, later eras ----------
-  ambassador: {
-    id: 'ambassador', name: 'Ambassador class', faction: 'federation',
-    tier: 5, role: 'explorer',
-    hull: 6800, shields: 5600, shieldRegen: 62,
-    crew: 700, mass: 1.4,
-    impulse: 0.72, turnRate: 7.0, maxWarp: 9.2, warpEfficiency: 1.3,
-    powerCap: 240,
-    weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 252, cycle: 3.0, ...arc(0, 270) },
-      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 138, cycle: 3.0, ...arc(180, 240) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 560, cycle: 6.4, ...arc(0, 120) },
-    ],
-    slots: { tactical: 3, engineering: 4, science: 4, device: 3 },
-    boffSeats: [
-      { dept: 'command', rank: 3 }, { dept: 'engineering', rank: 4 },
-      { dept: 'science', rank: 3 }, { dept: 'tactical', rank: 3 },
-    ],
-    description: 'The bridge between eras. Diplomatic suites forward, and enough hull to survive the diplomacy failing.',
-  },
-  galaxy: {
-    id: 'galaxy', name: 'Galaxy class', faction: 'federation',
-    tier: 6, role: 'explorer',
-    hull: 9200, shields: 7600, shieldRegen: 78,
-    crew: 1014, mass: 2.0,
-    impulse: 0.68, turnRate: 5.5, maxWarp: 9.6, warpEfficiency: 1.5,
-    powerCap: 265, saucerSeparation: true,
-    weapons: [
-      { id: 'phaser_dorsal', type: 'beam', name: 'Dorsal Phaser Array', damage: 330, cycle: 2.8, ...arc(0, 300) },
-      { id: 'phaser_ventral', type: 'beam', name: 'Ventral Phaser Array', damage: 168, cycle: 2.8, ...arc(180, 300) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 720, cycle: 6.0, ...arc(0, 120) },
-      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 480, cycle: 7.0, ...arc(180, 120) },
-    ],
-    slots: { tactical: 4, engineering: 5, science: 4, device: 4 },
-    boffSeats: [
-      { dept: 'command', rank: 4 }, { dept: 'engineering', rank: 4 },
-      { dept: 'science', rank: 4 }, { dept: 'tactical', rank: 3 },
-    ],
-    description: 'A city that goes to warp. Families aboard, which changes every decision you make with it.',
-  },
-  nebula: {
-    id: 'nebula', name: 'Nebula class', faction: 'federation',
-    tier: 6, role: 'science cruiser',
-    hull: 7800, shields: 7200, shieldRegen: 96,
-    crew: 750, mass: 1.7,
-    impulse: 0.7, turnRate: 6.5, maxWarp: 9.5, warpEfficiency: 1.45,
-    powerCap: 270, auxBonus: 35,
-    weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 262, cycle: 2.9, ...arc(0, 300) },
-      { id: 'torpedo_pod', type: 'torpedo', name: 'Sensor Pod Launcher', damage: 600, cycle: 6.5, ...arc(0, 180) },
-    ],
-    slots: { tactical: 3, engineering: 4, science: 6, device: 3 },
-    boffSeats: [
-      { dept: 'science', rank: 4 }, { dept: 'science', rank: 3 },
-      { dept: 'engineering', rank: 4 }, { dept: 'tactical', rank: 3 },
-    ],
-    description: 'The Galaxy spaceframe with the mission pod that matters. Sees things nothing else in the fleet can.',
-  },
-  intrepid: {
-    id: 'intrepid', name: 'Intrepid class', faction: 'federation',
-    tier: 5, role: 'science vessel',
-    hull: 5400, shields: 5800, shieldRegen: 104,
-    crew: 150, mass: 0.9,
-    impulse: 0.92, turnRate: 13.0, maxWarp: 9.975, warpEfficiency: 1.7,
-    powerCap: 250, auxBonus: 30,
-    weapons: [
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 222, cycle: 2.9, ...arc(0, 300) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Tubes', damage: 530, cycle: 6.2, ...arc(0, 120) },
-    ],
-    slots: { tactical: 3, engineering: 3, science: 5, device: 3 },
-    boffSeats: [
-      { dept: 'science', rank: 4 }, { dept: 'engineering', rank: 3 },
-      { dept: 'tactical', rank: 3 }, { dept: 'universal', rank: 3 },
-    ],
-    description: 'Fast, small, and built to be a long way from home. Variable geometry nacelles and a bio-neural computer.',
-  },
-  defiant: {
-    id: 'defiant', name: 'Defiant class', faction: 'federation',
-    tier: 5, role: 'escort',
-    hull: 4400, shields: 4600, shieldRegen: 58,
-    crew: 50, mass: 0.6,
-    impulse: 1.05, turnRate: 20.0, maxWarp: 9.5, warpEfficiency: 1.0,
-    powerCap: 245, ablative: true,
-    weapons: [
-      { id: 'pulse_fwd', type: 'cannon', name: 'Pulse Phaser Cannons', damage: 248, cycle: 2.0, ...arc(0, 45) },
-      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 108, cycle: 3.0, ...arc(0, 200) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedoes', damage: 700, cycle: 7.0, ...arc(0, 60) },
-    ],
-    slots: { tactical: 5, engineering: 3, science: 2, device: 3 },
-    boffSeats: [
-      { dept: 'tactical', rank: 4 }, { dept: 'tactical', rank: 3 },
-      { dept: 'engineering', rank: 3 }, { dept: 'science', rank: 2 },
-    ],
-    description: 'A warship, and the fleet stopped pretending otherwise. Overpowered, overgunned, and nearly tore itself apart in trials.',
-  },
-  sovereign: {
-    id: 'sovereign', name: 'Sovereign class', faction: 'federation',
-    tier: 6, role: 'heavy explorer',
-    hull: 9800, shields: 8200, shieldRegen: 88,
-    crew: 855, mass: 1.9,
-    impulse: 0.82, turnRate: 8.0, maxWarp: 9.9, warpEfficiency: 1.6,
-    powerCap: 285,
-    weapons: [
-      { id: 'phaser_dorsal', type: 'beam', name: 'Type-XII Phaser Arrays', damage: 330, cycle: 2.7, ...arc(0, 300) },
-      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 184, cycle: 2.7, ...arc(180, 260) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedo Bay', damage: 820, cycle: 5.8, ...arc(0, 120) },
-      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 580, cycle: 6.8, ...arc(180, 120) },
-    ],
-    slots: { tactical: 5, engineering: 5, science: 4, device: 4 },
-    boffSeats: [
-      { dept: 'command', rank: 4 }, { dept: 'tactical', rank: 4 },
-      { dept: 'engineering', rank: 4 }, { dept: 'science', rank: 4 },
-    ],
-    description: 'The best hull Starfleet has. If you are flying one, the situation is already serious.',
-  },
-  runabout: {
-    id: 'runabout', name: 'Danube-class Runabout', faction: 'federation',
-    tier: 1, role: 'runabout',
-    hull: 1200, shields: 1100, shieldRegen: 30,
-    crew: 4, mass: 0.25,
-    impulse: 1.0, turnRate: 24.0, maxWarp: 5.0, warpEfficiency: 0.9,
-    powerCap: 140,
-    weapons: [
-      { id: 'phaser', type: 'beam', name: 'Phaser Emitters', damage: 58, cycle: 3.0, ...arc(0, 240) },
-      { id: 'micro_torp', type: 'torpedo', name: 'Micro-Torpedoes', damage: 180, cycle: 8.0, ...arc(0, 90) },
-    ],
-    slots: { tactical: 1, engineering: 1, science: 1, device: 1 },
-    boffSeats: [{ dept: 'universal', rank: 1 }],
-    description: 'Four bunks and a warp drive. You are not fighting anything in this; you are getting somewhere.',
-  },
-
-  // ---------- Later hostiles ----------
-  vorcha: {
-    id: 'vorcha', name: 'Vor’cha-class Attack Cruiser', faction: 'klingon',
-    tier: 5, role: 'attack cruiser',
-    hull: 6200, shields: 5000, shieldRegen: 52,
-    crew: 1900, mass: 1.5,
-    impulse: 0.76, turnRate: 7.5, maxWarp: 9.6, warpEfficiency: 1.1,
-    powerCap: 245, cloak: true,
-    weapons: [
-      { id: 'disruptor_cannon', type: 'cannon', name: 'Forward Disruptor Cannon', damage: 240, cycle: 2.6, ...arc(0, 60) },
-      { id: 'disruptor_fwd', type: 'beam', name: 'Disruptor Arrays', damage: 158, cycle: 3.0, ...arc(0, 240) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 520, cycle: 6.8, ...arc(0, 120) },
-    ],
-    description: 'The Empire’s line ship of the modern fleet. Cloaks, closes, and does not negotiate afterwards.',
-  },
-  neghvar: {
-    id: 'neghvar', name: 'Negh’Var-class Warship', faction: 'klingon',
-    tier: 7, role: 'flagship',
-    hull: 11000, shields: 8400, shieldRegen: 72,
-    crew: 2500, mass: 2.4,
-    impulse: 0.64, turnRate: 4.5, maxWarp: 9.6, warpEfficiency: 1.0,
-    powerCap: 300, cloak: true,
-    weapons: [
-      { id: 'disruptor_heavy', type: 'beam', name: 'Heavy Disruptor Arrays', damage: 250, cycle: 2.9, ...arc(0, 280) },
-      { id: 'disruptor_aft', type: 'beam', name: 'Aft Disruptors', damage: 190, cycle: 3.1, ...arc(180, 220) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Heavy Torpedo Bay', damage: 820, cycle: 7.2, ...arc(0, 120) },
-    ],
-    description: 'The Chancellor’s flagship class. Fighting one alone is a decision, not an accident.',
-  },
-  ktinga: {
-    id: 'ktinga', name: 'K’t’inga-class Battlecruiser', faction: 'klingon',
-    tier: 4, role: 'battlecruiser',
-    hull: 5000, shields: 3900, shieldRegen: 42,
-    crew: 440, mass: 1.15,
-    impulse: 0.72, turnRate: 8.0, maxWarp: 9.0, warpEfficiency: 1.0,
-    powerCap: 215,
-    weapons: [
-      { id: 'disruptor_fwd', type: 'beam', name: 'Forward Disruptors', damage: 148, cycle: 2.9, ...arc(0, 220) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 460, cycle: 7.2, ...arc(0, 90) },
-    ],
-    description: 'The D7 rebuilt and kept in service for a century, because it works.',
-  },
-  keldon: {
-    id: 'keldon', name: 'Keldon-class Cruiser', faction: 'cardassian',
-    tier: 5, role: 'heavy cruiser',
-    hull: 5800, shields: 4800, shieldRegen: 56,
-    crew: 400, mass: 1.3,
-    impulse: 0.76, turnRate: 8.0, maxWarp: 9.2, warpEfficiency: 1.05,
-    powerCap: 235,
-    weapons: [
-      { id: 'spiral_fwd', type: 'beam', name: 'Spiral-Wave Disruptors', damage: 178, cycle: 2.8, ...arc(0, 250) },
-      { id: 'spiral_aft', type: 'beam', name: 'Aft Emitters', damage: 130, cycle: 3.0, ...arc(180, 200) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Launcher', damage: 480, cycle: 6.8, ...arc(0, 120) },
-    ],
-    description: 'The Galor with everything the Order wanted added. Drilled, patient, and very hard to surprise.',
-  },
-  jem_hadar_battleship: {
-    id: 'jem_hadar_battleship', name: 'Jem’Hadar Battleship', faction: 'dominion',
-    tier: 8, role: 'battleship',
-    hull: 16000, shields: 12000, shieldRegen: 120,
-    crew: 900, mass: 3.2,
-    impulse: 0.62, turnRate: 4.0, maxWarp: 9.4, warpEfficiency: 1.1,
-    powerCap: 330, ramsWhenDoomed: true,
-    weapons: [
-      { id: 'polaron_heavy', type: 'beam', name: 'Heavy Polaron Beams', damage: 300, cycle: 2.8, ...arc(0, 300) },
-      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Batteries', damage: 900, cycle: 6.5, ...arc(0, 180) },
-    ],
-    description: 'The Dominion does not build escorts for prestige. This is what they send when the escorts failed.',
-  },
-  bioship: {
-    id: 'bioship', name: 'Bioship', faction: 'borg',
-    tier: 9, role: 'bioship',
-    hull: 20000, shields: 14000, shieldRegen: 200,
-    crew: 1, mass: 2.6,
-    impulse: 1.2, turnRate: 14.0, maxWarp: 9.9, warpEfficiency: 2.0,
-    powerCap: 360, adapts: true, regenerates: 120,
-    weapons: [
-      { id: 'bio_beam', type: 'beam', name: 'Bioplasmic Discharge', damage: 460, cycle: 3.2, ...arc(0, 360) },
-    ],
-    description: 'Organic, fast, and outside every doctrine Starfleet has written. Weapons adapt within seconds.',
-  },
-  transport: {
-    id: 'transport', name: 'Colony Transport', faction: 'independent',
-    tier: 1, role: 'transport',
-    hull: 2200, shields: 1200, shieldRegen: 20,
-    crew: 1400, mass: 1.6,
-    impulse: 0.45, turnRate: 4.0, maxWarp: 6.0, warpEfficiency: 1.0,
-    powerCap: 130, civilian: true,
-    weapons: [],
-    description: 'Fourteen hundred colonists and no weapons at all. Whatever happens to it happens because of you.',
-  },
-  freighter: {
-    id: 'freighter', name: 'Civilian Freighter', faction: 'independent',
-    tier: 1, role: 'freighter',
-    hull: 1600, shields: 900, shieldRegen: 18,
-    crew: 14, mass: 1.2,
-    impulse: 0.5, turnRate: 5.0, maxWarp: 6.5, warpEfficiency: 1.0,
-    powerCap: 120, civilian: true,
-    weapons: [],
-    description: 'Unarmed, overloaded, and a long way from anyone who could help.',
-  },
-};
-const SHIP_LIST = Object.values(SHIP_CLASSES);
-function getShipClass(id) {
-  return SHIP_CLASSES[id];
-}
-
-/** Ships the player may command at a given rank tier. */
-function commandableAt(tier) {
-  return SHIP_LIST.filter((s) => s.faction === 'federation' && s.boffSeats && s.tier <= tier);
-}
-
-/** Registry numbers for generated Federation ships. */
-const FEDERATION_REGISTRIES = [
-  'NCC-1701', 'NCC-1017', 'NCC-1371', 'NCC-1672', 'NCC-1764', 'NCC-2000',
-  'NCC-1831', 'NCC-1864', 'NCC-638', 'NCC-1685',
-];
-
-__exports.SHIP_CLASSES = SHIP_CLASSES;
-__exports.SHIP_LIST = SHIP_LIST;
-__exports.getShipClass = getShipClass;
-__exports.commandableAt = commandableAt;
-__exports.FEDERATION_REGISTRIES = FEDERATION_REGISTRIES;
-
-});
-
-__define("src/sim/ship.js", function (__exports, __require) {
-// A ship in the simulation — player or otherwise.
-//
-// Shields are six independent facings. Subsystems degrade independently and
-// affect what the ship can actually do. Crew is a resource that dies.
-
-const { PowerGrid } = __require("src/sim/power.js");
-const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
-const { clamp } = __require("src/core/num.js");
-const { emit } = __require("src/core/events.js");
-
-// Six facings, not four.
-//
-// A ship is a solid in space and can be shot at from above and below, and once
-// the simulation has a third axis, pretending otherwise means an attacker who
-// climbs is hitting a shield that geometrically is not there. The dorsal and
-// ventral facings are the real cost of going 3D: they touch damage resolution,
-// the AI, the display, saves, and balance. They are worth paying for once.
-const FACINGS = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'];
-
-/**
- * How far past its normal ceiling one facing may be charged.
- *
- * `reinforceShield` moves charge from five facings onto one, and the point of
- * the order is that the receiving facing ends up STRONGER than it can normally
- * be — otherwise the manoeuvre buys nothing but a redistribution. The excess
- * bleeds off over about twenty seconds.
- *
- * Exported because the invariant checker has to know it. It did not, and
- * forbade any facing above `maxShield` outright, so reinforcing shields — an
- * ordinary tactical order — reported an anomaly in the ship's log to any
- * captain running with the checker on.
- */
-const SHIELD_OVERCHARGE = 1.2;
-const FACING_LABEL = {
-  fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
-  dorsal: 'Dorsal', ventral: 'Ventral',
-};
-
-/**
- * Ship-local axes, in simulation coordinates: +x is the bow, +y is starboard,
- * +z is dorsal. The renderer maps this to its own +y-up convention; nothing
- * else in the simulation needs to care.
- */
-const FACING_AXIS = {
-  fore: [1, 0, 0],
-  aft: [-1, 0, 0],
-  starboard: [0, 1, 0],
-  port: [0, -1, 0],
-  dorsal: [0, 0, 1],
-  ventral: [0, 0, -1],
-};
-
-const DEG = Math.PI / 180;
-
-/** A horizontal bearing in degrees, as a unit direction. */
-function bearingToDirection(bearing) {
-  const b = bearing * DEG;
-  return [Math.cos(b), Math.sin(b), 0];
-}
-
-/** Modifiers that add rather than multiply. */
-const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
-const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
-
-/**
- * How much better the crew fight a fire when nobody is shooting at them.
- *
- * During an action the damage-control parties are whoever can be spared while
- * the ship maneuvers and takes hits; the moment the shooting stops the whole
- * watch is on it. So the fire is not weaker off action — the response to it is
- * far stronger, which is the difference this number stands for.
- *
- * It is a survivability floor as much as a flavour note. Fires cost six hull a
- * second each and are the only damage in the game applied outside
- * `takeDamage`; at the in-action rate, a ship that limped away from a fight at
- * fifteen per cent hull with four of them burned to death on her own bridge in
- * thirty-two seconds, with no enemy on the board and no posture that changed
- * the outcome. At this rate the same ship puts them out having lost about
- * four per cent — a real price for leaving a battle alight, and one a captain
- * can cut further with power to auxiliary or the damage-control party.
- */
-const DAMAGE_CONTROL_OFF_ACTION = 8;
-
-/**
- * The share of the crew that turns out to fight an intruder.
- *
- * Not everyone: the ship is still being flown and still being shot at, so the
- * people who meet a boarding party are the security detail and whoever is on
- * that deck. Five per cent of a Constitution's complement is about twenty
- * people, which is the right order for a corridor fight.
- */
-const REPEL_DEFENDER_SHARE = 0.05;
-
-/**
- * Fewer than one intruder is nobody, and the fight is over.
- *
- * The repel loop takes `Math.min(boarders, killed)` per tick, so once the
- * party is smaller than what the defenders can kill in a second it decays
- * geometrically and never reaches zero: after ten minutes a boarded ship still
- * had 1e-264 Klingons aboard, `boarders > 0` was still true, and the block went
- * on damaging a subsystem roughly every second and drawing from the RNG every
- * tick for the rest of the commission. Nothing had ever set `boarders` above
- * zero, so it had never once run.
- */
-const BOARDERS_REPELLED_AT = 1;
-
-/**
- * Turning out the guard: how much more of the crew meets them, and for how long.
- *
- * `REPEL_DEFENDER_SHARE` is the watch that turns out on its own — the security
- * detail and whoever is on that deck. This is the captain ordering the rest of
- * the ship into the corridor, which roughly triples the defence and cannot be
- * kept up: the people doing it have other stations, and the ship is still
- * being flown.
- */
-const REPEL_STRENGTH = 3;
-const REPEL_DURATION = 20;
-
-/**
- * What killing one intruder costs in your own people, at the ordinary defence.
- *
- * Divided by the root of `repelBoarders`, so a captain who turns out the guard
- * buys a better exchange as well as a shorter fight — at REPEL_STRENGTH that
- * is about 0.46 of ours for each of theirs instead of 0.8.
- */
-const REPEL_COST_PER_INTRUDER = 0.8;
-
-/**
- * Which shield facing covers a direction, given in ship-local coordinates.
- *
- * The dominant axis wins. This is the six-sided generalisation of the old
- * quadrant test and agrees with it exactly in the plane: a bearing of 45°
- * still lands on the bow, 46° still lands to starboard.
- */
-function facingForDirection(dir) {
-  const [x, y, z] = dir;
-  const ax = Math.abs(x);
-  const ay = Math.abs(y);
-  const az = Math.abs(z);
-  if (ax >= ay && ax >= az) return x >= 0 ? 'fore' : 'aft';
-  if (ay >= az) return y >= 0 ? 'starboard' : 'port';
-  return z >= 0 ? 'dorsal' : 'ventral';
-}
-
-/** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
-function facingForBearing(bearing) {
-  return facingForDirection(bearingToDirection(bearing));
-}
-
-/**
- * Is a direction inside a weapon's firing arc?
- *
- * A cone test rather than an angle comparison, so an arc restricts elevation as
- * well as bearing — a forward phaser bank does not bear on something directly
- * above the saucer just because it is ahead in plan view.
- *
- * Accepts a local direction vector or, for the two-dimensional callers that
- * predate this, a plain bearing in degrees.
- */
-function inArc(dirOrBearing, weapon) {
-  const dir = Array.isArray(dirOrBearing) ? dirOrBearing : bearingToDirection(dirOrBearing);
-  const half = (weapon.degrees ?? 360) / 2;
-  if (half >= 180) return true;
-
-  const axis = bearingToDirection(weapon.facing ?? 0);
-  const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
-  const cos = (dir[0] * axis[0] + dir[1] * axis[1] + dir[2] * axis[2]) / len;
-  // Guard the floating-point edge so a shot exactly on the arc boundary is in.
-  return cos >= Math.cos(half * DEG) - 1e-9;
-}
-class Ship {
-  /**
-   * @param {string} classId key into SHIP_CLASSES
-   * @param {object} opts    { name, registry, faction, isPlayer, skillMods }
-   */
-  constructor(classId, opts = {}) {
-    const cls = getShipClass(classId);
-    if (!cls) throw new Error(`Unknown ship class: ${classId}`);
-
-    this.classId = classId;
-    this.cls = cls;
-    this.name = opts.name ?? cls.name;
-    this.registry = opts.registry ?? (cls.faction === 'federation' ? FEDERATION_REGISTRIES[0] : '');
-    this.faction = opts.faction ?? cls.faction;
-    this.isPlayer = !!opts.isPlayer;
-    this.civilian = !!cls.civilian;
-
-    // ---- durability ----
-    this.maxHull = cls.hull;
-    this.hull = cls.hull;
-    // Divided six ways rather than four. The total pool is unchanged; what
-    // changes is that each facing holds less of it and there are two more
-    // surfaces to be hit through.
-    this.maxShield = cls.shields / FACINGS.length;
-    this.shields = Object.fromEntries(FACINGS.map((f) => [f, this.maxShield]));
-    this.shieldRegen = cls.shieldRegen / FACINGS.length;
-    this.shieldsUp = true;
-    // Lowered deliberately, as opposed to shot out. Only the first stays down
-    // once the emitter is repaired.
-    this.shieldsDown = false;
-
-    // ---- crew ----
-    this.maxCrew = cls.crew;
-    this.crew = cls.crew;
-    this.injured = 0;
-
-    // ---- movement ----
-    // x/y is the plane, z is altitude. Heading is a compass bearing and pitch
-    // is nose-up in degrees; roll is carried for the renderer and for banking
-    // into a turn, and has no effect on where weapons bear.
-    this.x = 0; this.y = 0; this.z = 0;
-    this.heading = 0;              // degrees, 0 = +x
-    this.pitch = 0;                // degrees, + = nose up
-    this.roll = 0;                 // degrees, + = starboard wing down
-    this.throttle = 0;             // 0..1 of impulse
-    this.desiredHeading = 0;
-    this.desiredPitch = 0;
-    this.velocity = { x: 0, y: 0, z: 0 };
-
-    // ---- systems ----
-    this.power = new PowerGrid(cls.powerCap);
-    this.subsystems = Object.fromEntries(SUBSYSTEM_KEYS.map((k) => [k, 1.0])); // 1 = intact
-    this.weapons = (cls.weapons ?? []).map((w) => ({ ...w, cooldown: 0, enabled: true }));
-    this.torpedoes = cls.weapons?.some((w) => w.type === 'torpedo') ? 60 : 0;
-    this.maxTorpedoes = this.torpedoes;
-    this.antimatter = 100;
-
-    // ---- states ----
-    this.cloakCapable = !!cls.cloak;
-    this.cloaked = false;
-    this.cloakCooldown = 0;
-    this.destroyed = false;
-    this.breaching = false;
-    this.breachTimer = 0;
-    this.coreEjected = false;
-    this.fires = 0;
-    this.boarders = 0;
-    this.adaptation = {};          // Borg: damage type -> resistance 0..0.9
-    this.evasive = false;
-
-    // ---- modifiers from skills, consoles, officer abilities ----
-    this.mods = {
-      damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
-      impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
-      repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
-      damageResist: 0, stealthDetect: 1, crewProtect: 0, repelBoarders: 1,
-    };
-    this.buffs = [];               // { id, label, until, mods }
-
-    if (opts.skillMods) this.applyMods(opts.skillMods);
-    this.recomputeDerived();
-  }
-
-  // ---------------- derived stats ----------------
-
-  applyMods(mods) {
-    for (const [k, v] of Object.entries(mods)) {
-      if (typeof v !== 'number') continue;
-      if (ADDITIVE_MODS.has(k)) this.mods[k] += v;
-      else this.mods[k] = (this.mods[k] ?? 1) * v;
-    }
-    this.recomputeDerived();
-  }
-
-  recomputeDerived() {
-    // Raising a maximum scales the current value with it, so installing a
-    // hull console does not leave the ship reading as pre-damaged.
-    const prevMaxShield = this.maxShield;
-    const prevMaxHull = this.maxHull;
-
-    // `mod()` rather than `mods`, so a BUFF counts. Reading the raw table meant
-    // every temporary shieldMax or hullMax an officer ability granted was
-    // computed, reported in the UI, and then silently ignored by the only two
-    // numbers it was supposed to change.
-    this.maxHull = this.cls.hull * this.mod('hullMax');
-    this.maxShield = (this.cls.shields / FACINGS.length) * this.mod('shieldMax');
-
-    if (prevMaxShield > 0) {
-      const ratio = this.maxShield / prevMaxShield;
-      for (const f of FACINGS) this.shields[f] = Math.min(this.maxShield, this.shields[f] * ratio);
-    }
-    if (prevMaxHull > 0) {
-      this.hull = Math.min(this.maxHull, this.hull * (this.maxHull / prevMaxHull));
-    } else {
-      this.hull = Math.min(this.hull, this.maxHull);
-    }
-  }
-
-  /** Combined modifier including temporary buffs. */
-  mod(key) {
-    let value = this.mods[key] ?? 1;
-    for (const b of this.buffs) {
-      const v = b.mods?.[key];
-      if (typeof v !== 'number') continue;
-      if (ADDITIVE_MODS.has(key)) value += v;
-      else value *= v;
-    }
-    return value;
-  }
-
-  addBuff(buff) {
-    this.buffs = this.buffs.filter((b) => b.id !== buff.id);
-    this.buffs.push(buff);
-    // A buff can raise a maximum, and the maxima are cached. Without this the
-    // ability took effect only the next time something else happened to
-    // recompute them, which for most of a fight is never.
-    this.recomputeDerived();
-  }
-
-  hasBuff(id) {
-    return this.buffs.some((b) => b.id === id);
-  }
-
-  // ---------------- health readouts ----------------
-
-  get hullPct() { return this.maxHull > 0 ? this.hull / this.maxHull : 0; }
-  get shieldPct() {
-    const total = FACINGS.reduce((n, f) => n + this.shields[f], 0);
-    return this.maxShield > 0 ? total / (this.maxShield * FACINGS.length) : 0;
-  }
-  shieldPctOf(facing) {
-    return this.maxShield > 0 ? this.shields[facing] / this.maxShield : 0;
-  }
-  get crewPct() { return this.maxCrew > 0 ? this.crew / this.maxCrew : 0; }
-
-  /** Overall condition, used for status reports and AI decisions. */
-  get condition() {
-    if (this.destroyed) return 'destroyed';
-    if (this.breaching) return 'critical';
-    if (this.hullPct < 0.25) return 'critical';
-    if (this.hullPct < 0.55) return 'serious';
-    if (this.hullPct < 0.85 || this.shieldPct < 0.4) return 'damaged';
-    return 'nominal';
-  }
-
-  // ---------------- speed & manoeuvre ----------------
-
-  get maxSpeed() {
-    return this.cls.impulse * 100
-      * this.power.factor('engines')
-      * this.subsystems.engines
-      * this.mod('impulse')
-      * (this.evasive ? 1.25 : 1);
-  }
-
-  get turnRate() {
-    return this.cls.turnRate
-      * (0.6 + 0.4 * this.power.factor('engines'))
-      * this.subsystems.engines
-      * this.mod('turn')
-      * (this.evasive ? 1.4 : 1);
-  }
-
-  /** Chance an incoming shot misses, from speed and evasive manoeuvres. */
-  get defenseRating() {
-    const speedFactor = Math.min(1, this.throttle) * 0.18;
-    return (speedFactor + (this.evasive ? 0.16 : 0)) * this.mod('defense');
-  }
-
-  /**
-   * A world-space offset expressed in this ship's own frame.
-   *
-   * Yaw first, then pitch — the inverse of how the orientation is applied — so
-   * the result is a unit vector in the ship-local axes that FACING_AXIS and
-   * inArc are defined against. Roll is deliberately not undone: rolling the
-   * ship spins the hull about its own nose and moves nothing relative to it.
-   */
-  localDirection(dx, dy, dz) {
-    const h = this.heading * DEG;
-    const ch = Math.cos(h);
-    const sh = Math.sin(h);
-    const x1 = dx * ch + dy * sh;
-    const y1 = -dx * sh + dy * ch;
-
-    const p = (this.pitch ?? 0) * DEG;
-    const cp = Math.cos(p);
-    const sp = Math.sin(p);
-    const x2 = x1 * cp + dz * sp;
-    const z2 = -x1 * sp + dz * cp;
-
-    const len = Math.hypot(x2, y1, z2) || 1;
-    return [x2 / len, y1 / len, z2 / len];
-  }
-
-  /** Direction to a target, in this ship's frame. */
-  directionTo(target) {
-    return this.localDirection(target.x - this.x, target.y - this.y, (target.z ?? 0) - (this.z ?? 0));
-  }
-
-  /** Direction an attacker lies in, in this ship's frame — which facing it hits. */
-  directionFrom(source) {
-    return this.localDirection(source.x - this.x, source.y - this.y, (source.z ?? 0) - (this.z ?? 0));
-  }
-
-  /**
-   * Horizontal bearing to a target, relative to current heading.
-   * Retained because plenty of the game reasons in the plane — the AI's
-   * steering, the log lines, the 2D display — and none of that needs elevation.
-   */
-  bearingTo(target) {
-    const abs = Math.atan2(target.y - this.y, target.x - this.x) * 180 / Math.PI;
-    let rel = abs - this.heading;
-    rel = ((rel % 360) + 360) % 360;
-    if (rel > 180) rel -= 360;
-    return rel;
-  }
-
-  /** Bearing from the target's perspective — which of ITS facings we hit. */
-  bearingFrom(source) {
-    const abs = Math.atan2(source.y - this.y, source.x - this.x) * 180 / Math.PI;
-    let rel = abs - this.heading;
-    rel = ((rel % 360) + 360) % 360;
-    if (rel > 180) rel -= 360;
-    return rel;
-  }
-
-  /** Elevation angle to a target in degrees, + = above us. */
-  elevationTo(target) {
-    const dz = (target.z ?? 0) - (this.z ?? 0);
-    const flat = Math.hypot(target.x - this.x, target.y - this.y);
-    return Math.atan2(dz, flat) * 180 / Math.PI;
-  }
-
-  distanceTo(target) {
-    return Math.hypot(target.x - this.x, target.y - this.y, (target.z ?? 0) - (this.z ?? 0));
-  }
-
-  // ---------------- per-step update ----------------
-
-  /**
-   * @param {number} dt
-   * @param {RNG} [rng]
-   * @param {{inAction?: boolean}} [opts] `inAction` is true while the ship is
-   *   being fought — see DAMAGE_CONTROL_OFF_ACTION.
-   */
-  update(dt, rng, { inAction = false } = {}) {
-    if (this.destroyed) return;
-
-    this.power.update(dt);
-
-    // Buffs expire. A buff that raised a maximum has to give it back, so the
-    // maxima are recomputed on the tick anything actually left.
-    if (this.buffs.length) {
-      const before = this.buffs.length;
-      this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
-      for (const b of this.buffs) if (b.until !== undefined) b.until -= dt;
-      this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
-      if (this.buffs.length !== before) this.recomputeDerived();
-    }
-
-    // Movement — yaw, then pitch, then integrate along the nose.
-    let diff = this.desiredHeading - this.heading;
-    diff = ((diff % 360) + 360) % 360;
-    if (diff > 180) diff -= 360;
-    const maxTurn = this.turnRate * dt;
-    const yawStep = Math.abs(diff) <= maxTurn ? diff : Math.sign(diff) * maxTurn;
-    this.heading = (((this.heading + yawStep) % 360) + 360) % 360;
-
-    // Pitching is slower than yawing on every hull here. Starships are built
-    // around a horizontal plane and a captain who climbs to escape is trading
-    // time for the manoeuvre, which is what makes elevation a real decision
-    // rather than a free extra direction to run in.
-    const wantPitch = Math.max(-70, Math.min(70, this.desiredPitch ?? 0));
-    const pitchDiff = wantPitch - this.pitch;
-    const maxPitch = this.turnRate * 0.55 * dt;
-    this.pitch += Math.abs(pitchDiff) <= maxPitch ? pitchDiff : Math.sign(pitchDiff) * maxPitch;
-
-    // Bank into the turn. Cosmetic, but it is what makes a hull read as flying
-    // rather than sliding, and it costs one lerp.
-    const wantRoll = Math.max(-38, Math.min(38, -yawStep / Math.max(dt, 1e-6) * 0.9));
-    this.roll += (wantRoll - this.roll) * Math.min(1, dt * 2.2);
-
-    const speed = this.maxSpeed * this.throttle;
-    const h = this.heading * DEG;
-    const p = this.pitch * DEG;
-    const flat = Math.cos(p) * speed;
-    this.velocity.x = Math.cos(h) * flat;
-    this.velocity.y = Math.sin(h) * flat;
-    this.velocity.z = Math.sin(p) * speed;
-    this.x += this.velocity.x * dt;
-    this.y += this.velocity.y * dt;
-    this.z = (this.z ?? 0) + this.velocity.z * dt;
-
-    // The emitter is back, so the shields are back — unless they were lowered
-    // on purpose, which is a different thing and stays that way.
-    if (!this.shieldsUp && !this.shieldsDown && !this.cloaked && this.subsystems.shields > 0.25) {
-      this.shieldsUp = true;
-      emit('ship:shields', { ship: this, up: true, reason: 'emitter restored' });
-    }
-
-    // Shield regeneration — suppressed while cloaked or shields down.
-    if (this.shieldsUp && !this.cloaked && this.subsystems.shields > 0.05) {
-      const rate = this.shieldRegen * this.power.factor('shields')
-        * this.subsystems.shields * this.mod('shieldRegen') * dt;
-      for (const f of FACINGS) {
-        // Regeneration RAISES a shield. It must never lower one, and it did:
-        // the clamp was a flat Math.min against maxShield, so the twenty per
-        // cent overcharge that `reinforceShield` had just moved onto the bow
-        // was deleted on the very next tick. The order took charge off five
-        // facings and destroyed it — strictly worse than not giving it.
-        if (this.shields[f] >= this.maxShield) continue;
-        this.shields[f] = Math.min(this.maxShield, this.shields[f] + rate);
-      }
-    }
-
-    // An overcharged facing bleeds back toward its normal ceiling rather than
-    // holding forever. Slow enough to survive the pass it was called for.
-    for (const f of FACINGS) {
-      if (this.shields[f] > this.maxShield) {
-        this.shields[f] = Math.max(this.maxShield, this.shields[f] - this.maxShield * 0.012 * dt);
-      }
-    }
-
-    // Weapon cooldowns tick faster with weapon power.
-    const cycleRate = 0.6 + 0.4 * this.power.factor('weapons') * this.subsystems.weapons;
-    for (const w of this.weapons) {
-      if (w.cooldown > 0) w.cooldown = Math.max(0, w.cooldown - dt * cycleRate);
-    }
-    if (this.cloakCooldown > 0) this.cloakCooldown = Math.max(0, this.cloakCooldown - dt);
-
-    // Fires burn crew and hull until damage control gets to them.
-    if (this.fires > 0) {
-      // Floored, like every other write to the hull. This one was not, and it
-      // is the only place damage is applied outside takeDamage: a ship burning
-      // at zero hull kept subtracting, so hullPct went negative and every
-      // percentage read off it — the bars, the AI's break-off threshold, the
-      // condition line — read nonsense until the breach timer finally ran out.
-      this.hull = Math.max(0, this.hull - this.fires * 6 * dt);
-      if (rng && rng.chance(0.4 * dt)) this.crew = Math.max(0, this.crew - 1);
-      // Auxiliary power runs damage control — and how much of it there is to
-      // run depends on whether the ship is still being fought. See
-      // DAMAGE_CONTROL_OFF_ACTION.
-      const control = 0.06 * (inAction ? 1 : DAMAGE_CONTROL_OFF_ACTION)
-        * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
-      if (rng && rng.chance(control)) this.fires--;
-      if (this.hull <= 0) this.beginBreach();
-    }
-
-    // Boarders fight the crew.
-    if (this.boarders > 0 && rng) {
-      const defenders = Math.max(1, this.crew * REPEL_DEFENDER_SHARE) * this.mod('repelBoarders');
-      const losses = Math.min(this.boarders, Math.max(0, rng.normal(defenders * 0.4, 2))) * dt;
-      this.boarders = Math.max(0, this.boarders - losses);
-      // Whole people. Everything else that kills crew floors it — `takeDamage`
-      // uses Math.floor, a fire takes one at a time — and this loop was the
-      // only fractional writer of `crew` in the game, which nobody had ever
-      // seen because nothing had ever put a boarding party aboard anything.
-      // The tactical overlay printed the result straight: `Crew
-      // 426.1326943672293`, on a bridge display, in a fight. Carried rather
-      // than rounded, so losses smaller than one person a tick still add up to
-      // somebody instead of vanishing.
-      //
-      // And the exchange rate improves with numbers, which is why turning out
-      // the guard is worth ordering: twenty people meeting eighty is a running
-      // fight down a corridor, a hundred meeting eighty is a rout. Without
-      // this the order made the fight shorter and cost exactly the same — the
-      // same intruders had to be killed and each cost the same — so the button
-      // saying "it will cost fewer of ours" was saying something untrue.
-      const exchange = REPEL_COST_PER_INTRUDER / Math.sqrt(this.mod('repelBoarders'));
-      this.crewLossCarry = (this.crewLossCarry ?? 0) + losses * exchange;
-      if (this.crewLossCarry >= 1) {
-        const dead = Math.floor(this.crewLossCarry);
-        this.crewLossCarry -= dead;
-        this.crew = Math.max(0, this.crew - dead);
-      }
-      if (rng.chance(0.5 * dt)) this.damageSubsystem(rng.pick(SUBSYSTEM_KEYS), 0.05);
-      // And an end to it — see BOARDERS_REPELLED_AT.
-      if (this.boarders < BOARDERS_REPELLED_AT) {
-        this.boarders = 0;
-        emit('ship:boarders-repelled', { ship: this });
-      }
-    }
-
-    // Passive subsystem repair (only out of the red).
-    const repair = 0.012 * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
-    for (const k of SUBSYSTEM_KEYS) {
-      if (this.subsystems[k] < 1) this.subsystems[k] = Math.min(1, this.subsystems[k] + repair);
-    }
-
-    // Warp core breach countdown.
-    if (this.breaching) {
-      this.breachTimer -= dt;
-      if (this.breachTimer <= 0) this.destroy('warp core breach');
-    }
-
-    if (this.crew <= 0 && !this.destroyed) this.destroy('total crew loss');
-  }
-
-  /**
-   * Somebody has beamed a party aboard.
-   *
-   * One entry point, because `boarders` was a counter the whole game could
-   * only ever decrement: `Ship.update` fought them, `restore()` cleared them,
-   * and nothing anywhere set one above zero. A defence with no attack is not
-   * a mechanic, it is a comment.
-   */
-  receiveBoarders(count, from = null) {
-    const n = Math.max(0, Math.round(count));
-    if (n <= 0 || this.destroyed) return 0;
-    this.boarders += n;
-    emit('ship:boarded', { ship: this, count: n, from });
-    return n;
-  }
-
-  // ---------------- damage ----------------
-
-  /**
-   * Apply damage at a bearing.
-   * @returns {object} { shieldDamage, hullDamage, facing, penetrated, crewKilled }
-   */
-  takeDamage(amount, {
-    bearing = 0, direction = null, type = 'energy',
-    shieldPiercing = 0, rng = null, subsystem = null,
-  } = {}) {
-    if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
-
-    // A hit that is not a finite, non-negative quantity is not a hit. Negative
-    // damage healed the ship; -Infinity took the hull to NaN and nothing after
-    // that was recoverable.
-    amount = clamp(amount, 0, this.maxHull * 100);
-
-    // A direction covers all six facings; a bare bearing is the planar case and
-    // is still accepted, because plenty of damage in this game — boarding,
-    // hazards, collisions — has no meaningful elevation.
-    const facing = direction ? facingForDirection(direction) : facingForBearing(bearing);
-    let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist')));
-
-    // Borg-style adaptation: repeated damage of one type stops working.
-    if (this.cls.adapts) {
-      const adapt = this.adaptation[type] ?? 0;
-      incoming *= 1 - adapt;
-      this.adaptation[type] = Math.min(0.9, adapt + 0.012);
-    }
-
-    let shieldDamage = 0;
-    let hullDamage = 0;
-
-    const shieldUp = this.shieldsUp && this.subsystems.shields > 0.05;
-    if (shieldUp) {
-      // A fraction always bleeds through even a healthy shield.
-      const bleed = 0.08 + shieldPiercing;
-      const toShield = incoming * (1 - bleed);
-      const toHull = incoming * bleed;
-
-      shieldDamage = Math.min(this.shields[facing], toShield);
-      this.shields[facing] -= shieldDamage;
-      const overflow = toShield - shieldDamage;
-      hullDamage = toHull + overflow;
-    } else {
-      hullDamage = incoming;
-    }
-
-    // Floored at zero. A hull read as -456,745 is a ship that is very destroyed
-    // and, to every percentage the UI computes from it, absurd — hullPct goes
-    // deeply negative and the bars, the log lines and the AI's break-off
-    // threshold all read nonsense.
-    this.hull = Math.max(0, this.hull - hullDamage);
-
-    // Crew casualties scale with how hard the hull was hit, less whatever
-    // medical provision the ship carries — the biofunction monitor, a
-    // physician captain, and Triage all feed the same number.
-    let crewKilled = 0;
-    if (hullDamage > 0 && this.maxCrew > 0) {
-      const severity = hullDamage / this.maxHull;
-      const protection = 1 - Math.min(0.85, this.mod('crewProtect'));
-      crewKilled = Math.floor(
-        this.maxCrew * severity * 0.55 * protection * (rng ? rng.range(0.5, 1.5) : 1),
-      );
-      crewKilled = Math.min(this.crew, crewKilled);
-      this.crew -= crewKilled;
-      this.injured += Math.floor(crewKilled * 1.6);
-    }
-
-    // Subsystem damage: targeted, or randomly from a hull hit.
-    if (hullDamage > 0) {
-      if (subsystem) {
-        this.damageSubsystem(subsystem, (hullDamage / this.maxHull) * 3.2);
-      } else if (rng && rng.chance(Math.min(0.6, hullDamage / this.maxHull * 5))) {
-        this.damageSubsystem(rng.pick(SUBSYSTEM_KEYS), (hullDamage / this.maxHull) * 1.8);
-      }
-      // Hard hits start fires.
-      if (rng && hullDamage > this.maxHull * 0.04 && rng.chance(0.35)) this.fires++;
-    }
-
-    // Cloaks fail when the ship is hit.
-    if (this.cloaked && hullDamage > 0) this.decloak();
-
-    if (this.hull <= 0 && !this.breaching) this.beginBreach();
-
-    return { shieldDamage, hullDamage, facing, penetrated: hullDamage > 0, crewKilled };
-  }
-
-  damageSubsystem(key, amount) {
-    if (!(key in this.subsystems)) return;
-    // Guarded the same way `repair` and `takeDamage` are, and for the same
-    // reason: a subsystem is a number between zero and one that the whole
-    // damage model, the power grid and the AI read every tick, and one
-    // non-finite write to it is permanent. `takeDamage` clamps through
-    // `clamp`, which is NaN-safe; this did raw arithmetic and did not.
-    //
-    // Found by the API fuzzer in tests/invariants.test.js, which calls every
-    // public method with rubbish precisely because a save file is a thing a
-    // person can edit and a computed damage figure is a thing that can go NaN.
-    this.subsystems[key] = clamp(this.subsystems[key] - clamp(amount, 0, 1), 0, 1);
-    if (key === 'warpcore' && this.subsystems.warpcore <= 0.15 && !this.breaching) {
-      this.beginBreach(this.subsystems.warpcore <= 0 ? 12 : 28);
-    }
-    // Losing the emitter drops the shields. Getting it back has to raise them
-    // again, and nothing did — passive repair walked `subsystems.shields` from
-    // zero to a clean 1.0 over ten minutes and left `shieldsUp` false forever,
-    // so one hit on the shield generator cost you shields for the rest of the
-    // commission. `shieldsDown` remembers whether it was the captain's doing.
-    if (key === 'shields' && this.subsystems.shields <= 0.05) this.shieldsUp = false;
-  }
-
-  beginBreach(seconds = 20) {
-    if (this.breaching || this.coreEjected) {
-      if (this.hull <= 0) this.destroy('catastrophic hull failure');
-      return;
-    }
-    this.breaching = true;
-    this.breachTimer = seconds;
-    // The most dramatic thing that happens to a starship, and it used to happen
-    // in silence: the warning tone was written in sfx.js and played from
-    // nowhere. There is one way out — eject the core — and the player needs to
-    // be told the clock has started.
-    emit('ship:breach', { ship: this, seconds });
-  }
-
-  /** The one way out of a breach. Costs you warp drive for the rest of the fight. */
-  ejectCore() {
-    if (!this.breaching || this.coreEjected) return false;
-    this.breaching = false;
-    this.coreEjected = true;
-    this.breachTimer = 0;
-    this.subsystems.warpcore = 0;
-    this.power.cap = Math.round(this.cls.powerCap * 0.45);
-    this.power.normalize();
-
-    // Ejecting the core stops the antimatter going up. It does not put a hull
-    // back together.
-    //
-    // Clearing `breaching` unconditionally was a soft-lock: a ship already at
-    // zero hull came out of it not destroyed, not breaching and not repairable
-    // — the one state `ship.zerohull.adrift` exists to forbid — so the fight
-    // could never end on 'destroyed' and the campaign carried on with a wreck
-    // that the game did not know was a wreck. Found by the API fuzzer.
-    if (this.hull <= 0) this.destroy('hull failure with the core clear');
-    return true;
-  }
-
-  destroy(cause = 'destroyed') {
-    if (this.destroyed) return;
-    this.destroyed = true;
-    this.destroyCause = cause;
-    this.hull = 0;
-    for (const f of FACINGS) this.shields[f] = 0;
-  }
-
-  // ---------------- actions ----------------
-
-  cloak() {
-    if (!this.cloakCapable || this.cloaked || this.cloakCooldown > 0) return false;
-    this.cloaked = true;
-    this.shieldsUp = false;
-    this.cloakCooldown = 6;
-    return true;
-  }
-
-  decloak() {
-    if (!this.cloaked) return false;
-    this.cloaked = false;
-    this.shieldsUp = true;
-    this.cloakCooldown = 4;
-    return true;
-  }
-
-  /**
-   * Emergency shield reinforcement to one facing, taken from the others.
-   *
-   * The receiving facing is capped at SHIELD_OVERCHARGE, so it can only ever absorb a
-   * limited amount. Charge is conserved: we work out the headroom first and
-   * draw exactly that much, proportionally, rather than stripping a fixed
-   * fraction off five facings and letting the overflow evaporate.
-   */
-  reinforceShield(facing, fraction = 0.35) {
-    if (!FACINGS.includes(facing)) return false;
-    const others = FACINGS.filter((f) => f !== facing);
-    const draw = clamp(fraction, 0, 1);
-    const available = others.reduce((n, f) => n + this.shields[f] * draw, 0);
-    const headroom = Math.max(0, this.maxShield * SHIELD_OVERCHARGE - this.shields[facing]);
-    const wanted = Math.min(available, headroom);
-    if (wanted <= 0) return true;
-
-    // `available` is a fixed fraction of the pool, so scaling by wanted/available
-    // keeps each facing's contribution proportional to what it actually holds.
-    const scale = wanted / available;
-    let pooled = 0;
-    for (const f of others) {
-      const take = this.shields[f] * draw * scale;
-      this.shields[f] -= take;
-      pooled += take;
-    }
-    this.shields[facing] = Math.min(this.maxShield * SHIELD_OVERCHARGE, this.shields[facing] + pooled);
-    return true;
-  }
-
-  repair(amount) {
-    // Guarded, and never negative: `repair(-Infinity)` used to drive the hull
-    // to -Infinity, which is a destroyed ship the game does not know is dead.
-    const healed = clamp(amount, 0, this.maxHull);
-    this.hull = Math.min(this.maxHull, this.hull + healed);
-    for (const k of SUBSYSTEM_KEYS) {
-      this.subsystems[k] = Math.min(1, this.subsystems[k] + healed / this.maxHull);
-    }
-    if (this.subsystems.shields > 0.05) this.shieldsUp = true;
-    if (this.hull > 0) { this.breaching = false; this.breachTimer = 0; }
-    return this.hull;
-  }
-
-  /** Full starbase overhaul. */
-  restore() {
-    this.hull = this.maxHull;
-    for (const f of FACINGS) this.shields[f] = this.maxShield;
-    for (const k of SUBSYSTEM_KEYS) this.subsystems[k] = 1;
-    this.shieldsUp = true;
-    this.fires = 0;
-    this.boarders = 0;
-    this.breaching = false;
-    this.breachTimer = 0;
-    this.coreEjected = false;
-    this.power.cap = this.cls.powerCap;
-    this.torpedoes = this.maxTorpedoes;
-    this.antimatter = 100;
-    this.injured = 0;
-    this.adaptation = {};
-    this.destroyed = false;
-  }
-
-  // ---------------- persistence ----------------
-
-  save() {
-    return {
-      classId: this.classId, name: this.name, registry: this.registry, faction: this.faction,
-      hull: this.hull, shields: this.shields, shieldsUp: this.shieldsUp,
-      crew: this.crew, injured: this.injured,
-      subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
-      // `boarders` alongside `fires` for the same reason: it is a fight in
-      // progress, and a save taken during one used to come back with the
-      // intruders gone, the alert cleared and the crew no longer dying.
-      fires: this.fires, boarders: this.boarders, coreEjected: this.coreEjected, mods: this.mods,
-      // A breach in progress is state, not decoration. Left out, a save taken
-      // during the twenty seconds you have to eject the core came back as a
-      // ship sitting at zero hull with no countdown running and no way to die
-      // — undamaged by anything that followed, and never destroyed.
-      breaching: this.breaching, breachTimer: this.breachTimer,
-      destroyed: this.destroyed, destroyCause: this.destroyCause ?? null,
-      power: this.power.save(),
-    };
-  }
-
-  static load(data) {
-    const s = new Ship(data.classId, { name: data.name, registry: data.registry, faction: data.faction, isPlayer: true });
-
-    // Modifiers first, so the maxima are correct before the saved hull and
-    // shield values — which were recorded in that scaled space — are restored.
-    if (data.mods) {
-      s.mods = { ...s.mods, ...data.mods };
-      s.recomputeDerived();
-    }
-
-    Object.assign(s, {
-      hull: data.hull, shieldsUp: data.shieldsUp ?? true,
-      crew: data.crew, injured: data.injured ?? 0,
-      torpedoes: data.torpedoes ?? s.torpedoes,
-      // `?? 100` does not catch a bad figure: `??` only sees null and
-      // undefined, so a NaN in the save loaded straight through — and NaN
-      // antimatter is the worst kind, because nothing downstream ever complains
-      // about it. `fuel > NaN` is false, so plotTransit approves every course
-      // at every warp factor; `Math.max(0, NaN - fuel)` is NaN, so the reserve
-      // never recovers; and the NaN is written back on the next save. Measured:
-      // a Constitution loaded from such a record flew Sol to Qo'noS at warp
-      // nine, a 63.2% burn, on a tank the game could not read.
-      antimatter: Number.isFinite(data.antimatter) ? clamp(data.antimatter, 0, 100) : 100,
-      fires: data.fires ?? 0, boarders: Math.max(0, Number(data.boarders) || 0),
-      coreEjected: data.coreEjected ?? false,
-      breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
-      destroyed: data.destroyed === true,
-      destroyCause: data.destroyCause ?? null,
-    });
-    // A core that has been ejected is not still breaching.
-    //
-    // `beginBreach` refuses when the core is gone and `ejectCore` clears the
-    // breach, so the two are mutually exclusive everywhere at runtime — but the
-    // save restores them as two independent flags, and a record carrying both
-    // loaded as a ship counting down to destruction with the one escape from
-    // that countdown already spent: `ejectCore()` returns false, because the
-    // core it would have thrown is not there. Resolve it the way ejecting it
-    // does, since ejecting it is what happened.
-    if (s.coreEjected) { s.breaching = false; s.breachTimer = 0; }
-
-    // A record written before a breach was saved, restored onto a hull that is
-    // already gone, would load as the very thing the invariant checker calls
-    // `ship.zerohull.adrift` — dead, not dying, and on the board forever. Give
-    // it the countdown it should have had. (With the core already gone,
-    // `beginBreach` takes the other branch and finishes the ship, which is the
-    // same answer `ejectCore` gives a hull that is past saving.)
-    if (s.hull <= 0 && !s.destroyed && !s.breaching) s.beginBreach();
-    // Shield migration, from four facings to six.
-    //
-    // A save written before the third axis existed has no dorsal or ventral
-    // entry, and its four values were recorded against a per-facing maximum a
-    // half larger than the current one. Spreading over the defaults supplies
-    // the two new facings at full charge, and the clamp keeps the old four from
-    // reading as over-full. An old commission therefore loads as a ship that
-    // has been to a starbase, which is the kindest reading available and the
-    // only one that cannot produce a shield above its own maximum.
-    s.shields = { ...s.shields, ...(data.shields ?? {}) };
-    for (const f of FACINGS) {
-      s.shields[f] = Math.max(0, Math.min(s.maxShield, s.shields[f] ?? s.maxShield));
-    }
-    s.subsystems = { ...s.subsystems, ...(data.subsystems ?? {}) };
-    s.power = PowerGrid.load(data.power, s.cls.powerCap);
-    return s;
-  }
-}
-
-__exports.FACINGS = FACINGS;
-__exports.SHIELD_OVERCHARGE = SHIELD_OVERCHARGE;
-__exports.FACING_LABEL = FACING_LABEL;
-__exports.FACING_AXIS = FACING_AXIS;
-__exports.bearingToDirection = bearingToDirection;
-__exports.ADDITIVE_MODS = ADDITIVE_MODS;
-__exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
-__exports.DAMAGE_CONTROL_OFF_ACTION = DAMAGE_CONTROL_OFF_ACTION;
-__exports.REPEL_DEFENDER_SHARE = REPEL_DEFENDER_SHARE;
-__exports.BOARDERS_REPELLED_AT = BOARDERS_REPELLED_AT;
-__exports.REPEL_STRENGTH = REPEL_STRENGTH;
-__exports.REPEL_DURATION = REPEL_DURATION;
-__exports.REPEL_COST_PER_INTRUDER = REPEL_COST_PER_INTRUDER;
-__exports.facingForDirection = facingForDirection;
-__exports.facingForBearing = facingForBearing;
-__exports.inArc = inArc;
-__exports.Ship = Ship;
-
-});
-
 __define("src/world/factions.data.js", function (__exports, __require) {
 // Factions the Federation shares a galaxy with.
 //
@@ -5997,7 +4285,6 @@ __define("src/ui/tactical.js", function (__exports, __require) {
 // on the screen it is in the sim.
 
 const { fitCanvas, attachPanZoom } = __require("src/ui/touch.js");
-const { FACINGS } = __require("src/sim/ship.js");
 const { FACTIONS } = __require("src/world/factions.data.js");
 
 const HULL_SHAPES = {
@@ -6155,14 +4442,30 @@ class TacticalView {
     // Shield arcs, drawn only where there is shield left to draw.
     if (ship.shieldsUp && !ship.cloaked) {
       const radius = 30 * scale;
+      // Four arcs, and the loop reads THIS table rather than `FACINGS`.
+      //
+      // Shields have six facings; a plan view has room for four. Dorsal and
+      // ventral are "over the top of us" and "under us", which a top-down plot
+      // cannot point at — the six-facing readout lives on the tactical panel,
+      // where it has a middle column to put them in.
+      //
+      // This loop used to iterate `FACINGS` and index into these four, so the
+      // moment shields gained a third axis it destructured `undefined` and
+      // threw on the first ship with its shields up. Nothing caught it because
+      // nothing could reach this view: `settings.render3d` was never written,
+      // so the flat plot was unreachable except on a real WebGL failure. It has
+      // been throwing ever since, behind a door with no handle.
+      //
+      // Iterating the table is what stops that happening again: a facing this
+      // projection cannot draw is simply not in it, and there is no second list
+      // to keep in step.
       const arcs = {
         fore: [-45, 45], starboard: [45, 135], aft: [135, 225], port: [225, 315],
       };
       ctx.lineWidth = 5 / this.view.scale + 1.5;
-      for (const f of FACINGS) {
+      for (const [f, [a0, a1]] of Object.entries(arcs)) {
         const pct = ship.shieldPctOf(f);
         if (pct <= 0.02) continue;
-        const [a0, a1] = arcs[f];
         ctx.strokeStyle = `rgba(120,180,255,${0.18 + pct * 0.5})`;
         ctx.beginPath();
         ctx.arc(0, 0, radius,
@@ -6319,6 +4622,62 @@ class TacticalView {
 }
 
 __exports.TacticalView = TacticalView;
+
+});
+
+__define("src/core/num.js", function (__exports, __require) {
+// Numeric guards for the simulation's edges.
+//
+// The clamps in this game were all written as `Math.max(lo, Math.min(hi, v))`,
+// which is correct for every number except the ones that matter: `Math.min(1,
+// NaN)` is NaN, and `Math.max(0, NaN)` is NaN. A single bad value therefore
+// walked straight through every clamp in the sim and poisoned whatever it
+// touched — and NaN is contagious. Once a ship's position is NaN, every
+// subsequent update multiplies NaN by a heading and stores NaN back. Nothing
+// recovers it: not repair, not warping out, not ending the engagement. It is
+// the most complete soft-lock the game can reach, and it is one guard away
+// from being impossible.
+//
+// Fuzzing the parser with 20,000 hostile inputs produced no non-finite values,
+// so this is not defending against typed orders. It is defending against saves,
+// arithmetic edge cases, and every future caller — the sim should not be one
+// bad number away from unusable.
+
+/**
+ * Coerce anything to a finite number.
+ *
+ * NaN, both infinities, and non-numeric values become `fallback`. This is the
+ * gate: put it in front of a clamp rather than trusting the clamp.
+ *
+ * @param {*} v
+ * @param {number} fallback  used when `v` is not a finite number
+ */
+function finite(v, fallback = 0) {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Clamp to a range, NaN-safe.
+ *
+ * A non-finite input lands on `lo` rather than propagating, because every
+ * caller here is clamping a quantity where the low end is the safe answer:
+ * no throttle, no power, no damage.
+ */
+function clamp(v, lo, hi) {
+  const n = finite(v, lo);
+  return n < lo ? lo : n > hi ? hi : n;
+}
+
+/** Wrap a bearing into 0..360, NaN-safe. */
+function wrapDegrees(v) {
+  const n = finite(v, 0) % 360;
+  return n < 0 ? n + 360 : n;
+}
+
+__exports.finite = finite;
+__exports.clamp = clamp;
+__exports.wrapDegrees = wrapDegrees;
 
 });
 
@@ -9048,6 +7407,19 @@ __define("src/gfx/vista.js", function (__exports, __require) {
 const { vec3 } = __require("src/gfx/math.js");
 const { hashSeed } = __require("src/core/rng.js");
 
+/**
+ * How many scenery bodies may be drawn in one frame. See `drawVista` in
+ * ui/tactical3d.js, which enforces it.
+ *
+ * It lives HERE, rather than beside the code that uses it, for one reason:
+ * this module is the vista maths node can import, and `ui/tactical3d.js` is
+ * not. The budget test in tests/gfx.test.js used to carry its own `const CAP =
+ * 4` with a comment admitting it was a copy — two numbers that had to agree
+ * and nothing making them. The same shape as the button-phrase list that got
+ * deleted for the same reason.
+ */
+const VISTA_DRAW_CAP = 4;
+
 const DEG = Math.PI / 180;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -9310,6 +7682,7 @@ function joltTint(level, hull = false) {
     : [1 + f * 0.7, 1 + f * 1.5, 1 + f * 2.6];
 }
 
+__exports.VISTA_DRAW_CAP = VISTA_DRAW_CAP;
 __exports.fovFor = fovFor;
 __exports.horizontalFov = horizontalFov;
 __exports.noseOf = noseOf;
@@ -9520,15 +7893,17 @@ const { vec3, mat4, quat, identity, multiply, perspective, lookAt, compose, norm
 const { Renderer } = __require("src/gfx/gl.js");
 const { hullMesh, hullScale, paletteFor } = __require("src/gfx/blueprint.js");
 const { starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh, dropLineMesh, bodyMesh, VOLUME } = __require("src/gfx/scene.js");
-const { vista, bearingOf, fovFor, noseOf } = __require("src/gfx/vista.js");
+const { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } = __require("src/gfx/vista.js");
 const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const DEG = Math.PI / 180;
 
-/** How many scenery bodies may be drawn in one frame. See `drawVista`. */
-const VISTA_DRAW_CAP = 4;
+// Defined in gfx/vista.js and re-exported here, where it is enforced, so that
+// node — which cannot import this file — can assert the budget against the one
+// definition instead of a copy of the number.
+__exports.VISTA_DRAW_CAP = VISTA_DRAW_CAP;
 
 /**
  * Simulation space is currently a plane: ships carry x, y and a heading in
@@ -10393,7 +8768,6 @@ class TacticalView3D {
   }
 }
 
-__exports.VISTA_DRAW_CAP = VISTA_DRAW_CAP;
 __exports.TacticalView3D = TacticalView3D;
 
 });
@@ -15366,6 +13740,1662 @@ __exports.chairPanel = chairPanel;
 
 });
 
+__define("src/sim/power.js", function (__exports, __require) {
+// Power distribution — the STO model.
+//
+// Four subsystems draw from a fixed pool. Each level above/below the 50 nominal
+// scales that subsystem's output. Presets are one tap; the sliders underneath
+// are the real control, and they're what a captain actually orders.
+
+const { clamp } = __require("src/core/num.js");
+const SUBSYSTEMS = ['weapons', 'shields', 'engines', 'auxiliary'];
+const SUBSYSTEM_LABEL = {
+  weapons: 'Weapons',
+  shields: 'Shields',
+  engines: 'Engines',
+  auxiliary: 'Auxiliary',
+};
+
+/**
+ * What each channel actually buys, in the words an officer would use.
+ *
+ * Four unlabelled sliders told a captain nothing about what he was trading
+ * away, and the Auxiliary one was the worst of them: the parser calls that
+ * channel "sensors" and the preset above calls it Science, so the one thing a
+ * captain could reasonably infer from the screen was the one thing it did not
+ * do. These are read by the power panel and are the screen's half of the
+ * contract — if a line here stops being true, the effect it names has moved.
+ */
+const SUBSYSTEM_EFFECT = {
+  weapons: 'Beam and cannon damage, and how fast the banks recharge.',
+  shields: 'How quickly the facings come back after a hit.',
+  engines: 'Impulse speed and how hard she turns.',
+  auxiliary: 'Sensor resolution, damage control, and fire suppression.',
+};
+const PRESETS = {
+  balanced: { id: 'balanced', label: 'Balanced', order: 'Standard distribution',
+    levels: { weapons: 50, shields: 50, engines: 50, auxiliary: 50 } },
+  attack: { id: 'attack', label: 'Attack', order: 'Power to weapons',
+    levels: { weapons: 100, shields: 40, engines: 35, auxiliary: 25 } },
+  defense: { id: 'defense', label: 'Defense', order: 'Power to shields',
+    levels: { weapons: 40, shields: 100, engines: 35, auxiliary: 25 } },
+  speed: { id: 'speed', label: 'Speed', order: 'Power to engines',
+    levels: { weapons: 35, shields: 40, engines: 100, auxiliary: 25 } },
+  science: { id: 'science', label: 'Science', order: 'Power to auxiliary',
+    levels: { weapons: 30, shields: 45, engines: 25, auxiliary: 100 } },
+};
+const PRESET_LIST = Object.values(PRESETS);
+
+/** A subsystem at `level` performs at this multiple of nominal. */
+function effectiveness(level) {
+  // 50 -> 1.0, 100 -> 1.5, 25 -> 0.75, 0 -> 0.4 (never fully dead from power alone)
+  if (level >= 50) return 1 + (level - 50) * 0.01;
+  return Math.max(0.4, 1 - (50 - level) * 0.012);
+}
+class PowerGrid {
+  /**
+   * @param {number} cap total distributable power (ship's powerCap)
+   */
+  constructor(cap = 200) {
+    this.cap = cap;
+    this.levels = { ...PRESETS.balanced.levels };
+    this.preset = 'balanced';
+    // Rebalancing is not instant — the EPS grid takes a moment to settle.
+    this.target = { ...this.levels };
+    this.transferRate = 55; // power units per second
+    // Balanced is 50 to each of four subsystems, which is 200 — and plenty of
+    // hulls have a smaller grid than that. A Bird-of-Prey has a cap of 190, so
+    // it was built drawing 200 and was over its own budget from the first tick
+    // of its existence, with every `factor()` reading computed off a
+    // distribution the ship could not actually supply.
+    this.normalize();
+    this.levels = { ...this.target };
+  }
+
+  get total() {
+    return SUBSYSTEMS.reduce((n, s) => n + this.target[s], 0);
+  }
+
+  /** Apply a named preset. */
+  applyPreset(id) {
+    const p = PRESETS[id];
+    if (!p) return false;
+    this.target = { ...p.levels };
+    this.preset = id;
+    this.normalize();
+    return true;
+  }
+
+  /**
+   * Set one subsystem, stealing from or giving back to the others so the
+   * total stays within cap. This is what "divert power to shields" does.
+   */
+  set(subsystem, value) {
+    if (!SUBSYSTEMS.includes(subsystem)) return false;
+    // Rounded after the guard: Math.round(NaN) is NaN, and a NaN power level
+    // silently disables the subsystem it was meant to boost.
+    this.target[subsystem] = Math.round(clamp(value, 0, 100));
+    this.preset = 'custom';
+    this.normalize(subsystem);
+    return true;
+  }
+
+  /** Shift `amount` into a subsystem, drawn evenly from the rest. */
+  divert(subsystem, amount = 25) {
+    return this.set(subsystem, this.target[subsystem] + amount);
+  }
+
+  /** Keep the sum at or under cap by draining the others proportionally. */
+  normalize(protectedSub = null) {
+    const budget = this.cap;
+    let total = this.total;
+    if (total <= budget) return;
+
+    let excess = total - budget;
+    const donors = SUBSYSTEMS.filter((s) => s !== protectedSub && this.target[s] > 0);
+    // Drain proportional to how much each donor has above zero.
+    for (let pass = 0; pass < 4 && excess > 0.01; pass++) {
+      const pool = donors.reduce((n, s) => n + this.target[s], 0);
+      if (pool <= 0) break;
+      for (const s of donors) {
+        const share = (this.target[s] / pool) * excess;
+        const taken = Math.min(this.target[s], share);
+        this.target[s] -= taken;
+      }
+      excess = this.total - budget;
+    }
+    for (const s of SUBSYSTEMS) this.target[s] = Math.max(0, Math.round(this.target[s]));
+
+    // The protected subsystem is protected from being DRAINED, not exempt from
+    // the cap. With the donors emptied and the total still over budget it was
+    // simply left there — so after ejecting the warp core, which cuts the cap
+    // to 45 per cent, asking for 100 to weapons kept 100 to weapons and the
+    // whole point of the ejection penalty went away.
+    if (protectedSub && this.total > budget) {
+      const others = SUBSYSTEMS.reduce((n, s) => (s === protectedSub ? n : n + this.target[s]), 0);
+      this.target[protectedSub] = Math.max(0, Math.round(budget - others));
+    }
+
+    // Rounding four numbers up can put the total back over the cap by a couple
+    // of points, which is how a grid at 92 of 90 survived a function whose
+    // entire job is "keep the sum at or under cap". Shave the largest until it
+    // does not.
+    let over = this.total - budget;
+    while (over > 0) {
+      const biggest = SUBSYSTEMS.reduce((a, b) => (this.target[a] >= this.target[b] ? a : b));
+      if (this.target[biggest] <= 0) break;
+      const take = Math.min(over, this.target[biggest]);
+      this.target[biggest] -= take;
+      over -= take;
+    }
+  }
+
+  /** Ease actual levels toward target. Called every sim step. */
+  update(dt) {
+    for (const s of SUBSYSTEMS) {
+      const diff = this.target[s] - this.levels[s];
+      if (Math.abs(diff) < 0.01) { this.levels[s] = this.target[s]; continue; }
+      const step = Math.sign(diff) * Math.min(Math.abs(diff), this.transferRate * dt);
+      this.levels[s] += step;
+    }
+  }
+
+  /** Effectiveness multiplier for a subsystem right now. */
+  factor(subsystem) {
+    return effectiveness(this.levels[subsystem] ?? 50);
+  }
+
+  /** True once actual levels have caught up with the order. */
+  get settled() {
+    return SUBSYSTEMS.every((s) => Math.abs(this.target[s] - this.levels[s]) < 0.5);
+  }
+
+  save() {
+    return { cap: this.cap, levels: this.levels, target: this.target, preset: this.preset };
+  }
+
+  static load(data, cap = 200) {
+    const g = new PowerGrid(data?.cap ?? cap);
+    if (data) {
+      g.levels = { ...g.levels, ...data.levels };
+      g.target = { ...g.target, ...data.target };
+      g.preset = data.preset ?? 'custom';
+    }
+    return g;
+  }
+}
+
+__exports.SUBSYSTEMS = SUBSYSTEMS;
+__exports.SUBSYSTEM_LABEL = SUBSYSTEM_LABEL;
+__exports.SUBSYSTEM_EFFECT = SUBSYSTEM_EFFECT;
+__exports.PRESETS = PRESETS;
+__exports.PRESET_LIST = PRESET_LIST;
+__exports.effectiveness = effectiveness;
+__exports.PowerGrid = PowerGrid;
+
+});
+
+__define("src/world/ships.data.js", function (__exports, __require) {
+// Ship classes — player-commandable and otherwise.
+//
+// Every number here feeds the simulation directly. `tier` gates availability by
+// rank; `slots` are the loadout hardpoints (see sim/loadout.js).
+
+/** Weapon mounts. arc is degrees of firing coverage centred on `facing`. */
+const arc = (facing, degrees) => ({ facing, degrees });
+const SHIP_CLASSES = {
+  // ---------- Player-commandable ----------
+  constitution: {
+    id: 'constitution', name: 'Constitution class', faction: 'federation',
+    tier: 3, role: 'cruiser',
+    hull: 4200, shields: 3400, shieldRegen: 42,
+    crew: 430, mass: 1.0,
+    impulse: 0.72, turnRate: 9.0, maxWarp: 8.0, warpEfficiency: 1.0,
+    powerCap: 200,
+    weapons: [
+      { id: 'phaser_bank_fwd', type: 'beam', name: 'Forward Phaser Banks', damage: 168, cycle: 3.2, ...arc(0, 250) },
+      { id: 'phaser_bank_aft', type: 'beam', name: 'Aft Phaser Banks', damage: 120, cycle: 3.2, ...arc(180, 200) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Photon Tubes', damage: 420, cycle: 7.5, ...arc(0, 90) },
+    ],
+    slots: { tactical: 3, engineering: 3, science: 2, device: 2 },
+    boffSeats: [
+      { dept: 'tactical', rank: 3 }, { dept: 'engineering', rank: 3 },
+      { dept: 'science', rank: 2 }, { dept: 'universal', rank: 2 },
+    ],
+    description: 'Heavy cruiser. Twelve ships in the fleet, five-year missions, no support within a month at warp.',
+  },
+  constitution_refit: {
+    id: 'constitution_refit', name: 'Constitution class (Refit)', faction: 'federation',
+    tier: 4, role: 'cruiser', refitOf: 'constitution',
+    hull: 5100, shields: 4400, shieldRegen: 55,
+    crew: 430, mass: 1.05,
+    impulse: 0.78, turnRate: 9.5, maxWarp: 9.0, warpEfficiency: 1.15,
+    powerCap: 220,
+    weapons: [
+      { id: 'phaser_bank_fwd', type: 'beam', name: 'Forward Phaser Banks', damage: 196, cycle: 3.0, ...arc(0, 250) },
+      { id: 'phaser_bank_aft', type: 'beam', name: 'Aft Phaser Banks', damage: 140, cycle: 3.0, ...arc(180, 200) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Torpedo Bay', damage: 430, cycle: 6.8, ...arc(0, 90) },
+      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Photon Tube', damage: 340, cycle: 8.0, ...arc(180, 90) },
+    ],
+    slots: { tactical: 4, engineering: 3, science: 3, device: 2 },
+    boffSeats: [
+      { dept: 'tactical', rank: 3 }, { dept: 'engineering', rank: 3 },
+      { dept: 'science', rank: 3 }, { dept: 'universal', rank: 2 },
+    ],
+    description: 'The full rebuild. New warp geometry, new phasers drawing straight off the engines.',
+  },
+  miranda: {
+    id: 'miranda', name: 'Miranda class', faction: 'federation',
+    tier: 2, role: 'light cruiser',
+    hull: 3100, shields: 2600, shieldRegen: 38,
+    crew: 220, mass: 0.8,
+    impulse: 0.8, turnRate: 12.0, maxWarp: 8.0, warpEfficiency: 1.1,
+    powerCap: 180,
+    weapons: [
+      { id: 'phaser_bank_fwd', type: 'beam', name: 'Phaser Banks', damage: 132, cycle: 3.2, ...arc(0, 250) },
+      { id: 'torpedo_roll', type: 'torpedo', name: 'Rollbar Torpedo Pod', damage: 320, cycle: 7.0, ...arc(0, 180) },
+    ],
+    slots: { tactical: 2, engineering: 2, science: 2, device: 1 },
+    boffSeats: [
+      { dept: 'tactical', rank: 2 }, { dept: 'engineering', rank: 2 }, { dept: 'science', rank: 2 },
+    ],
+    description: 'Workhorse. Survey, escort, courier — whatever the sector needs that week.',
+  },
+  oberth: {
+    id: 'oberth', name: 'Oberth class', faction: 'federation',
+    tier: 2, role: 'science vessel',
+    hull: 2400, shields: 2900, shieldRegen: 62,
+    crew: 80, mass: 0.6,
+    impulse: 0.68, turnRate: 14.0, maxWarp: 7.5, warpEfficiency: 1.3,
+    powerCap: 190, auxBonus: 25,
+    weapons: [
+      { id: 'phaser_light', type: 'beam', name: 'Light Phaser Emitters', damage: 90, cycle: 3.5, ...arc(0, 300) },
+    ],
+    slots: { tactical: 1, engineering: 2, science: 4, device: 2 },
+    boffSeats: [
+      { dept: 'science', rank: 3 }, { dept: 'science', rank: 2 }, { dept: 'engineering', rank: 2 },
+    ],
+    description: 'A laboratory with a warp drive. Sensors that see everything, guns that deter nothing.',
+  },
+  excelsior: {
+    id: 'excelsior', name: 'Excelsior class', faction: 'federation',
+    tier: 5, role: 'heavy cruiser',
+    hull: 6400, shields: 5200, shieldRegen: 60,
+    crew: 750, mass: 1.35,
+    impulse: 0.75, turnRate: 7.5, maxWarp: 9.2, warpEfficiency: 1.25,
+    powerCap: 240,
+    weapons: [
+      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 244, cycle: 3.0, ...arc(0, 250) },
+      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 168, cycle: 3.0, ...arc(180, 250) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 545, cycle: 6.5, ...arc(0, 90) },
+      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 400, cycle: 7.2, ...arc(180, 90) },
+    ],
+    slots: { tactical: 4, engineering: 4, science: 3, device: 3 },
+    boffSeats: [
+      { dept: 'tactical', rank: 3 }, { dept: 'engineering', rank: 4 },
+      { dept: 'science', rank: 3 }, { dept: 'universal', rank: 3 },
+    ],
+    description: 'The transwarp experiment failed; the spaceframe did not. Still the fleet backbone.',
+  },
+  constellation: {
+    id: 'constellation', name: 'Constellation class', faction: 'federation',
+    tier: 3, role: 'explorer',
+    hull: 3800, shields: 3200, shieldRegen: 44,
+    crew: 535, mass: 1.0,
+    impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 1.35,
+    powerCap: 200,
+    weapons: [
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Banks', damage: 152, cycle: 3.2, ...arc(0, 270) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 360, cycle: 7.2, ...arc(0, 120) },
+    ],
+    slots: { tactical: 2, engineering: 3, science: 3, device: 3 },
+    boffSeats: [
+      { dept: 'engineering', rank: 3 }, { dept: 'science', rank: 3 },
+      { dept: 'tactical', rank: 2 }, { dept: 'universal', rank: 2 },
+    ],
+    description: 'Four nacelles for range. Built to be away from resupply longer than anything else in the fleet.',
+  },
+
+  // ---------- Klingon ----------
+  bird_of_prey: {
+    id: 'bird_of_prey', name: 'B’rel-class Bird-of-Prey', faction: 'klingon',
+    tier: 3, role: 'raider',
+    hull: 2600, shields: 2000, shieldRegen: 34,
+    crew: 36, mass: 0.55,
+    impulse: 0.95, turnRate: 18.0, maxWarp: 8.5, warpEfficiency: 1.0,
+    powerCap: 190, cloak: true,
+    weapons: [
+      { id: 'disruptor_fwd', type: 'cannon', name: 'Forward Disruptor Cannons', damage: 138, cycle: 2.4, ...arc(0, 45) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Torpedo', damage: 330, cycle: 8.0, ...arc(0, 45) },
+    ],
+    description: 'Fast, cloaked, and fragile. It must decloak to fire, and it knows exactly when to.',
+  },
+  d7: {
+    id: 'd7', name: 'D7-class Battlecruiser', faction: 'klingon',
+    tier: 4, role: 'battlecruiser',
+    hull: 4600, shields: 3600, shieldRegen: 40,
+    crew: 400, mass: 1.1,
+    impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 0.95,
+    powerCap: 210,
+    weapons: [
+      { id: 'disruptor_fwd', type: 'beam', name: 'Forward Disruptors', damage: 136, cycle: 3.0, ...arc(0, 200) },
+      { id: 'disruptor_aft', type: 'beam', name: 'Aft Disruptors', damage: 104, cycle: 3.2, ...arc(180, 160) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 420, cycle: 7.5, ...arc(0, 90) },
+    ],
+    description: 'The Empire’s line ship. Built to trade damage until one side stops.',
+  },
+
+  // ---------- Romulan ----------
+  warbird: {
+    id: 'warbird', name: 'D’deridex-class Warbird', faction: 'romulan',
+    tier: 6, role: 'warbird',
+    hull: 7800, shields: 6200, shieldRegen: 58,
+    crew: 1500, mass: 1.8,
+    impulse: 0.62, turnRate: 5.5, maxWarp: 9.0, warpEfficiency: 1.0,
+    powerCap: 250, cloak: true,
+    weapons: [
+      { id: 'disruptor_fwd', type: 'beam', name: 'Forward Disruptor Array', damage: 190, cycle: 3.2, ...arc(0, 220) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Plasma Torpedo', damage: 640, cycle: 9.0, ...arc(0, 90) },
+    ],
+    description: 'Twice your mass and in no hurry. It decloaks when the geometry already favours it.',
+  },
+  scoutship: {
+    id: 'scoutship', name: 'Romulan Scout', faction: 'romulan',
+    tier: 2, role: 'scout',
+    hull: 1800, shields: 1600, shieldRegen: 44,
+    crew: 24, mass: 0.5,
+    impulse: 1.0, turnRate: 20.0, maxWarp: 8.0, warpEfficiency: 1.2,
+    powerCap: 170, cloak: true,
+    weapons: [
+      { id: 'disruptor', type: 'cannon', name: 'Disruptor Cannon', damage: 84, cycle: 2.6, ...arc(0, 60) },
+    ],
+    description: 'Sent to look, not to fight. It will run the moment looking becomes expensive.',
+  },
+
+  // ---------- Cardassian ----------
+  galor: {
+    id: 'galor', name: 'Galor-class Cruiser', faction: 'cardassian',
+    tier: 4, role: 'cruiser',
+    hull: 4400, shields: 3800, shieldRegen: 48,
+    crew: 300, mass: 1.05,
+    impulse: 0.74, turnRate: 9.0, maxWarp: 9.0, warpEfficiency: 1.05,
+    powerCap: 205,
+    weapons: [
+      { id: 'spiral_fwd', type: 'beam', name: 'Spiral-Wave Disruptors', damage: 144, cycle: 2.9, ...arc(0, 240) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Launcher', damage: 380, cycle: 7.0, ...arc(0, 120) },
+    ],
+    description: 'Disciplined, well-drilled, and patient. It will wear your shields down by the numbers.',
+  },
+
+  // ---------- Others ----------
+  marauder: {
+    id: 'marauder', name: 'D’Kora-class Marauder', faction: 'ferengi',
+    tier: 3, role: 'marauder',
+    hull: 3400, shields: 3000, shieldRegen: 46,
+    crew: 450, mass: 1.0,
+    impulse: 0.78, turnRate: 10.0, maxWarp: 9.2, warpEfficiency: 1.2,
+    powerCap: 195,
+    weapons: [
+      { id: 'plasma_fwd', type: 'beam', name: 'Plasma Emitters', damage: 112, cycle: 3.4, ...arc(0, 260) },
+    ],
+    description: 'Armed enough to intimidate freighters, and entirely willing to be bought off.',
+  },
+  orion_raider: {
+    id: 'orion_raider', name: 'Orion Raider', faction: 'orion',
+    tier: 2, role: 'raider',
+    hull: 1900, shields: 1500, shieldRegen: 32,
+    crew: 60, mass: 0.6,
+    impulse: 0.92, turnRate: 16.0, maxWarp: 8.0, warpEfficiency: 1.0,
+    powerCap: 170,
+    weapons: [
+      { id: 'disruptor', type: 'cannon', name: 'Salvaged Disruptors', damage: 76, cycle: 2.5, ...arc(0, 70) },
+    ],
+    description: 'Whatever they could bolt to a hull. Dangerous in threes, worthless alone.',
+  },
+  tholian_web_spinner: {
+    id: 'tholian_web_spinner', name: 'Tholian Web Spinner', faction: 'tholian',
+    tier: 4, role: 'interceptor',
+    hull: 2200, shields: 4200, shieldRegen: 70,
+    crew: 12, mass: 0.5,
+    impulse: 1.05, turnRate: 22.0, maxWarp: 8.0, warpEfficiency: 1.0,
+    powerCap: 200, websAfter: 45,
+    weapons: [
+      { id: 'lance', type: 'cannon', name: 'Thermionic Lance', damage: 130, cycle: 2.8, ...arc(0, 90) },
+    ],
+    description: 'It is not trying to destroy you. It is trying to finish the web before you leave.',
+  },
+  jem_hadar_attack: {
+    id: 'jem_hadar_attack', name: 'Jem’Hadar Attack Ship', faction: 'dominion',
+    tier: 5, role: 'attack ship',
+    hull: 3000, shields: 2400, shieldRegen: 40,
+    crew: 50, mass: 0.7,
+    impulse: 1.1, turnRate: 19.0, maxWarp: 9.0, warpEfficiency: 1.0,
+    powerCap: 220, ramsWhenDoomed: true,
+    weapons: [
+      { id: 'polaron_fwd', type: 'cannon', name: 'Polaron Cannons', damage: 176, cycle: 2.2, ...arc(0, 60) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Launcher', damage: 420, cycle: 7.0, ...arc(0, 60) },
+    ],
+    description: 'Crewed by soldiers who were never told retreat exists. Below 20% hull, it will ram.',
+  },
+  borg_cube: {
+    id: 'borg_cube', name: 'Borg Cube', faction: 'borg',
+    tier: 10, role: 'cube',
+    hull: 42000, shields: 30000, shieldRegen: 260,
+    crew: 64000, mass: 12.0,
+    impulse: 0.55, turnRate: 3.0, maxWarp: 9.6, warpEfficiency: 2.0,
+    powerCap: 400, adapts: true, regenerates: 180,
+    weapons: [
+      { id: 'cutting_beam', type: 'beam', name: 'Cutting Beam', damage: 520, cycle: 3.0, ...arc(0, 360) },
+      { id: 'torpedo', type: 'torpedo', name: 'Plasma Projector', damage: 1100, cycle: 8.0, ...arc(0, 360) },
+    ],
+    description: 'It has no front. It adapts to your weapon frequencies. You are not expected to win this.',
+  },
+
+  // ---------- Player-commandable, later eras ----------
+  ambassador: {
+    id: 'ambassador', name: 'Ambassador class', faction: 'federation',
+    tier: 5, role: 'explorer',
+    hull: 6800, shields: 5600, shieldRegen: 62,
+    crew: 700, mass: 1.4,
+    impulse: 0.72, turnRate: 7.0, maxWarp: 9.2, warpEfficiency: 1.3,
+    powerCap: 240,
+    weapons: [
+      { id: 'phaser_fwd', type: 'beam', name: 'Forward Phaser Arrays', damage: 252, cycle: 3.0, ...arc(0, 270) },
+      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 138, cycle: 3.0, ...arc(180, 240) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 560, cycle: 6.4, ...arc(0, 120) },
+    ],
+    slots: { tactical: 3, engineering: 4, science: 4, device: 3 },
+    boffSeats: [
+      { dept: 'command', rank: 3 }, { dept: 'engineering', rank: 4 },
+      { dept: 'science', rank: 3 }, { dept: 'tactical', rank: 3 },
+    ],
+    description: 'The bridge between eras. Diplomatic suites forward, and enough hull to survive the diplomacy failing.',
+  },
+  galaxy: {
+    id: 'galaxy', name: 'Galaxy class', faction: 'federation',
+    tier: 6, role: 'explorer',
+    hull: 9200, shields: 7600, shieldRegen: 78,
+    crew: 1014, mass: 2.0,
+    impulse: 0.68, turnRate: 5.5, maxWarp: 9.6, warpEfficiency: 1.5,
+    powerCap: 265, saucerSeparation: true,
+    weapons: [
+      { id: 'phaser_dorsal', type: 'beam', name: 'Dorsal Phaser Array', damage: 330, cycle: 2.8, ...arc(0, 300) },
+      { id: 'phaser_ventral', type: 'beam', name: 'Ventral Phaser Array', damage: 168, cycle: 2.8, ...arc(180, 300) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Bay', damage: 720, cycle: 6.0, ...arc(0, 120) },
+      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 480, cycle: 7.0, ...arc(180, 120) },
+    ],
+    slots: { tactical: 4, engineering: 5, science: 4, device: 4 },
+    boffSeats: [
+      { dept: 'command', rank: 4 }, { dept: 'engineering', rank: 4 },
+      { dept: 'science', rank: 4 }, { dept: 'tactical', rank: 3 },
+    ],
+    description: 'A city that goes to warp. Families aboard, which changes every decision you make with it.',
+  },
+  nebula: {
+    id: 'nebula', name: 'Nebula class', faction: 'federation',
+    tier: 6, role: 'science cruiser',
+    hull: 7800, shields: 7200, shieldRegen: 96,
+    crew: 750, mass: 1.7,
+    impulse: 0.7, turnRate: 6.5, maxWarp: 9.5, warpEfficiency: 1.45,
+    powerCap: 270, auxBonus: 35,
+    weapons: [
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 262, cycle: 2.9, ...arc(0, 300) },
+      { id: 'torpedo_pod', type: 'torpedo', name: 'Sensor Pod Launcher', damage: 600, cycle: 6.5, ...arc(0, 180) },
+    ],
+    slots: { tactical: 3, engineering: 4, science: 6, device: 3 },
+    boffSeats: [
+      { dept: 'science', rank: 4 }, { dept: 'science', rank: 3 },
+      { dept: 'engineering', rank: 4 }, { dept: 'tactical', rank: 3 },
+    ],
+    description: 'The Galaxy spaceframe with the mission pod that matters. Sees things nothing else in the fleet can.',
+  },
+  intrepid: {
+    id: 'intrepid', name: 'Intrepid class', faction: 'federation',
+    tier: 5, role: 'science vessel',
+    hull: 5400, shields: 5800, shieldRegen: 104,
+    crew: 150, mass: 0.9,
+    impulse: 0.92, turnRate: 13.0, maxWarp: 9.975, warpEfficiency: 1.7,
+    powerCap: 250, auxBonus: 30,
+    weapons: [
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 222, cycle: 2.9, ...arc(0, 300) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Forward Torpedo Tubes', damage: 530, cycle: 6.2, ...arc(0, 120) },
+    ],
+    slots: { tactical: 3, engineering: 3, science: 5, device: 3 },
+    boffSeats: [
+      { dept: 'science', rank: 4 }, { dept: 'engineering', rank: 3 },
+      { dept: 'tactical', rank: 3 }, { dept: 'universal', rank: 3 },
+    ],
+    description: 'Fast, small, and built to be a long way from home. Variable geometry nacelles and a bio-neural computer.',
+  },
+  defiant: {
+    id: 'defiant', name: 'Defiant class', faction: 'federation',
+    tier: 5, role: 'escort',
+    hull: 4400, shields: 4600, shieldRegen: 58,
+    crew: 50, mass: 0.6,
+    impulse: 1.05, turnRate: 20.0, maxWarp: 9.5, warpEfficiency: 1.0,
+    powerCap: 245, ablative: true,
+    weapons: [
+      { id: 'pulse_fwd', type: 'cannon', name: 'Pulse Phaser Cannons', damage: 248, cycle: 2.0, ...arc(0, 45) },
+      { id: 'phaser_fwd', type: 'beam', name: 'Phaser Arrays', damage: 108, cycle: 3.0, ...arc(0, 200) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedoes', damage: 700, cycle: 7.0, ...arc(0, 60) },
+    ],
+    slots: { tactical: 5, engineering: 3, science: 2, device: 3 },
+    boffSeats: [
+      { dept: 'tactical', rank: 4 }, { dept: 'tactical', rank: 3 },
+      { dept: 'engineering', rank: 3 }, { dept: 'science', rank: 2 },
+    ],
+    description: 'A warship, and the fleet stopped pretending otherwise. Overpowered, overgunned, and nearly tore itself apart in trials.',
+  },
+  sovereign: {
+    id: 'sovereign', name: 'Sovereign class', faction: 'federation',
+    tier: 6, role: 'heavy explorer',
+    hull: 9800, shields: 8200, shieldRegen: 88,
+    crew: 855, mass: 1.9,
+    impulse: 0.82, turnRate: 8.0, maxWarp: 9.9, warpEfficiency: 1.6,
+    powerCap: 285,
+    weapons: [
+      { id: 'phaser_dorsal', type: 'beam', name: 'Type-XII Phaser Arrays', damage: 330, cycle: 2.7, ...arc(0, 300) },
+      { id: 'phaser_aft', type: 'beam', name: 'Aft Phaser Arrays', damage: 184, cycle: 2.7, ...arc(180, 260) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Quantum Torpedo Bay', damage: 820, cycle: 5.8, ...arc(0, 120) },
+      { id: 'torpedo_aft', type: 'torpedo', name: 'Aft Torpedo Bay', damage: 580, cycle: 6.8, ...arc(180, 120) },
+    ],
+    slots: { tactical: 5, engineering: 5, science: 4, device: 4 },
+    boffSeats: [
+      { dept: 'command', rank: 4 }, { dept: 'tactical', rank: 4 },
+      { dept: 'engineering', rank: 4 }, { dept: 'science', rank: 4 },
+    ],
+    description: 'The best hull Starfleet has. If you are flying one, the situation is already serious.',
+  },
+  runabout: {
+    id: 'runabout', name: 'Danube-class Runabout', faction: 'federation',
+    tier: 1, role: 'runabout',
+    hull: 1200, shields: 1100, shieldRegen: 30,
+    crew: 4, mass: 0.25,
+    impulse: 1.0, turnRate: 24.0, maxWarp: 5.0, warpEfficiency: 0.9,
+    powerCap: 140,
+    weapons: [
+      { id: 'phaser', type: 'beam', name: 'Phaser Emitters', damage: 58, cycle: 3.0, ...arc(0, 240) },
+      { id: 'micro_torp', type: 'torpedo', name: 'Micro-Torpedoes', damage: 180, cycle: 8.0, ...arc(0, 90) },
+    ],
+    slots: { tactical: 1, engineering: 1, science: 1, device: 1 },
+    boffSeats: [{ dept: 'universal', rank: 1 }],
+    description: 'Four bunks and a warp drive. You are not fighting anything in this; you are getting somewhere.',
+  },
+
+  // ---------- Later hostiles ----------
+  vorcha: {
+    id: 'vorcha', name: 'Vor’cha-class Attack Cruiser', faction: 'klingon',
+    tier: 5, role: 'attack cruiser',
+    hull: 6200, shields: 5000, shieldRegen: 52,
+    crew: 1900, mass: 1.5,
+    impulse: 0.76, turnRate: 7.5, maxWarp: 9.6, warpEfficiency: 1.1,
+    powerCap: 245, cloak: true,
+    weapons: [
+      { id: 'disruptor_cannon', type: 'cannon', name: 'Forward Disruptor Cannon', damage: 240, cycle: 2.6, ...arc(0, 60) },
+      { id: 'disruptor_fwd', type: 'beam', name: 'Disruptor Arrays', damage: 158, cycle: 3.0, ...arc(0, 240) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 520, cycle: 6.8, ...arc(0, 120) },
+    ],
+    description: 'The Empire’s line ship of the modern fleet. Cloaks, closes, and does not negotiate afterwards.',
+  },
+  neghvar: {
+    id: 'neghvar', name: 'Negh’Var-class Warship', faction: 'klingon',
+    tier: 7, role: 'flagship',
+    hull: 11000, shields: 8400, shieldRegen: 72,
+    crew: 2500, mass: 2.4,
+    impulse: 0.64, turnRate: 4.5, maxWarp: 9.6, warpEfficiency: 1.0,
+    powerCap: 300, cloak: true,
+    weapons: [
+      { id: 'disruptor_heavy', type: 'beam', name: 'Heavy Disruptor Arrays', damage: 250, cycle: 2.9, ...arc(0, 280) },
+      { id: 'disruptor_aft', type: 'beam', name: 'Aft Disruptors', damage: 190, cycle: 3.1, ...arc(180, 220) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Heavy Torpedo Bay', damage: 820, cycle: 7.2, ...arc(0, 120) },
+    ],
+    description: 'The Chancellor’s flagship class. Fighting one alone is a decision, not an accident.',
+  },
+  ktinga: {
+    id: 'ktinga', name: 'K’t’inga-class Battlecruiser', faction: 'klingon',
+    tier: 4, role: 'battlecruiser',
+    hull: 5000, shields: 3900, shieldRegen: 42,
+    crew: 440, mass: 1.15,
+    impulse: 0.72, turnRate: 8.0, maxWarp: 9.0, warpEfficiency: 1.0,
+    powerCap: 215,
+    weapons: [
+      { id: 'disruptor_fwd', type: 'beam', name: 'Forward Disruptors', damage: 148, cycle: 2.9, ...arc(0, 220) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Photon Tubes', damage: 460, cycle: 7.2, ...arc(0, 90) },
+    ],
+    description: 'The D7 rebuilt and kept in service for a century, because it works.',
+  },
+  keldon: {
+    id: 'keldon', name: 'Keldon-class Cruiser', faction: 'cardassian',
+    tier: 5, role: 'heavy cruiser',
+    hull: 5800, shields: 4800, shieldRegen: 56,
+    crew: 400, mass: 1.3,
+    impulse: 0.76, turnRate: 8.0, maxWarp: 9.2, warpEfficiency: 1.05,
+    powerCap: 235,
+    weapons: [
+      { id: 'spiral_fwd', type: 'beam', name: 'Spiral-Wave Disruptors', damage: 178, cycle: 2.8, ...arc(0, 250) },
+      { id: 'spiral_aft', type: 'beam', name: 'Aft Emitters', damage: 130, cycle: 3.0, ...arc(180, 200) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Launcher', damage: 480, cycle: 6.8, ...arc(0, 120) },
+    ],
+    description: 'The Galor with everything the Order wanted added. Drilled, patient, and very hard to surprise.',
+  },
+  jem_hadar_battleship: {
+    id: 'jem_hadar_battleship', name: 'Jem’Hadar Battleship', faction: 'dominion',
+    tier: 8, role: 'battleship',
+    hull: 16000, shields: 12000, shieldRegen: 120,
+    crew: 900, mass: 3.2,
+    impulse: 0.62, turnRate: 4.0, maxWarp: 9.4, warpEfficiency: 1.1,
+    powerCap: 330, ramsWhenDoomed: true,
+    weapons: [
+      { id: 'polaron_heavy', type: 'beam', name: 'Heavy Polaron Beams', damage: 300, cycle: 2.8, ...arc(0, 300) },
+      { id: 'torpedo_fwd', type: 'torpedo', name: 'Torpedo Batteries', damage: 900, cycle: 6.5, ...arc(0, 180) },
+    ],
+    description: 'The Dominion does not build escorts for prestige. This is what they send when the escorts failed.',
+  },
+  bioship: {
+    id: 'bioship', name: 'Bioship', faction: 'borg',
+    tier: 9, role: 'bioship',
+    hull: 20000, shields: 14000, shieldRegen: 200,
+    crew: 1, mass: 2.6,
+    impulse: 1.2, turnRate: 14.0, maxWarp: 9.9, warpEfficiency: 2.0,
+    powerCap: 360, adapts: true, regenerates: 120,
+    weapons: [
+      { id: 'bio_beam', type: 'beam', name: 'Bioplasmic Discharge', damage: 460, cycle: 3.2, ...arc(0, 360) },
+    ],
+    description: 'Organic, fast, and outside every doctrine Starfleet has written. Weapons adapt within seconds.',
+  },
+  transport: {
+    id: 'transport', name: 'Colony Transport', faction: 'independent',
+    tier: 1, role: 'transport',
+    hull: 2200, shields: 1200, shieldRegen: 20,
+    crew: 1400, mass: 1.6,
+    impulse: 0.45, turnRate: 4.0, maxWarp: 6.0, warpEfficiency: 1.0,
+    powerCap: 130, civilian: true,
+    weapons: [],
+    description: 'Fourteen hundred colonists and no weapons at all. Whatever happens to it happens because of you.',
+  },
+  freighter: {
+    id: 'freighter', name: 'Civilian Freighter', faction: 'independent',
+    tier: 1, role: 'freighter',
+    hull: 1600, shields: 900, shieldRegen: 18,
+    crew: 14, mass: 1.2,
+    impulse: 0.5, turnRate: 5.0, maxWarp: 6.5, warpEfficiency: 1.0,
+    powerCap: 120, civilian: true,
+    weapons: [],
+    description: 'Unarmed, overloaded, and a long way from anyone who could help.',
+  },
+};
+const SHIP_LIST = Object.values(SHIP_CLASSES);
+function getShipClass(id) {
+  return SHIP_CLASSES[id];
+}
+
+/** Ships the player may command at a given rank tier. */
+function commandableAt(tier) {
+  return SHIP_LIST.filter((s) => s.faction === 'federation' && s.boffSeats && s.tier <= tier);
+}
+
+/** Registry numbers for generated Federation ships. */
+const FEDERATION_REGISTRIES = [
+  'NCC-1701', 'NCC-1017', 'NCC-1371', 'NCC-1672', 'NCC-1764', 'NCC-2000',
+  'NCC-1831', 'NCC-1864', 'NCC-638', 'NCC-1685',
+];
+
+__exports.SHIP_CLASSES = SHIP_CLASSES;
+__exports.SHIP_LIST = SHIP_LIST;
+__exports.getShipClass = getShipClass;
+__exports.commandableAt = commandableAt;
+__exports.FEDERATION_REGISTRIES = FEDERATION_REGISTRIES;
+
+});
+
+__define("src/sim/ship.js", function (__exports, __require) {
+// A ship in the simulation — player or otherwise.
+//
+// Shields are six independent facings. Subsystems degrade independently and
+// affect what the ship can actually do. Crew is a resource that dies.
+
+const { PowerGrid } = __require("src/sim/power.js");
+const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
+const { clamp } = __require("src/core/num.js");
+const { emit } = __require("src/core/events.js");
+
+// Six facings, not four.
+//
+// A ship is a solid in space and can be shot at from above and below, and once
+// the simulation has a third axis, pretending otherwise means an attacker who
+// climbs is hitting a shield that geometrically is not there. The dorsal and
+// ventral facings are the real cost of going 3D: they touch damage resolution,
+// the AI, the display, saves, and balance. They are worth paying for once.
+const FACINGS = ['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'];
+
+/**
+ * How far past its normal ceiling one facing may be charged.
+ *
+ * `reinforceShield` moves charge from five facings onto one, and the point of
+ * the order is that the receiving facing ends up STRONGER than it can normally
+ * be — otherwise the manoeuvre buys nothing but a redistribution. The excess
+ * bleeds off over about twenty seconds.
+ *
+ * Exported because the invariant checker has to know it. It did not, and
+ * forbade any facing above `maxShield` outright, so reinforcing shields — an
+ * ordinary tactical order — reported an anomaly in the ship's log to any
+ * captain running with the checker on.
+ */
+const SHIELD_OVERCHARGE = 1.2;
+const FACING_LABEL = {
+  fore: 'Forward', aft: 'Aft', port: 'Port', starboard: 'Starboard',
+  dorsal: 'Dorsal', ventral: 'Ventral',
+};
+
+/**
+ * Ship-local axes, in simulation coordinates: +x is the bow, +y is starboard,
+ * +z is dorsal. The renderer maps this to its own +y-up convention; nothing
+ * else in the simulation needs to care.
+ */
+const FACING_AXIS = {
+  fore: [1, 0, 0],
+  aft: [-1, 0, 0],
+  starboard: [0, 1, 0],
+  port: [0, -1, 0],
+  dorsal: [0, 0, 1],
+  ventral: [0, 0, -1],
+};
+
+const DEG = Math.PI / 180;
+
+/** A horizontal bearing in degrees, as a unit direction. */
+function bearingToDirection(bearing) {
+  const b = bearing * DEG;
+  return [Math.cos(b), Math.sin(b), 0];
+}
+
+/** Modifiers that add rather than multiply. */
+const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
+const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
+
+/**
+ * How much better the crew fight a fire when nobody is shooting at them.
+ *
+ * During an action the damage-control parties are whoever can be spared while
+ * the ship maneuvers and takes hits; the moment the shooting stops the whole
+ * watch is on it. So the fire is not weaker off action — the response to it is
+ * far stronger, which is the difference this number stands for.
+ *
+ * It is a survivability floor as much as a flavour note. Fires cost six hull a
+ * second each and are the only damage in the game applied outside
+ * `takeDamage`; at the in-action rate, a ship that limped away from a fight at
+ * fifteen per cent hull with four of them burned to death on her own bridge in
+ * thirty-two seconds, with no enemy on the board and no posture that changed
+ * the outcome. At this rate the same ship puts them out having lost about
+ * four per cent — a real price for leaving a battle alight, and one a captain
+ * can cut further with power to auxiliary or the damage-control party.
+ */
+const DAMAGE_CONTROL_OFF_ACTION = 8;
+
+/**
+ * The share of the crew that turns out to fight an intruder.
+ *
+ * Not everyone: the ship is still being flown and still being shot at, so the
+ * people who meet a boarding party are the security detail and whoever is on
+ * that deck. Five per cent of a Constitution's complement is about twenty
+ * people, which is the right order for a corridor fight.
+ */
+const REPEL_DEFENDER_SHARE = 0.05;
+
+/**
+ * Fewer than one intruder is nobody, and the fight is over.
+ *
+ * The repel loop takes `Math.min(boarders, killed)` per tick, so once the
+ * party is smaller than what the defenders can kill in a second it decays
+ * geometrically and never reaches zero: after ten minutes a boarded ship still
+ * had 1e-264 Klingons aboard, `boarders > 0` was still true, and the block went
+ * on damaging a subsystem roughly every second and drawing from the RNG every
+ * tick for the rest of the commission. Nothing had ever set `boarders` above
+ * zero, so it had never once run.
+ */
+const BOARDERS_REPELLED_AT = 1;
+
+/**
+ * Turning out the guard: how much more of the crew meets them, and for how long.
+ *
+ * `REPEL_DEFENDER_SHARE` is the watch that turns out on its own — the security
+ * detail and whoever is on that deck. This is the captain ordering the rest of
+ * the ship into the corridor, which roughly triples the defence and cannot be
+ * kept up: the people doing it have other stations, and the ship is still
+ * being flown.
+ */
+const REPEL_STRENGTH = 3;
+const REPEL_DURATION = 20;
+
+/**
+ * What killing one intruder costs in your own people, at the ordinary defence.
+ *
+ * Divided by the root of `repelBoarders`, so a captain who turns out the guard
+ * buys a better exchange as well as a shorter fight — at REPEL_STRENGTH that
+ * is about 0.46 of ours for each of theirs instead of 0.8.
+ */
+const REPEL_COST_PER_INTRUDER = 0.8;
+
+/**
+ * Which shield facing covers a direction, given in ship-local coordinates.
+ *
+ * The dominant axis wins. This is the six-sided generalisation of the old
+ * quadrant test and agrees with it exactly in the plane: a bearing of 45°
+ * still lands on the bow, 46° still lands to starboard.
+ */
+function facingForDirection(dir) {
+  const [x, y, z] = dir;
+  const ax = Math.abs(x);
+  const ay = Math.abs(y);
+  const az = Math.abs(z);
+  if (ax >= ay && ax >= az) return x >= 0 ? 'fore' : 'aft';
+  if (ay >= az) return y >= 0 ? 'starboard' : 'port';
+  return z >= 0 ? 'dorsal' : 'ventral';
+}
+
+/** Bearing (deg, 0 = dead ahead) to the shield facing that covers it. */
+function facingForBearing(bearing) {
+  return facingForDirection(bearingToDirection(bearing));
+}
+
+/**
+ * Is a direction inside a weapon's firing arc?
+ *
+ * A cone test rather than an angle comparison, so an arc restricts elevation as
+ * well as bearing — a forward phaser bank does not bear on something directly
+ * above the saucer just because it is ahead in plan view.
+ *
+ * Accepts a local direction vector or, for the two-dimensional callers that
+ * predate this, a plain bearing in degrees.
+ */
+function inArc(dirOrBearing, weapon) {
+  const dir = Array.isArray(dirOrBearing) ? dirOrBearing : bearingToDirection(dirOrBearing);
+  const half = (weapon.degrees ?? 360) / 2;
+  if (half >= 180) return true;
+
+  const axis = bearingToDirection(weapon.facing ?? 0);
+  const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+  const cos = (dir[0] * axis[0] + dir[1] * axis[1] + dir[2] * axis[2]) / len;
+  // Guard the floating-point edge so a shot exactly on the arc boundary is in.
+  return cos >= Math.cos(half * DEG) - 1e-9;
+}
+class Ship {
+  /**
+   * @param {string} classId key into SHIP_CLASSES
+   * @param {object} opts    { name, registry, faction, isPlayer, skillMods }
+   */
+  constructor(classId, opts = {}) {
+    const cls = getShipClass(classId);
+    if (!cls) throw new Error(`Unknown ship class: ${classId}`);
+
+    this.classId = classId;
+    this.cls = cls;
+    this.name = opts.name ?? cls.name;
+    this.registry = opts.registry ?? (cls.faction === 'federation' ? FEDERATION_REGISTRIES[0] : '');
+    this.faction = opts.faction ?? cls.faction;
+    this.isPlayer = !!opts.isPlayer;
+    this.civilian = !!cls.civilian;
+
+    // ---- durability ----
+    this.maxHull = cls.hull;
+    this.hull = cls.hull;
+    // Divided six ways rather than four. The total pool is unchanged; what
+    // changes is that each facing holds less of it and there are two more
+    // surfaces to be hit through.
+    this.maxShield = cls.shields / FACINGS.length;
+    this.shields = Object.fromEntries(FACINGS.map((f) => [f, this.maxShield]));
+    this.shieldRegen = cls.shieldRegen / FACINGS.length;
+    this.shieldsUp = true;
+    // Lowered deliberately, as opposed to shot out. Only the first stays down
+    // once the emitter is repaired.
+    this.shieldsDown = false;
+
+    // ---- crew ----
+    this.maxCrew = cls.crew;
+    this.crew = cls.crew;
+    this.injured = 0;
+
+    // ---- movement ----
+    // x/y is the plane, z is altitude. Heading is a compass bearing and pitch
+    // is nose-up in degrees; roll is carried for the renderer and for banking
+    // into a turn, and has no effect on where weapons bear.
+    this.x = 0; this.y = 0; this.z = 0;
+    this.heading = 0;              // degrees, 0 = +x
+    this.pitch = 0;                // degrees, + = nose up
+    this.roll = 0;                 // degrees, + = starboard wing down
+    this.throttle = 0;             // 0..1 of impulse
+    this.desiredHeading = 0;
+    this.desiredPitch = 0;
+    this.velocity = { x: 0, y: 0, z: 0 };
+
+    // ---- systems ----
+    this.power = new PowerGrid(cls.powerCap);
+    this.subsystems = Object.fromEntries(SUBSYSTEM_KEYS.map((k) => [k, 1.0])); // 1 = intact
+    this.weapons = (cls.weapons ?? []).map((w) => ({ ...w, cooldown: 0, enabled: true }));
+    this.torpedoes = cls.weapons?.some((w) => w.type === 'torpedo') ? 60 : 0;
+    this.maxTorpedoes = this.torpedoes;
+    this.antimatter = 100;
+
+    // ---- states ----
+    this.cloakCapable = !!cls.cloak;
+    this.cloaked = false;
+    this.cloakCooldown = 0;
+    this.destroyed = false;
+    this.breaching = false;
+    this.breachTimer = 0;
+    this.coreEjected = false;
+    this.fires = 0;
+    this.boarders = 0;
+    this.adaptation = {};          // Borg: damage type -> resistance 0..0.9
+    this.evasive = false;
+
+    // ---- modifiers from skills, consoles, officer abilities ----
+    this.mods = {
+      damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
+      impulse: 1, accuracy: 1, defense: 1, critChance: 0.05, critSeverity: 0.5,
+      repairRate: 1, torpedoDamage: 1, beamDamage: 1, cannonDamage: 1,
+      damageResist: 0, stealthDetect: 1, crewProtect: 0, repelBoarders: 1,
+    };
+    this.buffs = [];               // { id, label, until, mods }
+
+    if (opts.skillMods) this.applyMods(opts.skillMods);
+    this.recomputeDerived();
+  }
+
+  // ---------------- derived stats ----------------
+
+  applyMods(mods) {
+    for (const [k, v] of Object.entries(mods)) {
+      if (typeof v !== 'number') continue;
+      if (ADDITIVE_MODS.has(k)) this.mods[k] += v;
+      else this.mods[k] = (this.mods[k] ?? 1) * v;
+    }
+    this.recomputeDerived();
+  }
+
+  recomputeDerived() {
+    // Raising a maximum scales the current value with it, so installing a
+    // hull console does not leave the ship reading as pre-damaged.
+    const prevMaxShield = this.maxShield;
+    const prevMaxHull = this.maxHull;
+
+    // `mod()` rather than `mods`, so a BUFF counts. Reading the raw table meant
+    // every temporary shieldMax or hullMax an officer ability granted was
+    // computed, reported in the UI, and then silently ignored by the only two
+    // numbers it was supposed to change.
+    this.maxHull = this.cls.hull * this.mod('hullMax');
+    this.maxShield = (this.cls.shields / FACINGS.length) * this.mod('shieldMax');
+
+    if (prevMaxShield > 0) {
+      const ratio = this.maxShield / prevMaxShield;
+      for (const f of FACINGS) this.shields[f] = Math.min(this.maxShield, this.shields[f] * ratio);
+    }
+    if (prevMaxHull > 0) {
+      this.hull = Math.min(this.maxHull, this.hull * (this.maxHull / prevMaxHull));
+    } else {
+      this.hull = Math.min(this.hull, this.maxHull);
+    }
+  }
+
+  /** Combined modifier including temporary buffs. */
+  mod(key) {
+    let value = this.mods[key] ?? 1;
+    for (const b of this.buffs) {
+      const v = b.mods?.[key];
+      if (typeof v !== 'number') continue;
+      if (ADDITIVE_MODS.has(key)) value += v;
+      else value *= v;
+    }
+    return value;
+  }
+
+  addBuff(buff) {
+    this.buffs = this.buffs.filter((b) => b.id !== buff.id);
+    this.buffs.push(buff);
+    // A buff can raise a maximum, and the maxima are cached. Without this the
+    // ability took effect only the next time something else happened to
+    // recompute them, which for most of a fight is never.
+    this.recomputeDerived();
+  }
+
+  hasBuff(id) {
+    return this.buffs.some((b) => b.id === id);
+  }
+
+  // ---------------- health readouts ----------------
+
+  get hullPct() { return this.maxHull > 0 ? this.hull / this.maxHull : 0; }
+  get shieldPct() {
+    const total = FACINGS.reduce((n, f) => n + this.shields[f], 0);
+    return this.maxShield > 0 ? total / (this.maxShield * FACINGS.length) : 0;
+  }
+  shieldPctOf(facing) {
+    return this.maxShield > 0 ? this.shields[facing] / this.maxShield : 0;
+  }
+  get crewPct() { return this.maxCrew > 0 ? this.crew / this.maxCrew : 0; }
+
+  /** Overall condition, used for status reports and AI decisions. */
+  get condition() {
+    if (this.destroyed) return 'destroyed';
+    if (this.breaching) return 'critical';
+    if (this.hullPct < 0.25) return 'critical';
+    if (this.hullPct < 0.55) return 'serious';
+    if (this.hullPct < 0.85 || this.shieldPct < 0.4) return 'damaged';
+    return 'nominal';
+  }
+
+  // ---------------- speed & manoeuvre ----------------
+
+  get maxSpeed() {
+    return this.cls.impulse * 100
+      * this.power.factor('engines')
+      * this.subsystems.engines
+      * this.mod('impulse')
+      * (this.evasive ? 1.25 : 1);
+  }
+
+  get turnRate() {
+    return this.cls.turnRate
+      * (0.6 + 0.4 * this.power.factor('engines'))
+      * this.subsystems.engines
+      * this.mod('turn')
+      * (this.evasive ? 1.4 : 1);
+  }
+
+  /** Chance an incoming shot misses, from speed and evasive manoeuvres. */
+  get defenseRating() {
+    const speedFactor = Math.min(1, this.throttle) * 0.18;
+    return (speedFactor + (this.evasive ? 0.16 : 0)) * this.mod('defense');
+  }
+
+  /**
+   * A world-space offset expressed in this ship's own frame.
+   *
+   * Yaw first, then pitch — the inverse of how the orientation is applied — so
+   * the result is a unit vector in the ship-local axes that FACING_AXIS and
+   * inArc are defined against. Roll is deliberately not undone: rolling the
+   * ship spins the hull about its own nose and moves nothing relative to it.
+   */
+  localDirection(dx, dy, dz) {
+    const h = this.heading * DEG;
+    const ch = Math.cos(h);
+    const sh = Math.sin(h);
+    const x1 = dx * ch + dy * sh;
+    const y1 = -dx * sh + dy * ch;
+
+    const p = (this.pitch ?? 0) * DEG;
+    const cp = Math.cos(p);
+    const sp = Math.sin(p);
+    const x2 = x1 * cp + dz * sp;
+    const z2 = -x1 * sp + dz * cp;
+
+    const len = Math.hypot(x2, y1, z2) || 1;
+    return [x2 / len, y1 / len, z2 / len];
+  }
+
+  /** Direction to a target, in this ship's frame. */
+  directionTo(target) {
+    return this.localDirection(target.x - this.x, target.y - this.y, (target.z ?? 0) - (this.z ?? 0));
+  }
+
+  /** Direction an attacker lies in, in this ship's frame — which facing it hits. */
+  directionFrom(source) {
+    return this.localDirection(source.x - this.x, source.y - this.y, (source.z ?? 0) - (this.z ?? 0));
+  }
+
+  /**
+   * Horizontal bearing to a target, relative to current heading.
+   * Retained because plenty of the game reasons in the plane — the AI's
+   * steering, the log lines, the 2D display — and none of that needs elevation.
+   */
+  bearingTo(target) {
+    const abs = Math.atan2(target.y - this.y, target.x - this.x) * 180 / Math.PI;
+    let rel = abs - this.heading;
+    rel = ((rel % 360) + 360) % 360;
+    if (rel > 180) rel -= 360;
+    return rel;
+  }
+
+  /** Bearing from the target's perspective — which of ITS facings we hit. */
+  bearingFrom(source) {
+    const abs = Math.atan2(source.y - this.y, source.x - this.x) * 180 / Math.PI;
+    let rel = abs - this.heading;
+    rel = ((rel % 360) + 360) % 360;
+    if (rel > 180) rel -= 360;
+    return rel;
+  }
+
+  /** Elevation angle to a target in degrees, + = above us. */
+  elevationTo(target) {
+    const dz = (target.z ?? 0) - (this.z ?? 0);
+    const flat = Math.hypot(target.x - this.x, target.y - this.y);
+    return Math.atan2(dz, flat) * 180 / Math.PI;
+  }
+
+  distanceTo(target) {
+    return Math.hypot(target.x - this.x, target.y - this.y, (target.z ?? 0) - (this.z ?? 0));
+  }
+
+  // ---------------- per-step update ----------------
+
+  /**
+   * @param {number} dt
+   * @param {RNG} [rng]
+   * @param {{inAction?: boolean}} [opts] `inAction` is true while the ship is
+   *   being fought — see DAMAGE_CONTROL_OFF_ACTION.
+   */
+  update(dt, rng, { inAction = false } = {}) {
+    if (this.destroyed) return;
+
+    this.power.update(dt);
+
+    // Buffs expire. A buff that raised a maximum has to give it back, so the
+    // maxima are recomputed on the tick anything actually left.
+    if (this.buffs.length) {
+      const before = this.buffs.length;
+      this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
+      for (const b of this.buffs) if (b.until !== undefined) b.until -= dt;
+      this.buffs = this.buffs.filter((b) => b.until === undefined || b.until > 0);
+      if (this.buffs.length !== before) this.recomputeDerived();
+    }
+
+    // Movement — yaw, then pitch, then integrate along the nose.
+    let diff = this.desiredHeading - this.heading;
+    diff = ((diff % 360) + 360) % 360;
+    if (diff > 180) diff -= 360;
+    const maxTurn = this.turnRate * dt;
+    const yawStep = Math.abs(diff) <= maxTurn ? diff : Math.sign(diff) * maxTurn;
+    this.heading = (((this.heading + yawStep) % 360) + 360) % 360;
+
+    // Pitching is slower than yawing on every hull here. Starships are built
+    // around a horizontal plane and a captain who climbs to escape is trading
+    // time for the manoeuvre, which is what makes elevation a real decision
+    // rather than a free extra direction to run in.
+    const wantPitch = Math.max(-70, Math.min(70, this.desiredPitch ?? 0));
+    const pitchDiff = wantPitch - this.pitch;
+    const maxPitch = this.turnRate * 0.55 * dt;
+    this.pitch += Math.abs(pitchDiff) <= maxPitch ? pitchDiff : Math.sign(pitchDiff) * maxPitch;
+
+    // Bank into the turn. Cosmetic, but it is what makes a hull read as flying
+    // rather than sliding, and it costs one lerp.
+    const wantRoll = Math.max(-38, Math.min(38, -yawStep / Math.max(dt, 1e-6) * 0.9));
+    this.roll += (wantRoll - this.roll) * Math.min(1, dt * 2.2);
+
+    const speed = this.maxSpeed * this.throttle;
+    const h = this.heading * DEG;
+    const p = this.pitch * DEG;
+    const flat = Math.cos(p) * speed;
+    this.velocity.x = Math.cos(h) * flat;
+    this.velocity.y = Math.sin(h) * flat;
+    this.velocity.z = Math.sin(p) * speed;
+    this.x += this.velocity.x * dt;
+    this.y += this.velocity.y * dt;
+    this.z = (this.z ?? 0) + this.velocity.z * dt;
+
+    // The emitter is back, so the shields are back — unless they were lowered
+    // on purpose, which is a different thing and stays that way.
+    if (!this.shieldsUp && !this.shieldsDown && !this.cloaked && this.subsystems.shields > 0.25) {
+      this.shieldsUp = true;
+      emit('ship:shields', { ship: this, up: true, reason: 'emitter restored' });
+    }
+
+    // Shield regeneration — suppressed while cloaked or shields down.
+    if (this.shieldsUp && !this.cloaked && this.subsystems.shields > 0.05) {
+      const rate = this.shieldRegen * this.power.factor('shields')
+        * this.subsystems.shields * this.mod('shieldRegen') * dt;
+      for (const f of FACINGS) {
+        // Regeneration RAISES a shield. It must never lower one, and it did:
+        // the clamp was a flat Math.min against maxShield, so the twenty per
+        // cent overcharge that `reinforceShield` had just moved onto the bow
+        // was deleted on the very next tick. The order took charge off five
+        // facings and destroyed it — strictly worse than not giving it.
+        if (this.shields[f] >= this.maxShield) continue;
+        this.shields[f] = Math.min(this.maxShield, this.shields[f] + rate);
+      }
+    }
+
+    // An overcharged facing bleeds back toward its normal ceiling rather than
+    // holding forever. Slow enough to survive the pass it was called for.
+    for (const f of FACINGS) {
+      if (this.shields[f] > this.maxShield) {
+        this.shields[f] = Math.max(this.maxShield, this.shields[f] - this.maxShield * 0.012 * dt);
+      }
+    }
+
+    // Weapon cooldowns tick faster with weapon power.
+    const cycleRate = 0.6 + 0.4 * this.power.factor('weapons') * this.subsystems.weapons;
+    for (const w of this.weapons) {
+      if (w.cooldown > 0) w.cooldown = Math.max(0, w.cooldown - dt * cycleRate);
+    }
+    if (this.cloakCooldown > 0) this.cloakCooldown = Math.max(0, this.cloakCooldown - dt);
+
+    // Fires burn crew and hull until damage control gets to them.
+    if (this.fires > 0) {
+      // Floored, like every other write to the hull. This one was not, and it
+      // is the only place damage is applied outside takeDamage: a ship burning
+      // at zero hull kept subtracting, so hullPct went negative and every
+      // percentage read off it — the bars, the AI's break-off threshold, the
+      // condition line — read nonsense until the breach timer finally ran out.
+      this.hull = Math.max(0, this.hull - this.fires * 6 * dt);
+      if (rng && rng.chance(0.4 * dt)) this.crew = Math.max(0, this.crew - 1);
+      // Auxiliary power runs damage control — and how much of it there is to
+      // run depends on whether the ship is still being fought. See
+      // DAMAGE_CONTROL_OFF_ACTION.
+      const control = 0.06 * (inAction ? 1 : DAMAGE_CONTROL_OFF_ACTION)
+        * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
+      if (rng && rng.chance(control)) this.fires--;
+      if (this.hull <= 0) this.beginBreach();
+    }
+
+    // Boarders fight the crew.
+    if (this.boarders > 0 && rng) {
+      const defenders = Math.max(1, this.crew * REPEL_DEFENDER_SHARE) * this.mod('repelBoarders');
+      const losses = Math.min(this.boarders, Math.max(0, rng.normal(defenders * 0.4, 2))) * dt;
+      this.boarders = Math.max(0, this.boarders - losses);
+      // Whole people. Everything else that kills crew floors it — `takeDamage`
+      // uses Math.floor, a fire takes one at a time — and this loop was the
+      // only fractional writer of `crew` in the game, which nobody had ever
+      // seen because nothing had ever put a boarding party aboard anything.
+      // The tactical overlay printed the result straight: `Crew
+      // 426.1326943672293`, on a bridge display, in a fight. Carried rather
+      // than rounded, so losses smaller than one person a tick still add up to
+      // somebody instead of vanishing.
+      //
+      // And the exchange rate improves with numbers, which is why turning out
+      // the guard is worth ordering: twenty people meeting eighty is a running
+      // fight down a corridor, a hundred meeting eighty is a rout. Without
+      // this the order made the fight shorter and cost exactly the same — the
+      // same intruders had to be killed and each cost the same — so the button
+      // saying "it will cost fewer of ours" was saying something untrue.
+      const exchange = REPEL_COST_PER_INTRUDER / Math.sqrt(this.mod('repelBoarders'));
+      this.crewLossCarry = (this.crewLossCarry ?? 0) + losses * exchange;
+      if (this.crewLossCarry >= 1) {
+        const dead = Math.floor(this.crewLossCarry);
+        this.crewLossCarry -= dead;
+        this.crew = Math.max(0, this.crew - dead);
+      }
+      if (rng.chance(0.5 * dt)) this.damageSubsystem(rng.pick(SUBSYSTEM_KEYS), 0.05);
+      // And an end to it — see BOARDERS_REPELLED_AT.
+      if (this.boarders < BOARDERS_REPELLED_AT) {
+        this.boarders = 0;
+        emit('ship:boarders-repelled', { ship: this });
+      }
+    }
+
+    // Passive subsystem repair (only out of the red).
+    const repair = 0.012 * this.power.factor('auxiliary') * this.mod('repairRate') * dt;
+    for (const k of SUBSYSTEM_KEYS) {
+      if (this.subsystems[k] < 1) this.subsystems[k] = Math.min(1, this.subsystems[k] + repair);
+    }
+
+    // Warp core breach countdown.
+    if (this.breaching) {
+      this.breachTimer -= dt;
+      if (this.breachTimer <= 0) this.destroy('warp core breach');
+    }
+
+    if (this.crew <= 0 && !this.destroyed) this.destroy('total crew loss');
+  }
+
+  /**
+   * Somebody has beamed a party aboard.
+   *
+   * One entry point, because `boarders` was a counter the whole game could
+   * only ever decrement: `Ship.update` fought them, `restore()` cleared them,
+   * and nothing anywhere set one above zero. A defence with no attack is not
+   * a mechanic, it is a comment.
+   */
+  receiveBoarders(count, from = null) {
+    const n = Math.max(0, Math.round(count));
+    if (n <= 0 || this.destroyed) return 0;
+    this.boarders += n;
+    emit('ship:boarded', { ship: this, count: n, from });
+    return n;
+  }
+
+  // ---------------- damage ----------------
+
+  /**
+   * Apply damage at a bearing.
+   * @returns {object} { shieldDamage, hullDamage, facing, penetrated, crewKilled }
+   */
+  takeDamage(amount, {
+    bearing = 0, direction = null, type = 'energy',
+    shieldPiercing = 0, rng = null, subsystem = null,
+  } = {}) {
+    if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
+
+    // A hit that is not a finite, non-negative quantity is not a hit. Negative
+    // damage healed the ship; -Infinity took the hull to NaN and nothing after
+    // that was recoverable.
+    amount = clamp(amount, 0, this.maxHull * 100);
+
+    // A direction covers all six facings; a bare bearing is the planar case and
+    // is still accepted, because plenty of damage in this game — boarding,
+    // hazards, collisions — has no meaningful elevation.
+    const facing = direction ? facingForDirection(direction) : facingForBearing(bearing);
+    let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist')));
+
+    // Borg-style adaptation: repeated damage of one type stops working.
+    if (this.cls.adapts) {
+      const adapt = this.adaptation[type] ?? 0;
+      incoming *= 1 - adapt;
+      this.adaptation[type] = Math.min(0.9, adapt + 0.012);
+    }
+
+    let shieldDamage = 0;
+    let hullDamage = 0;
+
+    const shieldUp = this.shieldsUp && this.subsystems.shields > 0.05;
+    if (shieldUp) {
+      // A fraction always bleeds through even a healthy shield.
+      const bleed = 0.08 + shieldPiercing;
+      const toShield = incoming * (1 - bleed);
+      const toHull = incoming * bleed;
+
+      shieldDamage = Math.min(this.shields[facing], toShield);
+      this.shields[facing] -= shieldDamage;
+      const overflow = toShield - shieldDamage;
+      hullDamage = toHull + overflow;
+    } else {
+      hullDamage = incoming;
+    }
+
+    // Floored at zero. A hull read as -456,745 is a ship that is very destroyed
+    // and, to every percentage the UI computes from it, absurd — hullPct goes
+    // deeply negative and the bars, the log lines and the AI's break-off
+    // threshold all read nonsense.
+    this.hull = Math.max(0, this.hull - hullDamage);
+
+    // Crew casualties scale with how hard the hull was hit, less whatever
+    // medical provision the ship carries — the biofunction monitor, a
+    // physician captain, and Triage all feed the same number.
+    let crewKilled = 0;
+    if (hullDamage > 0 && this.maxCrew > 0) {
+      const severity = hullDamage / this.maxHull;
+      const protection = 1 - Math.min(0.85, this.mod('crewProtect'));
+      crewKilled = Math.floor(
+        this.maxCrew * severity * 0.55 * protection * (rng ? rng.range(0.5, 1.5) : 1),
+      );
+      crewKilled = Math.min(this.crew, crewKilled);
+      this.crew -= crewKilled;
+      this.injured += Math.floor(crewKilled * 1.6);
+    }
+
+    // Subsystem damage: targeted, or randomly from a hull hit.
+    if (hullDamage > 0) {
+      if (subsystem) {
+        this.damageSubsystem(subsystem, (hullDamage / this.maxHull) * 3.2);
+      } else if (rng && rng.chance(Math.min(0.6, hullDamage / this.maxHull * 5))) {
+        this.damageSubsystem(rng.pick(SUBSYSTEM_KEYS), (hullDamage / this.maxHull) * 1.8);
+      }
+      // Hard hits start fires.
+      if (rng && hullDamage > this.maxHull * 0.04 && rng.chance(0.35)) this.fires++;
+    }
+
+    // Cloaks fail when the ship is hit.
+    if (this.cloaked && hullDamage > 0) this.decloak();
+
+    if (this.hull <= 0 && !this.breaching) this.beginBreach();
+
+    return { shieldDamage, hullDamage, facing, penetrated: hullDamage > 0, crewKilled };
+  }
+
+  damageSubsystem(key, amount) {
+    if (!(key in this.subsystems)) return;
+    // Guarded the same way `repair` and `takeDamage` are, and for the same
+    // reason: a subsystem is a number between zero and one that the whole
+    // damage model, the power grid and the AI read every tick, and one
+    // non-finite write to it is permanent. `takeDamage` clamps through
+    // `clamp`, which is NaN-safe; this did raw arithmetic and did not.
+    //
+    // Found by the API fuzzer in tests/invariants.test.js, which calls every
+    // public method with rubbish precisely because a save file is a thing a
+    // person can edit and a computed damage figure is a thing that can go NaN.
+    this.subsystems[key] = clamp(this.subsystems[key] - clamp(amount, 0, 1), 0, 1);
+    if (key === 'warpcore' && this.subsystems.warpcore <= 0.15 && !this.breaching) {
+      this.beginBreach(this.subsystems.warpcore <= 0 ? 12 : 28);
+    }
+    // Losing the emitter drops the shields. Getting it back has to raise them
+    // again, and nothing did — passive repair walked `subsystems.shields` from
+    // zero to a clean 1.0 over ten minutes and left `shieldsUp` false forever,
+    // so one hit on the shield generator cost you shields for the rest of the
+    // commission. `shieldsDown` remembers whether it was the captain's doing.
+    if (key === 'shields' && this.subsystems.shields <= 0.05) this.shieldsUp = false;
+  }
+
+  beginBreach(seconds = 20) {
+    if (this.breaching || this.coreEjected) {
+      if (this.hull <= 0) this.destroy('catastrophic hull failure');
+      return;
+    }
+    this.breaching = true;
+    this.breachTimer = seconds;
+    // The most dramatic thing that happens to a starship, and it used to happen
+    // in silence: the warning tone was written in sfx.js and played from
+    // nowhere. There is one way out — eject the core — and the player needs to
+    // be told the clock has started.
+    emit('ship:breach', { ship: this, seconds });
+  }
+
+  /** The one way out of a breach. Costs you warp drive for the rest of the fight. */
+  ejectCore() {
+    if (!this.breaching || this.coreEjected) return false;
+    this.breaching = false;
+    this.coreEjected = true;
+    this.breachTimer = 0;
+    this.subsystems.warpcore = 0;
+    this.power.cap = Math.round(this.cls.powerCap * 0.45);
+    this.power.normalize();
+
+    // Ejecting the core stops the antimatter going up. It does not put a hull
+    // back together.
+    //
+    // Clearing `breaching` unconditionally was a soft-lock: a ship already at
+    // zero hull came out of it not destroyed, not breaching and not repairable
+    // — the one state `ship.zerohull.adrift` exists to forbid — so the fight
+    // could never end on 'destroyed' and the campaign carried on with a wreck
+    // that the game did not know was a wreck. Found by the API fuzzer.
+    if (this.hull <= 0) this.destroy('hull failure with the core clear');
+    return true;
+  }
+
+  destroy(cause = 'destroyed') {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.destroyCause = cause;
+    this.hull = 0;
+    for (const f of FACINGS) this.shields[f] = 0;
+  }
+
+  // ---------------- actions ----------------
+
+  cloak() {
+    if (!this.cloakCapable || this.cloaked || this.cloakCooldown > 0) return false;
+    this.cloaked = true;
+    this.shieldsUp = false;
+    this.cloakCooldown = 6;
+    return true;
+  }
+
+  decloak() {
+    if (!this.cloaked) return false;
+    this.cloaked = false;
+    this.shieldsUp = true;
+    this.cloakCooldown = 4;
+    return true;
+  }
+
+  /**
+   * Emergency shield reinforcement to one facing, taken from the others.
+   *
+   * The receiving facing is capped at SHIELD_OVERCHARGE, so it can only ever absorb a
+   * limited amount. Charge is conserved: we work out the headroom first and
+   * draw exactly that much, proportionally, rather than stripping a fixed
+   * fraction off five facings and letting the overflow evaporate.
+   */
+  reinforceShield(facing, fraction = 0.35) {
+    if (!FACINGS.includes(facing)) return false;
+    const others = FACINGS.filter((f) => f !== facing);
+    const draw = clamp(fraction, 0, 1);
+    const available = others.reduce((n, f) => n + this.shields[f] * draw, 0);
+    const headroom = Math.max(0, this.maxShield * SHIELD_OVERCHARGE - this.shields[facing]);
+    const wanted = Math.min(available, headroom);
+    if (wanted <= 0) return true;
+
+    // `available` is a fixed fraction of the pool, so scaling by wanted/available
+    // keeps each facing's contribution proportional to what it actually holds.
+    const scale = wanted / available;
+    let pooled = 0;
+    for (const f of others) {
+      const take = this.shields[f] * draw * scale;
+      this.shields[f] -= take;
+      pooled += take;
+    }
+    this.shields[facing] = Math.min(this.maxShield * SHIELD_OVERCHARGE, this.shields[facing] + pooled);
+    return true;
+  }
+
+  repair(amount) {
+    // Guarded, and never negative: `repair(-Infinity)` used to drive the hull
+    // to -Infinity, which is a destroyed ship the game does not know is dead.
+    const healed = clamp(amount, 0, this.maxHull);
+    this.hull = Math.min(this.maxHull, this.hull + healed);
+    for (const k of SUBSYSTEM_KEYS) {
+      this.subsystems[k] = Math.min(1, this.subsystems[k] + healed / this.maxHull);
+    }
+    if (this.subsystems.shields > 0.05) this.shieldsUp = true;
+    if (this.hull > 0) { this.breaching = false; this.breachTimer = 0; }
+    return this.hull;
+  }
+
+  /** Full starbase overhaul. */
+  restore() {
+    this.hull = this.maxHull;
+    for (const f of FACINGS) this.shields[f] = this.maxShield;
+    for (const k of SUBSYSTEM_KEYS) this.subsystems[k] = 1;
+    this.shieldsUp = true;
+    this.fires = 0;
+    this.boarders = 0;
+    this.breaching = false;
+    this.breachTimer = 0;
+    this.coreEjected = false;
+    this.power.cap = this.cls.powerCap;
+    this.torpedoes = this.maxTorpedoes;
+    this.antimatter = 100;
+    this.injured = 0;
+    this.adaptation = {};
+    this.destroyed = false;
+  }
+
+  // ---------------- persistence ----------------
+
+  save() {
+    return {
+      classId: this.classId, name: this.name, registry: this.registry, faction: this.faction,
+      hull: this.hull, shields: this.shields, shieldsUp: this.shieldsUp,
+      crew: this.crew, injured: this.injured,
+      subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
+      // `boarders` alongside `fires` for the same reason: it is a fight in
+      // progress, and a save taken during one used to come back with the
+      // intruders gone, the alert cleared and the crew no longer dying.
+      fires: this.fires, boarders: this.boarders, coreEjected: this.coreEjected, mods: this.mods,
+      // A breach in progress is state, not decoration. Left out, a save taken
+      // during the twenty seconds you have to eject the core came back as a
+      // ship sitting at zero hull with no countdown running and no way to die
+      // — undamaged by anything that followed, and never destroyed.
+      breaching: this.breaching, breachTimer: this.breachTimer,
+      destroyed: this.destroyed, destroyCause: this.destroyCause ?? null,
+      power: this.power.save(),
+    };
+  }
+
+  static load(data) {
+    const s = new Ship(data.classId, { name: data.name, registry: data.registry, faction: data.faction, isPlayer: true });
+
+    // Modifiers first, so the maxima are correct before the saved hull and
+    // shield values — which were recorded in that scaled space — are restored.
+    if (data.mods) {
+      s.mods = { ...s.mods, ...data.mods };
+      s.recomputeDerived();
+    }
+
+    Object.assign(s, {
+      hull: data.hull, shieldsUp: data.shieldsUp ?? true,
+      crew: data.crew, injured: data.injured ?? 0,
+      torpedoes: data.torpedoes ?? s.torpedoes,
+      // `?? 100` does not catch a bad figure: `??` only sees null and
+      // undefined, so a NaN in the save loaded straight through — and NaN
+      // antimatter is the worst kind, because nothing downstream ever complains
+      // about it. `fuel > NaN` is false, so plotTransit approves every course
+      // at every warp factor; `Math.max(0, NaN - fuel)` is NaN, so the reserve
+      // never recovers; and the NaN is written back on the next save. Measured:
+      // a Constitution loaded from such a record flew Sol to Qo'noS at warp
+      // nine, a 63.2% burn, on a tank the game could not read.
+      antimatter: Number.isFinite(data.antimatter) ? clamp(data.antimatter, 0, 100) : 100,
+      fires: data.fires ?? 0, boarders: Math.max(0, Number(data.boarders) || 0),
+      coreEjected: data.coreEjected ?? false,
+      breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
+      destroyed: data.destroyed === true,
+      destroyCause: data.destroyCause ?? null,
+    });
+    // A core that has been ejected is not still breaching.
+    //
+    // `beginBreach` refuses when the core is gone and `ejectCore` clears the
+    // breach, so the two are mutually exclusive everywhere at runtime — but the
+    // save restores them as two independent flags, and a record carrying both
+    // loaded as a ship counting down to destruction with the one escape from
+    // that countdown already spent: `ejectCore()` returns false, because the
+    // core it would have thrown is not there. Resolve it the way ejecting it
+    // does, since ejecting it is what happened.
+    if (s.coreEjected) { s.breaching = false; s.breachTimer = 0; }
+
+    // A record written before a breach was saved, restored onto a hull that is
+    // already gone, would load as the very thing the invariant checker calls
+    // `ship.zerohull.adrift` — dead, not dying, and on the board forever. Give
+    // it the countdown it should have had. (With the core already gone,
+    // `beginBreach` takes the other branch and finishes the ship, which is the
+    // same answer `ejectCore` gives a hull that is past saving.)
+    if (s.hull <= 0 && !s.destroyed && !s.breaching) s.beginBreach();
+    // Shield migration, from four facings to six.
+    //
+    // A save written before the third axis existed has no dorsal or ventral
+    // entry, and its four values were recorded against a per-facing maximum a
+    // half larger than the current one. Spreading over the defaults supplies
+    // the two new facings at full charge, and the clamp keeps the old four from
+    // reading as over-full. An old commission therefore loads as a ship that
+    // has been to a starbase, which is the kindest reading available and the
+    // only one that cannot produce a shield above its own maximum.
+    s.shields = { ...s.shields, ...(data.shields ?? {}) };
+    for (const f of FACINGS) {
+      s.shields[f] = Math.max(0, Math.min(s.maxShield, s.shields[f] ?? s.maxShield));
+    }
+    s.subsystems = { ...s.subsystems, ...(data.subsystems ?? {}) };
+    s.power = PowerGrid.load(data.power, s.cls.powerCap);
+    return s;
+  }
+}
+
+__exports.FACINGS = FACINGS;
+__exports.SHIELD_OVERCHARGE = SHIELD_OVERCHARGE;
+__exports.FACING_LABEL = FACING_LABEL;
+__exports.FACING_AXIS = FACING_AXIS;
+__exports.bearingToDirection = bearingToDirection;
+__exports.ADDITIVE_MODS = ADDITIVE_MODS;
+__exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
+__exports.DAMAGE_CONTROL_OFF_ACTION = DAMAGE_CONTROL_OFF_ACTION;
+__exports.REPEL_DEFENDER_SHARE = REPEL_DEFENDER_SHARE;
+__exports.BOARDERS_REPELLED_AT = BOARDERS_REPELLED_AT;
+__exports.REPEL_STRENGTH = REPEL_STRENGTH;
+__exports.REPEL_DURATION = REPEL_DURATION;
+__exports.REPEL_COST_PER_INTRUDER = REPEL_COST_PER_INTRUDER;
+__exports.facingForDirection = facingForDirection;
+__exports.facingForBearing = facingForBearing;
+__exports.inArc = inArc;
+__exports.Ship = Ship;
+
+});
+
 __define("src/sim/officers.js", function (__exports, __require) {
 // Bridge officers: abilities on cooldowns, and opinions about your orders.
 //
@@ -20210,6 +20240,14 @@ const DEFAULT_SETTINGS = {
   muted: false,
   voice: true, haptics: true, autoFire: true, wakeLock: true,
   textSize: 'normal', reduceMotion: false, orders: 'both',
+  // Three dimensions, when the device can.
+  //
+  // This existed as a read in main.js and nothing else: not a default, not a
+  // control, never written. `undefined === false` is false, so the 3D path was
+  // always taken and the 2D view — the display this game shipped with — was
+  // reachable only by a real WebGL failure, which meant it was also never
+  // exercised by anything. A seam nobody can move is not a seam.
+  render3d: true,
   // The commission runs in real time. This is the escape hatch, and it is
   // labelled honestly in Options for what it forfeits.
   compression: 1,
@@ -34414,6 +34452,22 @@ function optionsScreen(app) {
     button(s.reduceMotion ? 'Reduce motion: on' : 'Reduce motion: off', tap(() => {
       s.reduceMotion = !s.reduceMotion; app.applySettings(); app.render();
     }), { color: s.reduceMotion ? 'green' : 'ghost' }),
+    // No `say:` here, and none on the three above it. Everything the crew can
+    // be told to do is sayable; a device preference is not an order to the
+    // crew, and making this the one settable-by-voice setting would be the
+    // inconsistency rather than the fix.
+    button(s.render3d !== false ? '3D view: on' : '3D view: off', tap(() => {
+      s.render3d = s.render3d === false;
+      // `applySettings` persists on its way out, which is why the three
+      // toggles above do not call `saveSettings` either.
+      app.applySettings();
+      app.render();
+    }), {
+      color: s.render3d !== false ? 'green' : 'ghost',
+      sub: s.render3d !== false
+        ? 'Solid hulls and a lit bridge, where the device can'
+        : 'The flat plot this game shipped with. Cheaper, and always available.',
+    }),
     field('Text size', select([
       { value: 'normal', label: 'Normal' },
       { value: 'large', label: 'Large' },
@@ -35825,6 +35879,45 @@ class App {
 
   saveSettings() { persistSettings(this.settings); }
 
+  /**
+   * Give the tactical display a canvas that has never been spoken to.
+   *
+   * A canvas can only ever have ONE context type. Once `getContext('webgl')`
+   * has succeeded on a node, `getContext('2d')` returns null on that node for
+   * as long as it exists — and `#tactical` is deliberately a singleton, kept
+   * and moved between screens because GL contexts are expensive and browsers
+   * cap how many may exist at once.
+   *
+   * So the flat plot could never have been switched TO at runtime. It worked
+   * only when it was chosen first, before GL had touched the canvas, which is
+   * the one case the old dead `render3d` flag could not produce. Turning the
+   * setting on for real means the mode change has to bring its own canvas.
+   */
+  replaceTacticalCanvas() {
+    const host = this.tacticalHost;
+    const old = this.tacticalCanvas;
+    if (!host || !old) return;
+
+    this.fpv?.dispose?.();
+    this.fpv = null;
+    this.fpvCanvas = null;
+    this.tactical?.dispose?.();
+    this.tactical = null;
+    this.tacticalViewCanvas = null;
+    // The GL context belongs to the node being thrown away. Let it go, or the
+    // browser holds it against the cap for nothing.
+    this.renderer?.dispose?.();
+    this.renderer = null;
+    this.rendererCanvas = null;
+
+    const fresh = el('canvas', { id: 'tactical' });
+    old.replaceWith(fresh);
+    this.tacticalCanvas = fresh;
+    // Label overlays are created by the 3D view against the old canvas. Any
+    // that outlived their view would paint over the new one.
+    for (const stale of host.querySelectorAll('canvas.tactical-labels')) stale.remove();
+  }
+
   // ------------------------------------------------------------ events
 
   wireEvents() {
@@ -36206,11 +36299,30 @@ class App {
       // is not a stub — it is the display this game shipped with, and it stays
       // complete, because "no WebGL" must mean a different picture and not a
       // broken game.
-      if (!this.tactical || this.tacticalViewCanvas !== this.tacticalCanvas) {
+      // The third clause is what makes the setting a setting. The rebuild used
+      // to fire only on a new canvas, so flipping the flag changed nothing
+      // until something else happened to swap the DOM — a control that works
+      // eventually is worse than one that does not work at all, because you
+      // cannot tell which you have.
+      //
+      // It compares against what was ASKED for and not against `renderMode`,
+      // which is what was achieved. On a device with no WebGL those differ
+      // permanently: the request is 3D, the result is 2D, and comparing the
+      // two would rebuild the view and retry the context on every single
+      // render — a rebuild loop on exactly the hardware least able to afford
+      // one.
+      const want3d = this.settings.render3d !== false;
+      if (this.tactical && this.renderWanted !== undefined && want3d !== this.renderWanted) {
+        this.replaceTacticalCanvas();
+      }
+      if (!this.tactical
+        || this.tacticalViewCanvas !== this.tacticalCanvas
+        || want3d !== this.renderWanted) {
+        this.renderWanted = want3d;
         this.tactical?.dispose?.();
-        this.tactical = (this.settings.render3d === false
-          ? null
-          : TacticalView3D.create(this.tacticalCanvas, this.sharedRenderer()))
+        this.tactical = (want3d
+          ? TacticalView3D.create(this.tacticalCanvas, this.sharedRenderer())
+          : null)
           ?? new TacticalView(this.tacticalCanvas);
         this.tacticalViewCanvas = this.tacticalCanvas;
         this.renderMode = this.tactical instanceof TacticalView3D ? '3d' : '2d';
