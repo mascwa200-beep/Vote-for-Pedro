@@ -2753,3 +2753,84 @@ describe('a reloaded game runs the same game', () => {
       'the interrupted fight was not recorded, which is what makes the divergence honest');
   });
 });
+
+describe('a commission that cannot go on ends, rather than sitting there', () => {
+  // Found by a long soak. A full tank is about ten neighbour jumps at warp 7,
+  // and nothing refuels a ship except a starbase or a reputation perk — no
+  // recipe makes antimatter and it does not regenerate. At 13 of the galaxy's
+  // 43 systems an empty tank means no course the ship can afford and no
+  // docking facility either.
+  //
+  // So a captain could run dry at Romulus and simply stop: unable to move,
+  // unable to refuel, with the game neither continuing nor ending. That is the
+  // one outcome a five-year commission must not have.
+
+  /** A ship on an empty tank at a system with no way out. */
+  const strand = (systemId) => {
+    const g = new Game({ seed: 8080n, crewMode: 'original' });
+    g.locationId = systemId;
+    g.ship.antimatter = 0.05;
+    return g;
+  };
+
+  /** Somewhere with no dock and nothing affordable next door. */
+  const deadEnd = () => {
+    const probe = new Game({ seed: 8080n, crewMode: 'original' });
+    for (const sys of probe.galaxy.systems) {
+      const g = strand(sys.id);
+      if (g.dock?.().ok) continue;
+      const canMove = g.galaxy.neighbors(sys.id)
+        .some((n) => strand(sys.id).setCourse(n.id, 1).ok);
+      if (!canMove) return sys.id;
+    }
+    return null;
+  };
+
+  test('there is somewhere a ship can be stuck, or this guards nothing', () => {
+    // The positive case, proved before anything below is believed. If the
+    // galaxy ever changes so that every system has a way out, this whole
+    // describe block is dead weight and should say so out loud.
+    assert.ok(deadEnd(), 'no system strands a ship any more — delete this guard');
+  });
+
+  test('being unable to move anywhere ends the commission', () => {
+    const g = strand(deadEnd());
+    assert.equal(g.over, false, 'the game was already over before the check ran');
+    // A tick is all it should take to notice.
+    g.update(STEP);
+    assert.equal(g.over, true, 'the ship is stranded and the commission is still running');
+    assert.ok(/adrift|strand|antimatter|fuel/i.test(g.overReason ?? ''),
+      `the commission ended for "${g.overReason}", which does not say why`);
+  });
+
+  test('and it does not fire on a ship that can still limp somewhere', () => {
+    // The half that matters more. Ending a commission by mistake is worse than
+    // the soft-lock: a captain who can still make one warp-1 hop is not
+    // stranded, and neither is one sitting at a starbase with an empty tank.
+    const probe = new Game({ seed: 8080n, crewMode: 'original' });
+    let limped = null;
+    let docked = null;
+    for (const sys of probe.galaxy.systems) {
+      const g = strand(sys.id);
+      if (!docked && g.dock?.().ok) docked = sys.id;
+      if (!limped && g.galaxy.neighbors(sys.id).some((n) => strand(sys.id).setCourse(n.id, 1).ok)) {
+        limped = sys.id;
+      }
+      if (limped && docked) break;
+    }
+    assert.ok(limped && docked, 'could not find both an escapable system and a dockable one');
+
+    for (const [where, why] of [[limped, 'can still reach a neighbour'], [docked, 'is at a dock']]) {
+      const g = strand(where);
+      for (let i = 0; i < 60; i++) g.update(STEP);
+      assert.equal(g.over, false, `a ship that ${why} had its commission ended at ${where}`);
+    }
+  });
+
+  test('and a full tank is never mistaken for an empty one', () => {
+    const g = new Game({ seed: 8080n, crewMode: 'original' });
+    assert.equal(g.ship.antimatter, 100);
+    for (let i = 0; i < 300; i++) g.update(STEP);
+    assert.equal(g.over, false, 'a fuelled ship at Sol was declared stranded');
+  });
+});
