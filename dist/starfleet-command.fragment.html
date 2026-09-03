@@ -7736,7 +7736,7 @@ function orientAlong(dir, from, len, thickness, m = _model) {
 }
 
 /** Every `kind` on `engagement.effects` that this module knows how to draw. */
-const DRAWN_EFFECTS = ['beam', 'cannon', 'explosion', 'impact'];
+const DRAWN_EFFECTS = ['beam', 'cannon', 'explosion', 'impact', 'cloak', 'decloak'];
 
 /**
  * Draw everything happening in an engagement that is not a hull.
@@ -7823,6 +7823,49 @@ function drawCombatEffects(renderer, engagement, opts = {}) {
       alpha: (1 - age) * (e.penetrated ? 0.95 : 0.6),
       // White-hot through the hull; the shield's own colour when it holds.
       tint: e.penetrated ? [1, 0.92, 0.7] : [0.55, 0.8, 1],
+    });
+  }
+
+  // Cloaking, which this renderer ignored for as long as it has existed.
+  //
+  // The simulation has always pushed these — `src/sim/ai.js`, when a ship
+  // cloaks or drops its cloak — and the only thing that ever drew them was the
+  // 2D fallback, which no player could reach until the display setting became
+  // real. So the signature move of an entire faction happened with nothing on
+  // screen for it on the display everyone actually uses.
+  //
+  // The reading matches the flat plot's: an expanding shell that fades as it
+  // grows, in the same green. `shieldMesh` is the faceted sphere already used
+  // for the impact flare, so this costs a draw call and no new geometry.
+  for (const e of engagement.effects ?? []) {
+    if (e.kind !== 'cloak' && e.kind !== 'decloak') continue;
+    const age = clamp(1 - e.life, 0, 1);
+    // Sized to the hull, not to a stock radius.
+    //
+    // The flat plot's law is `30 + t * 60` units, which is right for a plan
+    // view that draws every ship at roughly one size and wrong out here, where
+    // hulls are drawn to scale. Five classes in this game can cloak, and their
+    // half-lengths are 10, 23, 69, 98 and 149 units: a shell that never gets
+    // past 90 is buried inside a Vor'cha, a Neg'Var and a D'deridex for its
+    // whole life. Three of the five ships that cloak drew the effect somewhere
+    // no one could see it.
+    //
+    // Measured off `hullScale`, the same way the impact flare is, it starts
+    // just proud of the plating and swells to about two and a half times the
+    // ship — the reading the flat plot gives, at each ship's own scale.
+    const r = hullScale(e.classId) * 0.5;
+    compose(toRender(e, _pos), quat(), r * (1.15 + age * 1.35), _model);
+    draw('cloak', shieldMesh(), {
+      model: _model,
+      normalMatrix: normalMatrix(_model, _normal),
+      emissive: 1,
+      // The flat plot strokes a ring and this fills a sphere, so the same
+      // alpha is not the same picture: at the flat view's opacity the first
+      // frame put an opaque green ball over the hull it is supposed to be
+      // veiling. Halved, so the ship stays visible through its own cloaking
+      // field — which is what the effect is depicting.
+      alpha: (1 - age) * 0.35,
+      tint: [0.63, 1, 0.71],
     });
   }
 
@@ -22066,14 +22109,24 @@ function chooseAction(ship, engagement, dt, opts = {}) {
       if (distance < want * 0.8) {
         ship.decloak();
         engagement.pushLog(`${ship.name} is decloaking!`, 'tactical');
-        engagement.effects.push({ kind: 'decloak', x: ship.x, y: ship.y, life: 1.0 });
+        // `z` and `classId` for the same reason the impact flare carries them:
+        // the renderer places the effect in three dimensions and sizes it to
+        // the hull it belongs to. Without them the shell sat on the ecliptic
+        // at a stock size while the ship it was veiling was somewhere else.
+        engagement.effects.push({
+          kind: 'decloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
+          classId: ship.classId, life: 1.0,
+        });
       }
       return;
     }
     // Re-cloak to reset the engagement once shields are thin.
     if (decide && ship.shieldPct < 0.35 && ship.cloakCooldown <= 0 && distance > 350) {
       ship.cloak();
-      engagement.effects.push({ kind: 'cloak', x: ship.x, y: ship.y, life: 1.0 });
+      engagement.effects.push({
+        kind: 'cloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
+        classId: ship.classId, life: 1.0,
+      });
       return;
     }
   }

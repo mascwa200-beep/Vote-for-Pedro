@@ -25,7 +25,7 @@ import {
 } from '../src/gfx/blueprint.js';
 import { SHIP_LIST } from '../src/world/ships.data.js';
 import { drawCombatEffects, DRAWN_EFFECTS } from '../src/gfx/effects.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import {
   sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, worldMesh, limbMesh,
   WARP_LENGTH, VOLUME,
@@ -2158,17 +2158,37 @@ describe('a fight is drawn, not just simulated', () => {
     // been pushed onto `effects` by every hit since combat was written, and
     // the only thing that ever read it was the 2D fallback for devices with no
     // WebGL. On anything with a GPU it was recorded and drawn by nothing.
-    const src = readFileSync(new URL('../src/sim/combat.js', import.meta.url), 'utf8');
+    // EVERY file under src/sim, and matched on the property rather than the
+    // receiver.
+    //
+    // This read `src/sim/combat.js` alone and matched only `this.effects.push`.
+    // The cloak and decloak effects are pushed from `src/sim/ai.js`, written
+    // `engagement.effects.push` — a different file AND a different receiver, so
+    // the scrape missed them twice over and the renderer ignored both kinds for
+    // as long as they have existed. One file scraped, two files pushing.
+    const simDir = new URL('../src/sim/', import.meta.url);
+    const sources = readdirSync(simDir)
+      .filter((f) => f.endsWith('.js'))
+      .map((f) => [f, readFileSync(new URL(f, simDir), 'utf8')]);
     const kinds = new Set();
-    // Only what goes onto `effects`. Projectiles are a separate list with a
-    // `kind` of its own, and conflating the two is how this test first came
-    // out wrong.
-    for (const m of src.matchAll(/this\.effects\.push\(\{([\s\S]{0,400}?)\}\)/g)) {
-      const named = m[1].match(/kind:\s*'([a-z_]+)'/);
-      if (named) { kinds.add(named[1]); continue; }
-      // A weapon's own type is the kind, for beams and cannons.
-      if (/kind:\s*weapon\.type/.test(m[1])) { kinds.add('beam'); kinds.add('cannon'); }
+    const pushers = new Set();
+    for (const [file, src] of sources) {
+      // `\w+\.effects\.push` catches `this.` and `engagement.` alike. Projectiles
+      // are a separate list with a `kind` of its own, and conflating the two is
+      // how this test first came out wrong.
+      for (const m of src.matchAll(/\w+\.effects\.push\(\{([\s\S]{0,400}?)\}\)/g)) {
+        const named = m[1].match(/kind:\s*'([a-z_]+)'/);
+        if (named) { kinds.add(named[1]); pushers.add(file); continue; }
+        // A weapon's own type is the kind, for beams and cannons.
+        if (/kind:\s*weapon\.type/.test(m[1])) {
+          kinds.add('beam'); kinds.add('cannon'); pushers.add(file);
+        }
+      }
     }
+    // Prove the widened scrape actually reaches past the file it used to read.
+    // If it only ever finds combat.js again, it has learned nothing.
+    assert.ok(pushers.size >= 2,
+      `only ${[...pushers]} push effects — the scrape is no wider than it was`);
     assert.ok(kinds.size >= 3, `only found ${[...kinds]}`);
     const missing = [...kinds].filter((k) => !DRAWN_EFFECTS.includes(k));
     assert.deepEqual(missing, [], 'effect kinds the renderer ignores');
@@ -2180,6 +2200,71 @@ describe('a fight is drawn, not just simulated', () => {
       projectiles: [{ kind: 'torpedo', x: 10, y: 20, z: 0 }],
     });
     assert.ok(r.calls.some((c) => c.key === 'torpedo'), 'a torpedo in flight is invisible');
+  });
+
+  test('a ship cloaking is something you can see', () => {
+    // The simulation has pushed these since cloaking existed and this renderer
+    // drew neither. The only thing that ever did was the 2D fallback, which no
+    // player could reach until the display setting became real — so an entire
+    // faction's signature move happened with nothing on screen for it.
+    for (const kind of ['cloak', 'decloak']) {
+      const r = recorder();
+      drawCombatEffects(r, {
+        effects: [{ kind, life: 1.0, x: 120, y: -80, z: 0 }],
+        projectiles: [],
+      });
+      const shot = r.calls.find((c) => c.key === 'cloak');
+      assert.ok(shot, `a ship ${kind}ing draws nothing`);
+      assert.ok(shot.opts.alpha > 0, `${kind} is drawn fully transparent`);
+    }
+  });
+
+  test('and it fades as it grows, rather than sitting there', () => {
+    // The effect is only ever seen mid-life, so the two ends have to differ:
+    // an effect that draws the same shell at the same opacity for its whole
+    // life reads as a bug, not a cloak.
+    const at = (life) => {
+      const r = recorder();
+      drawCombatEffects(r, {
+        effects: [{ kind: 'cloak', life, x: 0, y: 0, z: 0 }],
+        projectiles: [],
+      });
+      const c = r.calls.find((x) => x.key === 'cloak');
+      // Uniform scale sits on the matrix diagonal.
+      return { alpha: c.opts.alpha, size: c.model[0] };
+    };
+    const young = at(0.9);
+    const old = at(0.1);
+    assert.ok(old.size > young.size, `${old.size} is not larger than ${young.size}`);
+    assert.ok(old.alpha < young.alpha, `${old.alpha} is not fainter than ${young.alpha}`);
+  });
+
+  test('and every ship that cloaks is small enough to see it happen', () => {
+    // Found by looking at it, then measured. The flat plot's radius law is a
+    // constant — 30 units growing to 90 — which is right for a plan view that
+    // draws every ship at one size and wrong where hulls are drawn to scale.
+    // The five classes that can cloak have half-lengths of 10, 23, 69, 98 and
+    // 149 units, so a shell that never passes 90 spends its entire life inside
+    // a Vor'cha, a Neg'Var or a D'deridex. Three of the five ships in the game
+    // that cloak drew the effect somewhere nobody could see it.
+    const shellAt = (classId, life) => {
+      const r = recorder();
+      drawCombatEffects(r, {
+        effects: [{ kind: 'cloak', life, classId, x: 0, y: 0, z: 0 }],
+        projectiles: [],
+      });
+      return r.calls.find((x) => x.key === 'cloak').model[0];
+    };
+    // Every hull that can actually cloak, not a sample: this is exactly the
+    // check that would have caught the constant.
+    const cloakers = SHIP_LIST.filter((s) => s.cloak).map((s) => s.id);
+    assert.ok(cloakers.length >= 4, `only ${cloakers.length} classes can cloak`);
+    const buried = cloakers.filter((id) => shellAt(id, 1.0) <= hullScale(id) * 0.5);
+    assert.deepEqual(buried, [], 'ships whose cloak shell starts inside their own hull');
+    // And it is a measurement rather than a constant that happens to clear
+    // them: the largest hull gets the largest shell.
+    assert.ok(shellAt('warbird', 1.0) > shellAt('scoutship', 1.0),
+      'every ship cloaks inside a shell of the same size');
   });
 
   test('a beam is laid on its own shot', () => {

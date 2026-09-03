@@ -1765,6 +1765,48 @@ try {
     check('the renderer stays inside the triangle budget', gl && gl.triangles <= 8000, String(gl?.triangles));
     check('the WebGL context is healthy', gl && gl.lost === false, String(gl?.lost));
 
+    // A ship cloaking, on the display everyone actually uses.
+    //
+    // The simulation has pushed `cloak`/`decloak` since cloaking existed and
+    // this renderer drew neither: only the 2D fallback did, and until #93 no
+    // player could reach that. A mesh that builds is not a mesh that draws, so
+    // this asks the renderer what it drew rather than asking the geometry what
+    // it could.
+    const cloakDraw = await page.evaluate(async () => {
+      const app = window.__app;
+      const g = app.game;
+      const eng = g.engagement;
+      if (!eng) return { staged: false };
+      const paint = () => app.tactical?.render?.(eng, 0, 1 / 30);
+
+      const kept = eng.effects;
+      eng.effects = [];
+      paint();
+      const without = { ...app.tactical.stats };
+
+      const ship = eng.hostiles?.[0] ?? eng.player;
+      eng.effects = [{
+        kind: 'cloak', life: 0.6, x: ship.x, y: ship.y, z: ship.z ?? 0,
+        classId: ship.classId,
+      }];
+      paint();
+      const withIt = { ...app.tactical.stats };
+
+      eng.effects = kept;
+      paint();
+      return {
+        staged: true,
+        withoutCalls: without.drawCalls,
+        withCalls: withIt.drawCalls,
+        withinBudget: withIt.drawCalls <= 60 && withIt.triangles <= 8000,
+      };
+    });
+    check('a fight was staged to cloak in', cloakDraw.staged === true, JSON.stringify(cloakDraw));
+    check('a ship cloaking costs the renderer a draw it would not otherwise make',
+      cloakDraw.withCalls > cloakDraw.withoutCalls, JSON.stringify(cloakDraw));
+    check('and drawing it stays inside the frame budget',
+      cloakDraw.withinBudget === true, JSON.stringify(cloakDraw));
+
     // Navigating away from Tactical used to null the view without disposing it.
     // The canvas lives in a persistent host, so returning built a second GL
     // program on the same canvas and inserted another overlay canvas — stale
@@ -2308,12 +2350,22 @@ try {
   const combatWorking = await page.evaluate(() => {
     const g = globalThis.__app.game;
     const enemy = g.engagement?.hostiles[0];
+    // Read what the orders did BEFORE running the guns.
+    //
+    // The loop below exists to give the guns enough cycles to land a hit, and
+    // when they land enough of them the enemy dies, the engagement ends, and
+    // `g.engagement` is null by the time this returns. Read afterwards, the
+    // targeting check reported `undefined` — a fight that had gone WELL
+    // looked like an order that never arrived. The order's effect is a fact
+    // about the moment it was given, so it is measured at that moment.
+    const preset = g.ship.power.preset;
+    const subsystem = g.engagement?.targetedSubsystem;
     // Individual shots can miss by design, so give the guns a few cycles
     // before deciding whether they work at all.
     for (let i = 0; i < 400 && enemy && !enemy.destroyed; i++) g.update(1 / 30);
     return {
-      preset: g.ship.power.preset,
-      subsystem: g.engagement?.targetedSubsystem,
+      preset,
+      subsystem,
       enemyDamaged: enemy ? enemy.hullPct < 1 || enemy.shieldPct < 1 : false,
     };
   });
@@ -2331,6 +2383,15 @@ try {
   const atWill = await page.evaluate(async () => {
     const app = globalThis.__app;
     const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    // Point defence needs something to shoot at, and the four hundred gunnery
+    // cycles above can end the fight by WINNING it. When they did, this
+    // reported `held: true, stopped: 0` — the ability worked and there was no
+    // engagement left to hold torpedoes — which reads exactly like a broken
+    // intercept. Same restart the targeting checks make, for the same reason.
+    if (!g.engagement || g.engagement.over) {
+      g.startCombat([new Ship('d7', { name: 'Klingon cruiser' })], { relentless: true });
+    }
     const { parseOrder } = await import('./src/ui/orders.js');
     const order = parseOrder('fire at will');
     const { applyAbility } = await import('./src/sim/powers.js');
