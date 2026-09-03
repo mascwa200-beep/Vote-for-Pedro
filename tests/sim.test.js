@@ -12,7 +12,7 @@ import {
   Engagement, rangeFactor, ARENA_RADIUS, MAX_WEAPON_RANGE, WITHDRAW_SECONDS, OUTCOMES,
 } from '../src/sim/combat.js';
 import { CaptainProgress, RANKS } from '../src/sim/skills.js';
-import { Loadout, startingLoadout } from '../src/sim/loadout.js';
+import { Loadout, startingLoadout, CONSOLES } from '../src/sim/loadout.js';
 import { Ledger } from '../src/core/ledger.js';
 import { on } from '../src/core/events.js';
 import { Galaxy, warpSpeed, travelHours, fuelCost, plotTransit } from '../src/world/galaxy.js';
@@ -741,11 +741,32 @@ test('every hail outcome that ends a fight maps to a real ending', () => {
   }
 
   // The ones that do NOT end a fight need no mapping; the ones that do, do.
-  const ending = new Set(['surrendered', 'bought_off', 'stand_down', 'deterred', 'accepted_aid', 'acknowledged']);
-  for (const outcome of produced) {
-    if (!ending.has(outcome)) continue;
-    assert.ok(HAIL_ENDING[outcome], `'${outcome}' ends a fight and has no ending mapped`);
+  //
+  // This half used to be a tautology. It filtered `produced` through a
+  // hand-typed Set of exactly the six keys of HAIL_ENDING, and then asserted
+  // that each survivor was in HAIL_ENDING — so it checked only the entries
+  // that were already there and could not fail. The doc comment on the table
+  // says "a test asserts exactly that rather than trusting anyone to
+  // remember", and until now it did not: a seventh outcome that ended a fight
+  // would have been skipped past by the very filter meant to select it.
+  //
+  // The real predicate is `endsCombat` on the result, so that is what is read.
+  // Anything not literally `false` counts, which keeps the conditional case —
+  // `acknowledged` carries `endsCombat: !tier.hostile` and ends a fight
+  // whenever the other side is not hostile.
+  const endsAFight = new Set();
+  for (const block of source.matchAll(/\{[^{}]*\}/g)) {
+    if (!/endsCombat:/.test(block[0]) || /endsCombat:\s*false/.test(block[0])) continue;
+    const named = block[0].match(/outcome:\s*'([a-z_]+)'/);
+    if (named) endsAFight.add(named[1]);
   }
+  // Prove the scrape found the shape before believing what it did not find.
+  assert.ok(endsAFight.size >= 4,
+    `only ${endsAFight.size} hail outcomes were found to end a fight — the scrape is broken, not the table`);
+
+  const unmapped = [...endsAFight].filter((outcome) => !HAIL_ENDING[outcome]);
+  assert.deepEqual(unmapped, [],
+    `hail outcomes that end a fight with no ending mapped: ${unmapped.join(', ')}`);
 });
 
 test('talking your way out pays what the talking is worth, not a battle', () => {
@@ -1940,21 +1961,61 @@ test('devices are spent, and spending one does something', () => {
         assert.equal(game.ship.fires, 0);
       };
     },
+    // The probe was the one device this test did not cover, and it is the one
+    // with the most behind it: a pre-spend guard, a catalogue, XP, a survey
+    // mark and reputation. Its own comment in sim/powers.js records that it
+    // once "had no case at all below and fell through to the default, which
+    // spends the device and logs 'probe discharged'" — so the device most
+    // likely to break quietly was the device nothing checked.
+    //
+    // It needs something out there to probe. That is the guard, not an
+    // accident of setup: a probe fired at empty space is refused before it is
+    // spent.
+    probe: (game) => {
+      game.encounter = {
+        kind: 'anomaly',
+        system: { id: game.locationId },
+        anomaly: { name: 'Test Rift', value: 2 },
+      };
+      const before = game.ledger.entries.length;
+      return () => {
+        assert.ok(game.ledger.entries.length > before, 'the probe catalogued nothing');
+        assert.equal(game.ledger.entries.at(-1).kind, 'anomaly_catalogued');
+        assert.equal(game.encounter, null, 'the anomaly is still out there after a full survey');
+      };
+    },
   };
 
-  let tried = 0;
+  // Every device in the game, named from the loadout rather than from this
+  // list. The list used to cover four of the five and the floor below was
+  // `tried >= 3`, so the missing one could never have made this fail.
+  const carried = Object.values(CONSOLES).filter((c) => c.slot === 'device').map((c) => c.id);
+  assert.deepEqual(Object.keys(effects).sort(), [...carried].sort(),
+    'a device the game carries that this test has no arrangement for');
+
+  const tried = [];
   for (const [id, arrange] of Object.entries(effects)) {
     // Exactly one in the locker, regardless of what the starting loadout
     // rolled, so "spent" means something.
     g.loadout.equipped.device = [id];
     const check = arrange(g);
     const r = g.useDevice(id);
-    if (!r.ok) continue;   // a loadout that cannot carry it is not a failure
-    tried++;
+    assert.ok(r.ok, `${id} could not be used at all: ${r.reason}`);
+    tried.push(id);
     check();
-    assert.equal(g.useDevice(id).ok, false, `${id} was used twice from one charge`);
+
+    // Re-arrange before asking again. The probe taught this: after a survey
+    // the anomaly is gone, so a second attempt is refused for having nothing
+    // to probe — which looks exactly like "the charge is spent" and proves
+    // nothing about it. Set the world back up, and the refusal that comes back
+    // is the empty locker.
+    arrange(g);
+    const again = g.useDevice(id);
+    assert.equal(again.ok, false, `${id} was used twice from one charge`);
+    assert.equal(again.reason, 'none left',
+      `${id} was refused for "${again.reason}" rather than for being spent`);
   }
-  assert.ok(tried >= 3, `only ${tried} devices could be used at all`);
+  assert.deepEqual(tried.sort(), [...carried].sort(), 'not every device was exercised');
 });
 
 // --------------------------------------------- breaking off a course under way
