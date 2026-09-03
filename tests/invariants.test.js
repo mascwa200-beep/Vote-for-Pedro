@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { RNG } from '../src/core/rng.js';
 import { Galaxy, plotTransit } from '../src/world/galaxy.js';
+import { takeCommandOf } from '../src/sim/command.js';
 import { COMMISSION_DAYS } from '../src/campaign/clock.js';
 import { EPISODES } from '../src/missions/episodes/index.js';
 import { parseOrder } from '../src/ui/orders.js';
@@ -3922,5 +3923,87 @@ describe("an episode's ordered fight is still ordered after a reload", () => {
     assert.equal(back.pendingCombat, null, 'a reload queued a fight out of nothing');
     assert.equal(back.engagement, null, 'a reload started a fight out of nothing');
     assert.deepEqual(checkAll(back, { arenaRadius: ARENA_RADIUS }), []);
+  });
+});
+
+// ============================== a change of ship is a change of ship
+
+describe('the mastery track follows the captain, not the hull', () => {
+  // `takeCommandOf` carries the rule in a comment — "The track follows the
+  // captain, not the hull: the points already earned in other classes stay in
+  // the map and are waiting if he ever flies one again" — and its neighbour
+  // `yardReport` says it is "shared by all three ways a captain ends up in a
+  // different hull: promotion, a board of inquiry, and the change-of-command
+  // screen".
+  //
+  // The change-of-command screen was the one that was not. `App.changeShip`
+  // built its own `new Ship(...)`, refitted the loadout and applied the mods,
+  // and never touched `mastery.classId`. Measured on a Constitution worked up
+  // to tier five and swapped for an Excelsior:
+  //
+  //   changeShip     flying excelsior | track: constitution | tier 5
+  //   takeCommandOf  flying excelsior | track: excelsior    | tier 0
+  //
+  // Five tiers of bonuses on a hull nobody had ever flown, and six systems have
+  // a shipyard — one of them Sol, so it is a button a captain can press on the
+  // first day.
+
+  const workedUp = (classId = 'constitution') => {
+    const g = new Game({ seed: 2n, shipClass: classId });
+    g.mastery.points[g.ship.classId] = 100000;
+    return g;
+  };
+
+  test('a ship really can be worked up, and the tier means something', () => {
+    // The positive case. If mastery stops accumulating there is no bonus to
+    // carry anywhere and the rest of this proves nothing.
+    const g = workedUp();
+    assert.equal(g.mastery.classId, 'constitution');
+    assert.ok(g.mastery.tier >= 4, `a fully worked-up hull is only tier ${g.mastery.tier}`);
+  });
+
+  test('and a new hull starts unlearned, however the captain got into it', () => {
+    const g = workedUp();
+    const before = g.mastery.tier;
+    const took = takeCommandOf(g, 'excelsior');
+    assert.ok(took.ok, took.reason);
+    assert.equal(g.ship.classId, 'excelsior');
+    assert.equal(g.mastery.classId, 'excelsior',
+      'the mastery track is still pointed at the ship the captain no longer flies');
+    assert.ok(g.mastery.tier < before,
+      `carried tier ${g.mastery.tier} onto a hull nobody has flown`);
+  });
+
+  test('and the yard keeps her name and her number', () => {
+    // What the shipyard needs from the shared path, and the reason it had its
+    // own copy: a refit is the same ship coming out of dock as a different
+    // class, not a new command. Promotion and a board of inquiry pass neither
+    // and get a fresh hull with a fresh name, which is what those are.
+    const g = workedUp();
+    // A number that is NOT the default a fresh hull would be given. The first
+    // version of this assertion passed without the fix, because a starting
+    // Constitution carries NCC-1701 and so does every new Federation hull — so
+    // it was comparing a value against itself and proving nothing.
+    g.ship.registry = 'NCC-1764';
+    const name = g.ship.name;
+    const registry = g.ship.registry;
+    assert.notEqual(registry, new Game({ seed: 1n }).ship.registry,
+      'the probe is using the default registry again and cannot see a change');
+    assert.ok(takeCommandOf(g, 'excelsior', { name, registry }).ok);
+    assert.equal(g.ship.name, name, 'the yard renamed her');
+    assert.equal(g.ship.registry, registry, 'the yard changed her number');
+    assert.equal(g.mastery.classId, 'excelsior', 'keeping the name kept the old mastery');
+  });
+
+  test('and the points already earned are still waiting', () => {
+    // The other half of the rule: the track follows the captain, so going back
+    // to a class he has flown finds it as he left it.
+    const g = workedUp();
+    const earned = g.mastery.tier;
+    takeCommandOf(g, 'excelsior');
+    assert.ok(g.mastery.tier < earned);
+    takeCommandOf(g, 'constitution');
+    assert.equal(g.mastery.classId, 'constitution');
+    assert.equal(g.mastery.tier, earned, 'the work put into the old hull was thrown away');
   });
 });

@@ -25129,7 +25129,7 @@ function nameFor(game, avoid) {
  * @returns {{ok: boolean, ship?: Ship, previous?: string, reason?: string,
  *            stowed?: string[], gained?: Record<string, number>}}
  */
-function takeCommandOf(game, classId, { name = null } = {}) {
+function takeCommandOf(game, classId, { name = null, registry = null } = {}) {
   const cls = getShipClass(classId);
   if (!cls) return { ok: false, reason: 'There is no such class in the registry.' };
   const previous = game.ship?.classId ?? null;
@@ -25137,6 +25137,11 @@ function takeCommandOf(game, classId, { name = null } = {}) {
 
   game.ship = new Ship(classId, {
     name: name ?? nameFor(game, previousName),
+    // The yard refit keeps her name and her number: it is the same ship coming
+    // out of dock as a different class, not a new command. Promotion and a
+    // board of inquiry pass neither and get a fresh hull with a fresh name,
+    // which is what those are.
+    ...(registry ? { registry } : {}),
     faction: 'federation',
     isPlayer: true,
   });
@@ -36389,7 +36394,7 @@ const { saveGame, loadSave, hasSave, loadSettings, saveSettings: persistSettings
 
 const { ABILITIES } = __require("src/sim/officers.js");
 const { WATCHES } = __require("src/sim/watch.js");
-const { Ship, FACINGS, REPEL_STRENGTH, REPEL_DURATION } = __require("src/sim/ship.js");
+const { FACINGS, REPEL_STRENGTH, REPEL_DURATION } = __require("src/sim/ship.js");
 const { answeringFor } = __require("src/sim/address.js");
 const { parseOrder } = __require("src/ui/orders.js");
 const { readAnswer, AFFIRM_PHRASE, BELAY_PHRASE } = __require("src/lang/answers.js");
@@ -36397,7 +36402,7 @@ const { SKILLS } = __require("src/sim/skills.js");
 const { RNG } = __require("src/core/rng.js");
 const { FEAT_BY_ID, ABILITIES: ABILITY_LIST } = __require("src/rules/character.js");
 const { CONSOLES } = __require("src/sim/loadout.js");
-const { yardReport } = __require("src/sim/command.js");
+const { yardReport, takeCommandOf } = __require("src/sim/command.js");
 const { venueFor } = __require("src/rules/inquiry.js");
 const { TIERS, TRAIT_LIST } = __require("src/sim/mastery.js");
 
@@ -37599,9 +37604,34 @@ class App {
     }
     const oldName = g.ship.name;
     const oldRegistry = g.ship.registry;
-    g.ship = new Ship(classId, { name: oldName, registry: oldRegistry, faction: 'federation', isPlayer: true });
-    const refit = g.loadout.refitTo(g.ship.cls.slots);
-    g.applyAllMods();
+    // Through `takeCommandOf`, which is the one path that puts a captain in a
+    // different hull — and whose neighbour already claims to be shared by "all
+    // three ways a captain ends up in a different hull: promotion, a board of
+    // inquiry, and the change-of-command screen". This screen was the one that
+    // was not.
+    //
+    // What it was missing is the line `takeCommandOf` carries a comment for:
+    // "The track follows the captain, not the hull." Nothing here re-pointed
+    // `mastery.classId`, so a Constitution worked up to tier five and then
+    // swapped for an Excelsior at the yard flew the Excelsior on the
+    // Constitution's mastery — five tiers of bonuses on a hull nobody had ever
+    // flown. Measured:
+    //
+    //   changeShip     flying excelsior | track: constitution | tier 5
+    //   takeCommandOf  flying excelsior | track: excelsior    | tier 0
+    //
+    // And there are six shipyards, one of them Sol, so this is a button a
+    // captain can press on the first day.
+    const took = takeCommandOf(g, classId, { name: oldName, registry: oldRegistry });
+    if (!took.ok) {
+      audio.play('ui_deny');
+      g.officerSays('engineering', took.reason ?? 'The yard cannot do that, Captain.', 'object');
+      this.render();
+      return;
+    }
+    const refit = took;
+    // The yard time is this screen's own contribution: the other two ways into
+    // a new hull do not spend four days in dock.
     g.clock.advanceStardate(4);
     g.pushLog(`Transferred command to a ${g.ship.cls.name}.`, 'captain');
     audio.play('dock');
