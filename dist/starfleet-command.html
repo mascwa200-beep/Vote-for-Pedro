@@ -17030,13 +17030,47 @@ const INTENTS = [
     help: 'Request docking / put in for repairs',
     phrases: [
       'request docking', 'docking clearance', 'permission to dock', 'dock with',
+      // "Put in for repairs" is a request to a STARBASE. "Repair the ship" is
+      // an order to your own crew, and used to be listed here — so a captain
+      // holed up somewhere with no yard, which is the only time the "Effect
+      // repairs" button appears at all, was answered "No docking facilities
+      // here, Captain." and nothing happened. See `effect_repairs`.
       'put in for repairs', 'put in for resupply', 'take on supplies',
-      'resupply', 'refit', 'repair the ship', 'go to spacedock', 'dock us',
+      'resupply', 'refit', 'go to spacedock', 'dock us',
       'bring us alongside', 'moor', 'shore leave', 'restock', 'rearm',
       'take on torpedoes', 'reload torpedoes', 'refuel',
     ],
     keywords: { dock: 3, docking: 3, resupply: 3, repair: 1.5, refit: 3, spacedock: 3, rearm: 2 },
     build: () => ({ action: 'dock' }),
+  },
+
+  {
+    // Repairing where you stand, with the people you have.
+    //
+    // `Game.effectRepairs` has existed and been reachable by NO phrase at all:
+    // every way of asking for it — "effect repairs", "begin repairs", "make
+    // repairs" — was read as a request to dock, and "repair the ship" went
+    // straight there with no confirmation. Measured at Archanis III with the
+    // hull at 55%: the words printed on the button got "No docking facilities
+    // here, Captain." while the button itself took the hull to 67%.
+    //
+    // "Patch her up" was worse than useless — it scored as `pitch`, because
+    // "patch" and "pitch" are one vowel apart and vetoes and keywords are
+    // matched phonetically. Asking to patch the hull put the ship into a dive.
+    id: 'effect_repairs',
+    help: 'Effect repairs with the crew we have',
+    phrases: [
+      'effect repairs', 'effect emergency repairs', 'emergency repairs',
+      'begin repairs', 'start repairs', 'make repairs', 'carry out repairs',
+      'repair the ship', 'repair the hull', 'fix the ship', 'patch her up',
+      'patch us up', 'seal the breaches', 'seal the hull breaches',
+      'repair crews to work', 'damage control parties to work',
+      'all hands to repair stations', 'get her patched up',
+    ],
+    keywords: { repairs: 2, patch: 1.5 },
+    // Anything that names a yard is a request to put in, not to turn to.
+    veto: ['dock', 'docking', 'spacedock', 'starbase', 'resupply', 'refit'],
+    build: () => ({ action: 'effect_repairs' }),
   },
 
   // ------------------------------------------------------------------
@@ -19668,6 +19702,15 @@ const ORDERS = [
   },
 ];
 
+/**
+ * Asking for somebody to be TAUGHT a thing rather than to do it.
+ *
+ * Deliberately narrow. "Drill" is in because a drill is training; "practise"
+ * and "rehearse" are not, because `boarding_drill` and the duty details already
+ * own that sense and mean something else by it.
+ */
+const TRAINING = /\b(?:train|trains|training|trained|teach|teaches|teaching|taught|qualify|qualified|instruct|instructed)\b/;
+
 /** Abilities are addressable by their order phrase, e.g. "attack pattern alpha". */
 function matchAbility(t) {
   for (const a of Object.values(ABILITIES)) {
@@ -19730,7 +19773,17 @@ function parseOrder(raw, crew = null) {
     ? { ...order, raw, addressee: { station: address.station, name: address.officer?.name ?? null, form: address.form } }
     : { ...order, raw });
 
+  // Training somebody in an ability is not using it.
+  //
+  // `matchAbility` matches any line CONTAINING an ability's order phrase or its
+  // name, and it runs first, so "train high yield torpedoes" was read as an
+  // order to FIRE high yield torpedoes — an ability the officer does not have
+  // yet, which is the entire reason you were asking to train them in it. There
+  // was no phrase that trained anybody, in either direction: the Train button
+  // printed the ability's ORDER phrase underneath itself, which is the words
+  // that use it once learned.
   const ability = matchAbility(t);
+  if (ability && TRAINING.test(t)) return to({ action: 'train', ability });
   if (ability) {
     const fallback = plain && !plain.unknown && !plain.error ? plain
       : (natural && !natural.unknown && !natural.confirm ? natural : null);
@@ -32839,6 +32892,7 @@ function chairConsole(app) {
           : 'Nineteen hours. The chief says that is the best she can do without a starbase.',
       ]);
     }), {
+      say: 'effect repairs',
       color: 'peach',
       sub: g.alert === 'blue'
         ? 'Blue alert: maintenance stations manned, repairs go faster'
@@ -33711,7 +33765,16 @@ function officerDetail(app, officer) {
         g.trainOfficer(officer, a.id);
         app.closeModal();
         app.render();
-      }, 'ui_confirm'), { color: 'blue', sub: `“${a.order}” · one day` }));
+        // The `sub` used to print the ability's ORDER phrase — the words that
+        // USE it once learned — which read as the phrase for this button and
+        // is not: saying it tries to fire an ability the officer does not have
+        // yet. The say line trains; the sub says what they will be able to
+        // order afterwards, which is worth knowing and is now labelled.
+      }, 'ui_confirm'), {
+        color: 'blue',
+        say: `train ${a.name.toLowerCase()}`,
+        sub: `One day. Then: “${a.order}”`,
+      }));
     }
   }
   return nodes;
@@ -36980,6 +37043,49 @@ class App {
           this.showMessage('Board of Inquiry', [r.finding.text]
             .concat(r.finding.reducedTo ? [`Your rank is now ${r.finding.reducedTo}.`] : []));
         }
+        break;
+      }
+      // Repairing where you stand. The same call the "Effect repairs" button
+      // makes, and reachable by phrase for the first time — every wording of it
+      // used to be read as a request to dock, which is the one thing a captain
+      // with a holed hull and no yard in reach cannot do.
+      case 'effect_repairs': {
+        const r = g.effectRepairs();
+        if (!r.ok) { audio.play('ui_deny'); ack('engineering', r.reason); break; }
+        audio.play('computer_ack');
+        this.showMessage('Repairs', [
+          `Hull integrity ${Math.round(r.before * 100)}% → ${Math.round(r.after * 100)}%.`,
+          r.blue
+            ? 'Fourteen hours, with the whole crew at maintenance stations.'
+            : 'Nineteen hours. The chief says that is the best she can do without a starbase.',
+        ]);
+        break;
+      }
+      // Training an officer in an ability, which had no phrase at all — the
+      // words that look like one fire the ability instead. Finds whoever can
+      // actually learn it: the officer the order was addressed to if they can,
+      // otherwise the one whose department it belongs to.
+      case 'train': {
+        const wanted = order.ability;
+        const addressed = order.addressee?.station ? g.crew.at(order.addressee.station) : null;
+        const canLearn = (o) => o && g.trainableFor(o).some((a) => a.id === wanted);
+        const officer = canLearn(addressed)
+          ? addressed
+          : g.crew.available.find(canLearn);
+        if (!officer) {
+          audio.play('ui_deny');
+          // Say WHY rather than going quiet: already known and not yet
+          // available are different answers, and the officer knows which.
+          const holder = g.crew.available.find((o) => o.abilities.includes(wanted));
+          ack('first_officer', holder
+            ? `${holder.name} already has that qualification, Captain.`
+            : 'Nobody aboard can take that course yet, Captain.');
+          break;
+        }
+        const r = g.trainOfficer(officer, wanted);
+        if (!r.ok) { audio.play('ui_deny'); ack('first_officer', r.reason); break; }
+        audio.play('computer_ack');
+        ack('first_officer', `${officer.name} is on the training programme, Captain. One day.`);
         break;
       }
       case 'alert':

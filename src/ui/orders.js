@@ -319,6 +319,15 @@ const ORDERS = [
   },
 ];
 
+/**
+ * Asking for somebody to be TAUGHT a thing rather than to do it.
+ *
+ * Deliberately narrow. "Drill" is in because a drill is training; "practise"
+ * and "rehearse" are not, because `boarding_drill` and the duty details already
+ * own that sense and mean something else by it.
+ */
+const TRAINING = /\b(?:train|trains|training|trained|teach|teaches|teaching|taught|qualify|qualified|instruct|instructed)\b/;
+
 /** Abilities are addressable by their order phrase, e.g. "attack pattern alpha". */
 function matchAbility(t) {
   for (const a of Object.values(ABILITIES)) {
@@ -381,7 +390,17 @@ export function parseOrder(raw, crew = null) {
     ? { ...order, raw, addressee: { station: address.station, name: address.officer?.name ?? null, form: address.form } }
     : { ...order, raw });
 
+  // Training somebody in an ability is not using it.
+  //
+  // `matchAbility` matches any line CONTAINING an ability's order phrase or its
+  // name, and it runs first, so "train high yield torpedoes" was read as an
+  // order to FIRE high yield torpedoes — an ability the officer does not have
+  // yet, which is the entire reason you were asking to train them in it. There
+  // was no phrase that trained anybody, in either direction: the Train button
+  // printed the ability's ORDER phrase underneath itself, which is the words
+  // that use it once learned.
   const ability = matchAbility(t);
+  if (ability && TRAINING.test(t)) return to({ action: 'train', ability });
   if (ability) {
     const fallback = plain && !plain.unknown && !plain.error ? plain
       : (natural && !natural.unknown && !natural.confirm ? natural : null);

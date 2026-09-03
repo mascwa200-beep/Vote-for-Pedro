@@ -1524,6 +1524,49 @@ class App {
         }
         break;
       }
+      // Repairing where you stand. The same call the "Effect repairs" button
+      // makes, and reachable by phrase for the first time — every wording of it
+      // used to be read as a request to dock, which is the one thing a captain
+      // with a holed hull and no yard in reach cannot do.
+      case 'effect_repairs': {
+        const r = g.effectRepairs();
+        if (!r.ok) { audio.play('ui_deny'); ack('engineering', r.reason); break; }
+        audio.play('computer_ack');
+        this.showMessage('Repairs', [
+          `Hull integrity ${Math.round(r.before * 100)}% → ${Math.round(r.after * 100)}%.`,
+          r.blue
+            ? 'Fourteen hours, with the whole crew at maintenance stations.'
+            : 'Nineteen hours. The chief says that is the best she can do without a starbase.',
+        ]);
+        break;
+      }
+      // Training an officer in an ability, which had no phrase at all — the
+      // words that look like one fire the ability instead. Finds whoever can
+      // actually learn it: the officer the order was addressed to if they can,
+      // otherwise the one whose department it belongs to.
+      case 'train': {
+        const wanted = order.ability;
+        const addressed = order.addressee?.station ? g.crew.at(order.addressee.station) : null;
+        const canLearn = (o) => o && g.trainableFor(o).some((a) => a.id === wanted);
+        const officer = canLearn(addressed)
+          ? addressed
+          : g.crew.available.find(canLearn);
+        if (!officer) {
+          audio.play('ui_deny');
+          // Say WHY rather than going quiet: already known and not yet
+          // available are different answers, and the officer knows which.
+          const holder = g.crew.available.find((o) => o.abilities.includes(wanted));
+          ack('first_officer', holder
+            ? `${holder.name} already has that qualification, Captain.`
+            : 'Nobody aboard can take that course yet, Captain.');
+          break;
+        }
+        const r = g.trainOfficer(officer, wanted);
+        if (!r.ok) { audio.play('ui_deny'); ack('first_officer', r.reason); break; }
+        audio.play('computer_ack');
+        ack('first_officer', `${officer.name} is on the training programme, Captain. One day.`);
+        break;
+      }
       case 'alert':
         g.setAlert(order.level);
         break;

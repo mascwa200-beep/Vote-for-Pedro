@@ -323,13 +323,47 @@ export const INTENTS = [
     help: 'Request docking / put in for repairs',
     phrases: [
       'request docking', 'docking clearance', 'permission to dock', 'dock with',
+      // "Put in for repairs" is a request to a STARBASE. "Repair the ship" is
+      // an order to your own crew, and used to be listed here — so a captain
+      // holed up somewhere with no yard, which is the only time the "Effect
+      // repairs" button appears at all, was answered "No docking facilities
+      // here, Captain." and nothing happened. See `effect_repairs`.
       'put in for repairs', 'put in for resupply', 'take on supplies',
-      'resupply', 'refit', 'repair the ship', 'go to spacedock', 'dock us',
+      'resupply', 'refit', 'go to spacedock', 'dock us',
       'bring us alongside', 'moor', 'shore leave', 'restock', 'rearm',
       'take on torpedoes', 'reload torpedoes', 'refuel',
     ],
     keywords: { dock: 3, docking: 3, resupply: 3, repair: 1.5, refit: 3, spacedock: 3, rearm: 2 },
     build: () => ({ action: 'dock' }),
+  },
+
+  {
+    // Repairing where you stand, with the people you have.
+    //
+    // `Game.effectRepairs` has existed and been reachable by NO phrase at all:
+    // every way of asking for it — "effect repairs", "begin repairs", "make
+    // repairs" — was read as a request to dock, and "repair the ship" went
+    // straight there with no confirmation. Measured at Archanis III with the
+    // hull at 55%: the words printed on the button got "No docking facilities
+    // here, Captain." while the button itself took the hull to 67%.
+    //
+    // "Patch her up" was worse than useless — it scored as `pitch`, because
+    // "patch" and "pitch" are one vowel apart and vetoes and keywords are
+    // matched phonetically. Asking to patch the hull put the ship into a dive.
+    id: 'effect_repairs',
+    help: 'Effect repairs with the crew we have',
+    phrases: [
+      'effect repairs', 'effect emergency repairs', 'emergency repairs',
+      'begin repairs', 'start repairs', 'make repairs', 'carry out repairs',
+      'repair the ship', 'repair the hull', 'fix the ship', 'patch her up',
+      'patch us up', 'seal the breaches', 'seal the hull breaches',
+      'repair crews to work', 'damage control parties to work',
+      'all hands to repair stations', 'get her patched up',
+    ],
+    keywords: { repairs: 2, patch: 1.5 },
+    // Anything that names a yard is a request to put in, not to turn to.
+    veto: ['dock', 'docking', 'spacedock', 'starbase', 'resupply', 'refit'],
+    build: () => ({ action: 'effect_repairs' }),
   },
 
   // ------------------------------------------------------------------

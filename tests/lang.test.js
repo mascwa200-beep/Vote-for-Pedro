@@ -31,6 +31,7 @@ import { article } from '../src/world/encounters.js';
 import { FACTIONS } from '../src/world/factions.data.js';
 import { addressedTo, answeringFor } from '../src/sim/address.js';
 import { Game } from '../src/core/state.js';
+import { ABILITIES } from '../src/sim/officers.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -1289,5 +1290,119 @@ describe('a station with nobody at it still has a name', () => {
     g.officerSays('helm', 'Course laid in.');
     const line = g.log[g.log.length - 1].text;
     assert.match(line, /^[A-Z][^:]*: Course laid in\.$/, line);
+  });
+});
+
+describe('repairing the ship is not the same as docking it', () => {
+  // `Game.effectRepairs` existed and was reachable by no phrase at all: every
+  // wording of the request was read as `dock`, and "repair the ship" went there
+  // outright with no confirmation. The "Effect repairs" button only APPEARS
+  // when you cannot dock, so its own label proposed the one thing it exists
+  // because you cannot do.
+
+  test('every way of ordering repairs reaches the repair crews', () => {
+    const wrong = [];
+    for (const said of [
+      'effect repairs', 'begin repairs', 'start repairs', 'make repairs',
+      'emergency repairs', 'repair the ship', 'repair the hull', 'fix the ship',
+      'patch her up', 'seal the hull breaches', 'all hands to repair stations',
+    ]) {
+      const r = parseOrder(said);
+      const o = r.order ?? r;
+      if (o.action !== 'effect_repairs') wrong.push(`"${said}" -> ${o.action ?? 'nothing'}`);
+    }
+    assert.deepEqual(wrong, [], `${wrong.length} ways of ordering repairs did something else`);
+  });
+
+  test('and "patch her up" no longer puts the ship into a dive', () => {
+    // "patch" and "pitch" are one vowel apart, and keywords are matched
+    // phonetically, so asking to patch the hull was an elevation order.
+    const r = parseOrder('patch her up');
+    assert.equal((r.order ?? r).action, 'effect_repairs');
+  });
+
+  test('but putting in to a starbase still means putting in', () => {
+    // A guard. It passes on the old code, and it is the whole risk of this
+    // change: `dock` and `effect_repairs` share the word "repairs", and taking
+    // the wrong half would break the thing that already worked.
+    for (const said of ['put in for repairs', 'request docking', 'dock us',
+      'permission to dock', 'resupply', 'refit', 'go to spacedock']) {
+      const r = parseOrder(said);
+      assert.equal((r.order ?? r).action, 'dock', `"${said}"`);
+    }
+  });
+
+  test('and building a hull patch is still building one', () => {
+    // Another guard: "patch the hull" is a fabrication recipe and stays one.
+    const r = parseOrder('patch the hull');
+    assert.equal((r.order ?? r).action, 'fabricate');
+  });
+
+  test('the order does what the button does, at a system with no yard', () => {
+    // The effect, not the routing — so this passes on the old code too, where
+    // `effectRepairs` worked perfectly and simply could not be reached by any
+    // phrase. It is here to pin down what the newly-reachable order must DO,
+    // and to fail loudly if the repair itself is ever broken.
+    const g = new Game({ seed: 11n, crewMode: 'original' });
+    g.locationId = 'archanis_iii';
+    g.ship.hull = g.ship.maxHull * 0.55;
+    assert.equal(g.canDock(), false, 'the fixture is not the situation being tested');
+    const before = g.ship.hullPct;
+    const r = g.effectRepairs();
+    assert.equal(r.ok, true);
+    assert.ok(g.ship.hullPct > before, `hull did not improve: ${before} -> ${g.ship.hullPct}`);
+  });
+});
+
+describe('training an officer is not the same as using what they trained in', () => {
+  // `matchAbility` matches any line CONTAINING an ability's order phrase or its
+  // name, and runs before everything else, so "train high yield torpedoes" was
+  // an order to FIRE high yield torpedoes — an ability the officer does not
+  // have yet, which is the whole reason you were asking. There was no phrase
+  // that trained anybody, and the Train button printed the ability's ORDER
+  // phrase underneath itself: the words that use it once learned.
+
+  function trainee(g) {
+    const officer = g.crew.available.find((o) => g.trainableFor(o).length);
+    return { officer, ability: g.trainableFor(officer)[0] };
+  }
+
+  test('asking to train somebody trains them', () => {
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    const { officer, ability } = trainee(g);
+    for (const said of [
+      `train ${ability.name.toLowerCase()}`,
+      `teach ${ability.name.toLowerCase()}`,
+      `train ${officer.name} in ${ability.name.toLowerCase()}`,
+      `have ${officer.name} trained in ${ability.name.toLowerCase()}`,
+    ]) {
+      const o = parseOrder(said, g);
+      assert.equal(o.action, 'train', `"${said}" -> ${o.action}`);
+      assert.equal(o.ability, ability.id, `"${said}"`);
+    }
+  });
+
+  test('and the order actually puts them through it', () => {
+    // The effect. `trainOfficer` worked before and could not be reached; this
+    // pins down what the newly-reachable order must do.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    const { officer, ability } = trainee(g);
+    assert.equal(officer.abilities.includes(ability.id), false, 'fixture already knows it');
+    const r = g.trainOfficer(officer, ability.id);
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(officer.abilities.includes(ability.id), true);
+  });
+
+  test('but ORDERING the ability still orders it', () => {
+    // A guard, and the whole risk of this change: "train" must be read off the
+    // line without taking the ability phrases with it. This passes either way.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    for (const o of g.crew.available) {
+      for (const id of o.abilities) {
+        const order = parseOrder(ABILITIES[id].order, g);
+        assert.equal(order.action, 'ability', `"${ABILITIES[id].order}"`);
+        assert.equal(order.ability, id);
+      }
+    }
   });
 });

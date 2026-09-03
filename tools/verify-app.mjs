@@ -3835,6 +3835,81 @@ try {
   check('and "withdraw" still breaks off a fight when there is one to break off',
     stillWarpsOut.warping, JSON.stringify(stillWarpsOut));
 
+  // ------------------------------------------------ repairing where you stand
+  //
+  // `effectRepairs` was reachable by NO phrase: every wording was read as a
+  // request to dock, and "repair the ship" went there outright. The button that
+  // does it only APPEARS when you cannot dock, so its own label proposed the
+  // one thing it exists because you cannot do.
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+
+  const repairs = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const keep = { at: g.locationId, hull: g.ship.hull, alert: g.alert, screen: app.screen };
+    // Holed, and nowhere near a yard — the situation the button exists for.
+    g.locationId = 'archanis_iii';
+    g.ship.hull = g.ship.maxHull * 0.55;
+    app.render();
+    const canDock = g.canDock();
+    const before = g.ship.hullPct;
+
+    const input = document.querySelector('.orderbar input');
+    input.value = 'effect repairs';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 200));
+    const after = g.ship.hullPct;
+    const refused = g.log.slice(-4).some((l) => /no docking facilities/i.test(l.text ?? ''));
+
+    // Put the world back.
+    g.locationId = keep.at;
+    g.ship.hull = keep.hull;
+    g.setAlert(keep.alert);
+    app.closeModal();
+    app.go(keep.screen);
+    app.render();
+    return { canDock, before, after, refused };
+  });
+  check('the repair fixture really is somewhere that cannot dock',
+    repairs.canDock === false, JSON.stringify(repairs));
+  check('saying "effect repairs" repairs the ship instead of asking for a starbase',
+    repairs.after > repairs.before && !repairs.refused,
+    JSON.stringify({ ...repairs, before: repairs.before.toFixed(3), after: repairs.after.toFixed(3) }));
+
+  // ------------------------------------------------ training an officer
+  //
+  // "train high yield torpedoes" was an order to FIRE high yield torpedoes, an
+  // ability the officer does not have yet. No phrase trained anybody, and the
+  // Train button printed the ability's ORDER phrase — the words that use it
+  // once learned — as though that were the way to ask for it.
+  const training = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const officer = g.crew.available.find((o) => g.trainableFor(o).length);
+    if (!officer) return { skipped: true };
+    const ability = g.trainableFor(officer)[0];
+    const knewBefore = officer.abilities.includes(ability.id);
+
+    const input = document.querySelector('.orderbar input');
+    input.value = `train ${ability.name.toLowerCase()}`;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 200));
+
+    const now = g.crew.available.find((o) => o.name === officer.name);
+    return {
+      skipped: false,
+      ability: ability.name,
+      knewBefore,
+      knowsNow: !!now?.abilities.includes(ability.id),
+      said: `train ${ability.name.toLowerCase()}`,
+    };
+  });
+  check('there is an officer with something left to learn', training.skipped === false,
+    JSON.stringify(training));
+  check('saying "train <ability>" trains them instead of firing it',
+    training.knewBefore === false && training.knowsNow === true, JSON.stringify(training));
+
   // ------------------------------------------------ reading and writing the log
   //
   // Measured before this worked: every way of asking to SEE the log WROTE one,
@@ -3932,17 +4007,42 @@ try {
   await dismissModals(page);
   await nav(page, 'Bridge');
 
+  // A phrase the parser finds PLAUSIBLE but is not confident about, which is
+  // the case the dialog exists for — FOUND at run time rather than hard-coded.
+  //
+  // It was "effect repairs" once, read as "request docking", until that became
+  // an order in its own right and this whole section quietly stopped finding a
+  // dialog to test. Pinning one phrase couples these checks to a confidence
+  // score that legitimately moves as the lexicon grows: "shields" sits at 0.56
+  // against a threshold of 0.58, and would break the same way. So try several
+  // and use the first that actually asks — and fail loudly if none does, rather
+  // than passing on a dialog that was never raised.
+  const CONFIRMERS = ['send a survey team', 'shields', 'check the sensors',
+    'use what is in front of me', 'bring her about', 'stand by'];
+  let confirmer = null;
+
   const ask = async () => {
-    // "effect repairs" is read as "request docking" with middling confidence,
-    // which is exactly the plausible-but-unsure case the dialog exists for.
-    await page.fill('.orderbar input', 'effect repairs');
-    await page.press('.orderbar input', 'Enter');
-    await page.waitForTimeout(250);
-    return page.locator('.modal').count();
+    if (confirmer) {
+      await page.fill('.orderbar input', confirmer);
+      await page.press('.orderbar input', 'Enter');
+      await page.waitForTimeout(250);
+      return page.locator('.modal').count();
+    }
+    for (const phrase of CONFIRMERS) {
+      await dismissModals(page);
+      await page.fill('.orderbar input', phrase);
+      await page.press('.orderbar input', 'Enter');
+      await page.waitForTimeout(250);
+      const seen = await page.locator('.modal header').first()
+        .textContent().catch(() => null);
+      if (/confirm order/i.test(seen ?? '')) { confirmer = phrase; return 1; }
+    }
+    return 0;
   };
 
   const raised = await ask();
-  check('an unsure reading stops and asks', raised === 1, `${raised} modals`);
+  check('an unsure reading stops and asks', raised === 1,
+    confirmer ? `via "${confirmer}"` : `no phrase of ${CONFIRMERS.length} raised the dialog`);
 
   const dialogButtons = await page.locator('.modal .actions button').evaluateAll(
     (bs) => bs.map((b) => ({
@@ -4002,7 +4102,9 @@ try {
     for (const [key, said] of Object.entries(phrases)) {
       g.log.length = 0;
       const input = document.querySelector('.orderbar input');
-      input.value = 'effect repairs';
+      g.ship.shieldsUp = false;
+      g.ship.shieldsDown = true;
+      input.value = 'shields';
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       await new Promise((r) => setTimeout(r, 120));
       const asked = !!document.querySelector('.modal');
@@ -4011,20 +4113,26 @@ try {
       await new Promise((r) => setTimeout(r, 120));
       out[key] = {
         asked,
-        // The reading was "request docking". Running it says something about
-        // docking; dropping it says nothing at all.
-        docked: g.log.some((l) => /dock|moor|put in/i.test(l.text ?? '')),
+        // The reading was "shields up" — unconditional, and it raises no modal
+        // of its own, so this measures the ANSWER rather than the ship's
+        // circumstances. ("send a survey team" was tried here and is not that:
+        // it needs a free specialist on the duty roster, so affirming it
+        // correctly did nothing and the check read that as the answer being
+        // ignored.)
+        acted: g.ship.shieldsUp === true,
       };
     }
+    g.ship.shieldsUp = true;
+    g.ship.shieldsDown = false;
     return out;
   }, { affirm: 'make it so', belay: 'belay that' });
   check('saying "make it so" runs the reading the computer offered',
-    acted.affirm.asked && acted.affirm.docked, JSON.stringify(acted.affirm));
+    acted.affirm.asked && acted.affirm.acted, JSON.stringify(acted.affirm));
   check('and saying "belay that" drops it instead',
-    acted.belay.asked && !acted.belay.docked, JSON.stringify(acted.belay));
+    acted.belay.asked && !acted.belay.acted, JSON.stringify(acted.belay));
 
   await dismissModals(page);
-  await page.fill('.orderbar input', 'effect repairs');
+  await page.fill('.orderbar input', 'send a survey team');
   await page.press('.orderbar input', 'Enter');
   await page.waitForTimeout(250);
   await page.screenshot({ path: join(SHOTS, '06p-answering-the-computer.png') });

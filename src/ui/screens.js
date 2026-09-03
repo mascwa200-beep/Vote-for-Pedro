@@ -321,6 +321,7 @@ export function chairConsole(app) {
           : 'Nineteen hours. The chief says that is the best she can do without a starbase.',
       ]);
     }), {
+      say: 'effect repairs',
       color: 'peach',
       sub: g.alert === 'blue'
         ? 'Blue alert: maintenance stations manned, repairs go faster'
@@ -1201,7 +1202,16 @@ export function officerDetail(app, officer) {
         g.trainOfficer(officer, a.id);
         app.closeModal();
         app.render();
-      }, 'ui_confirm'), { color: 'blue', sub: `“${a.order}” · one day` }));
+        // The `sub` used to print the ability's ORDER phrase — the words that
+        // USE it once learned — which read as the phrase for this button and
+        // is not: saying it tries to fire an ability the officer does not have
+        // yet. The say line trains; the sub says what they will be able to
+        // order afterwards, which is worth knowing and is now labelled.
+      }, 'ui_confirm'), {
+        color: 'blue',
+        say: `train ${a.name.toLowerCase()}`,
+        sub: `One day. Then: “${a.order}”`,
+      }));
     }
   }
   return nodes;
