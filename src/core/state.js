@@ -595,6 +595,32 @@ export class Game {
   }
 
   /**
+   * Order the ships an episode's stage asked for.
+   *
+   * Shared by `chooseMission`, which does it when the captain takes the choice,
+   * and by `Game.load`, which does it for a record saved in the one tick
+   * between the order and the fight arriving. One place, so the two cannot
+   * drift about how a mission's hostiles are built or named.
+   *
+   * @param {object} spec  the stage's `effects.combat`
+   * @param {number|null} fightId  reuse the id from a restored record, so the
+   *   engagement still answers for the episode that is waiting on it
+   */
+  orderTheStagesFight(spec, fightId = null) {
+    if (!spec) return null;
+    // Named, like every other hostile in the game. A mission stage used to
+    // field "klingon vessel 1" while an ordinary encounter with the same ship
+    // called it the IKS Rotarran.
+    const ships = (spec.ships ?? []).map((cls, i) =>
+      new Ship(cls, { name: hostileName(spec.faction, i), faction: spec.faction }));
+    if (!ships.length) return null;
+    const id = fightId ?? ++this.missionFightSeq;
+    if (fightId != null) this.missionFightSeq = Math.max(this.missionFightSeq, fightId);
+    this.pendingCombat = { ships, canWarpOut: spec.canWarpOut, fightId: id };
+    return id;
+  }
+
+  /**
    * Notice where the ship has ended up.
    *
    * A border is a fact about a position, not about how you got there. Both of
@@ -2731,8 +2757,6 @@ export class Game {
       // Named, like every other hostile in the game. A mission stage used to
       // field "klingon vessel 1" while an ordinary encounter with the same
       // ship called it the IKS Rotarran.
-      const ships = (spec.ships ?? []).map((cls, i) =>
-        new Ship(cls, { name: hostileName(spec.faction, i), faction: spec.faction }));
       // No `returnToMission` flag. There used to be one, set here and read by
       // nobody: the consumer in `update` destructures what it needs and drops
       // the rest. It was not a missing feature either — a mission stage hangs
@@ -2748,9 +2772,8 @@ export class Game {
       // cleanly out of the thing holding you.
       // Both ends of the same token: the fight that is about to start, and the
       // episode that is waiting for it. Nothing else can answer for it.
-      const fightId = ++this.missionFightSeq;
-      this.pendingCombat = { ships, canWarpOut: spec.canWarpOut, fightId };
-      if (m.pending) m.pending.fightId = fightId;
+      const fightId = this.orderTheStagesFight(spec);
+      if (m.pending && fightId != null) m.pending.fightId = fightId;
     }
 
     if (result.complete) {
@@ -4259,6 +4282,21 @@ export class Game {
     // Older records carry no counter; starting past any id they could hold
     // keeps a stale `pending` from being answered by a fight ordered later.
     g.missionFightSeq = data.missionFightSeq ?? 0;
+    // And the fight the episode is waiting on, ordered again.
+    //
+    // `pendingCombat` is not in the save — the ships are built from the stage's
+    // own data, so there is nothing to serialise that the episode does not
+    // already carry. What WAS missing is this: the mark saying a reward is held
+    // came back and the ships did not, so the episode waited for a battle that
+    // was never coming, forever, on every record saved in the one tick between
+    // the order and its arrival.
+    //
+    // Re-ordered with the id the record already holds, so the engagement still
+    // answers for the episode waiting on it. A record written before the spec
+    // was carried has no `combat` and is left alone: there is nothing to
+    // rebuild it from, and inventing a battle is worse than not having one.
+    const waiting = g.missions.active?.pending;
+    if (waiting?.combat) g.orderTheStagesFight(waiting.combat, waiting.fightId ?? null);
     g.locationId = data.locationId ?? 'sol';
     g.clock = new Clock(data.stardate ?? 4523.3);
     g.latinum = data.latinum ?? 500;

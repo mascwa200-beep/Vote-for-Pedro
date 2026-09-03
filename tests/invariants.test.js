@@ -3415,9 +3415,18 @@ describe('an episode is settled by its own fight and no other', () => {
   });
 
   test('and a fight broken off by a save does not settle it later either', () => {
-    // The across-a-save route. A fight interrupted by a save is never resumed,
-    // so the episode goes on waiting — and the next fight anywhere used to
-    // settle it.
+    // The across-a-save route, on the only record that can still produce it.
+    //
+    // A stage's fight is re-ordered on load now, so a save taken in that window
+    // comes back with the ships still coming and nothing is left dangling. What
+    // CAN still dangle is a record written before the stage's combat spec was
+    // carried: `pending` comes back, `combat` is not there to rebuild from, and
+    // inventing a battle for it would be worse than not having one. So those
+    // episodes wait — and the thing this guard was written for is that the next
+    // fight anywhere must not answer for them.
+    //
+    // The legacy shape is built here rather than waited for, because the game
+    // no longer writes it.
     let checked = 0;
     for (const [def] of withFights) {
       const f = atTheFightStage(def);
@@ -3426,9 +3435,13 @@ describe('an episode is settled by its own fight and no other', () => {
       for (let i = 0; i < 5 && !f.g.engagement; i++) f.g.update(STEP);
       if (!f.g.engagement) continue;
 
-      const back = Game.load(f.g.save());
+      const record = JSON.parse(JSON.stringify(f.g.save()));
+      if (record.missions?.active?.pending) delete record.missions.active.pending.combat;
+      const back = Game.load(record);
       const bm = back.missions.active;
       if (!bm?.pending) continue;      // already settled, nothing to prove here
+      assert.equal(back.pendingCombat, null,
+        `${def.id}: a record with no combat spec queued a fight out of nothing`);
       checked++;
       back.locationId = 'sol';
       back.mode = MODES.BRIDGE;
@@ -3801,5 +3814,113 @@ describe('a wreck is lost when the ship leaves, whichever way it leaves', () => 
     for (let i = 0; i < 600; i++) g.update(STEP);
     assert.ok(g.wreck, 'the hulk vanished without the ship going anywhere');
     assert.ok(g.wreckHere, 'the hulk is here and the ship cannot see it');
+  });
+});
+
+// ============================== an episode's fight survives the app closing
+
+describe("an episode's ordered fight is still ordered after a reload", () => {
+  // `chooseMission` does two things when a stage orders a battle: it sets
+  // `game.pendingCombat` with the ships, and it marks `mission.pending` with the
+  // reward being held for it. `update` starts the fight on the next tick.
+  //
+  // `pendingCombat` appears in the constructor, the setter and the consumer —
+  // and NOWHERE in `save()` or `load()`. `Mission.save` carries `pending`, and
+  // `MissionBook.load` restores it deliberately: "Dropping it on load would
+  // strand the episode on a stage it can never leave."
+  //
+  // So a save taken in that one-tick window keeps the half that waits and drops
+  // the half that arrives. All seven episodes that queue a fight:
+  //
+  //   vega_raid … the_cube:  clean before save
+  //                          after reload + 300 ticks: mission.awaiting-ghost
+  //                          mission complete: false
+  //
+  // Not a hard lock — choosing the stage again re-queues it — but the reward
+  // held for the first fight is never paid, and the ship's log fills with
+  // "Computer: internal anomaly [mission.awaiting-ghost]" on a sampled tick
+  // forever. The window is one tick, and the browser saves on
+  // `visibilitychange`: backgrounding the app the instant you order the attack
+  // is exactly how a player reaches it.
+
+  /** Walk an episode to the stage that orders a fight, and order it. */
+  const orderedTheFight = (def, seed = 5n) => {
+    const g = new Game({ seed });
+    const m = g.missions.start(def.id, g);
+    if (!m) return null;
+    for (let i = 0; i < 40; i++) {
+      if (m.complete) return null;
+      const need = m.stageLocation?.(m.stage);
+      if (need) g.locationId = need;
+      const open = m.choices().filter((c) => !c.locked);
+      if (!open.length) return null;
+      if (open[0].effects?.combat) {
+        if (!g.chooseMission(open[0].id)) return null;
+        return g.pendingCombat ? g : null;
+      }
+      if (!g.chooseMission(open[0].id)) return null;
+    }
+    return null;
+  };
+
+  const withFights = EPISODES.map((d) => [d, orderedTheFight(d)]).filter(([, g]) => g);
+
+  test('episodes really do order fights', () => {
+    // The positive case. If stages stop queueing combat this suite is about
+    // nothing.
+    assert.ok(withFights.length >= 5,
+      `only ${withFights.length} episodes reached a stage that orders a fight`);
+    for (const [def, g] of withFights) {
+      assert.ok(g.pendingCombat, `${def.id} marked the episode without queueing the ships`);
+      assert.ok(g.missions.active.pending, `${def.id} queued ships without marking the episode`);
+      assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS }), [],
+        `${def.id} was already broken before anything was saved`);
+    }
+  });
+
+  test('and the ships are still coming after the app is closed and reopened', () => {
+    for (const [def] of withFights) {
+      const g = orderedTheFight(def);
+      if (!g) continue;
+      const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+      // The tick that would have started it.
+      for (let i = 0; i < 300; i++) back.update(STEP);
+      assert.deepEqual(checkAll(back, { arenaRadius: ARENA_RADIUS })
+        .filter((v) => v.code === 'mission.awaiting-ghost').map((v) => v.text), [],
+      `${def.id} is waiting on a battle that is never coming`);
+    }
+  });
+
+  test('and flying it wins the episode the stage was about', () => {
+    // The consequence, not just the invariant: the held reward is paid and the
+    // episode moves on. This is what the captain lost.
+    let settled = 0;
+    for (const [def] of withFights) {
+      const g = orderedTheFight(def);
+      if (!g) continue;
+      const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+      for (let i = 0; i < 10 && !back.engagement; i++) back.update(STEP);
+      if (!back.engagement) continue;
+      for (const h of back.engagement.hostiles) { h.hull = 1; h.destroyed = false; }
+      for (let i = 0; i < 30 * 600 && back.engagement && !back.engagement.over; i++) back.update(STEP);
+      for (let i = 0; i < 120; i++) back.update(STEP);
+      assert.equal(back.missions.active?.pending ?? null, null,
+        `${def.id} fought its fight and is still waiting on one`);
+      settled++;
+    }
+    assert.ok(settled >= 5, `only ${settled} episodes could fight the fight they had ordered`);
+  });
+
+  test('but an episode with no fight ordered queues nothing on load', () => {
+    // Must not misfire: most saves are not taken in that one-tick window, and a
+    // reload must not conjure a battle nobody asked for.
+    const g = new Game({ seed: 5n });
+    const m = g.missions.start('shakedown', g);
+    assert.ok(m, 'the shakedown is no longer startable');
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    for (let i = 0; i < 300; i++) back.update(STEP);
+    assert.equal(back.pendingCombat, null, 'a reload queued a fight out of nothing');
+    assert.equal(back.engagement, null, 'a reload started a fight out of nothing');
+    assert.deepEqual(checkAll(back, { arenaRadius: ARENA_RADIUS }), []);
   });
 });
