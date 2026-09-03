@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { RNG } from '../src/core/rng.js';
 import { Galaxy, plotTransit } from '../src/world/galaxy.js';
+import { COMMISSION_DAYS } from '../src/campaign/clock.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { ABILITIES } from '../src/sim/officers.js';
 // The canonical lists the pools below are drawn from. Hand-written copies of
@@ -2907,5 +2908,124 @@ describe('a ship lost where nobody was shooting is still a ship lost', () => {
     for (let i = 0; i < 3000; i++) g.update(STEP);
     assert.equal(g.over, false, 'a damaged but living ship ended the commission');
     assert.ok(!g.shipsLost, 'a damaged ship was recorded as lost');
+  });
+});
+
+// ============================================================ the five years
+
+describe('the commission ends when the five years are up', () => {
+  // The headline feature of the whole game is that it is a *five-year* mission,
+  // and the clock that measures it was read by nothing.
+  //
+  // `CampaignClock.complete` is computed correctly, `progress` pins at 1 and
+  // `remainingText()` will say "The five-year mission is complete." on the
+  // bridge — and then the game carries on. Measured before the fix: day 1,856
+  // of 1,826, `complete: true`, the bridge announcing the mission finished, and
+  // `over: false` with no reason, no assessment, no ending. Year six, day
+  // thirty-one, still steering.
+  //
+  // Same shape as the stranding and the out-of-combat hull loss above: a real
+  // terminal condition that exactly one module knew about.
+
+  /** A commission driven to its end on an injected clock, in 48-hour steps. */
+  const flyToTheEnd = (extraDays = 40, seed = 4242n) => {
+    let t = 1_700_000_000_000;
+    const g = new Game({ seed, now: () => t });
+    const target = COMMISSION_DAYS + extraDays;
+    for (let step = 0; step < 1200 && g.campaign.elapsedDays < target; step++) {
+      t += 48 * 3600 * 1000;         // under MAX_ABSENCE_HOURS, so nothing is forfeited
+      g.syncCampaign();
+      for (let i = 0; i < 20; i++) g.update(STEP);
+      if (g.over) break;
+    }
+    return g;
+  };
+
+  test('the clock really does reach the end of the commission', () => {
+    // The positive case first. If the clock ever stops being drivable this way,
+    // every test below would pass by never getting there.
+    let t = 1_700_000_000_000;
+    const g = new Game({ seed: 4242n, now: () => t });
+    assert.equal(g.campaign.complete, false, 'a commission began already finished');
+    for (let step = 0; step < 1200 && !g.campaign.complete; step++) {
+      t += 48 * 3600 * 1000;
+      g.campaign.sync();
+      g.campaign.drainPending();
+    }
+    assert.equal(g.campaign.complete, true, 'the campaign clock never reached 1,826 days');
+    assert.ok(g.campaign.elapsedDays >= COMMISSION_DAYS,
+      `elapsed ${g.campaign.elapsedDays} days, needed ${COMMISSION_DAYS}`);
+  });
+
+  test('serving out the five years ends the commission', () => {
+    const g = flyToTheEnd();
+    assert.equal(g.over, true,
+      `day ${Math.floor(g.campaign.elapsedDays)} of ${COMMISSION_DAYS} and the commission is still running`);
+    assert.ok(g.overReason, 'the commission ended with no reason to show the captain');
+  });
+
+  test('and it ends as a completion, not as a loss', () => {
+    // This is the whole point of the ending: five years served is the good
+    // outcome. It must be distinguishable from being stranded or losing the
+    // ship, because the end-of-commission screen reads the same field.
+    const g = flyToTheEnd();
+    assert.equal(g.commissionCompleted, true,
+      'the five years were served and the ending does not say so');
+    assert.ok(!/lost|stranded/i.test(g.overReason), `read as a failure: ${g.overReason}`);
+    assert.equal(g.shipsLost, 0, 'the ship was lost on the way, so this proves nothing');
+    assert.ok(g.ledger.entries.some((e) => e.kind === 'commission_completed'),
+      'nothing in the record says the commission was completed');
+  });
+
+  test('the record still assesses, and the assessment is not the ending', () => {
+    // The screen shows `ledger.assessment()`. Completing a commission must not
+    // be worth service points of its own — the bands were tuned without it, and
+    // a captain does not get to be Exemplary for merely surviving.
+    const g = flyToTheEnd();
+    const a = g.ledger.assessment();
+    assert.ok(a && a.label, 'no assessment at the end of a completed commission');
+    assert.equal(typeof g.ledger.serviceScore(), 'number');
+  });
+
+  test('a commission that is not up does not end', () => {
+    // The half that must not misfire. Four years in is four years in.
+    let t = 1_700_000_000_000;
+    const g = new Game({ seed: 77n, now: () => t });
+    for (let step = 0; step < 700 && g.campaign.elapsedDays < COMMISSION_DAYS - 100; step++) {
+      t += 48 * 3600 * 1000;
+      g.syncCampaign();
+      for (let i = 0; i < 20; i++) g.update(STEP);
+    }
+    assert.ok(g.campaign.elapsedDays > 1000, 'the probe never got far enough to mean anything');
+    assert.equal(g.over, false,
+      `ended at day ${Math.floor(g.campaign.elapsedDays)} of ${COMMISSION_DAYS}`);
+    assert.ok(!g.commissionCompleted, 'an unfinished commission was marked complete');
+  });
+
+  test('the commission does not end twice', () => {
+    const g = flyToTheEnd();
+    const entries = () => g.ledger.entries.filter((e) => e.kind === 'commission_completed').length;
+    const once = entries();
+    for (let i = 0; i < 600; i++) g.update(STEP);
+    assert.equal(entries(), once, 'the end of the commission was recorded more than once');
+  });
+
+  test('and a commission that has ended still says why after a reload', () => {
+    // `over` was saved and `overReason` was not, so reloading a finished
+    // commission produced a screen that said only "Your command has ended."
+    // and would not say what had happened.
+    const g = new Game({ seed: 9n });
+    g.gameOver('a second ship lost — no further command was offered');
+    const back = Game.load(g.save());
+    assert.equal(back.over, true, 'a finished commission reloaded as though it were running');
+    assert.equal(back.overReason, g.overReason, 'the reason the commission ended did not survive a reload');
+  });
+
+  test('and a completed commission reloads as completed', () => {
+    const g = flyToTheEnd();
+    const back = Game.load(g.save());
+    assert.equal(back.over, true);
+    assert.equal(back.commissionCompleted, true,
+      'a completed commission reloaded as a failure');
   });
 });

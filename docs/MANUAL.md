@@ -388,6 +388,23 @@ The consequence ledger is the spine of the game. It is never rolled back.
 
 Your service record is scored continuously and read aloud at the end.
 
+### How a commission ends
+
+There are three ways off the bridge, and only one of them is good.
+
+- **You serve the five years.** On day 1,826 the ship is ordered home and
+  command passes to relief. This is a *completion*, and the screen says so —
+  the record closes and is assessed on the same bands a promotion board uses.
+  Finishing is not worth service points of its own: what the five years were
+  worth is already in the record.
+- **You lose the ship twice.** The first loss costs standing and brings a board
+  of inquiry and a replacement hull. Starfleet does not hand out a third.
+- **You strand her.** Dry tanks, no berth, and nothing affordable next door is
+  the end of the commission, for the same reason losing the hull is.
+
+Reaching the last day with empty tanks is a completion, not a stranding. You
+served the time; getting the ship home is the fleet's problem.
+
 ---
 
 ## Talking instead of shooting

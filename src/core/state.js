@@ -275,6 +275,9 @@ export class Game {
     // over the UI and the save, and an unset field reads as "not over" by luck.
     this.over = false;
     this.overReason = null;
+    // Set when the five years were served, rather than when the career was cut
+    // short. Same reasoning as `over`: read as a boolean, so it starts as one.
+    this.commissionCompleted = false;
     this.latinum = 500;
 
     // ---- stores and the machine shop ----
@@ -3204,6 +3207,22 @@ export class Game {
       return;
     }
 
+    // Five years, and then you are relieved.
+    //
+    // `CampaignClock` counted the whole thing correctly — 1,826 days, banked at
+    // the compression in force when they passed, monotonic against a phone
+    // clock that moves in either direction — and then NOTHING READ IT. The
+    // bridge would print "The five-year mission is complete." out of
+    // `remainingText()` while the game carried blithely on: measured at day
+    // 1,856, `complete` true, `progress` pinned at 1, `over` false. Year six,
+    // day thirty-one, still steering.
+    //
+    // Checked before `stranded()` on purpose. A captain who reaches the last
+    // day of a commission with dry tanks has served the five years; Starfleet
+    // sends a tender and takes the ship back. Being out of fuel on the morning
+    // you are relieved is the fleet's problem, not the end of a career.
+    if (this.campaign?.complete && !this.over) return this.endOfCommission();
+
     // A commission that cannot go on is over, and says so.
     //
     // Running the tank dry somewhere with no berth and nothing affordable next
@@ -3476,10 +3495,48 @@ export class Game {
     ).error);
   }
 
-  gameOver(reason) {
+  /**
+   * The five years are up. Hand the ship back.
+   *
+   * This is the only *good* ending the game has, and it goes through the same
+   * door as the bad ones because there is only one door — the end-of-commission
+   * screen reads `overReason` and `ledger.assessment()` whatever brought the
+   * captain to it. What separates them is `commissionCompleted`, so the screen
+   * can tell a career that finished from one that ended.
+   */
+  endOfCommission() {
+    const years = (this.campaign.elapsedDays / 365.25).toFixed(1);
+    this.pushLog(
+      `${this.ship.name} is ordered home. ${this.campaign.format()} — the commission is complete `
+      + `after ${years} years, and command passes to relief at the earliest opportunity.`,
+      'captain',
+    );
+    // Recorded, and deliberately weightless: `RECORD_WEIGHTS` has no entry for
+    // this, so `serviceScore()` counts it as zero. The assessment bands were
+    // tuned without a completion bonus, and a captain does not get to be
+    // Exemplary for having merely lasted. What the five years were worth is
+    // already in the rest of the record.
+    this.ledger.record('commission_completed', {
+      text: `Five-year commission completed aboard ${this.ship.name}`,
+      system: this.locationId,
+      count: 1,
+    });
+    return this.gameOver(
+      `the five-year commission is complete — ${Math.floor(this.campaign.elapsedDays)} days served`,
+      { completed: true },
+    );
+  }
+
+  gameOver(reason, { completed = false } = {}) {
     this.over = true;
     this.overReason = reason;
-    emit('game:over', { reason, ledger: this.ledger, assessment: this.ledger.assessment() });
+    // Whether this was a career finished or a career ended. The screen changes
+    // its whole tone on it, so it is a field rather than something re-derived
+    // by matching on the wording of `reason`.
+    this.commissionCompleted = completed;
+    emit('game:over', {
+      reason, completed, ledger: this.ledger, assessment: this.ledger.assessment(),
+    });
   }
 
   // ------------------------------------------------------------------ save
@@ -3511,6 +3568,12 @@ export class Game {
       latinum: this.latinum,
       log: this.log.slice(-80),
       over: this.over ?? false,
+      // `over` was saved and the reason for it was not, so a captain who
+      // reloaded a finished commission got an end-of-commission screen that
+      // said only "Your command has ended." and would not say what had
+      // happened — the one screen whose entire job is to tell you.
+      overReason: this.overReason ?? null,
+      commissionCompleted: this.commissionCompleted ?? false,
       // The alert condition is an order with a price on it, not a colour.
       // `effectRepairs` pays `blue ? 0.18 : 0.12` of the hull and `blue ? 0.6
       // : 0.8` stardate, so a captain who called maintenance stations and then
@@ -4015,6 +4078,10 @@ export class Game {
     g.latinum = data.latinum ?? 500;
     g.log = data.log ?? [];
     g.over = data.over ?? false;
+    // Both default for a save written before they were carried. A record from
+    // then reads as "ended, reason unknown", which is what it actually is.
+    g.overReason = data.overReason ?? null;
+    g.commissionCompleted = data.commissionCompleted ?? false;
     // The condition the captain left the ship in — unless the record caught a
     // fight, in which case that fight is over by the time anyone reads this
     // and battle stations with nobody to fight is worse than losing the order.
