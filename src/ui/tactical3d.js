@@ -25,8 +25,7 @@ import {
 import { Renderer } from '../gfx/gl.js';
 import { hullMesh, hullScale, paletteFor } from '../gfx/blueprint.js';
 import {
-  starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh,
-  dropLineMesh, bodyMesh, VOLUME,
+  starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, VOLUME,
 } from '../gfx/scene.js';
 import { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } from '../gfx/vista.js';
 import { drawCombatEffects } from '../gfx/effects.js';

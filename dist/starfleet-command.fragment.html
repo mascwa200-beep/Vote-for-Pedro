@@ -4674,7 +4674,16 @@ __define("src/gfx/math.js", function (__exports, __require) {
 // takes an optional output array, because the render loop should not allocate.
 
 const { clamp } = __require("src/core/num.js");
-const DEG = Math.PI / 180;
+
+// No `DEG` here, deliberately.
+//
+// It was exported from this file and imported by nothing, while
+// `src/ui/tactical3d.js`, `src/gfx/vista.js` and `src/sim/ship.js` each
+// declared the identical `Math.PI / 180` locally. The third of those is the
+// reason not to republish it for them to share: `src/sim/` reaching into
+// `src/gfx/` for a constant couples the simulation to the renderer, and the
+// simulation has to keep running when nothing is drawing at all. One line of
+// arithmetic repeated three times is the cheaper of the two.
 
 // ---------------------------------------------------------------- vectors
 const vec3 = (x = 0, y = 0, z = 0) => new Float64Array([x, y, z]);
@@ -4706,12 +4715,6 @@ function normalize(a, out = vec3()) {
   return out;
 }
 const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-function lerp(a, b, t, out = vec3()) {
-  out[0] = a[0] + (b[0] - a[0]) * t;
-  out[1] = a[1] + (b[1] - a[1]) * t;
-  out[2] = a[2] + (b[2] - a[2]) * t;
-  return out;
-}
 
 /** Rotate a vector by a quaternion. */
 function transformQuat(v, q, out = vec3()) {
@@ -4729,6 +4732,11 @@ function transformQuat(v, q, out = vec3()) {
 
 // ------------------------------------------------------------ quaternions
 const quat = (x = 0, y = 0, z = 0, w = 1) => new Float64Array([x, y, z, w]);
+
+// `quatIdentity` and `quatNormalize` are used by the rotations below and by
+// nothing outside this file, so they are not exported. They are not dead —
+// grepping for them outside `math.js` makes them look it, which is why the
+// guard in tests/wiring.test.js counts importers rather than mentions.
 function quatIdentity(out = quat()) {
   out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1;
   return out;
@@ -4751,6 +4759,7 @@ function quatMultiply(a, b, out = quat()) {
   out[3] = aw * bw - ax * bx - ay * by - az * bz;
   return out;
 }
+
 function quatNormalize(q, out = quat()) {
   const len = Math.hypot(q[0], q[1], q[2], q[3]);
   if (len === 0) return quatIdentity(out);
@@ -4951,7 +4960,6 @@ function project(point, viewProj) {
   };
 }
 
-__exports.DEG = DEG;
 __exports.vec3 = vec3;
 __exports.add = add;
 __exports.sub = sub;
@@ -4961,13 +4969,10 @@ __exports.cross = cross;
 __exports.length = length;
 __exports.normalize = normalize;
 __exports.distance = distance;
-__exports.lerp = lerp;
 __exports.transformQuat = transformQuat;
 __exports.quat = quat;
-__exports.quatIdentity = quatIdentity;
 __exports.quatAxisAngle = quatAxisAngle;
 __exports.quatMultiply = quatMultiply;
-__exports.quatNormalize = quatNormalize;
 __exports.quatFromTo = quatFromTo;
 __exports.quatSlerp = quatSlerp;
 __exports.quatFromEuler = quatFromEuler;
@@ -5771,21 +5776,27 @@ const FEDERATION_FORMS = {
       rimColor: p.trim,
     });
 
-    if (b.rollbar !== false) {
-      const ry = b.rollbarY ?? high * 0.42;
-      box(mb, { center: vec3(sx, ry, 0), size: vec3(sr * 0.34, high * 0.12, wide * 0.82), color: p.trim });
-      mirrored(mb, (m) => {
-        box(m, {
-          center: vec3(sx, ry / 2, wide * 0.4),
-          size: vec3(sr * 0.22, ry, high * 0.13),
-          color: p.trim,
-        });
+    // The rollbar itself, which is what this form is named for.
+    //
+    // This used to sit behind `if (b.rollbar !== false)`, and no blueprint has
+    // ever set a `rollbar` key — the only mention anywhere is `form: 'rollbar'`
+    // on the Miranda, which is this function's NAME, not a parameter to it. A
+    // branch nothing can take reads as an option the caller has, and there was
+    // none: a rollbar hull without the rollbar is a Miranda without the part
+    // the class is recognised by.
+    const ry = b.rollbarY ?? high * 0.42;
+    box(mb, { center: vec3(sx, ry, 0), size: vec3(sr * 0.34, high * 0.12, wide * 0.82), color: p.trim });
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(sx, ry / 2, wide * 0.4),
+        size: vec3(sr * 0.22, ry, high * 0.13),
+        color: p.trim,
       });
-      tube(mb, {
-        origin: vec3(sx - sr * 0.34, ry, 0), length: sr * 0.68,
-        r0: high * 0.11, r1: high * 0.11, segments: 8, color: p.hull,
-      });
-    }
+    });
+    tube(mb, {
+      origin: vec3(sx - sr * 0.34, ry, 0), length: sr * 0.68,
+      r0: high * 0.11, r1: high * 0.11, segments: 8, color: p.hull,
+    });
 
     const ny = b.nacelleY ?? -high * 0.28;
     const nz = b.nacelleZ ?? wide * 0.44;
@@ -6054,7 +6065,14 @@ const { vec3 } = __require("src/gfx/math.js");
 const { MeshBuilder, saucer, tube, box, sphere, mirrored } = __require("src/gfx/mesh.js");
 const { FEDERATION_FORMS } = __require("src/gfx/forms.federation.js");
 
-/** Hull plating by faction. Flat shading means these are the whole look. */
+/**
+ * Hull plating by faction. Flat shading means these are the whole look.
+ *
+ * Not exported: `paletteFor` below is how the rest of the game asks, and it
+ * falls back to `independent` for a faction with no entry. Handing out the
+ * table itself invites `PALETTE[faction]` at the call site, which is the same
+ * lookup without the fallback.
+ */
 const PALETTE = {
   // Warm off-white, not refit grey. The 1966 miniature photographed as a
   // cream-white hull with darker grey detailing; [0.74, 0.77, 0.82] is the
@@ -6444,8 +6462,11 @@ const FORMS = {
    * 372 units long instead of 1.25, and then multiplied it by the on-screen
    * scale on top: 31,836 units of Cardassian cruiser inside a 2,600-unit
    * engagement volume. Somebody hit this before and invented the `length_`
-   * name for it — four blueprints have carried the correct value ever since,
-   * and no builder has ever read it.
+   * name for it, and four blueprints have carried the correct value ever
+   * since. This comment used to end "and no builder has ever read it", which
+   * was wrong when it was written: `wedge` reads it on the next line but one,
+   * and `hauler` reads it too. A docblock saying a value is ignored is an
+   * invitation to delete the value.
    */
   wedge(mb, p, b) {
     box(mb, {
@@ -6594,7 +6615,11 @@ const BLUEPRINTS = {
   // is one copy too many and the second one always goes stale.
   constitution: { form: 'tos_starfleet', length: 289 },
   constitution_refit: { form: 'starfleet', length: 305, domeRatio: 0.52, domeFlat: 0.22, nacelleHigh: 0.3, pylonSweep: 0.08 },
-  miranda: { form: 'rollbar', length: 278, neck: false },
+  // No `neck: false` here: `neck` is read by the `starfleet` form, which the
+  // Sovereign uses, and the `rollbar` form builds its own saucer and has never
+  // looked at it. Carrying the key made the Miranda look like it was turning
+  // something off.
+  miranda: { form: 'rollbar', length: 278 },
   oberth: { form: 'twinhull', length: 120, lowerY: -0.06 },
   excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, hullReach: 1.15, nacelleHigh: 0.46, nacelleWide: 0.68, pylonSweep: 0.02 },
   constellation: { form: 'quadnacelle', length: 260 },
@@ -6792,9 +6817,6 @@ function hullScale(classId) {
   return (DIMENSIONS[classId]?.length ?? 200) * UNITS_PER_METRE;
 }
 
-__exports.FORMS = FORMS;
-
-__exports.PALETTE = PALETTE;
 __exports.paletteFor = paletteFor;
 __exports.DIMENSIONS = DIMENSIONS;
 __exports.BLUEPRINTS = BLUEPRINTS;
@@ -7914,7 +7936,7 @@ __define("src/ui/tactical3d.js", function (__exports, __require) {
 const { vec3, mat4, quat, identity, multiply, perspective, lookAt, compose, normalMatrix, quatFromEuler, project, sub, length: vlength, normalize, cross } = __require("src/gfx/math.js");
 const { Renderer } = __require("src/gfx/gl.js");
 const { hullMesh, hullScale, paletteFor } = __require("src/gfx/blueprint.js");
-const { starfield, gridMesh, beamMesh, torpedoMesh, shieldMesh, explosionMesh, dropLineMesh, bodyMesh, VOLUME } = __require("src/gfx/scene.js");
+const { starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, VOLUME } = __require("src/gfx/scene.js");
 const { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } = __require("src/gfx/vista.js");
 const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { fitCanvas } = __require("src/ui/touch.js");

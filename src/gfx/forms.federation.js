@@ -78,21 +78,27 @@ export const FEDERATION_FORMS = {
       rimColor: p.trim,
     });
 
-    if (b.rollbar !== false) {
-      const ry = b.rollbarY ?? high * 0.42;
-      box(mb, { center: vec3(sx, ry, 0), size: vec3(sr * 0.34, high * 0.12, wide * 0.82), color: p.trim });
-      mirrored(mb, (m) => {
-        box(m, {
-          center: vec3(sx, ry / 2, wide * 0.4),
-          size: vec3(sr * 0.22, ry, high * 0.13),
-          color: p.trim,
-        });
+    // The rollbar itself, which is what this form is named for.
+    //
+    // This used to sit behind `if (b.rollbar !== false)`, and no blueprint has
+    // ever set a `rollbar` key — the only mention anywhere is `form: 'rollbar'`
+    // on the Miranda, which is this function's NAME, not a parameter to it. A
+    // branch nothing can take reads as an option the caller has, and there was
+    // none: a rollbar hull without the rollbar is a Miranda without the part
+    // the class is recognised by.
+    const ry = b.rollbarY ?? high * 0.42;
+    box(mb, { center: vec3(sx, ry, 0), size: vec3(sr * 0.34, high * 0.12, wide * 0.82), color: p.trim });
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(sx, ry / 2, wide * 0.4),
+        size: vec3(sr * 0.22, ry, high * 0.13),
+        color: p.trim,
       });
-      tube(mb, {
-        origin: vec3(sx - sr * 0.34, ry, 0), length: sr * 0.68,
-        r0: high * 0.11, r1: high * 0.11, segments: 8, color: p.hull,
-      });
-    }
+    });
+    tube(mb, {
+      origin: vec3(sx - sr * 0.34, ry, 0), length: sr * 0.68,
+      r0: high * 0.11, r1: high * 0.11, segments: 8, color: p.hull,
+    });
 
     const ny = b.nacelleY ?? -high * 0.28;
     const nz = b.nacelleZ ?? wide * 0.44;
