@@ -3029,3 +3029,149 @@ describe('the commission ends when the five years are up', () => {
       'a completed commission reloaded as a failure');
   });
 });
+
+// ================================================ borders you did not fly over
+
+describe('a border is a fact about where you are, not about how you got there', () => {
+  // Found by a verification check that failed once in three runs and would not
+  // reproduce — "the treaty rider clears the zone, and says so rather than
+  // being silent", with `said: false` and everything else right. It was not a
+  // flake in the test. It was the test catching a real thing intermittently,
+  // because the thing itself only happens when a course is interrupted.
+  //
+  // `crossTheZone()` and `enterTheDMZ()` were called from exactly one place —
+  // `arrive()`. Two other paths put the ship in a system: being forced out of
+  // warp mid-course (state.js, the transit tick), and `dropOutOfWarp()`, the
+  // order to break off a course. Neither noticed a border.
+  //
+  // Measured over 400 flights into the Romulan Neutral Zone: 354 arrivals, all
+  // 354 charged as a crossing — and 11 flights that were jumped on the way in,
+  // none of them charged. The ship was sitting inside the Zone and the
+  // Romulans had not logged it. Get intercepted and the treaty violation does
+  // not happen.
+  //
+  // The same 400 flights into the demilitarised zone: 27 ended with the ship
+  // parked inside it, `inTheDMZ` false, nobody having noticed. That is the
+  // check that kept failing.
+
+  /**
+   * The first game, over a scan of seeds, that ends up at `target` having been
+   * forced out of warp rather than having arrived.
+   *
+   * Written as a scan rather than a hard-coded seed because the interception is
+   * a 2%-per-second roll on the main stream: pinning a seed would pin every
+   * other roll in the flight with it, and the next change to any of them would
+   * quietly turn this into a test of nothing.
+   */
+  const flightJumpedInto = (from, target, prep = () => {}) => {
+    for (let s = 1n; s <= 400n; s++) {
+      const g = new Game({ seed: s });
+      g.locationId = from;
+      g.ship.antimatter = g.ship.maxAntimatter;
+      prep(g);
+      if (!g.setCourse(target).ok) continue;
+      for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(STEP);
+      if (g.locationId !== target) continue;
+      if (g.log.some((l) => /forced out of warp/i.test(l.text ?? ''))) return g;
+    }
+    return null;
+  };
+
+  /** The same flight, flown to its end without being interrupted. */
+  const flightInto = (from, target, prep = () => {}) => {
+    for (let s = 1n; s <= 400n; s++) {
+      const g = new Game({ seed: s });
+      g.locationId = from;
+      g.ship.antimatter = g.ship.maxAntimatter;
+      prep(g);
+      if (!g.setCourse(target).ok) continue;
+      for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(STEP);
+      if (g.locationId !== target) continue;
+      if (!g.log.some((l) => /forced out of warp/i.test(l.text ?? ''))) return g;
+    }
+    return null;
+  };
+
+  const crossedTheZone = (g) => g.ledger.entries.some((e) => /Neutral Zone/i.test(e.text ?? ''));
+
+  test('flying into the Neutral Zone is a crossing, and is charged as one', () => {
+    // The positive case. Everything below is a comparison against this, so if
+    // arriving ever stops being a violation the rest must fail loudly rather
+    // than agree with a broken baseline.
+    const g = flightInto('neutral_zone_1', 'devron');
+    assert.ok(g, 'no uninterrupted flight into the Zone in 400 seeds');
+    assert.ok(crossedTheZone(g), 'arriving at Devron was not recorded as a crossing');
+    assert.ok(g.ledger.standingOf('romulan') < 0, 'the Romulans did not mind at all');
+    assert.equal(g.inTheZone, true);
+  });
+
+  test('and so is being forced out of warp inside it', () => {
+    const g = flightJumpedInto('neutral_zone_1', 'devron');
+    assert.ok(g, 'no interrupted flight into the Zone in 400 seeds — the probe cannot see the case');
+    assert.equal(g.locationId, 'devron');
+    assert.ok(crossedTheZone(g),
+      'the ship was dropped out of warp inside the Romulan Neutral Zone and nobody logged it');
+    assert.equal(g.inTheZone, true, 'inside the Zone and the game does not think so');
+  });
+
+  test('the demilitarised zone notices a ship that was jumped on the way in', () => {
+    const g = flightJumpedInto('setlik', 'dmz_volnar', (x) => { x.inTheDMZ = false; });
+    assert.ok(g, 'no interrupted flight into the DMZ in 400 seeds');
+    assert.equal(g.inTheDMZ, true,
+      'the ship is parked in the demilitarised zone and the game does not think it is there');
+  });
+
+  test('and the treaty rider still says so when the arrival was not an arrival', () => {
+    // This is the verification check that kept failing, as a unit test.
+    const g = flightJumpedInto('setlik', 'dmz_volnar', (x) => {
+      x.inTheDMZ = false;
+      x.reputation.perks.add('dmz_passage');
+    });
+    assert.ok(g, 'no interrupted flight into the DMZ in 400 seeds');
+    assert.ok(g.log.some((l) => /waved through|treaty rider/i.test(l.text ?? '')),
+      'the rider cleared the zone silently, which is indistinguishable from not working');
+  });
+
+  test('breaking off a course inside the Zone is a crossing too', () => {
+    // `dropOutOfWarp` is the order, not the ambush: same position, same treaty.
+    const g = new Game({ seed: 31n });
+    g.locationId = 'neutral_zone_1';
+    g.ship.antimatter = g.ship.maxAntimatter;
+    assert.ok(g.setCourse('devron').ok, 'could not lay in the course at all');
+    // Far enough along that the nearest system on the route is the destination.
+    while (g.transit && g.transit.progress < 0.9) g.update(STEP);
+    assert.ok(g.transit, 'the flight ended before it could be broken off');
+    const out = g.dropOutOfWarp();
+    assert.ok(out.ok, 'the order to break off was refused');
+    assert.equal(g.locationId, 'devron', 'coasted in somewhere else — this proves nothing');
+    assert.ok(crossedTheZone(g),
+      'broke off a course inside the Neutral Zone and it was not recorded as a crossing');
+  });
+
+  test('but being forced out somewhere ordinary is not a border incident', () => {
+    // The half that must not misfire. Most interceptions happen nowhere near a
+    // line, and none of them are treaty violations.
+    const g = flightJumpedInto('sol', 'wolf359');
+    assert.ok(g, 'no interrupted flight to Wolf 359 in 400 seeds');
+    assert.ok(!crossedTheZone(g), 'an ordinary interception was written up as a treaty violation');
+    assert.equal(g.inTheZone, false);
+    assert.equal(g.inTheDMZ, false);
+  });
+
+  test('and leaving a zone that way re-arms it', () => {
+    // The second-order half. `inTheDMZ` is "we are already in, do not say it
+    // twice"; if leaving by interception never cleared it, the NEXT entry would
+    // be silent for the rest of the commission.
+    const armed = (x) => { x.inTheDMZ = true; };
+    const flown = flightInto('dmz_volnar', 'setlik', armed);
+    assert.ok(flown, 'no uninterrupted flight out of the DMZ in 400 seeds');
+    assert.equal(flown.inTheDMZ, false,
+      'flew out of the demilitarised zone and the game still thinks we are in it');
+
+    // And by the path this whole suite is about.
+    const jumped = flightJumpedInto('dmz_volnar', 'setlik', armed);
+    assert.ok(jumped, 'no interrupted flight out of the DMZ in 400 seeds');
+    assert.equal(jumped.inTheDMZ, false,
+      'was forced out of warp beyond the zone and the game still thinks we are inside it');
+  });
+});
