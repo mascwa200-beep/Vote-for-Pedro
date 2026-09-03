@@ -39,6 +39,7 @@ import { dirname, join } from 'node:path';
 import { RNG } from '../src/core/rng.js';
 import { Galaxy, plotTransit } from '../src/world/galaxy.js';
 import { COMMISSION_DAYS } from '../src/campaign/clock.js';
+import { EPISODES } from '../src/missions/episodes/index.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { ABILITIES } from '../src/sim/officers.js';
 // The canonical lists the pools below are drawn from. Hand-written copies of
@@ -3297,5 +3298,148 @@ describe('the captain can lead a landing party, and it costs something', () => {
       assert.ok(r.outcome !== 'success' || r.passed === 3,
         `broke off after ${r.passed} of 3 and reported ${r.outcome}`);
     }
+  });
+});
+
+// =============================================== the fight an episode ordered
+
+describe('an episode is settled by its own fight and no other', () => {
+  // `settleCombat` says what it is for in its first line — "The fight this
+  // episode ordered is over" — and it was called at the end of EVERY fight,
+  // with nothing checking that the fight that just ended was that one.
+  //
+  // So a stage's held reward was paid out by whatever the captain shot next.
+  // Measured, taking the stage's fight choice while already in an ordinary
+  // engagement and then finishing THAT fight:
+  //
+  //   the_cube          episode complete: true engaged   xp +2350  banked +1
+  //   tholian_border    episode complete: true fought_out xp +2890  banked +1
+  //   organia_question  episode complete: true defended   xp +2350  banked +1
+  //
+  // An ordinary Bird-of-Prey is worth 550. The Borg cube episode was completed,
+  // banked and paid 1,800 experience for killing a Bird-of-Prey at Sol — and
+  // the cube itself then arrived, for an episode that was already over.
+  //
+  // Reachable in one session with no save and no reload, and reachable again
+  // across one: a fight interrupted by a save is never resumed (see the
+  // interrupted-combat handling in `load`), so the episode goes on waiting and
+  // the next fight anywhere settles it.
+
+  /** Walk an episode to the stage that orders a fight, without taking it. */
+  const atTheFightStage = (def, seed = 5n) => {
+    const g = new Game({ seed });
+    const m = g.missions.start(def.id, g);
+    if (!m) return null;
+    for (let i = 0; i < 40; i++) {
+      if (m.complete) return null;
+      const need = m.stageLocation?.(m.stage);
+      if (need) g.locationId = need;
+      const open = m.choices().filter((c) => !c.locked);
+      if (!open.length) return null;
+      if (open[0].effects?.combat) return { g, m, choiceId: open[0].id };
+      if (!g.chooseMission(open[0].id)) return null;
+    }
+    return null;
+  };
+
+  /** Somebody with nothing to do with any episode. */
+  const anOrdinaryFight = (g) => {
+    g.startCombat([new Ship('bird_of_prey', { name: 'IKS Nothing', faction: 'klingon' })]);
+    for (const s of g.engagement.hostiles) { s.hull = 1; s.destroyed = false; }
+  };
+
+  const fightToTheEnd = (g) => {
+    for (let i = 0; i < 30 * 600 && g.engagement && !g.engagement.over; i++) g.update(STEP);
+    for (let i = 0; i < 60; i++) g.update(STEP);
+  };
+
+  /** Every episode that has a stage ordering a fight, so none is missed. */
+  const withFights = EPISODES.map((d) => [d, atTheFightStage(d)]).filter(([, f]) => f);
+
+  test('there are episodes that order a fight', () => {
+    // The positive case. If episodes ever stop queueing combat, everything
+    // below passes by testing nothing.
+    assert.ok(withFights.length >= 5,
+      `only ${withFights.length} episodes reach a stage that orders a fight`);
+  });
+
+  test("and the episode's own fight still settles it", () => {
+    // The half that must keep working, and the reason this is not fixed by
+    // simply not calling `settleCombat`.
+    let settled = 0;
+    for (const [def] of withFights) {
+      const f = atTheFightStage(def);
+      if (!f) continue;
+      f.g.chooseMission(f.choiceId);
+      for (let i = 0; i < 5 && !f.g.engagement; i++) f.g.update(STEP);
+      if (!f.g.engagement) continue;
+      for (const s of f.g.engagement.hostiles) { s.hull = 1; s.destroyed = false; }
+      fightToTheEnd(f.g);
+      assert.equal(f.m.pending, null,
+        `${def.id}: the episode fought its own fight and is still waiting on one`);
+      settled++;
+    }
+    assert.ok(settled >= 5, `only ${settled} episodes settled their own fight`);
+  });
+
+  test('a stage that orders a fight during one sends its enemies into that fight', () => {
+    // Held apart because it looks like the defect and is not it. `startCombat`
+    // called during a fight does not start a second one: it puts the new ships
+    // into the engagement in progress — "More of them, closing" — so the
+    // episode's enemies really are in that fight and it really does answer for
+    // it. All seven episodes that order a fight do this.
+    //
+    // Asked by identity rather than by counting hostiles: the ordinary hostile
+    // can die on the same tick the episode's arrives, and the count never
+    // moves. Counting said they had not joined, which is how this was nearly
+    // filed as a bug.
+    let joined = 0;
+    for (const [def] of withFights) {
+      const f = atTheFightStage(def);
+      if (!f) continue;
+      const { g, m } = f;
+      anOrdinaryFight(g);
+      if (!g.chooseMission(f.choiceId)) continue;
+      assert.ok(m.pending, `${def.id}: the stage did not queue a fight at all`);
+      const ordered = g.pendingCombat?.ships ?? [];
+      assert.ok(ordered.length, `${def.id}: the stage ordered a fight with nobody in it`);
+      g.update(STEP);
+      assert.ok(g.engagement && ordered.some((s) => g.engagement.hostiles.includes(s)),
+        `${def.id}: the enemies the stage ordered never arrived`);
+      assert.equal(g.engagement.missionFightId, m.pending.fightId,
+        `${def.id}: its enemies are in this fight and it does not answer for it`);
+      joined++;
+    }
+    assert.equal(joined, withFights.length,
+      `only ${joined} of ${withFights.length} episodes put their enemies into the fight`);
+  });
+
+  test('and a fight broken off by a save does not settle it later either', () => {
+    // The across-a-save route. A fight interrupted by a save is never resumed,
+    // so the episode goes on waiting — and the next fight anywhere used to
+    // settle it.
+    let checked = 0;
+    for (const [def] of withFights) {
+      const f = atTheFightStage(def);
+      if (!f) continue;
+      f.g.chooseMission(f.choiceId);
+      for (let i = 0; i < 5 && !f.g.engagement; i++) f.g.update(STEP);
+      if (!f.g.engagement) continue;
+
+      const back = Game.load(f.g.save());
+      const bm = back.missions.active;
+      if (!bm?.pending) continue;      // already settled, nothing to prove here
+      checked++;
+      back.locationId = 'sol';
+      back.mode = MODES.BRIDGE;
+      const banked = back.missions.completed.size;
+      anOrdinaryFight(back);
+      fightToTheEnd(back);
+      assert.equal(bm.complete, false,
+        `${def.id} was completed after a reload by a fight somewhere else`);
+      assert.equal(back.missions.completed.size, banked,
+        `${def.id} was banked after a reload by a fight somewhere else`);
+    }
+    assert.ok(checked >= 3, `only ${checked} episodes were left waiting across a save`);
   });
 });

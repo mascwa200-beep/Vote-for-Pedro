@@ -259,6 +259,14 @@ export class Game {
     this.conLines = [];
     this.log = [];
     this.pendingCombat = null;
+    // Which fight an episode is waiting on.
+    //
+    // `settleCombat` says what it is for in its own first line — "the fight
+    // this episode ordered is over" — and it was called at the end of every
+    // fight, with nothing checking that the fight that just ended was that one.
+    // So a stage's held reward was paid out by whatever the captain shot next.
+    // Saved, so an id issued before a reload cannot collide with one after it.
+    this.missionFightSeq = 0;
     this.firstStrike = false;
     // Whether this fight's call for help has been made, and what is on its way.
     this.helpCalled = false;
@@ -2495,7 +2503,15 @@ export class Game {
     // ending it declared and the reward held back for it; anything else means
     // the episode ends without them, because you did not do the thing the
     // ending says you did.
-    const settled = this.missions?.active?.settleCombat?.(outcome);
+    // And only that fight settles it. Measured before this: taking a stage's
+    // fight choice while already in an ordinary engagement, then finishing that
+    // engagement, completed and banked the Borg cube episode and paid its 1,800
+    // experience for killing a Bird-of-Prey at Sol — after which the cube
+    // itself arrived, for an episode that was already over.
+    const waiting = this.missions?.active?.pending;
+    const oursToSettle = !!waiting && eng?.missionFightId != null
+      && eng.missionFightId === waiting.fightId;
+    const settled = oursToSettle ? this.missions.active.settleCombat(outcome) : null;
     if (settled?.complete) {
       this.missions.finishActive();
       if (!simulated) this.creditMastery('mission');
@@ -2647,7 +2663,11 @@ export class Game {
       // that cannot go to warp until the lattice is broken", and there was no
       // way for it to say that to the engagement — so breaking off warped you
       // cleanly out of the thing holding you.
-      this.pendingCombat = { ships, canWarpOut: spec.canWarpOut };
+      // Both ends of the same token: the fight that is about to start, and the
+      // episode that is waiting for it. Nothing else can answer for it.
+      const fightId = ++this.missionFightSeq;
+      this.pendingCombat = { ships, canWarpOut: spec.canWarpOut, fightId };
+      if (m.pending) m.pending.fightId = fightId;
     }
 
     if (result.complete) {
@@ -3436,12 +3456,18 @@ export class Game {
 
     // A mission stage queued a fight; start it once the UI has caught up.
     if (this.pendingCombat && this.mode !== MODES.COMBAT) {
-      const { ships, canWarpOut } = this.pendingCombat;
+      const { ships, canWarpOut, fightId } = this.pendingCombat;
       this.pendingCombat = null;
-      this.startCombat(ships, {
+      const eng = this.startCombat(ships, {
         name: 'Engagement',
         ...(canWarpOut === false ? { canWarpOut: false } : {}),
       });
+      // The fight now on the screen answers for the episode only if the
+      // episode's enemies are actually in it. `startCombat` does not always
+      // start one: called during a fight it puts the new ships into the
+      // engagement in progress instead — "More of them, closing" — which is
+      // still the episode's fight, and refuses outright when handed nobody.
+      if (eng && ships.some((s) => eng.hostiles.includes(s))) eng.missionFightId = fightId;
     }
   }
 
@@ -3630,6 +3656,7 @@ export class Game {
       ledger: this.ledger.save(),
       galaxy: this.galaxy.save(),
       missions: this.missions.save(),
+      missionFightSeq: this.missionFightSeq,
       locationId: this.locationId,
       // Where the ship is GOING, not only where it last was. See Transit.save.
       transit: this.transit?.save?.() ?? null,
@@ -4143,6 +4170,9 @@ export class Game {
     g.difficulty = DifficultySettings.load(data.difficulty);
     g.galaxy.load(data.galaxy);
     g.missions.load(data.missions, g);
+    // Older records carry no counter; starting past any id they could hold
+    // keeps a stale `pending` from being answered by a fight ordered later.
+    g.missionFightSeq = data.missionFightSeq ?? 0;
     g.locationId = data.locationId ?? 'sol';
     g.clock = new Clock(data.stardate ?? 4523.3);
     g.latinum = data.latinum ?? 500;
