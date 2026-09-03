@@ -3835,6 +3835,92 @@ try {
   check('and "withdraw" still breaks off a fight when there is one to break off',
     stillWarpsOut.warping, JSON.stringify(stillWarpsOut));
 
+  // ------------------------------------------------ reading and writing the log
+  //
+  // Measured before this worked: every way of asking to SEE the log WROTE one,
+  // because `log_entry` carries `log` as a keyword and the request became the
+  // entry. A captain who asked to read the log got an entry reading "show me
+  // the log", so the log filled with failed attempts to read it.
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+
+  const logWork = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const input = document.querySelector('.orderbar input');
+    const say = async (text) => {
+      input.value = text;
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 120));
+    };
+    const before = g.log.length;
+    const startScreen = app.screen;
+
+    // Asking to read it must not add to it.
+    await say('show me the log');
+    const read = { screen: app.screen, added: g.log.length - before };
+
+    // Dictating must keep the captain's words exactly — including a word the
+    // order normaliser rewrites ("well" matches the contraction rule for
+    // "we'll") and an addressee it strips off the front of an order.
+    app.go(startScreen);
+    await say("captain's log, supplemental: number one has the con and the crew performed well");
+    // The entry itself, not the officer's acknowledgement of it.
+    const written = g.log.slice(-4).map((l) => l.text ?? '')
+      .find((t) => /supplemental:/i.test(t)) ?? '';
+
+    return { read, written };
+  });
+  check('asking to see the log opens it instead of writing an entry',
+    logWork.read.screen === 'log' && logWork.read.added === 0, JSON.stringify(logWork.read));
+  // `logEntry` writes the "Captain's log, supplemental:" prefix itself, which is
+  // correct formatting — what must not happen is the preamble surviving inside
+  // the captain's OWN words, so the comparison is on the part after the colon.
+  const dictated = (logWork.written.split(/supplemental:/i)[1] ?? '').trim();
+  check('and a dictated entry survives the order normaliser word for word',
+    dictated === 'number one has the con and the crew performed well',
+    JSON.stringify(dictated));
+
+  await page.evaluate(() => { window.__app.go('log'); window.__app.render(); });
+  await page.waitForTimeout(200);
+
+  // Nothing on the screen should be an internal identifier. Both of these were
+  // found by LOOKING at this screenshot rather than by any assertion: a line
+  // reading "captain: Log entry recorded." under a tag already saying CAPTAIN,
+  // and a filter chip reading "FIRST_OFFICER" with the underscore in it.
+  const raw = await page.evaluate(() => {
+    const chips = [...document.querySelectorAll('.chip-row .btn')]
+      .map((b) => b.childNodes[0]?.textContent?.trim() ?? '');
+    // `.logline` is a `.src` pill followed by a bare text node — see
+    // lcars.js logLine. An earlier version of this check guessed at
+    // `.logline-text` and friends, matched NOTHING, and passed vacuously.
+    const rows = [...document.querySelectorAll('.logline')];
+    const said = rows.map((r) => [...r.childNodes]
+      .filter((n) => n.nodeType === Node.TEXT_NODE)
+      .map((n) => n.textContent).join('').trim());
+    const pills = rows.map((r) => r.querySelector('.src')?.textContent ?? '');
+    return {
+      rows: rows.length,
+      chips: chips.filter((c) => /_/.test(c)),
+      pills: pills.filter((p) => /_/.test(p)),
+      // A speaker prefix that is the channel id verbatim — LOWER CASE, and
+      // case-sensitively so: "Security: decks are clear" is the proper label
+      // and must not be flagged, while "security:" is the raw id leaking.
+      selfNamed: said.filter((t) => /^(captain|security|transporter|navigation|ops|computer):/.test(t)),
+    };
+  });
+  // The count is asserted too, so this cannot pass by finding nothing to check.
+  check('the log screen actually has lines to inspect', raw.rows > 5, `${raw.rows} rows`);
+  check('no channel on the log screen shows its own identifier',
+    raw.chips.length === 0 && raw.pills.length === 0,
+    JSON.stringify({ chips: raw.chips, pills: raw.pills.slice(0, 3) }));
+  check('and no station announces itself by its id',
+    raw.selfNamed.length === 0, JSON.stringify(raw.selfNamed.slice(0, 3)));
+
+  await page.screenshot({ path: join(SHOTS, '06q-the-log.png') });
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+
   // ------------------------------------------------ answering the computer
   //
   // The parser stops on a reading it is not sure of and asks "I read that as X,

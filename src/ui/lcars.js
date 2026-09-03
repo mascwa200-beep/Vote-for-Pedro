@@ -209,9 +209,20 @@ export function officerRow(officer, onClick = null) {
 }
 
 /** Log line. */
+/**
+ * What to call a log channel on screen.
+ *
+ * A channel IS a log source id, which is right for filtering and grouping and
+ * wrong for printing: "first_officer" reached the screen with its underscore
+ * intact, both in this pill and in the filter row on the log screen.
+ */
+export function channelName(id) {
+  return String(id ?? 'log').replace(/_/g, ' ');
+}
+
 export function logLine(entry) {
   return el('div', { class: `logline ${entry.source ?? ''}`.trim() }, [
-    el('span', { class: 'src', text: entry.source ?? 'log' }),
+    el('span', { class: 'src', text: channelName(entry.source) }),
     entry.text,
   ]);
 }

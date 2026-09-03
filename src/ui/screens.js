@@ -4,7 +4,7 @@
 
 import {
   el, clear, panel, button, readout, shieldDiagram, powerSlider,
-  pill, modal, field, textInput, select, officerRow, logLine,
+  pill, modal, field, textInput, select, officerRow, logLine, channelName,
 } from './lcars.js';
 import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
@@ -212,7 +212,7 @@ export function bridgeScreen(app) {
   // --- Recent log ---
   side.append(panel('Ship’s Log', [
     ...g.log.slice(-4).reverse().map(logLine),
-    button('Full log', tap(() => app.go('log')), { color: 'ghost' }),
+    button('Full log', tap(() => app.go('log')), { color: 'ghost', say: 'show me the log' }),
   ]));
   return root;
 }
@@ -341,7 +341,7 @@ export function chairConsole(app) {
     // Always offered, not only once the log is long. A way out that appears
     // later is a way out nobody finds.
     button(`Full log — ${g.log.length} entr${g.log.length === 1 ? 'y' : 'ies'}`,
-      tap(() => app.go('log')), { color: 'ghost' }),
+      tap(() => app.go('log')), { color: 'ghost', say: 'show me the log' }),
   ]));
   return root;
 }
@@ -576,7 +576,7 @@ export function viewscreenScreen(app) {
 
   side.append(panel('Ship’s Log', [
     ...g.log.slice(-4).reverse().map(logLine),
-    button('Full log', tap(() => app.go('log')), { color: 'ghost' }),
+    button('Full log', tap(() => app.go('log')), { color: 'ghost', say: 'show me the log' }),
   ]));
   return root;
 }
@@ -1573,7 +1573,11 @@ export function logScreen(app) {
         button('All', tap(() => { app.logFilter = null; app.render(); }), {
           color: active === null ? 'green' : 'ghost',
         }),
-        ...sources.map((st) => button(st, tap(() => {
+        // The channel names are log SOURCE ids, and were printed raw — so the
+        // filter row carried a chip reading "FIRST_OFFICER", underscore and
+        // all, next to ordinary words. Same defect as a station announcing
+        // itself by its id: an internal name reaching the screen.
+        ...sources.map((st) => button(channelName(st), tap(() => {
           app.logFilter = app.logFilter === st ? null : st;
           app.render();
         }), { color: active === st ? 'green' : 'ghost' })),
@@ -1582,7 +1586,7 @@ export function logScreen(app) {
   }
 
   root.append(panel(
-    active ? `Ship’s Log — ${active}` : 'Ship’s Log',
+    active ? `Ship’s Log — ${channelName(active)}` : 'Ship’s Log',
     entries.length
       ? entries.slice().reverse().map(logLine)
       : [el('p', { class: 'muted', text: 'Nothing on this channel yet.' })],

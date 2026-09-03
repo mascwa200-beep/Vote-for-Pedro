@@ -1170,3 +1170,124 @@ describe('the captain can answer a question the game asked', () => {
     assert.equal(readAnswer(BELAY_PHRASE), 'belay');
   });
 });
+
+// ================================ the log records what the captain said
+
+describe('the captain’s log records what the captain said', () => {
+  // The log is the one thing the order line carries that is prose rather than a
+  // command. Everything else on it is matched, folded and thrown away; this is
+  // kept, and read back later as the record of a command.
+
+  test('asking to SEE the log does not write one', () => {
+    // Measured before this existed: 8 of 8 phrasings became log_entry with the
+    // request itself as the entry text, so a captain who asked to read the log
+    // got an entry reading "show me the log", and the log filled up with failed
+    // attempts to read it.
+    const wrote = [];
+    for (const said of [
+      'show me the log', 'open the log', 'read the log', 'the log',
+      'ships log', 'full log', 'let me see the log', 'display the log',
+      'bring up the log', 'check the log', 'what does the log say',
+    ]) {
+      const r = parseOrder(said);
+      const o = r.order ?? r;
+      if (o.action !== 'read_log') wrote.push(`"${said}" -> ${o.action ?? 'nothing'}`);
+    }
+    assert.deepEqual(wrote, [], `${wrote.length} ways of asking to read the log did something else`);
+  });
+
+  test('and a dictated entry keeps the captain’s own words', () => {
+    // The entry text came off the NORMALISED line, which exists to make orders
+    // matchable and mangles prose doing it. The contraction rule for "we'll"
+    // has the apostrophe optional, so it matches "well": "the crew performed
+    // well" was recorded as "the crew performed we will".
+    const cases = [
+      ["captain's log, supplemental: the crew performed well", 'the crew performed well'],
+      ['log entry: all is well aboard', 'all is well aboard'],
+      ["captain's log: well done to the engine room", 'well done to the engine room'],
+      // The addressee stripper takes "number one" off the front of an ORDER,
+      // which is right, and took the subject off the front of a sentence.
+      ['log entry: number one has the con', 'number one has the con'],
+    ];
+    for (const [said, want] of cases) {
+      const r = parseOrder(said);
+      assert.equal((r.order ?? r).text, want, `"${said}"`);
+    }
+  });
+
+  test('and the preamble does not end up inside the entry', () => {
+    // The old stripper removed everything up to the FIRST preamble word it
+    // found, so a line carrying both "captain's log" AND "supplemental" — which
+    // is how the line is actually said — stopped at the first and left the
+    // second in the text.
+    const r = parseOrder("captain's log, supplemental: we have reached the neutral zone");
+    assert.equal((r.order ?? r).text, 'we have reached the neutral zone');
+    assert.ok(!/supplemental/i.test((r.order ?? r).text ?? ''));
+  });
+
+  test('and saying only the preamble files nothing', () => {
+    // "Captain's log" is a captain STARTING to dictate. It used to file an
+    // entry whose entire text was the words "captains log".
+    for (const said of ['captains log', "captain's log", 'captains log supplemental',
+      'begin recording', 'note in the log']) {
+      const r = parseOrder(said);
+      const o = r.order ?? r;
+      assert.equal(o.action, 'log_entry', `"${said}" stopped being a log order`);
+      assert.equal(o.text, null, `"${said}" filed an entry reading ${JSON.stringify(o.text)}`);
+    }
+  });
+
+  test('and dictating still works, which is the point of the whole thing', () => {
+    // Here because everything above narrows what counts as an entry, and
+    // narrowing it to nothing would satisfy every other test in this block.
+    //
+    // It fails on the old code too, but for a smaller reason than the others:
+    // dictation DID work there, it was just case-folded, so "I objected" came
+    // back as "i objected". Worth saying rather than letting the red tick imply
+    // the whole thing was broken.
+    for (const [said, want] of [
+      ['log this: we lost four good people today', 'we lost four good people today'],
+      ['for the record: I objected', 'I objected'],
+      ['log entry: the warp core is holding', 'the warp core is holding'],
+    ]) {
+      const r = parseOrder(said);
+      const o = r.order ?? r;
+      assert.equal(o.action, 'log_entry', `"${said}"`);
+      assert.equal(o.text, want, `"${said}"`);
+    }
+  });
+});
+
+describe('a station with nobody at it still has a name', () => {
+  test('an unmanned station does not speak under its own identifier', () => {
+    // Found in a screenshot of the log: "captain: Log entry recorded." sitting
+    // underneath a line already tagged CAPTAIN — the identifier twice, once in
+    // lower case. Five stations have lines and no officer on the roster.
+    const g = new Game({ seed: 7n, crewMode: 'original' });
+    const bad = [];
+    for (const station of ['security', 'transporter', 'navigation', 'ops', 'computer']) {
+      g.officerSays(station, 'Reporting.');
+      const line = g.log[g.log.length - 1].text;
+      if (line.startsWith(`${station}:`)) bad.push(line);
+    }
+    assert.deepEqual(bad, [], 'a station announced itself by its own id');
+  });
+
+  test('and the captain speaks with no name at all, because the tag says who', () => {
+    const g = new Game({ seed: 7n, crewMode: 'original' });
+    g.officerSays('captain', 'Log entry recorded.');
+    const entry = g.log[g.log.length - 1];
+    assert.equal(entry.text, 'Log entry recorded.');
+    assert.equal(entry.source, 'captain');
+  });
+
+  test('but an officer who IS there is still named', () => {
+    // A guard: the fix must not strip the names off the seven posts that have
+    // somebody at them. This passes on the old code, and is here so that
+    // "nobody has a name" cannot satisfy the two tests above.
+    const g = new Game({ seed: 7n, crewMode: 'original' });
+    g.officerSays('helm', 'Course laid in.');
+    const line = g.log[g.log.length - 1].text;
+    assert.match(line, /^[A-Z][^:]*: Course laid in\.$/, line);
+  });
+});
