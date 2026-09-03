@@ -1778,3 +1778,110 @@ describe('every weapon the game has is a weapon you can order', () => {
     }
   });
 });
+
+// The other half of the manual, and the reason this is a test rather than a
+// note: `parseOrder` consults the lexicon AND a table of regex orders, and
+// `commandReference` is built from the lexicon alone. The two layers do not
+// share ids and do not share wording — the table's `ahead` is the lexicon's
+// `throttle`, its `power_preset` is `preset`, its `target` is `cycle_target`,
+// its `transporter` is `transport` — so today every table order has a lexicon
+// twin and the manual is complete.
+//
+// That is not obvious and it is not enforced anywhere, which cost a full
+// investigation to establish. Comparing the layers by help text said twelve
+// orders were missing from the manual; comparing by id said five; both were
+// wrong, because neither string is the identity. The only sound question is
+// behavioural: can a captain reading the manual find a phrasing that reaches
+// this order?
+//
+// So that is what this asks. It passes today. It exists for the day somebody
+// adds an order to the table with no lexicon twin, when the manual would
+// silently stop being complete and nothing else would notice.
+/** One phrasing per table order, to ask whether the manual reaches it. */
+const TABLE_PROBES = {
+  set_course: 'set course for vulcan warp six',
+  warp_factor: 'warp eight',
+  all_stop: 'all stop',
+  ahead: 'ahead full',
+  come_about: 'come about',
+  evasive: 'evasive manoeuvres',
+  warp_out: 'get us out of here',
+  dock: 'request docking',
+  alert: 'red alert',
+  shields: 'shields up',
+  reinforce: 'reinforce forward shields',
+  power: 'divert power to shields',
+  power_preset: 'attack pattern power',
+  target_subsystem: 'target their engines',
+  target: 'next target',
+  cease_fire: 'cease fire',
+  fire: 'fire phasers',
+  hail: 'open a channel',
+  surrender_demand: 'demand their surrender',
+  scan: 'scan them',
+  status: 'damage report',
+  eject_core: 'eject the warp core',
+  brace: 'all hands brace for impact',
+  away_team: 'assemble an away team',
+  transporter: 'energize',
+};
+const TABLE_ORDER_IDS = Object.keys(TABLE_PROBES);
+
+describe('the manual reaches every order the regex table carries', () => {
+  const ref = commandReference({ examples: 200 });
+  const printed = ref.groups.flatMap((g) => g.entries.flatMap((e) => e.examples));
+
+  test('there is a regex table to be missed', () => {
+    // The positive case. If the table is ever folded into the lexicon this
+    // suite proves nothing and should say so rather than passing quietly.
+    assert.ok(TABLE_ORDER_IDS.length > 10,
+      `only ${TABLE_ORDER_IDS.length} orders in the table`);
+  });
+
+  test('and no entry teaches only fragments', () => {
+    // The manual teaches by example, so an entry whose every example answers
+    // with a question teaches nothing. Measured before the fix: one entry of
+    // sixty-nine, `power`, whose four printed phrasings all came back "Power to
+    // which system, Captain?" — because the lexicon's nineteen phrasings for it
+    // are all stems, the channel being read separately. Right for matching,
+    // wrong for a manual.
+    const game = new Game({ seed: 1n });
+    const teachesNothing = [];
+    for (const group of ref.groups) {
+      for (const entry of group.entries) {
+        if (!entry.examples.length) continue;
+        const sayable = entry.examples.filter((phrase) => {
+          const parsed = parseOrder(phrase, game.crew);
+          return parsed && !parsed.error;
+        });
+        if (!sayable.length) {
+          teachesNothing.push(`${entry.id}: ${JSON.stringify(entry.examples.slice(0, 4))}`);
+        }
+      }
+    }
+    assert.deepEqual(teachesNothing, [],
+      'manual entries where not one printed phrasing can be said as it stands');
+  });
+
+  test('and every order in it is reachable from a phrasing the manual prints', () => {
+    const game = new Game({ seed: 1n });
+    // Which actions the manual can actually produce, by running every phrasing
+    // it prints through the parser the game uses.
+    const reachable = new Set();
+    for (const phrase of printed) {
+      const parsed = parseOrder(phrase, game.crew);
+      if (parsed?.action) reachable.add(parsed.action);
+    }
+    assert.ok(reachable.size > 30, `the manual's phrasings only reach ${reachable.size} actions`);
+
+    // And every action the table exists to produce is among them.
+    const unreachable = [];
+    for (const [id, said] of Object.entries(TABLE_PROBES)) {
+      const want = parseOrder(said, game.crew)?.action;
+      assert.ok(want, `"${said}" no longer parses, so ${id} cannot be checked`);
+      if (!reachable.has(want)) unreachable.push(`${id} ("${said}" -> ${want})`);
+    }
+    assert.deepEqual(unreachable, [],
+      'orders the game understands that no phrasing in the manual reaches');
+  });
+});

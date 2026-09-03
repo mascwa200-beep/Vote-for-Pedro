@@ -20067,6 +20067,26 @@ const STATION_ORDER = [
 ];
 
 /**
+ * Sayable examples for orders whose lexicon phrasings are all sentence stems.
+ *
+ * The lexicon's phrase list is a MATCHING list: `power` carries nineteen of
+ * them and every one is a fragment — "give me more power", "reallocate power",
+ * "take power from" — because the channel is read separately. That is right for
+ * matching and wrong for a manual. The reference printed four of those stems,
+ * and all four answer "Power to which system, Captain?", so the one screen
+ * whose whole job is to teach phrasings taught four fragments.
+ *
+ * One order needs this today. The test below is what keeps it that way: no
+ * entry may print only examples that cannot be said as they stand.
+ */
+const SAYABLE_EXAMPLES = {
+  power: [
+    'divert power to shields', 'more power to the engines',
+    'all power to weapons', 'reroute power to the shields',
+  ],
+};
+
+/**
  * Every order the game understands, grouped by the station that carries it out,
  * with the alternate phrasings the parser accepts.
  *
@@ -20090,8 +20110,9 @@ function commandReference({ examples = 4 } = {}) {
       id: intent.id,
       help: intent.help,
       // Longest first is how the lexicon sorts them, and the longest phrasings
-      // are the most natural-sounding ones — which is what to show.
-      examples: intent.phrases.slice(0, examples),
+      // are the most natural-sounding ones — which is what to show. Unless they
+      // are all stems, in which case what to show is written out by hand.
+      examples: (SAYABLE_EXAMPLES[intent.id] ?? intent.phrases).slice(0, examples),
       total: intent.phrases.length,
     });
   }
