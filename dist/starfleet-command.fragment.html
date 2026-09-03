@@ -28855,7 +28855,7 @@ const { Clock } = __require("src/core/time.js");
 const { Ledger } = __require("src/core/ledger.js");
 const { emit } = __require("src/core/events.js");
 
-const { Ship } = __require("src/sim/ship.js");
+const { Ship, FACINGS, SHIELD_OVERCHARGE } = __require("src/sim/ship.js");
 const { Crew, Officer, ABILITIES, ABILITY_LIST } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP, SKILLS } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
@@ -29431,6 +29431,26 @@ class Game {
 
   /** Recompute ship modifiers from skills + consoles. Call after any change. */
   applyAllMods() {
+    // What the ship has left, as a fraction, before any of this runs.
+    //
+    // Every `applyMods` below ends in `recomputeDerived`, which rescales the
+    // current hull and shields by `newMax / prevMax` so that raising a maximum
+    // does not leave the ship reading as pre-damaged. Correct once. Done five
+    // times in a row after a reset to the baseline, it walks the hull down to
+    // the unmodded scale and back up again, and
+    // `4588 * (4200/4620) * (4620/4200)` is not 4588.
+    //
+    // So this asked the same question twice and got a slightly different ship:
+    // the hull crept up an ulp per call for the first three calls, and it is
+    // called on construction, on load, on promotion, on fitting a console and
+    // on a difficulty change. Capturing the fraction here and restoring it at
+    // the end conserves exactly what the rescale exists to conserve, once
+    // instead of five times.
+    const hullPct = this.ship.maxHull > 0 ? this.ship.hull / this.ship.maxHull : null;
+    const shieldPct = this.ship.maxShield > 0
+      ? Object.fromEntries(FACINGS.map((f) => [f, this.ship.shields[f] / this.ship.maxShield]))
+      : null;
+
     // Reset to the class baseline, then reapply everything.
     this.ship.mods = {
       damage: 1, shieldMax: 1, shieldRegen: 1, hullMax: 1, turn: 1,
@@ -29472,6 +29492,16 @@ class Game {
     const eps = this.loadout.special('powerTransfer');
     if (eps) this.ship.power.transferRate = 55 + eps;
     if (this.character?.hasFeat('master_engineer')) this.ship.power.transferRate = 400;
+
+    // And put the ship back where it was, proportionally. One rescale against
+    // the maxima this method finally settled on, rather than one per source of
+    // modifiers against whatever the maxima happened to be halfway through.
+    if (hullPct !== null) this.ship.hull = Math.min(this.ship.maxHull, hullPct * this.ship.maxHull);
+    if (shieldPct !== null) {
+      for (const f of FACINGS) {
+        this.ship.shields[f] = Math.min(this.ship.maxShield * SHIELD_OVERCHARGE, shieldPct[f] * this.ship.maxShield);
+      }
+    }
   }
 
   /**
@@ -32247,6 +32277,11 @@ class Game {
       // closed the app came back at normal with every later repair worth a
       // third less, and nothing to say why.
       alert: this.alert,
+      // The stamp every ledger entry gets. It is re-set from the clock on each
+      // tick, so it was only ever wrong in the window between a load and the
+      // first update — but an entry recorded in that window went into the
+      // permanent record stamped `stardate: null`.
+      ledgerStardate: this.ledger.stardate ?? null,
       // The after-action record. Its own comment says it "survives the fight,
       // which is what an after-action report is for" — and it did not survive
       // a save, because nothing wrote it down. The panel that reads it in
@@ -32751,6 +32786,7 @@ class Game {
     // fight is not resumed — see the mode comment below — but the captain is
     // told the action was broken off rather than finding the enemy simply
     // gone, and the panel that reads `lastCombat` has something to show.
+    if (data.ledgerStardate != null) g.ledger.stardate = data.ledgerStardate;
     g.lastCombat = data.interruptedCombat ?? data.lastCombat ?? null;
     if (data.interruptedCombat) {
       g.log = [...g.log, {
