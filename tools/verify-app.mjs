@@ -4779,13 +4779,23 @@ try {
     JSON.stringify(dcShift));
 
   // Spend a skill point through the real UI.
+  //
+  // Waited for rather than counted immediately. The Record screen renders after
+  // the navigation resolves, so `count()` could return zero before the skill
+  // rows existed, the click never happened, and the check failed with an
+  // unchanged tally and nothing to say why — intermittently, which is the worst
+  // way for a check to fail. How many buttons were found is reported either
+  // way, so the next failure names its own cause.
   await nav(page, 'Record');
-  const before = await page.evaluate(() => globalThis.__app.game.progress.unspent);
   const plus = page.locator('.skill button:not([disabled])').first();
-  if (await plus.count()) await plus.click();
+  await plus.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  const enabled = await page.locator('.skill button:not([disabled])').count();
+  const before = await page.evaluate(() => globalThis.__app.game.progress.unspent);
+  if (enabled) await plus.click();
   await page.waitForTimeout(300);
   const after = await page.evaluate(() => globalThis.__app.game.progress.unspent);
-  check('skill points can be spent from the UI', after === before - 1, `${before} -> ${after}`);
+  check('skill points can be spent from the UI', after === before - 1,
+    `${before} -> ${after}, ${enabled} spendable control(s) on the screen`);
 
   // ------------------------------------------------ save / restore
   await page.evaluate(() => globalThis.__app.save());
