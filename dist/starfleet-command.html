@@ -32042,6 +32042,27 @@ class Game {
 
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
+
+    // A commission that cannot go on is over, and says so.
+    //
+    // Running the tank dry somewhere with no berth and nothing affordable next
+    // door used to leave the game in the one state a five-year commission must
+    // not have: unable to move, unable to refuel, neither continuing nor
+    // ending. Losing the ship ends a career; so does losing the ability to fly
+    // her, and for the same reason — the record stands on what happened, not
+    // on the player sitting at a helm that answers nothing.
+    if (this.stranded()) {
+      this.pushLog(
+        `${this.ship.name} is adrift at ${this.location?.name ?? 'an empty system'} with dry tanks `
+        + 'and no berth within reach. There is nothing further to order.',
+        'engineering',
+      );
+      this.ledger.record('ship_stranded', {
+        text: `${this.ship.name} stranded at ${this.location?.name ?? this.locationId}`,
+        system: this.locationId,
+      });
+      return this.gameOver('stranded with no antimatter and no port within reach');
+    }
     this.updateWalk(dt);
 
     // The ship is alive whether or not anyone is shooting at her.
@@ -32255,6 +32276,43 @@ class Game {
       system: this.locationId,
     });
     emit('ship:recovered', { ship: this.ship });
+  }
+
+  /**
+   * Above this much antimatter, no ship is stranded anywhere in the charts.
+   *
+   * The cheapest thing any ship can do is warp 1 to its nearest neighbour, and
+   * the dearest such hop in the galaxy costs well under this. It exists so the
+   * check below is a cheap comparison on the common path and only walks the
+   * neighbours when the tank is genuinely low.
+   */
+  static get STRANDED_FUEL() { return 5; }
+
+  /**
+   * Can this ship still get anywhere?
+   *
+   * A full tank is about ten neighbour jumps at warp 7, nothing regenerates
+   * antimatter, and no recipe makes it — so a captain who does not dock will
+   * run dry eventually. At 13 of the galaxy's 43 systems that means no course
+   * the ship can afford and no docking facility either, and the commission
+   * simply stopped: unable to move, unable to refuel, neither continuing nor
+   * ending.
+   *
+   * Warp 1 to the nearest neighbour is the cheapest thing a ship can do, so if
+   * that is refused everywhere and there is no berth here, there is nothing
+   * left to try.
+   */
+  stranded() {
+    if (this.over || this.transit || this.ashore) return false;
+    if (this.engagement && !this.engagement.over) return false;
+    if (this.canDock()) return false;
+    // Cheap guard first: a ship with fuel for the cheapest hop is not stuck,
+    // and this runs on a tick.
+    if (this.ship.antimatter > Game.STRANDED_FUEL) return false;
+
+    return !this.galaxy.neighbors(this.locationId).some((n) => !plotTransit(
+      this.galaxy, this.locationId, n.id, 1, this.ship, this.progress.warpEfficiency,
+    ).error);
   }
 
   gameOver(reason) {
