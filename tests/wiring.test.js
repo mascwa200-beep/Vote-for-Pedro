@@ -13,7 +13,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 import { Game } from '../src/core/state.js';
 import { on } from '../src/core/events.js';
@@ -3149,7 +3149,8 @@ describe('the tests agree with combat about how a fight can end', () => {
   // Same shape as DRAWN_EFFECTS before the cloak fix: a second list that has
   // to be remembered, and is not.
 
-  const OUTCOME_FILES = [join(HERE, '..', 'src'), join(HERE, '..', 'tests'), join(HERE, '..', 'tools')];
+  const ROOT = join(HERE, '..');
+  const OUTCOME_FILES = [join(ROOT, 'src'), join(ROOT, 'tests'), join(ROOT, 'tools')];
 
   const sources = (dir, out = []) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -3176,7 +3177,17 @@ describe('the tests agree with combat about how a fight can end', () => {
             if (!quoted.every((q) => OUTCOMES.includes(q))) continue;
             // Two names is a pair being tested, not the list being copied.
             if (quoted.length < 3) continue;
-            found.push({ where: `${file.slice(file.indexOf('/', file.indexOf('Pedro')) + 1)}:${i + 1}`, names: quoted });
+            // Relative to the repo root, not carved out of the absolute path.
+            //
+            // This hunted for the string "Pedro" in the path and cut after the
+            // next slash, which works from a checkout at ~/Vote-for-Pedro and
+            // fails on CI, where the runner checks out to
+            // .../work/Vote-for-Pedro/Vote-for-Pedro/ — the first match is the
+            // wrong one, every path came out with a leading `Vote-for-Pedro/`,
+            // and the guard's own "did the scrape find the definition" check
+            // then failed on green code. A test that only passes from one
+            // directory is not a test.
+            found.push({ where: `${relative(ROOT, file)}:${i + 1}`, names: quoted });
           }
         });
       }
