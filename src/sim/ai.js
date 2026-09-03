@@ -259,14 +259,24 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
       if (distance < want * 0.8) {
         ship.decloak();
         engagement.pushLog(`${ship.name} is decloaking!`, 'tactical');
-        engagement.effects.push({ kind: 'decloak', x: ship.x, y: ship.y, life: 1.0 });
+        // `z` and `classId` for the same reason the impact flare carries them:
+        // the renderer places the effect in three dimensions and sizes it to
+        // the hull it belongs to. Without them the shell sat on the ecliptic
+        // at a stock size while the ship it was veiling was somewhere else.
+        engagement.effects.push({
+          kind: 'decloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
+          classId: ship.classId, life: 1.0,
+        });
       }
       return;
     }
     // Re-cloak to reset the engagement once shields are thin.
     if (decide && ship.shieldPct < 0.35 && ship.cloakCooldown <= 0 && distance > 350) {
       ship.cloak();
-      engagement.effects.push({ kind: 'cloak', x: ship.x, y: ship.y, life: 1.0 });
+      engagement.effects.push({
+        kind: 'cloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
+        classId: ship.classId, life: 1.0,
+      });
       return;
     }
   }
