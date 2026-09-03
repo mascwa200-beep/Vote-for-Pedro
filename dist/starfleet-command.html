@@ -29537,6 +29537,27 @@ class Game {
     return this.enterTheDMZ();
   }
 
+  /**
+   * The hulk you left behind is gone.
+   *
+   * `finishCombat` describes the salvage as a choice — "strip it, or leave the
+   * system and lose it" — and leaving did not lose it. `wreckHere` stopped
+   * offering the hulk once you were elsewhere, so it LOOKED lost, but the
+   * object survived in the save and came back the moment you returned to that
+   * system. A wreck could be banked for the whole five years and cashed in
+   * whenever the machine shop ran dry, which is not a choice at all.
+   *
+   * That clause lived inside `arrive`, and `arrive` is not the only way to end
+   * up in a different system from the hulk: breaking off a course leaves the
+   * ship at the nearest system on the route, and kept the wreck. So the choice
+   * was still not a choice — take the other exit and the hulk was banked
+   * anyway. Hoisted here so a third departure cannot forget it, exactly as
+   * `noticeTheBorder` was hoisted for the same two paths.
+   */
+  loseTheHulkBehindUs() {
+    if (this.wreck && this.wreck.systemId !== this.locationId) this.wreck = null;
+  }
+
   encounterPerks(systemId) {
     return {
       quietInHostileSpace: this.perk('reduced_detection'),
@@ -30560,6 +30581,28 @@ class Game {
     }
 
     this.transit = plan.transit;
+    // Flying away is withdrawing.
+    //
+    // This cleared the orbit and not the ENCOUNTER, and `arrive` only overwrites
+    // one — and only when the arrival roll produces something that is not quiet,
+    // which most of the time it does not. So whatever was on the viewer when the
+    // captain laid in a course stayed live in a system the ship was no longer
+    // anywhere near: measured over sixty legs, thirty-nine turned something up
+    // and fifteen of those were still there afterwards.
+    //
+    // `checkGame` has called that illegal since before this line existed
+    // (`game.encounter.elsewhere`); nothing had ever flown away from an
+    // encounter to trip it. And it is not invisible in play — `hail` reads the
+    // encounter's faction before the engagement's, and `availableAwayMissions`
+    // reads its kind, so a distress call left four light years back offers a
+    // landing party at a world with no emergency.
+    //
+    // Through `endEncounter` rather than a bare null, because that is the same
+    // door `resolveEncounter('withdraw')` uses: the alert stands down and
+    // `encounter:end` is emitted, so the bridge is told what the captain just
+    // did. Done AFTER the plan is accepted — a course the helm refuses is not a
+    // departure, and the thing on the viewer is still in front of the ship.
+    if (this.encounter) this.endEncounter();
     // You cannot hold an orbit and leave the system. Cleared silently: the helm
     // announcing a break the captain did not order is noise, and the course
     // report immediately after says where the ship is going instead.
@@ -30608,6 +30651,8 @@ class Game {
     this.transit = null;
     this.orbit = null;
     this.mode = MODES.BRIDGE;
+
+    this.loseTheHulkBehindUs();
 
     const isNew = this.galaxy.markVisited(this.locationId);
     this.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
@@ -30686,15 +30731,7 @@ class Game {
     this.orbit = null;
     this.mode = MODES.BRIDGE;
 
-    // The hulk you left behind is gone.
-    //
-    // `finishCombat` describes the salvage as a choice — "strip it, or leave
-    // the system and lose it" — and leaving did not lose it. `wreckHere`
-    // stopped offering the hulk once you were elsewhere, so it LOOKED lost, but
-    // the object survived in the save and came back the moment you returned to
-    // that system. A wreck could be banked for the whole five years and cashed
-    // in whenever the machine shop ran dry, which is not a choice at all.
-    if (this.wreck && this.wreck.systemId !== this.locationId) this.wreck = null;
+    this.loseTheHulkBehindUs();
 
     const isNew = this.galaxy.markVisited(this.locationId);
     this.pushLog(`Arrived at ${t.to.name}.`, 'helm');
