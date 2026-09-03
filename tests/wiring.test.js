@@ -3206,3 +3206,23 @@ describe('the tests agree with combat about how a fight can end', () => {
       `${copies.length} places keep their own copy of OUTCOMES instead of importing it`);
   });
 });
+
+// The after-action panel reads the record, not the ship.
+//
+// `main.js` is DOM-bound and cannot be imported here, so this reads it as text
+// the way the rest of this file does. The panel already took the casualties from
+// `lastCombat` — it took the HULL from the live ship, so a report about one
+// fight carried a number from some later moment, and after a hull is lost and
+// replaced, from a different ship entirely.
+test('the engagement report takes its hull from the fight it describes', () => {
+  const main = readFileSync(join(HERE, '..', 'src', 'main.js'), 'utf8');
+  // Anchored on the DEFINITION, not on the `on('combat:resolved')` registration
+  // eight hundred lines above it, which is what `indexOf` finds first.
+  const at = main.indexOf('  showCombatResult(outcome) {');
+  assert.ok(at > 0, 'showCombatResult is no longer defined where this test looks for it');
+  const panel = main.slice(at, at + 2600);
+  assert.ok(/lastCombat\?\.hullLeft/.test(panel),
+    'the report does not read the hull the record carries');
+  assert.ok(!/lines\.push\(`Hull at \$\{Math\.round\(g\.ship\.hullPct/.test(panel),
+    'the report still reads the live hull');
+});

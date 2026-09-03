@@ -3536,3 +3536,93 @@ describe('a watch report is something a captain can actually hear', () => {
     assert.ok(after < 30 * 1024, `${(after / 1024).toFixed(0)}KB of save after the report was given`);
   });
 });
+
+// ================================ an after-action report for a ship you have
+
+describe('the last battle is reported against the ship that fought it', () => {
+  // `lastCombat` survives the engagement on purpose — "anything that wanted to
+  // know how the last battle went had to read a live engagement before it was
+  // cleared, which is a race dressed up as an API". It also survives the SHIP.
+  //
+  // Starfleet gives you a different hull twice: when you lose one, and when you
+  // take a command offer. Both go through `takeCommandOf`, and neither touches
+  // the report. So a costly battle in a Galaxy, followed by the loss of that
+  // Galaxy, leaves the after-action report saying:
+  //
+  //   the last battle is recorded as costing 811 of a crew of 750
+  //
+  // More people than the new ship carries. `checkGame` already calls that
+  // illegal, with a comment saying "a count larger than the crew is not a number
+  // anybody should be shown" — and the number the panel shows is exactly this
+  // one, next to a hull percentage read from the ship the captain is on NOW
+  // rather than the one the battle was fought in.
+  //
+  // The record already carries `hullLeft`. It did not carry the complement, so
+  // there was nothing to check the casualties against except a ship that had
+  // changed underneath them.
+
+  /** A costly battle, and then Starfleet hands over a smaller hull. */
+  const foughtThenReassigned = (seed = 3n) => {
+    const g = new Game({ seed, shipClass: 'galaxy' });
+    const flew = g.ship.classId;
+    const complement = g.ship.maxCrew;
+    g.startCombat([new Ship('d7', { name: 'IKS Something', faction: 'klingon' })]);
+    g.ship.crew = Math.round(g.ship.maxCrew * 0.2);
+    g.engagement.end('victory');
+    for (let i = 0; i < 120; i++) g.update(STEP);
+    return { g, flew, complement };
+  };
+
+  test('a costly battle really is recorded as costly', () => {
+    // The positive case: if the casualties stop being recorded there is nothing
+    // here to be wrong about.
+    const { g, complement } = foughtThenReassigned();
+    assert.ok(g.lastCombat, 'no after-action report at all');
+    assert.ok(g.lastCombat.crewLost > complement * 0.5,
+      `the battle cost ${g.lastCombat.crewLost} of ${complement}, which is not a costly battle`);
+    assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS })
+      .filter((v) => v.code === 'game.lastCombat.crew'), [],
+    'the report was already illegal before the ship changed');
+  });
+
+  test('and it stays a legal number when the ship changes underneath it', () => {
+    const { g, flew } = foughtThenReassigned();
+    g.shipsLost = 0;
+    g.ship.hull = 0;
+    g.ship.destroyed = true;
+    g.loseTheShip();
+    assert.notEqual(g.ship.classId, flew, 'the ship did not change, so this proves nothing');
+    assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS })
+      .filter((v) => v.code === 'game.lastCombat.crew').map((v) => v.text), [],
+    'the last battle is reported against a ship that did not fight it');
+  });
+
+  test('and it says which ship fought it, and what she carried', () => {
+    // What makes the number checkable at all. Without the complement there is
+    // nothing to compare the casualties against except whatever hull the captain
+    // happens to be standing on.
+    const { g, flew, complement } = foughtThenReassigned();
+    assert.equal(g.lastCombat.complement, complement,
+      'the report does not say how many people were aboard');
+    assert.ok(g.lastCombat.shipName, 'the report does not say which ship fought');
+    assert.ok(g.lastCombat.crewLost <= g.lastCombat.complement,
+      `${g.lastCombat.crewLost} lost of a complement of ${g.lastCombat.complement}`);
+  });
+
+  test('and it survives a reload still saying so', () => {
+    const { g, complement } = foughtThenReassigned();
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(back.lastCombat?.complement, complement,
+      'the complement did not survive a save');
+    assert.deepEqual(checkAll(back, { arenaRadius: ARENA_RADIUS })
+      .filter((v) => v.code === 'game.lastCombat.crew'), []);
+  });
+
+  test('but an ordinary battle on the ship that fought it is unchanged', () => {
+    // Must not misfire: the common case is one ship, one fight, one report.
+    const { g, complement } = foughtThenReassigned();
+    assert.equal(g.ship.maxCrew, complement, 'the ship changed and it should not have');
+    assert.ok(g.lastCombat.crewLost > 0 && g.lastCombat.crewLost <= complement);
+    assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS }), []);
+  });
+});

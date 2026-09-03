@@ -24471,9 +24471,15 @@ function checkGame(game) {
     // a number anybody should be shown.
     if (game.lastCombat) {
       const lost = game.lastCombat.crewLost;
-      r.must(ok(lost) && lost >= 0 && lost <= (game.ship?.maxCrew ?? Infinity),
+      // Against the complement the battle was FOUGHT with, not the ship the
+      // captain is on now — those are different ships after a loss or a command
+      // offer, and comparing across them reported a Galaxy's casualties against
+      // a Nebula's crew. Falls back to the current ship for a record written
+      // before the complement was carried.
+      const aboard = game.lastCombat.complement ?? game.ship?.maxCrew ?? Infinity;
+      r.must(ok(lost) && lost >= 0 && lost <= aboard,
         'game.lastCombat.crew', 'error',
-        `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
+        `the last battle is recorded as costing ${lost} of a crew of ${aboard}`);
     }
 
     // An encounter that belongs somewhere else.
@@ -31387,6 +31393,17 @@ class Game {
       hostiles: eng.hostiles.length,
       hullLeft: this.ship.hullPct,
       crewLost: lost,
+      // Which ship fought it, and how many she carried.
+      //
+      // The report outlives the engagement on purpose. It also outlives the
+      // SHIP: Starfleet hands over a different hull when one is lost and when a
+      // command offer is taken, and neither touched this. So a costly battle in
+      // a Galaxy followed by the loss of that Galaxy left the report saying it
+      // had cost 811 of a crew of 750 — more people than the new ship carries —
+      // because the only thing to check the casualties against was whatever
+      // hull the captain was standing on now.
+      shipName: this.ship.name,
+      complement: this.ship.maxCrew,
       shotsFired: eng.shotsFired ?? 0,
       seconds: Math.round(eng.time),
       systemId: this.locationId,
@@ -37373,7 +37390,12 @@ class App {
       // the rest of the five years, next to a ledger entry that had it right.
       const lost = g.lastCombat?.crewLost ?? 0;
       if (lost > 0) lines.push(`${lost} crew did not survive it.`);
-      lines.push(`Hull at ${Math.round(g.ship.hullPct * 100)}%.`);
+      // The hull as it was when the shooting stopped, which the record has
+      // carried all along. Reading the LIVE hull put this fight's casualties
+      // next to a number from some later moment — and after a ship is lost and
+      // replaced, next to a different ship entirely.
+      const hull = g.lastCombat?.hullLeft ?? g.ship.hullPct;
+      lines.push(`Hull at ${Math.round(hull * 100)}%.`);
     }
     this.showMessage('Engagement Concluded', lines);
   }

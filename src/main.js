@@ -1097,7 +1097,12 @@ class App {
       // the rest of the five years, next to a ledger entry that had it right.
       const lost = g.lastCombat?.crewLost ?? 0;
       if (lost > 0) lines.push(`${lost} crew did not survive it.`);
-      lines.push(`Hull at ${Math.round(g.ship.hullPct * 100)}%.`);
+      // The hull as it was when the shooting stopped, which the record has
+      // carried all along. Reading the LIVE hull put this fight's casualties
+      // next to a number from some later moment — and after a ship is lost and
+      // replaced, next to a different ship entirely.
+      const hull = g.lastCombat?.hullLeft ?? g.ship.hullPct;
+      lines.push(`Hull at ${Math.round(hull * 100)}%.`);
     }
     this.showMessage('Engagement Concluded', lines);
   }
