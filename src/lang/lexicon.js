@@ -560,8 +560,24 @@ export const INTENTS = [
       'build', 'fabricate', 'replicate', 'improvise', 'machine', 'salvage'],
     build: (c) => ({
       action: 'fire',
-      weaponType: /\b(?:torpedo|photon|spread|launch)\b/.test(c.text) ? 'torpedo'
-        : /\b(?:phaser|beam|laser|battery|batteries)\b/.test(c.text) ? 'beam'
+      // Three weapon types, and this used to read two.
+      //
+      // `cannon` is in WEAPON_RANGE alongside beam and torpedo, and seven
+      // hulls mount one — the Defiant's primary armament is a pair of Pulse
+      // Phaser Cannons. There was no phrase that fired them: "fire cannons"
+      // fell through to `all`, and "fire the pulse phaser cannons" — the
+      // weapon's own NAME — matched `phaser` and fired the beam arrays
+      // instead, which is worse than not understanding, because it shoots.
+      //
+      // So cannon is read FIRST: it is the only one of the three whose word
+      // is unambiguous across the fleet, and every cannon-type weapon in the
+      // game has "cannon", "pulse" or "lance" in its name.
+      //
+      // The plurals are not decoration. `\bbeam\b` does not match "beams",
+      // and six hulls mount weapons named "... Beams".
+      weaponType: /\b(?:torpedoe?s?|photons?|spread|launche?r?s?)\b/.test(c.text) ? 'torpedo'
+        : /\b(?:cannons?|pulse|lance)\b/.test(c.text) ? 'cannon'
+        : /\b(?:phasers?|beams?|lasers?|batter(?:y|ies)|arrays?|emitters?)\b/.test(c.text) ? 'beam'
         : 'all',
     }),
   },

@@ -32,6 +32,7 @@ import { FACTIONS } from '../src/world/factions.data.js';
 import { addressedTo, answeringFor } from '../src/sim/address.js';
 import { Game } from '../src/core/state.js';
 import { ABILITIES } from '../src/sim/officers.js';
+import { WEAPON_RANGE } from '../src/sim/combat.js';
 // The data the templated buttons build their phrases from. `PRESETS` had no
 // importer anywhere until this test used it, which is what it was for.
 import { PRESETS } from '../src/sim/power.js';
@@ -1702,5 +1703,78 @@ describe('the chair quotes the captain saying things that work', () => {
     const dud = says.filter((s) => !s.includes('${'))
       .filter((s) => { const r = parseOrder(s, g); return r.unknown || !(r.order ?? r).action; });
     assert.deepEqual(dud, []);
+  });
+});
+
+describe('every weapon the game has is a weapon you can order', () => {
+  // The game has three weapon types and the order line knew two.
+  //
+  // `WEAPON_RANGE` in src/sim/combat.js lists beam, cannon and torpedo, and
+  // seven hulls mount a cannon — the Defiant's primary armament is a pair of
+  // Pulse Phaser Cannons. There was no phrase that fired them. "Fire cannons"
+  // fell through to `all`, and "fire the pulse phaser cannons" — the weapon's
+  // own name — matched `phaser` and fired the beam arrays instead, which is
+  // worse than not being understood, because it shoots.
+
+  test('each type answers to its own name, and fires its own guns', () => {
+    const g = new Game({ seed: 21n, crewMode: 'original' });
+    // A hull that mounts all three, so the order can be told apart from what
+    // it fires. Asserting the parse alone would have passed on a ship with no
+    // cannons aboard.
+    g.ship = new Ship('defiant', { isPlayer: true, name: 'Defiant' });
+    assert.deepEqual(
+      [...new Set(g.ship.weapons.map((w) => w.type))].sort(),
+      Object.keys(WEAPON_RANGE).sort(),
+      'the Defiant no longer mounts one of every weapon type',
+    );
+
+    g.startCombat([new Ship('d7', { name: 'IKS Range' })], { relentless: true });
+    const eng = g.engagement;
+    const foe = eng.hostiles[0];
+    // Inside the cannon's reach, which is shorter than the beam's. Out at
+    // normal engagement range the cannons cannot bear and this reads as a
+    // broken order when it is only a long shot.
+    foe.x = g.ship.x + 200; foe.y = g.ship.y; foe.z = g.ship.z ?? 0;
+    eng.target = foe;
+
+    const wrong = [];
+    for (const type of Object.keys(WEAPON_RANGE)) {
+      const r = parseOrder(`fire ${type}s`, g);
+      const o = r.order ?? r;
+      if (o.weaponType !== type) {
+        wrong.push(`"fire ${type}s" is a ${o.weaponType} order`);
+        continue;
+      }
+      for (const w of g.ship.weapons) w.cooldown = 0;
+      eng.fireAll(o.weaponType);
+      const wentOff = [...new Set(g.ship.weapons.filter((w) => w.cooldown > 0).map((w) => w.type))];
+      if (wentOff.join() !== type) wrong.push(`"fire ${type}s" set off ${wentOff.join(',') || 'nothing'}`);
+    }
+    assert.deepEqual(wrong, [], `${wrong.length} of ${Object.keys(WEAPON_RANGE).length} weapon types cannot be ordered`);
+  });
+
+  test('and saying a cannon by its full name does not fire the beams', () => {
+    // The sharp case. "Pulse Phaser Cannons" contains "phaser", and the beam
+    // test ran first, so the Defiant's signature weapon was unreachable by its
+    // own name while a different gun answered for it.
+    const g = new Game({ seed: 21n, crewMode: 'original' });
+    g.ship = new Ship('defiant', { isPlayer: true, name: 'Defiant' });
+    const cannon = g.ship.weapons.find((w) => w.type === 'cannon');
+    assert.ok(cannon, 'the Defiant no longer mounts a cannon');
+    const r = parseOrder(`fire the ${cannon.name.toLowerCase()}`, g);
+    assert.equal((r.order ?? r).weaponType, 'cannon',
+      `"fire the ${cannon.name.toLowerCase()}" does not fire the ${cannon.name}`);
+  });
+
+  test('and a plural does not lose the weapon it names', () => {
+    // `\bbeam\b` does not match "beams", so "fire beams" fell through to `all`
+    // while "fire beam" worked. Six hulls mount weapons named "... Beams".
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    for (const [singular, want] of [['beam', 'beam'], ['cannon', 'cannon'], ['torpedo', 'torpedo']]) {
+      for (const phrase of [`fire ${singular}`, `fire ${singular}s`]) {
+        const r = parseOrder(phrase, g);
+        assert.equal((r.order ?? r).weaponType, want, `"${phrase}" is not a ${want} order`);
+      }
+    }
   });
 });
