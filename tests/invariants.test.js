@@ -2508,3 +2508,69 @@ describe('the fuzzer can actually reach what it fuzzes', () => {
       `the fuzzer optionally calls methods Game does not have: ${missing.join(', ')}`);
   });
 });
+
+describe('a fight interrupted by the phone is still a fight that happened', () => {
+  // The autosave fires on `visibilitychange` and `beforeunload` — src/main.js
+  // wires both — so on the phone this game is built for, taking a call in the
+  // middle of a battle writes a save. `Game.save()` does not serialise the
+  // engagement, and `Game.load` sets the mode back to the bridge on purpose.
+  // That part is deliberate and documented: a fight "should not resume
+  // mid-air".
+  //
+  // What was not deliberate is that nothing settled it. The enemy simply
+  // stopped existing, the hull kept every point of damage the fight had cost,
+  // the alert dropped to normal, and no after-action record was written — so
+  // there was no trace the battle had ever been fought.
+  //
+  // The comment above that mode line convicts it. The transit case was fixed
+  // for exactly this shape: "the fuel was charged and the voyage was not."
+  // Here the damage was taken and the fight was not.
+
+  test('the damage is kept, so the fight has to be accounted for', () => {
+    const g = new Game({ seed: 31n, crewMode: 'original' });
+    g.startCombat([new Ship('d7', { name: 'IKS Interrupted' })], { relentless: true });
+    g.engagement.autoFire = true;
+    for (let i = 0; i < 900; i++) g.update(STEP);
+
+    // The fight has to have cost something, or this proves nothing.
+    const hurt = g.ship.hullPct;
+    assert.ok(hurt < 0.99, `the fight cost the ship nothing (${hurt}) — nothing to account for`);
+    assert.ok(g.engagement && !g.engagement.over, 'the fight ended on its own before the save');
+
+    const reloaded = Game.load(JSON.parse(JSON.stringify(g.save())));
+
+    // The damage survives. That is correct and is the whole problem: a game
+    // that keeps the wounds has to keep the reason for them.
+    assert.ok(Math.abs(reloaded.ship.hullPct - hurt) < 1e-9,
+      'the hull damage did not survive the save');
+
+    assert.ok(reloaded.lastCombat,
+      'the ship came back damaged from a battle with no after-action record of it');
+    assert.equal(reloaded.lastCombat.outcome, 'interrupted');
+    assert.equal(reloaded.engagement, null, 'a fight resumed mid-air');
+    assert.equal(reloaded.alert, 'normal', 'still at battle stations with nobody to fight');
+  });
+
+  test('and the record of a fight that DID finish survives a save too', () => {
+    // The second half, and a defect on its own. `lastCombat` is written by
+    // finishCombat and read by the after-action panel in main.js, and its own
+    // comment says it "survives the fight, which is what an after-action
+    // report is for". It did not survive a SAVE — nothing serialised it — so
+    // the panel came back empty after every reload, for every outcome.
+    const g = new Game({ seed: 44n, crewMode: 'original' });
+    g.startCombat([new Ship('scoutship', { faction: 'romulan', name: 'IRW Brief' })],
+      { relentless: true });
+    g.engagement.autoFire = true;
+    for (let i = 0; i < 30000 && g.engagement && !g.engagement.over; i++) g.update(STEP);
+    for (let i = 0; i < 60; i++) g.update(STEP);
+
+    assert.ok(g.lastCombat, 'the fight did not finish, so there is nothing to carry');
+    assert.notEqual(g.lastCombat.outcome, 'interrupted',
+      'this fight was meant to end on its own, not be cut short by the save');
+    const before = { ...g.lastCombat };
+
+    const reloaded = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.deepEqual(reloaded.lastCombat, before,
+      'the after-action record did not survive the save');
+  });
+});

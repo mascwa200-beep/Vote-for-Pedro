@@ -22381,7 +22381,16 @@ const POINT_DEFENCE_PER_SECOND = 1.6;
 const ARENA_RADIUS = 2600;
 
 /** Every way a fight can finish. `end` accepts nothing else. */
-const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+// `interrupted` is not something the simulation decides — it is what happens
+// when the game is SAVED with a fight still running. The autosave fires when
+// the app is backgrounded, which on a phone is a call arriving, and a fight
+// cannot be resumed from a save: Game.load says so out loud and means it.
+//
+// It is an ending rather than a special case because the alternative is what
+// used to happen. The engagement was simply not serialised, so the enemy
+// stopped existing while the hull kept every point of damage the fight had
+// cost, at normal alert, with no record that a battle had been fought at all.
+const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed', 'interrupted'];
 
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
@@ -31167,6 +31176,16 @@ class Game {
       }
     }
 
+    // Say so, rather than letting the hostile appear to evaporate.
+    //
+    // An interrupted fight is the one ending the captain did not choose and
+    // was not told about: the app was backgrounded and the battle could not be
+    // saved. Without a line here the ship simply wakes on the bridge, damaged,
+    // with nobody to fight and no explanation.
+    if (outcome === 'interrupted') {
+      this.pushLog('Action broken off. The engagement was not carried to a decision.', 'captain');
+    }
+
     // Casualties from THIS fight.
     //
     // The count used to be `maxCrew - crew`, which is the standing deficit and
@@ -31210,6 +31229,7 @@ class Game {
         escaped: `We were engaged and broke off. We did not stay to finish it.`,
         destroyed: `We were engaged, and we lost the ship.`,
         parley: `We were engaged, and it ended in a negotiation.`,
+        interrupted: `We were engaged. The action was broken off before it was decided.`,
       }[outcome] ?? `We were engaged. The outcome was ${outcome}.`;
       this.conLines.push(`${told} Hull integrity is at ${Math.round(this.ship.hullPct * 100)} percent.`);
       if (lost > 0) this.conLines.push(`We lost ${lost} of the crew.`);
@@ -32230,6 +32250,44 @@ class Game {
       latinum: this.latinum,
       log: this.log.slice(-80),
       over: this.over ?? false,
+      // The after-action record. Its own comment says it "survives the fight,
+      // which is what an after-action report is for" — and it did not survive
+      // a save, because nothing wrote it down. The panel that reads it in
+      // main.js came back empty after every reload.
+      lastCombat: this.lastCombat ?? null,
+      // A fight that was still running when the record was written.
+      //
+      // `Game.load` deliberately wakes on the bridge and does not resume a
+      // battle; the comment there explains why and it is right. What was
+      // missing is the other half: nothing serialised the engagement and
+      // nothing accounted for it, so the hostile stopped existing while the
+      // hull kept every point of damage the fight had cost, the alert fell
+      // back to normal, and no record was written. The ship came back wounded
+      // from a battle the game had no memory of.
+      //
+      // That is the shape of the bug fixed a few lines below this, in this
+      // same file: "the fuel was charged and the voyage was not". Here the
+      // damage was taken and the fight was not.
+      //
+      // Written rather than settled, because `save()` is a snapshot and must
+      // not change the game it is describing. Ending the fight here broke
+      // every caller that saves mid-battle without meaning to stop it — the
+      // browser harness stages fights for portraits and reported
+      // "fight-ended-mid-portrait" for eight checks at once.
+      interruptedCombat: this.engagement && !this.engagement.over
+        ? {
+          outcome: 'interrupted',
+          name: this.engagement.name,
+          killed: this.engagement.hostiles.filter((h) => h.destroyed).length,
+          hostiles: this.engagement.hostiles.length,
+          hullLeft: this.ship.hullPct,
+          crewLost: Math.max(0, Math.round((this.engagement.crewAtStart ?? this.ship.maxCrew) - this.ship.crew)),
+          shotsFired: this.engagement.shotsFired ?? 0,
+          seconds: Math.round(this.engagement.time),
+          systemId: this.locationId,
+          stardate: this.clock.stardate,
+        }
+        : null,
       campaign: this.campaign?.save() ?? null,
       stores: this.stores,
       fabrication: this.fabrication,
@@ -32685,6 +32743,18 @@ class Game {
     g.latinum = data.latinum ?? 500;
     g.log = data.log ?? [];
     g.over = data.over ?? false;
+    // A record written mid-battle wakes up with the battle accounted for. The
+    // fight is not resumed — see the mode comment below — but the captain is
+    // told the action was broken off rather than finding the enemy simply
+    // gone, and the panel that reads `lastCombat` has something to show.
+    g.lastCombat = data.interruptedCombat ?? data.lastCombat ?? null;
+    if (data.interruptedCombat) {
+      g.log = [...g.log, {
+        text: 'Action broken off. The engagement was not carried to a decision.',
+        source: 'captain',
+        stardate: data.interruptedCombat.stardate,
+      }];
+    }
 
     // Back on the course you were flying.
     //
