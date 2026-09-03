@@ -2133,12 +2133,23 @@ export function gameOverScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'scroll' });
   const assessment = g.ledger.assessment();
+  // Five years served is the one good ending, and it must not be shown in the
+  // red border the game uses for a ship lost or a career cut short. Read off a
+  // flag set when the commission ended rather than off the wording of
+  // `overReason`, which is prose and will change.
+  const finished = !!g.commissionCompleted;
 
-  root.append(panel('End of Commission', [
-    el('p', { text: g.overReason ?? 'Your command has ended.' }),
+  root.append(panel(finished ? 'Commission Complete' : 'End of Commission', [
+    el('p', {
+      text: g.overReason
+        ?? (finished ? 'The five-year mission is complete.' : 'Your command has ended.'),
+    }),
+    finished
+      ? el('p', { class: 'hint', text: `${g.ship.name} is ordered home. ${g.campaign?.format() ?? ''}`.trim() })
+      : null,
     el('p', { class: 'big-stat center', text: assessment.label }),
     el('p', { class: 'hint center', text: `Service score ${g.ledger.serviceScore()}` }),
-  ], 'danger'));
+  ], finished ? 'accent' : 'danger'));
 
   root.append(panel('Final Record', [
     el('p', { class: 'hint', text: `Stardate ${g.stardate}. ${g.ledger.entries.length} entries.` }),

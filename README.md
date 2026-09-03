@@ -157,6 +157,12 @@ what it costs: the bridge says *"this is not the five-year mission"* while it
 is on. Nothing is locked behind real time. It is just that a commission you
 finish in a fortnight is not the thing the game was built to be.
 
+**And on day 1,826 you are relieved.** Serving the five years out is the one
+ending that is not a failure: the ship is ordered home, the record closes, and
+Starfleet assesses it on the same bands it uses at every promotion board. It is
+shown as a commission completed rather than a command lost, which is a
+distinction the end-of-commission screen draws on purpose.
+
 **A save you can trust for five years.** Every write is checksummed, so a
 record truncated by a phone running out of space is *detected* rather than
 handed to the game as though it were sound. The last three autosaves are kept
