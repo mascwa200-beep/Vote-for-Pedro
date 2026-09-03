@@ -162,6 +162,21 @@ export class Mission {
         held: applied.held ?? {},
         outcome: choice.outcome ?? applied.outcome ?? 'complete',
         terminal: !nextId || !this.def.stages[nextId],
+        // And WHO is coming, so the fight can be ordered again after a reload.
+        //
+        // Two halves are set when a stage orders a battle: this mark, which
+        // says a reward is being held, and `game.pendingCombat`, which holds
+        // the ships. `update` turns the second into an engagement one tick
+        // later. Only the first was ever saved — this one is restored on load
+        // deliberately, "dropping it would strand the episode on a stage it can
+        // never leave" — so a save taken inside that one-tick window kept the
+        // half that waits and dropped the half that arrives, and the episode
+        // waited for a battle that was never coming.
+        //
+        // The spec is the episode's own plain data, so carrying it here costs a
+        // faction and a list of class ids, and lets `Game.load` re-order the
+        // fight for records already written that way.
+        combat: choice.effects?.combat ?? null,
       };
     }
 
