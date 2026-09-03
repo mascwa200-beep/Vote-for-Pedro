@@ -31,6 +31,7 @@ import { article } from '../src/world/encounters.js';
 import { FACTIONS } from '../src/world/factions.data.js';
 import { addressedTo, answeringFor } from '../src/sim/address.js';
 import { Game } from '../src/core/state.js';
+import { SHIP_CLASSES, commandableAt } from '../src/world/ships.data.js';
 import { ABILITIES } from '../src/sim/officers.js';
 import { WEAPON_RANGE } from '../src/sim/combat.js';
 // The data the templated buttons build their phrases from. `PRESETS` had no
@@ -1883,5 +1884,130 @@ describe('the manual reaches every order the regex table carries', () => {
     }
     assert.deepEqual(unreachable, [],
       'orders the game understands that no phrasing in the manual reaches');
+  });
+});
+
+// One question, two answers. `parseOrder` reads a weapon type from the words in
+// the order, and there were two copies of that reader — one in the regex table
+// in src/ui/orders.js, one in the lexicon's `fire` intent — because either
+// layer can be the one that hears "fire the forward phaser banks".
+//
+// The table's own comment said what it wanted: "Guessing consistently is better
+// than guessing differently in two places." The two places guessed differently.
+// Measured across all 47 weapon names in the fleet, they disagreed on seven,
+// and each was right about three of them:
+//
+//   fire forward disruptors      table: beam    lexicon: all      (beam)
+//   fire spiral-wave disruptors  table: beam    lexicon: all      (beam)
+//   fire plasma emitters         table: all     lexicon: beam     (beam)
+//   fire sensor pod launcher     table: all     lexicon: torpedo  (torpedo)
+//   fire aft emitters            table: all     lexicon: beam     (beam)
+//   fire salvaged disruptors     table: beam    lexicon: all      (cannon)
+//
+// The table knew `disruptor`; the lexicon knew `launcher`, `emitters`, `arrays`
+// and the plurals. Neither knew both. One of the seven is genuinely beyond a
+// reader that only sees words — a cannon named "Salvaged Disruptors" — and the
+// table's comment says so.
+describe('the parser reads a weapon type the same way whoever hears it', () => {
+  const FLEET_WEAPONS = (() => {
+    const out = [];
+    for (const cls of Object.values(SHIP_CLASSES)) {
+      for (const w of cls.weapons ?? []) if (w.name) out.push({ name: w.name, type: w.type, ship: cls.id });
+    }
+    return out;
+  })();
+
+  // Weapons no reader that only sees words can place, listed by name so the
+  // list cannot quietly grow.
+  //
+  // "Salvaged Disruptors" are cannons with a beam word in their name — that one
+  // needs to know which ship is firing, and the parser is given the crew, not
+  // the ship. The other two carry no type word at all: a "Projector" and a
+  // "Discharge" are not kinds of weapon in any language the parser reads, and
+  // teaching it those two words would be fitting the reader to this table
+  // rather than to how people talk.
+  //
+  // All three are on hulls a captain cannot be given — the raider, the Borg
+  // cube, the bioship — so no captain can say them at their own tactical
+  // station. That is asserted below rather than assumed.
+  const UNREADABLE = new Set(['Salvaged Disruptors', 'Plasma Projector', 'Bioplasmic Discharge']);
+
+  test('the fleet is armed, and its weapons have names worth saying', () => {
+    // The positive case.
+    assert.ok(FLEET_WEAPONS.length >= 40, `only ${FLEET_WEAPONS.length} named weapons in the fleet`);
+    const types = new Set(FLEET_WEAPONS.map((w) => w.type));
+    for (const t of ['beam', 'cannon', 'torpedo']) {
+      assert.ok(types.has(t), `no ${t} weapon in the fleet, so this proves nothing about ${t}`);
+    }
+  });
+
+  test('naming a weapon fires that kind of weapon', () => {
+    const game = new Game({ seed: 1n });
+    const wrong = [];
+    for (const w of FLEET_WEAPONS) {
+      if (UNREADABLE.has(w.name)) continue;
+      const order = parseOrder(`fire ${w.name.toLowerCase()}`, game.crew);
+      if (order?.action !== 'fire' || order.weaponType !== w.type) {
+        wrong.push(`"${w.name}" (${w.type} on ${w.ship}) reads as ${order?.weaponType ?? order?.action}`);
+      }
+    }
+    assert.deepEqual(wrong, [], `${wrong.length} weapon names do not fire their own weapon`);
+  });
+
+  test('and every weapon a captain can actually fire is one of them', () => {
+    // The half that matters: it is the ship under the captain's feet whose
+    // weapons they will name. Nothing on the exception list may be reachable
+    // from a hull the ladder can hand out.
+    const flyable = new Set();
+    for (let tier = 1; tier <= 12; tier++) {
+      for (const cls of commandableAt(tier) ?? []) flyable.add(cls.id);
+    }
+    assert.ok(flyable.size >= 8, `only ${flyable.size} commandable hulls`);
+    const game = new Game({ seed: 1n });
+    const wrong = [];
+    for (const w of FLEET_WEAPONS) {
+      if (!flyable.has(w.ship)) continue;
+      const order = parseOrder(`fire ${w.name.toLowerCase()}`, game.crew);
+      if (order?.weaponType !== w.type) {
+        wrong.push(`"${w.name}" (${w.type} on ${w.ship}) reads as ${order?.weaponType}`);
+      }
+    }
+    assert.deepEqual(wrong, [],
+      'weapons on ships the captain can fly whose names do not fire them');
+  });
+
+  test('and the ones no reader can get right are still exactly the ones named', () => {
+    // The exception list is a claim too: if a weapon stops being ambiguous, or
+    // another one starts, this says so rather than letting the list rot.
+    const game = new Game({ seed: 1n });
+    for (const name of UNREADABLE) {
+      const w = FLEET_WEAPONS.find((x) => x.name === name);
+      assert.ok(w, `${name} is on the exception list and not in the fleet`);
+      const order = parseOrder(`fire ${name.toLowerCase()}`, game.crew);
+      assert.notEqual(order?.weaponType, w.type,
+        `"${name}" resolves correctly now and should come off the list`);
+    }
+  });
+
+  test('and the plain orders still mean what they always did', () => {
+    // Must not misfire. These are the phrasings every captain uses.
+    const game = new Game({ seed: 1n });
+    for (const [said, want] of [
+      ['fire', 'all'], ['fire phasers', 'beam'], ['fire torpedoes', 'torpedo'],
+      ['fire cannons', 'cannon'], ['fire the pulse phaser cannons', 'cannon'],
+      ['open fire', 'all'], ['fire a spread of torpedoes', 'torpedo'],
+    ]) {
+      assert.equal(parseOrder(said, game.crew)?.weaponType, want, `"${said}"`);
+    }
+    // "fire a full spread" is the torpedo-spread ABILITY, not a fire order —
+    // but it carries a fire order as its fallback, and that fallback read the
+    // type through the table while "full spread" read it through the lexicon.
+    // The same drift, showing up one level down.
+    for (const said of ['fire a full spread', 'full spread']) {
+      const order = parseOrder(said, game.crew);
+      assert.equal(order?.ability, 'torpedo_spread', `"${said}" is the spread ability`);
+      assert.equal(order.fallback?.weaponType, 'torpedo',
+        `"${said}" falls back to firing everything rather than torpedoes`);
+    }
   });
 });
