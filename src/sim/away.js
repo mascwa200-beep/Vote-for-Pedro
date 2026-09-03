@@ -198,6 +198,12 @@ export class AwayTeam {
 
     if (this.captainLeads && lethal && rng.chance(deathChance * 0.35)) {
       result.captainWounded = true;
+      // Recorded like any other casualty, and the +2 for a captain leading
+      // stops here: they are being carried, not leading. This was set and read
+      // by nothing — no casualty, no line, no consequence — so the risk half of
+      // leading from the front cost exactly nothing.
+      this.casualties.push({ name: this.character?.name ?? 'The captain', injured: true, captain: true });
+      this.captainLeads = false;
     }
 
     result.text = buildCheckText(spec, result, roll);

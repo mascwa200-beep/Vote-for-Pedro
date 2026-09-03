@@ -3175,3 +3175,127 @@ describe('a border is a fact about where you are, not about how you got there', 
       'was forced out of warp beyond the zone and the game still thinks we are inside it');
   });
 });
+
+// ========================================================= leading from the front
+
+describe('the captain can lead a landing party, and it costs something', () => {
+  // `captainLeads` is a whole mechanic: the order line understands "I'll lead",
+  // "with me", "myself" and "personally" in two separate parsers, it is worth
+  // +2 on every check in `modifierFor`, and `check()` rolls a wound for the
+  // captain at 35% of the officer death chance when the hazard is lethal.
+  //
+  // None of it reached the game.
+  //
+  //   The order was parsed and dropped. `away_team` passes `order.captainLeads`
+  //   to `buildAwayTeam` on ONE branch — the one that says "there is nowhere to
+  //   send them, Captain" and does nothing. When there is somewhere to send
+  //   them, `awayMission` built the team with `captainLeads` hard-coded false.
+  //
+  //   And the risk was computed and read by nobody. `result.captainWounded` was
+  //   set in `away.js` and appears nowhere else in `src/` — no log line, no
+  //   entry in the record, not a sentence in `buildCheckText`. Measured over
+  //   600 lethal checks with the captain leading: it fired twice, and both
+  //   times the report talked about the science officer.
+
+  const leadOrders = ["away team, i'll lead", 'landing party, with me'];
+
+  test('the order line hears a captain saying they will go', () => {
+    // The positive case: if this ever stops parsing, everything below is
+    // testing a road nobody can drive down.
+    const g = new Game({ seed: 1n });
+    for (const t of leadOrders) {
+      const o = parseOrder(t, g.crew);
+      assert.equal(o?.action, 'away_team', `"${t}" no longer assembles a team`);
+      assert.equal(o.captainLeads, true, `"${t}" was not heard as the captain going`);
+    }
+    assert.equal(parseOrder('away team', g.crew).captainLeads, false,
+      'an ordinary away team order now sends the captain down as well');
+  });
+
+  /** A derelict to board, which is the away mission that needs no fight. */
+  const withAWreck = (seed = 8n) => {
+    const g = new Game({ seed });
+    // The shape `finishCombat` leaves behind. `wreckHere` is a getter over it.
+    g.wreck = { tier: 2, systemId: g.locationId, hulls: 1, name: 'derelict', boarded: false };
+    return g;
+  };
+
+  test('and a landing party the captain leads knows they are on it', () => {
+    const g = withAWreck();
+    assert.ok(g.availableAwayMissions().some((t) => t.id === 'derelict_search'),
+      'no derelict to board — the probe cannot see the case');
+    const r = g.awayMission('derelict_search', { captainLeads: true });
+    assert.ok(r.ok, `the mission did not run: ${r.reason}`);
+    assert.equal(g.awayTeam.captainLeads, true,
+      'the captain said they were leading and the landing party went without them');
+  });
+
+  test('and one they do not lead still does not take them', () => {
+    const g = withAWreck();
+    const r = g.awayMission('derelict_search');
+    assert.ok(r.ok, `the mission did not run: ${r.reason}`);
+    assert.equal(g.awayTeam.captainLeads, false,
+      'the captain went down with a party they never said they would lead');
+  });
+
+  test('a captain who goes down is said to have gone down', () => {
+    // The consequence half. Scanned rather than seeded for the same reason as
+    // the border suite: the wound is a roll, and pinning a seed would pin every
+    // other roll in the mission with it.
+    let found = null;
+    for (let s = 1n; s <= 400n && !found; s++) {
+      const g = withAWreck(s);
+      const r = g.awayMission('derelict_search', { captainLeads: true });
+      if (r.ok && r.captainWounded) found = { g, r };
+    }
+    assert.ok(found, 'no captain was wounded in 400 landing parties — the probe sees nothing');
+    const { g, r } = found;
+    assert.ok(g.log.some((l) => /you are hit|carrying you back/i.test(l.text ?? '')),
+      'the captain was wounded and the ship was never told');
+    assert.ok(g.ledger.entries.some((e) => e.kind === 'captain_wounded'),
+      'nothing in the record says the captain was hurt leading a landing party');
+    assert.equal(r.of, 3, 'a mission broken off reported fewer objectives than it had');
+    // The party stops where the captain went down, so the wound is always on
+    // the last step attempted. Being hit on the third of three is a real case
+    // and looks identical, which is why breaking off is proved separately.
+    let brokeOff = null;
+    for (let s = 1n; s <= 400n && !brokeOff; s++) {
+      const gg = withAWreck(s);
+      const rr = gg.awayMission('derelict_search', { captainLeads: true });
+      if (rr.ok && rr.captainWounded && rr.steps.length < 3) brokeOff = rr;
+    }
+    assert.ok(brokeOff,
+      'no landing party ever broke off early — the captain goes down and it carries on');
+  });
+
+  test('and an unhurt captain does not stop the mission', () => {
+    // Must not misfire: most landing parties come back with everyone on them.
+    let ran = 0;
+    for (let s = 1n; s <= 60n; s++) {
+      const g = withAWreck(s);
+      const r = g.awayMission('derelict_search', { captainLeads: true });
+      if (!r.ok || r.captainWounded) continue;
+      ran++;
+      assert.equal(r.steps.length, 3,
+        'a landing party with nobody hurt came back early');
+      assert.ok(!g.ledger.entries.some((e) => e.kind === 'captain_wounded'),
+        'an unhurt captain was written up as wounded');
+    }
+    assert.ok(ran > 20, `only ${ran} clean landing parties in 60 — this proves little`);
+  });
+
+  test('a mission broken off is not reported as a clean sweep', () => {
+    // The denominator. `won === steps.length` counted the objectives ATTEMPTED,
+    // so a party that broke off after one success out of three read as a
+    // success — which was already true for a wiped-out team before the captain
+    // could be wounded at all.
+    for (let s = 1n; s <= 400n; s++) {
+      const g = withAWreck(s);
+      const r = g.awayMission('derelict_search', { captainLeads: true });
+      if (!r.ok || r.steps.length === 3) continue;
+      assert.equal(r.of, 3, 'a broken-off mission shrank the objectives it was measured against');
+      assert.ok(r.outcome !== 'success' || r.passed === 3,
+        `broke off after ${r.passed} of 3 and reported ${r.outcome}`);
+    }
+  });
+});
