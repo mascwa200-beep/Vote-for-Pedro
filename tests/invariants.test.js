@@ -470,7 +470,7 @@ describe('the game finishes its own fights', () => {
     assert.equal(g.engagement, null, 'the finished engagement was left lying around');
     assert.notEqual(g.mode, 'combat', 'the game stayed in combat mode after the fight');
     assert.ok(g.lastCombat, 'no after-action record was written');
-    assert.ok(['victory', 'routed', 'destroyed', 'escaped'].includes(g.lastCombat.outcome),
+    assert.ok(OUTCOMES.includes(g.lastCombat.outcome),
       `outcome was ${g.lastCombat.outcome}`);
   });
 
@@ -1111,7 +1111,17 @@ describe('a fight that ends on a sentence ends immediately', () => {
     assert.ok(g.mode === 'bridge' || (ran && g.mode === 'transit'),
       `${how}: still in ${g.mode} mode`);
     assert.equal(g.engagement, null, `${how}: the engagement was left hanging`);
-    assert.equal(g.alert, 'normal', `${how}: still at battle stations`);
+    // Losing the ship does not stand the crew down.
+    //
+    // This asserted `normal` for every ending, which is why the caller below
+    // iterated four of the five and left `destroyed` out — the one ending this
+    // helper could not express. `finishCombat` ends with
+    // `setAlert(outcome === 'destroyed' ? 'red' : 'normal')`, and until this
+    // line said so, nothing in the suite asserted that at all: the only
+    // `'red'` in tests/ was the parser reading the phrase "red alert".
+    const lost = g.lastCombat?.outcome === 'destroyed';
+    assert.equal(g.alert, lost ? 'red' : 'normal',
+      lost ? `${how}: stood down after losing the ship` : `${how}: still at battle stations`);
     assert.ok(g.lastCombat, `${how}: no after-action record`);
     assert.deepEqual(checkAll(g, OPTS), [], `${how}: the checker still objects`);
   }
@@ -1160,7 +1170,10 @@ describe('a fight that ends on a sentence ends immediately', () => {
     // The general guarantee, and the one that stops this being fixed once per
     // call site: whoever ends a fight, however they reach it, the game is out
     // of combat before the next line of their code runs. No tick required.
-    for (const outcome of ['victory', 'routed', 'escaped', 'parley']) {
+    // Every ending, from the list combat.js publishes. This used to name four
+    // of them by hand and omit `destroyed`, which is the ending a captain is
+    // most likely to reach and the one the guarantee most needs to hold for.
+    for (const outcome of OUTCOMES) {
       const g = fight('d7');
       g.engagement.end(outcome);
       settled(g, `end('${outcome}') by hand`);
@@ -1219,7 +1232,10 @@ describe('the aftermath of a fight is coherent whatever the fight was', () => {
   // Every combination below has to satisfy the same list, so a rule added to
   // src/sim/invariants.js defends all of them at once.
 
-  const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed'];
+  // `OUTCOMES` is imported at the top of this file. It used to be re-declared
+  // here as well, which shadowed the import for everything below — so the
+  // comment above, promising that every case satisfies "the same list", was
+  // satisfied by a hand-written copy that nothing kept in step.
 
   /** The situations a captain can be in when the shooting starts. */
   const SITUATIONS = {
@@ -1959,7 +1975,7 @@ describe('the game survives being called wrongly', () => {
       () => g.engagement?.targetSubsystem(pick([...subsystems, ...JUNK])),
       () => g.engagement?.cycleTarget(),
       () => g.engagement?.beginWarpOut(),
-      () => g.engagement?.end(pick(['victory', 'routed', 'escaped', ...JUNK])),
+      () => g.engagement?.end(pick([...OUTCOMES, ...JUNK])),
       () => g.ship.reinforceShield(pick([...facings, ...JUNK])),
       () => { g.ship.shieldsUp = pick([true, false]); },
       () => g.ship.cloak(),
