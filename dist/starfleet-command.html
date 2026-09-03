@@ -1327,9 +1327,19 @@ function officerRow(officer, onClick = null) {
 }
 
 /** Log line. */
+/**
+ * What to call a log channel on screen.
+ *
+ * A channel IS a log source id, which is right for filtering and grouping and
+ * wrong for printing: "first_officer" reached the screen with its underscore
+ * intact, both in this pill and in the filter row on the log screen.
+ */
+function channelName(id) {
+  return String(id ?? 'log').replace(/_/g, ' ');
+}
 function logLine(entry) {
   return el('div', { class: `logline ${entry.source ?? ''}`.trim() }, [
-    el('span', { class: 'src', text: entry.source ?? 'log' }),
+    el('span', { class: 'src', text: channelName(entry.source) }),
     entry.text,
   ]);
 }
@@ -1347,6 +1357,7 @@ __exports.field = field;
 __exports.textInput = textInput;
 __exports.select = select;
 __exports.officerRow = officerRow;
+__exports.channelName = channelName;
 __exports.logLine = logLine;
 
 });
@@ -17394,18 +17405,51 @@ const INTENTS = [
     id: 'log_entry',
     help: 'Captain’s log, supplemental: <text>',
     phrases: [
-      'captains log', 'ships log', 'log entry', 'supplemental',
+      // "Ship's log" is the BOOK, and belongs to read_log. A captain dictating
+      // says "Captain's log" — it stays in the preamble stripper, so
+      // "ship's log: all quiet" still records "all quiet", but the bare phrase
+      // is a request to read rather than a preamble with nothing after it.
+      'captains log', 'log entry', 'supplemental',
       'record a log entry', 'make a log entry', 'note in the log',
       'begin recording', 'for the record', 'log this',
     ],
     keywords: { log: 2, record: 1.5, supplemental: 3 },
     veto: ['damage', 'status'],
-    build: (c) => ({
-      action: 'log_entry',
-      // Everything after the preamble is the entry itself.
-      text: c.text.replace(/^.*?(?:supplemental|log entry|captains log|ships log|log this|for the record)\s*/, '').trim()
-        || c.text,
-    }),
+    // `text` is null when the captain has said only the preamble. That is not
+    // a failure: "Captain's log" is how you START dictating, and the handler
+    // opens the recorder rather than filing an entry that reads "captains log".
+    build: (c) => ({ action: 'log_entry', text: c.dictation }),
+  },
+  {
+    // Asking to SEE the log, which is not the same as adding to it.
+    //
+    // `log_entry` carries `log: 2` as a keyword, so every way of asking to read
+    // the log scored as a way of writing one — and the request became the
+    // entry. "Show me the log" recorded a captain's log reading "show me the
+    // log". Eight phrasings, eight times, so the log filled up with a captain's
+    // failed attempts to read it.
+    //
+    // Phrases beat keywords in `scoreIntent`, and a multi-word phrase beats a
+    // single one, so these win on the lines they name without `log_entry`
+    // needing a veto — which would have been the wrong tool anyway: vetoes are
+    // matched phonetically, so vetoing "show" would also have vetoed a log
+    // entry that happened to say "showed".
+    id: 'read_log',
+    help: 'Show me the ship’s log',
+    phrases: [
+      'show me the log', 'show the log', 'let me see the log', 'see the log',
+      'read the log', 'read me the log', 'read back the log', 'open the log',
+      'display the log', 'bring up the log', 'pull up the log', 'check the log',
+      'review the log', 'the full log', 'full log', 'the log', 'log please',
+      'what does the log say', 'what is in the log', 'ships log',
+    ],
+    keywords: { log: 1 },
+    // Anything with something to record is an entry, not a request to read.
+    // `dictation` is only set when a real log preamble was found, so this rules
+    // out every line that actually carries words for the record.
+    veto: ['supplemental'],
+    vetoSlots: ['dictation'],
+    build: () => ({ action: 'read_log' }),
   },
   {
     id: 'jettison_pod',
@@ -18717,17 +18761,68 @@ const SLOT_PROMPTS = {
   warp: 'What warp factor, Captain?',
   room: 'Which compartment, Captain?',
   recipe: 'Build what, Captain? There is no specification for that.',
+  dictation: 'What should I record, Captain?',
 };
+
+/**
+ * The words of a captain's log, taken off the front matter and NOT off the
+ * normalised line.
+ *
+ * A log entry is the one thing the order line carries that is prose rather
+ * than a command, so it is the one thing that must survive verbatim. The old
+ * build read `c.text` — the folded, filler-stripped, addressee-stripped line —
+ * and then removed everything up to the FIRST preamble word it found, which
+ * went wrong three ways at once:
+ *
+ *   "captains log"                      recorded an entry reading "captains log"
+ *   "captains log, supplemental: ..."   left the word "supplemental" in the entry,
+ *                                       because it stopped at "captains log"
+ *   "the crew performed well"           recorded "the crew performed we will"
+ *
+ * Returns null when there is nothing to record, which makes it a missing slot
+ * and gets the captain asked instead of writing the request down as the entry.
+ */
+const LOG_PREAMBLE = new RegExp(
+  '^\\s*(?:'
+  + '(?:captain\'?s?|ship\'?s?)\\s+log'
+  + '|log\\s+entry|log\\s+this|make\\s+a\\s+log\\s+entry|record\\s+a\\s+log\\s+entry'
+  + '|note\\s+in\\s+the\\s+log|begin\\s+recording|for\\s+the\\s+record'
+  + ')?[\\s,:.;-]*(?:supplemental)?[\\s,:.;-]*',
+  'i',
+);
+
+function findDictation(raw) {
+  const line = String(raw ?? '').trim();
+  if (!line) return null;
+  const m = LOG_PREAMBLE.exec(line);
+  // Every part of the preamble is optional, so the pattern also matches the
+  // empty string at position 0. No preamble means nothing was dictated — a
+  // line that only NAMES the log ("the log") is not an entry reading "the log".
+  if (!m || !m[0].trim()) return null;
+  return line.slice(m[0].length).trim() || null;
+}
 
 /**
  * Pull every entity the lexicon can reference out of a normalised line.
  * Done once per order rather than once per intent, because entity extraction is
  * the expensive half and the answer does not change between intents.
  */
-function extract(norm) {
+function extract(norm, raw = '') {
   const { text, tokens } = norm;
   return {
     text,
+    // The line EXACTLY as the captain typed it — no folding, no expanded
+    // contractions, no stripped addressee.
+    //
+    // Almost nothing should want this: matching an order against unfolded text
+    // is the thing normalisation exists to avoid. The captain's log wants it,
+    // because a log entry is not an order to be matched, it is prose to be
+    // kept. Taking its text from the normalised line recorded "the crew
+    // performed well" as "the crew performed we will" (the contraction rule
+    // for "we'll" matches "well" with the apostrophe optional) and reduced
+    // "number one has the con" to "the con" (the addressee was stripped off
+    // the front, subject and all).
+    raw: String(raw ?? ''),
     tokens,
     // The line as it was typed, before the addressee was stripped off it.
     //
@@ -18750,6 +18845,8 @@ function extract(norm) {
     bearing: findBearing(text),
     elevation: findElevation(text, tokens),
     recipe: findRecipe(text),
+    // What a captain's log would actually record. Off the RAW line — see above.
+    dictation: findDictation(raw),
     // The ship has an inside. A compartment is deliberately matched exactly
     // rather than fuzzily — see the note on findRoom — because "go to
     // sickbay" becoming a course for a star system is the obvious failure.
@@ -18893,7 +18990,7 @@ function parseText(raw) {
   if (!raw || !String(raw).trim()) return { unknown: true, raw, suggestions: [] };
 
   const norm = normalize(raw);
-  const ctx = extract(norm);
+  const ctx = extract(norm, raw);
 
   const ranked = [];
   for (const intent of INTENTS) {
@@ -28490,7 +28587,26 @@ const { makeSurface, clearSurface, surfaceReport } = __require("src/world/surfac
 const { ROOMS } = __require("src/world/interiors.data.js");
 const { rollEncounter, environmentalHazard, SALVAGE_POOL } = __require("src/world/encounters.js");
 const { FACTIONS } = __require("src/world/factions.data.js");
-const { buildRoster, ERAS } = __require("src/world/crews.data.js");
+const { buildRoster, ERAS, STATIONS } = __require("src/world/crews.data.js");
+
+/**
+ * What to call a station that has nobody at it.
+ *
+ * The crew roster covers seven posts. The log speaks for more than seven — the
+ * captain, security, the transporter room, navigation and ops all have lines
+ * and no officer to say them, and fell back to printing their own id.
+ */
+const STATION_LABEL = {
+  ...Object.fromEntries(STATIONS.map((s) => [s.id, s.label])),
+  security: 'Security',
+  transporter: 'Transporter Room',
+  navigation: 'Navigation',
+  ops: 'Ops',
+  computer: 'Computer',
+  // The captain is the player. Their own lines are already tagged CAPTAIN, so
+  // they carry no speaker name at all.
+  captain: null,
+};
 const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
 const { SYSTEM_BY_ID, distanceLy } = __require("src/world/systems.data.js");
 
@@ -29387,8 +29503,16 @@ class Game {
   /** An officer says something, in their own register. */
   officerSays(station, text, kind = 'order') {
     const officer = this.crew.at(station);
-    const who = officer ? `${officer.name}` : station;
-    this.pushLog(`${who}: ${text}`, station);
+    // Nobody is at every station. Five of them have no officer on the roster —
+    // captain, security, transporter, navigation, ops — and the fallback was
+    // the raw id, so the log printed "captain: Log entry recorded." underneath
+    // a line already tagged CAPTAIN: the identifier twice, once in lower case.
+    //
+    // The captain is the player rather than a member of the crew, so their own
+    // lines carry no speaker at all — the tag on the line already says who is
+    // talking. Everything else falls back to the station's proper name.
+    const who = officer ? officer.name : STATION_LABEL[station] ?? null;
+    this.pushLog(who ? `${who}: ${text}` : text, station);
     emit('officer:speak', { officer, station, text, kind });
     return officer;
   }
@@ -32401,7 +32525,7 @@ __define("src/ui/screens.js", function (__exports, __require) {
 // needs it. No virtual DOM, no diffing — the panels are small enough that a
 // straight rebuild is cheaper than any machinery to avoid one.
 
-const { el, clear, panel, button, readout, shieldDiagram, powerSlider, pill, modal, field, textInput, select, officerRow, logLine } = __require("src/ui/lcars.js");
+const { el, clear, panel, button, readout, shieldDiagram, powerSlider, pill, modal, field, textInput, select, officerRow, logLine, channelName } = __require("src/ui/lcars.js");
 const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
@@ -32606,7 +32730,7 @@ function bridgeScreen(app) {
   // --- Recent log ---
   side.append(panel('Ship’s Log', [
     ...g.log.slice(-4).reverse().map(logLine),
-    button('Full log', tap(() => app.go('log')), { color: 'ghost' }),
+    button('Full log', tap(() => app.go('log')), { color: 'ghost', say: 'show me the log' }),
   ]));
   return root;
 }
@@ -32735,7 +32859,7 @@ function chairConsole(app) {
     // Always offered, not only once the log is long. A way out that appears
     // later is a way out nobody finds.
     button(`Full log — ${g.log.length} entr${g.log.length === 1 ? 'y' : 'ies'}`,
-      tap(() => app.go('log')), { color: 'ghost' }),
+      tap(() => app.go('log')), { color: 'ghost', say: 'show me the log' }),
   ]));
   return root;
 }
@@ -32969,7 +33093,7 @@ function viewscreenScreen(app) {
 
   side.append(panel('Ship’s Log', [
     ...g.log.slice(-4).reverse().map(logLine),
-    button('Full log', tap(() => app.go('log')), { color: 'ghost' }),
+    button('Full log', tap(() => app.go('log')), { color: 'ghost', say: 'show me the log' }),
   ]));
   return root;
 }
@@ -33957,7 +34081,11 @@ function logScreen(app) {
         button('All', tap(() => { app.logFilter = null; app.render(); }), {
           color: active === null ? 'green' : 'ghost',
         }),
-        ...sources.map((st) => button(st, tap(() => {
+        // The channel names are log SOURCE ids, and were printed raw — so the
+        // filter row carried a chip reading "FIRST_OFFICER", underscore and
+        // all, next to ordinary words. Same defect as a station announcing
+        // itself by its id: an internal name reaching the screen.
+        ...sources.map((st) => button(channelName(st), tap(() => {
           app.logFilter = app.logFilter === st ? null : st;
           app.render();
         }), { color: active === st ? 'green' : 'ghost' })),
@@ -33966,7 +34094,7 @@ function logScreen(app) {
   }
 
   root.append(panel(
-    active ? `Ship’s Log — ${active}` : 'Ship’s Log',
+    active ? `Ship’s Log — ${channelName(active)}` : 'Ship’s Log',
     entries.length
       ? entries.slice().reverse().map(logLine)
       : [el('p', { class: 'muted', text: 'Nothing on this channel yet.' })],
@@ -36948,11 +37076,29 @@ class App {
         break;
       }
       case 'log_entry': {
-        const recorded = g.logEntry(order.text ?? raw);
+        // "Captain's log" with nothing after it is not an entry — it is a
+        // captain starting to dictate one. It used to FILE an entry whose text
+        // was the words "captains log"; now it opens the recorder in the chair
+        // and puts the cursor in it.
+        if (!order.text) {
+          this.go('bridge');
+          this.render();
+          const line = document.querySelector('.logline');
+          if (line) { line.focus(); ack('computer', 'Recording, Captain.'); }
+          else ack('computer', 'Take the chair to record, Captain.');
+          break;
+        }
+        const recorded = g.logEntry(order.text);
         if (recorded) ack('captain', 'Log entry recorded.');
         else audio.play('ui_deny');
         break;
       }
+      // Reading the log, which used to write one. The parser now tells the two
+      // apart; this is where the reading goes.
+      case 'read_log':
+        audio.play('ui_tap');
+        this.go('log');
+        break;
       case 'jettison_pod': {
         const r = g.jettisonPod();
         if (r.ok) { audio.play('torpedo_launch'); haptic('warp'); }

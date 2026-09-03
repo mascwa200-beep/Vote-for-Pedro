@@ -36,7 +36,26 @@ import { makeSurface, clearSurface, surfaceReport } from '../world/surface.js';
 import { ROOMS } from '../world/interiors.data.js';
 import { rollEncounter, environmentalHazard, SALVAGE_POOL } from '../world/encounters.js';
 import { FACTIONS } from '../world/factions.data.js';
-import { buildRoster, ERAS } from '../world/crews.data.js';
+import { buildRoster, ERAS, STATIONS } from '../world/crews.data.js';
+
+/**
+ * What to call a station that has nobody at it.
+ *
+ * The crew roster covers seven posts. The log speaks for more than seven — the
+ * captain, security, the transporter room, navigation and ops all have lines
+ * and no officer to say them, and fell back to printing their own id.
+ */
+const STATION_LABEL = {
+  ...Object.fromEntries(STATIONS.map((s) => [s.id, s.label])),
+  security: 'Security',
+  transporter: 'Transporter Room',
+  navigation: 'Navigation',
+  ops: 'Ops',
+  computer: 'Computer',
+  // The captain is the player. Their own lines are already tagged CAPTAIN, so
+  // they carry no speaker name at all.
+  captain: null,
+};
 import { getShipClass, FEDERATION_REGISTRIES } from '../world/ships.data.js';
 import { SYSTEM_BY_ID, distanceLy } from '../world/systems.data.js';
 
@@ -937,8 +956,16 @@ export class Game {
   /** An officer says something, in their own register. */
   officerSays(station, text, kind = 'order') {
     const officer = this.crew.at(station);
-    const who = officer ? `${officer.name}` : station;
-    this.pushLog(`${who}: ${text}`, station);
+    // Nobody is at every station. Five of them have no officer on the roster —
+    // captain, security, transporter, navigation, ops — and the fallback was
+    // the raw id, so the log printed "captain: Log entry recorded." underneath
+    // a line already tagged CAPTAIN: the identifier twice, once in lower case.
+    //
+    // The captain is the player rather than a member of the crew, so their own
+    // lines carry no speaker at all — the tag on the line already says who is
+    // talking. Everything else falls back to the station's proper name.
+    const who = officer ? officer.name : STATION_LABEL[station] ?? null;
+    this.pushLog(who ? `${who}: ${text}` : text, station);
     emit('officer:speak', { officer, station, text, kind });
     return officer;
   }

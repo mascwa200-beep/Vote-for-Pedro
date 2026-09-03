@@ -698,18 +698,51 @@ export const INTENTS = [
     id: 'log_entry',
     help: 'Captain’s log, supplemental: <text>',
     phrases: [
-      'captains log', 'ships log', 'log entry', 'supplemental',
+      // "Ship's log" is the BOOK, and belongs to read_log. A captain dictating
+      // says "Captain's log" — it stays in the preamble stripper, so
+      // "ship's log: all quiet" still records "all quiet", but the bare phrase
+      // is a request to read rather than a preamble with nothing after it.
+      'captains log', 'log entry', 'supplemental',
       'record a log entry', 'make a log entry', 'note in the log',
       'begin recording', 'for the record', 'log this',
     ],
     keywords: { log: 2, record: 1.5, supplemental: 3 },
     veto: ['damage', 'status'],
-    build: (c) => ({
-      action: 'log_entry',
-      // Everything after the preamble is the entry itself.
-      text: c.text.replace(/^.*?(?:supplemental|log entry|captains log|ships log|log this|for the record)\s*/, '').trim()
-        || c.text,
-    }),
+    // `text` is null when the captain has said only the preamble. That is not
+    // a failure: "Captain's log" is how you START dictating, and the handler
+    // opens the recorder rather than filing an entry that reads "captains log".
+    build: (c) => ({ action: 'log_entry', text: c.dictation }),
+  },
+  {
+    // Asking to SEE the log, which is not the same as adding to it.
+    //
+    // `log_entry` carries `log: 2` as a keyword, so every way of asking to read
+    // the log scored as a way of writing one — and the request became the
+    // entry. "Show me the log" recorded a captain's log reading "show me the
+    // log". Eight phrasings, eight times, so the log filled up with a captain's
+    // failed attempts to read it.
+    //
+    // Phrases beat keywords in `scoreIntent`, and a multi-word phrase beats a
+    // single one, so these win on the lines they name without `log_entry`
+    // needing a veto — which would have been the wrong tool anyway: vetoes are
+    // matched phonetically, so vetoing "show" would also have vetoed a log
+    // entry that happened to say "showed".
+    id: 'read_log',
+    help: 'Show me the ship’s log',
+    phrases: [
+      'show me the log', 'show the log', 'let me see the log', 'see the log',
+      'read the log', 'read me the log', 'read back the log', 'open the log',
+      'display the log', 'bring up the log', 'pull up the log', 'check the log',
+      'review the log', 'the full log', 'full log', 'the log', 'log please',
+      'what does the log say', 'what is in the log', 'ships log',
+    ],
+    keywords: { log: 1 },
+    // Anything with something to record is an entry, not a request to read.
+    // `dictation` is only set when a real log preamble was found, so this rules
+    // out every line that actually carries words for the record.
+    veto: ['supplemental'],
+    vetoSlots: ['dictation'],
+    build: () => ({ action: 'read_log' }),
   },
   {
     id: 'jettison_pod',

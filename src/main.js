@@ -1618,11 +1618,29 @@ class App {
         break;
       }
       case 'log_entry': {
-        const recorded = g.logEntry(order.text ?? raw);
+        // "Captain's log" with nothing after it is not an entry — it is a
+        // captain starting to dictate one. It used to FILE an entry whose text
+        // was the words "captains log"; now it opens the recorder in the chair
+        // and puts the cursor in it.
+        if (!order.text) {
+          this.go('bridge');
+          this.render();
+          const line = document.querySelector('.logline');
+          if (line) { line.focus(); ack('computer', 'Recording, Captain.'); }
+          else ack('computer', 'Take the chair to record, Captain.');
+          break;
+        }
+        const recorded = g.logEntry(order.text);
         if (recorded) ack('captain', 'Log entry recorded.');
         else audio.play('ui_deny');
         break;
       }
+      // Reading the log, which used to write one. The parser now tells the two
+      // apart; this is where the reading goes.
+      case 'read_log':
+        audio.play('ui_tap');
+        this.go('log');
+        break;
       case 'jettison_pod': {
         const r = g.jettisonPod();
         if (r.ok) { audio.play('torpedo_launch'); haptic('warp'); }

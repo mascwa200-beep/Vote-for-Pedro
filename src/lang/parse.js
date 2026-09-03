@@ -43,17 +43,68 @@ const SLOT_PROMPTS = {
   warp: 'What warp factor, Captain?',
   room: 'Which compartment, Captain?',
   recipe: 'Build what, Captain? There is no specification for that.',
+  dictation: 'What should I record, Captain?',
 };
+
+/**
+ * The words of a captain's log, taken off the front matter and NOT off the
+ * normalised line.
+ *
+ * A log entry is the one thing the order line carries that is prose rather
+ * than a command, so it is the one thing that must survive verbatim. The old
+ * build read `c.text` — the folded, filler-stripped, addressee-stripped line —
+ * and then removed everything up to the FIRST preamble word it found, which
+ * went wrong three ways at once:
+ *
+ *   "captains log"                      recorded an entry reading "captains log"
+ *   "captains log, supplemental: ..."   left the word "supplemental" in the entry,
+ *                                       because it stopped at "captains log"
+ *   "the crew performed well"           recorded "the crew performed we will"
+ *
+ * Returns null when there is nothing to record, which makes it a missing slot
+ * and gets the captain asked instead of writing the request down as the entry.
+ */
+const LOG_PREAMBLE = new RegExp(
+  '^\\s*(?:'
+  + '(?:captain\'?s?|ship\'?s?)\\s+log'
+  + '|log\\s+entry|log\\s+this|make\\s+a\\s+log\\s+entry|record\\s+a\\s+log\\s+entry'
+  + '|note\\s+in\\s+the\\s+log|begin\\s+recording|for\\s+the\\s+record'
+  + ')?[\\s,:.;-]*(?:supplemental)?[\\s,:.;-]*',
+  'i',
+);
+
+function findDictation(raw) {
+  const line = String(raw ?? '').trim();
+  if (!line) return null;
+  const m = LOG_PREAMBLE.exec(line);
+  // Every part of the preamble is optional, so the pattern also matches the
+  // empty string at position 0. No preamble means nothing was dictated — a
+  // line that only NAMES the log ("the log") is not an entry reading "the log".
+  if (!m || !m[0].trim()) return null;
+  return line.slice(m[0].length).trim() || null;
+}
 
 /**
  * Pull every entity the lexicon can reference out of a normalised line.
  * Done once per order rather than once per intent, because entity extraction is
  * the expensive half and the answer does not change between intents.
  */
-function extract(norm) {
+function extract(norm, raw = '') {
   const { text, tokens } = norm;
   return {
     text,
+    // The line EXACTLY as the captain typed it — no folding, no expanded
+    // contractions, no stripped addressee.
+    //
+    // Almost nothing should want this: matching an order against unfolded text
+    // is the thing normalisation exists to avoid. The captain's log wants it,
+    // because a log entry is not an order to be matched, it is prose to be
+    // kept. Taking its text from the normalised line recorded "the crew
+    // performed well" as "the crew performed we will" (the contraction rule
+    // for "we'll" matches "well" with the apostrophe optional) and reduced
+    // "number one has the con" to "the con" (the addressee was stripped off
+    // the front, subject and all).
+    raw: String(raw ?? ''),
     tokens,
     // The line as it was typed, before the addressee was stripped off it.
     //
@@ -76,6 +127,8 @@ function extract(norm) {
     bearing: findBearing(text),
     elevation: findElevation(text, tokens),
     recipe: findRecipe(text),
+    // What a captain's log would actually record. Off the RAW line — see above.
+    dictation: findDictation(raw),
     // The ship has an inside. A compartment is deliberately matched exactly
     // rather than fuzzily — see the note on findRoom — because "go to
     // sickbay" becoming a course for a star system is the obvious failure.
@@ -219,7 +272,7 @@ export function parseText(raw) {
   if (!raw || !String(raw).trim()) return { unknown: true, raw, suggestions: [] };
 
   const norm = normalize(raw);
-  const ctx = extract(norm);
+  const ctx = extract(norm, raw);
 
   const ranked = [];
   for (const intent of INTENTS) {
