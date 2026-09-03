@@ -32022,6 +32022,29 @@ class Game {
   update(dt) {
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
 
+    // A ship lost where nobody was shooting is still a ship lost.
+    //
+    // `loseTheShip` is the whole policy — difficulty decides whether a hull can
+    // be lost at all, the first loss costs standing and brings a board and a
+    // replacement, and the second ends the career. It was reached from exactly
+    // one place, `finishCombat`, so it only ever ran when the ship died in a
+    // fight.
+    //
+    // A ship can die outside one. A plasma storm in the Badlands does 40 to 130
+    // damage a second through `takeDamage`, which breaches a hull like anything
+    // else; a ship parked there at 6% is gone inside a minute. Nothing noticed,
+    // and the captain was left in command of a destroyed ship — no replacement,
+    // no ending, and the invariant checker quiet, because the ship is correctly
+    // flagged destroyed. It is only the commission that had not been told.
+    if (this.ship.destroyed && !this.over && !(this.engagement && !this.engagement.over)) {
+      this.pushLog(
+        `${this.ship.name} has been lost at ${this.location?.name ?? 'an uncharted position'}.`,
+        'captain',
+      );
+      this.loseTheShip();
+      return;
+    }
+
     // A commission that cannot go on is over, and says so.
     //
     // Running the tank dry somewhere with no berth and nothing affordable next
