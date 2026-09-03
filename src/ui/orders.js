@@ -261,7 +261,19 @@ const ORDERS = [
     test: (t) => /\bfire\b|\bopen fire\b|\bshoot\b|\bengage them\b|\bweapons free\b/.test(t),
     build: (t) => ({
       action: 'fire',
+      // Cannon first, and for the reason the lexicon's copy of this spells
+      // out: it is the third weapon type, seven hulls mount one, and the
+      // Defiant's own "Pulse Phaser Cannons" matched `phaser` here and fired
+      // the beam arrays instead.
+      //
+      // `disruptor` stays on the beam line and stays wrong for some ships.
+      // Across the fleet `disruptor`, `polaron`, `plasma` and `phaser` each
+      // name MORE than one weapon type, so no reader that only sees the words
+      // can resolve them — it needs to know which ship is firing, and this
+      // parser is given the crew, not the ship. Guessing consistently is
+      // better than guessing differently in two places.
       weaponType: /torpedo|photon/.test(t) ? 'torpedo'
+        : /\bcannons?\b|\bpulse\b|\blance\b/.test(t) ? 'cannon'
         : /phaser|beam|disruptor/.test(t) ? 'beam' : 'all',
     }),
   },
