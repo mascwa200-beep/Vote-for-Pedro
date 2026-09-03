@@ -3835,6 +3835,115 @@ try {
   check('and "withdraw" still breaks off a fight when there is one to break off',
     stillWarpsOut.warping, JSON.stringify(stillWarpsOut));
 
+  // ------------------------------------------------ answering the computer
+  //
+  // The parser stops on a reading it is not sure of and asks "I read that as X,
+  // confirm?". Measured here before this existed: that was the one moment in
+  // the game a captain could not answer in words. "make it so", "yes",
+  // "execute", "do it" and the "belay that" PRINTED ON THE DIALOG'S OWN BUTTON
+  // all fell through to the parser and were swallowed; the dialog stayed up and
+  // the only way past it was a tap. See docs/RESEARCH.md §26.
+  await dismissModals(page);
+  await nav(page, 'Bridge');
+
+  const ask = async () => {
+    // "effect repairs" is read as "request docking" with middling confidence,
+    // which is exactly the plausible-but-unsure case the dialog exists for.
+    await page.fill('.orderbar input', 'effect repairs');
+    await page.press('.orderbar input', 'Enter');
+    await page.waitForTimeout(250);
+    return page.locator('.modal').count();
+  };
+
+  const raised = await ask();
+  check('an unsure reading stops and asks', raised === 1, `${raised} modals`);
+
+  const dialogButtons = await page.locator('.modal .actions button').evaluateAll(
+    (bs) => bs.map((b) => ({
+      label: b.childNodes[0]?.textContent?.trim() ?? '',
+      say: b.querySelector('.say')?.textContent?.replace(/[“”]/g, '').trim() ?? null,
+    })));
+  check('and both of its buttons print the phrase that answers it',
+    dialogButtons.length === 2 && dialogButtons.every((b) => b.say),
+    JSON.stringify(dialogButtons));
+
+  // ...and the order line is still reachable, which is the half a DOM check
+  // cannot see. The dialog is bottom-aligned and grew straight over the order
+  // bar: the input sat inside the dialog's footprint and a tap over it landed
+  // on the dismiss button. Playwright's fill() sets a value without
+  // hit-testing, so every spoken-answer check above passed while a human could
+  // not have typed a word of it. Found by looking at the screenshot.
+  const reach = await page.evaluate(() => {
+    const input = document.querySelector('.orderbar input');
+    const box = document.querySelector('.modal');
+    const ib = input?.getBoundingClientRect();
+    const mb = box?.getBoundingClientRect();
+    const at = ib ? document.elementFromPoint(ib.left + ib.width / 2, ib.top + ib.height / 2) : null;
+    return {
+      inputIsTopmost: at === input,
+      topmost: at ? (at.className || at.tagName) : null,
+      dialogClears: !!(ib && mb) && Math.round(mb.bottom) <= Math.round(ib.top),
+    };
+  });
+  check('and the dialog leaves the order line uncovered, so the phrase can be typed',
+    reach.inputIsTopmost && reach.dialogClears, JSON.stringify(reach));
+
+  // Every answer, each against a freshly raised question, so no one of them is
+  // being credited with a dialog a previous one already closed.
+  const answers = [];
+  for (const said of ['make it so', 'yes', 'execute', 'do it', 'engage',
+    'acknowledged', 'belay that', 'negative', 'as you were']) {
+    await dismissModals(page);
+    const up = await ask();
+    await page.fill('.orderbar input', said);
+    await page.press('.orderbar input', 'Enter');
+    await page.waitForTimeout(250);
+    const left = await page.locator('.modal').count();
+    answers.push({ said, up, left });
+  }
+  check('every one of them can be answered out loud',
+    answers.every((a) => a.up === 1 && a.left === 0),
+    JSON.stringify(answers.filter((a) => a.left !== 0)));
+
+  // And the two answers are not the same answer. Affirming has to actually run
+  // the reading; belaying has to actually drop it. A dialog that closes either
+  // way while doing nothing would pass the check above and be worthless.
+  await dismissModals(page);
+  const acted = await page.evaluate(async (phrases) => {
+    const app = window.__app;
+    const g = app.game;
+    const out = {};
+    for (const [key, said] of Object.entries(phrases)) {
+      g.log.length = 0;
+      const input = document.querySelector('.orderbar input');
+      input.value = 'effect repairs';
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 120));
+      const asked = !!document.querySelector('.modal');
+      input.value = said;
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 120));
+      out[key] = {
+        asked,
+        // The reading was "request docking". Running it says something about
+        // docking; dropping it says nothing at all.
+        docked: g.log.some((l) => /dock|moor|put in/i.test(l.text ?? '')),
+      };
+    }
+    return out;
+  }, { affirm: 'make it so', belay: 'belay that' });
+  check('saying "make it so" runs the reading the computer offered',
+    acted.affirm.asked && acted.affirm.docked, JSON.stringify(acted.affirm));
+  check('and saying "belay that" drops it instead',
+    acted.belay.asked && !acted.belay.docked, JSON.stringify(acted.belay));
+
+  await dismissModals(page);
+  await page.fill('.orderbar input', 'effect repairs');
+  await page.press('.orderbar input', 'Enter');
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, '06p-answering-the-computer.png') });
+  await dismissModals(page);
+
   // ------------------------------------------------ the machine shop
   await nav(page, 'Ship');
   const shop = await page.evaluate(async () => {

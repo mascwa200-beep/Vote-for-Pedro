@@ -641,6 +641,10 @@ canvas.tactical-labels {
 .orderbar {
   display: flex; gap: 6px; align-items: stretch;
   padding: 4px 8px 6px; flex: 0 0 auto;
+  /* Above the modal backdrop (z-index 50), so a question on the screen can be
+     answered in words instead of only by tapping. `modal()` keeps the dialog
+     box itself clear of this bar. */
+  position: relative; z-index: 60;
 }
 .orderbar input {
   flex: 1; min-width: 0; min-height: var(--tap);
