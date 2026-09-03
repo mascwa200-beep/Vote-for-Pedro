@@ -33,11 +33,36 @@ import {
   ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES, OUTCOMES,
   Engagement, MAX_WEAPON_RANGE,
 } from '../src/sim/combat.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { RNG } from '../src/core/rng.js';
 import { Galaxy, plotTransit } from '../src/world/galaxy.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { ABILITIES } from '../src/sim/officers.js';
+// The canonical lists the pools below are drawn from. Hand-written copies of
+// these are what let three of the fuzzer's calls do nothing at all.
+import { SUBSYSTEM_KEYS } from '../src/sim/ship.js';
+import { PRESETS, SUBSYSTEMS } from '../src/sim/power.js';
+import { RECIPE_BY_ID } from '../src/sim/fabrication.js';
 import { AWAY_TEMPLATES } from '../src/sim/away.js';
+
+const HERE_ROOT = dirname(fileURLToPath(import.meta.url));
+const readSrc = (...parts) => readFileSync(join(HERE_ROOT, '..', 'src', ...parts), 'utf8');
+
+/**
+ * The departments the intercom answers to, taken from the chair that calls it.
+ *
+ * `src/ui/chair.js` cannot be imported here — it reaches `document` through
+ * touch.js — so its table is read as text, the way wiring.test.js reads
+ * main.js. The soak used to pass 'sickbay', which is the LABEL on that button;
+ * the id is `medical`, and `Game.intercom` answers anything it does not
+ * recognise with the security report. So the soak asked security twice and the
+ * doctor never, and got a plausible-looking answer both times.
+ */
+const INTERCOM_DEPTS = [...readSrc('ui', 'chair.js')
+  .match(/INTERCOM_STATIONS = \[([\s\S]*?)\];/)[1]
+  .matchAll(/id:\s*'([a-z_]+)'/g)].map((m) => m[1]);
 
 const STEP = 1 / 30;
 const OPTS = { arenaRadius: ARENA_RADIUS };
@@ -292,7 +317,10 @@ test('a tour of duty: fight after fight, on one commission', () => {
         }
 
         const roll = rand();
-        if (roll < 0.004) eng.targetSubsystem(pick(['weapons', 'shields', 'engines', 'warp_core', null]));
+        // 'warp_core' is not a key — it is spelt `warpcore` — and
+        // `targetSubsystem` rejects anything not in SUBSYSTEM_KEYS, so this
+        // soak had only ever targeted weapons, shields and engines.
+        if (roll < 0.004) eng.targetSubsystem(pick([...SUBSYSTEM_KEYS, null]));
         else if (roll < 0.008) eng.evasive(rand() < 0.5);
         else if (roll < 0.010) eng.deployDecoy(2 + rand() * 4);
         else if (roll < 0.012) g.setAlert(pick(['red', 'yellow', 'normal']));
@@ -365,7 +393,10 @@ test('a tour of duty: fight after fight, on one commission', () => {
         () => g.enterOrbit(),
         () => g.breakOrbit(),
         () => g.logEntry(`After action, engagement ${f + 1}.`),
-        () => g.intercom(pick(['engineering', 'sickbay', 'security'])),
+        // 'sickbay' is the LABEL; the department is `medical`. Game.intercom
+        // falls through to the security report for anything it does not know,
+        // so this asked security twice and the doctor never.
+        () => g.intercom(pick(INTERCOM_DEPTS)),
         () => g.handOverCon(),
         () => g.takeCon(),
         () => g.workTheShop(1),
@@ -1962,7 +1993,13 @@ describe('the game survives being called wrongly', () => {
       () => g.awayMission(pick(['boarding_action', 'derelict_search', 'colony_rescue', ...JUNK])),
       () => g.availableAwayMissions(),
       () => g.stripWreck(),
-      () => g.fabricate(pick([...JUNK, 'torpedoes'])),
+      // 'torpedoes' is not a recipe id, so the shop refused every job the
+      // fuzzer ever gave it and the whole success path went unexercised.
+      // `RECIPES` is an ARRAY, so `Object.keys` on it would be "0","1","2" —
+      // a pool as dead as the 'torpedoes' it replaced. The ids live in
+      // RECIPE_BY_ID, and this was caught by checking that a real id is
+      // actually accepted rather than by assuming it.
+      () => g.fabricate(pick([...JUNK, ...Object.keys(RECIPE_BY_ID)])),
       () => g.workTheShop(pick([1, 8, ...JUNK])),
       () => g.setAlert(pick(['red', 'yellow', 'normal', 'blue', ...JUNK])),
       () => g.handOverCon(pick(['first_officer', 'helm', ...JUNK])),
@@ -2003,7 +2040,12 @@ describe('the game survives being called wrongly', () => {
       () => g.progress.addXP(pick([100, 1e6, ...JUNK]), { ledger: g.ledger }),
       () => g.ledger.adjustStanding(pick(['klingon', 'federation', ...JUNK]), pick([5, -400, ...JUNK]), 'fuzz'),
       () => g.pushLog(pick(['line', ...JUNK]), pick(['helm', ...JUNK])),
-      () => g.setPreset?.(pick(['balanced', 'attack', 'evade', ...JUNK])),
+      // `g.setPreset` never existed; this optional-chained to nothing on every
+      // one of 4000 calls a seed. The real method is on the power grid, and
+      // the pool is now every preset the game has rather than two of them
+      // plus 'evade', which is not one.
+      () => g.ship.power.applyPreset(pick([...Object.keys(PRESETS), ...JUNK])),
+      () => g.ship.power.set(pick([...SUBSYSTEMS, ...JUNK]), pick([0, 50, 100, ...JUNK])),
       () => g.useSignature(),
       () => {
         const ready = g.readyAbilities();
@@ -2365,4 +2407,104 @@ test('and the sweep can see the flag standing on its own', () => {
   g.firstStrike = true;
   assert.ok(checkGame(g).some((v) => v.code === 'game.firstStrike.orphan'),
     'nothing noticed a first strike in a battle that is not running');
+});
+
+describe('the fuzzer can actually reach what it fuzzes', () => {
+  // A call that does not exist is not a test, it is a line.
+  //
+  // The API fuzzer above drives 4000 random calls per seed and checks every
+  // invariant after each one. One of its calls was `g.setPreset?.(...)`. There
+  // is no `setPreset` on Game — the method is `g.ship.power.applyPreset` — so
+  // the optional chain swallowed it, silently, on every iteration of every
+  // seed since it was written. Nothing failed, nothing was covered, and the
+  // line read exactly like coverage.
+  //
+  // Optional chaining is the right tool for a method that may legitimately be
+  // absent on some game states. It is also the perfect place to hide a typo,
+  // so the names get checked once, here.
+
+  const HERE_DIR = dirname(fileURLToPath(import.meta.url));
+
+  test('every intercom station has a report of its own', () => {
+    // The fallthrough this protects: `Game.intercom` looks the department up in
+    // a local table and answers `reports[dept] ?? reports.security` — so a
+    // station whose id has no entry does not fail, it quietly reads back the
+    // security report. That is what the soak was doing to itself for
+    // 'sickbay', and it is what the game would do to a real button if the two
+    // lists ever drifted.
+    const reportsBlock = readSrc('core', 'state.js').match(/const reports = \{([\s\S]*?)\n {4}\};/);
+    assert.ok(reportsBlock, 'the intercom no longer builds a reports table');
+    const answered = [...reportsBlock[1].matchAll(/^ {6}([a-z_]+):/gm)].map((m) => m[1]);
+    assert.ok(answered.length >= 5, `only scraped ${answered.length} intercom reports`);
+    assert.ok(INTERCOM_DEPTS.length >= 5, `only scraped ${INTERCOM_DEPTS.length} chair stations`);
+
+    const g = new Game({ seed: 3n, crewMode: 'original' });
+    const fallback = g.intercom('a department that does not exist');
+    const silent = INTERCOM_DEPTS.filter((d) => !answered.includes(d));
+    assert.deepEqual(silent, [],
+      `chair stations with no intercom report of their own: ${silent.join(', ')}`);
+    // And prove the fallthrough is real, so the check above is worth making.
+    assert.equal(fallback, g.intercom('security'),
+      'an unknown department no longer falls through to security — this guard can be simpler');
+  });
+
+  test('and the values it fuzzes with are values the game accepts', () => {
+    // The other half, and the one I got wrong myself while fixing the first.
+    //
+    // A pool of legal-looking values that the target rejects is exactly as
+    // dead as a method that does not exist, and it looks even more like
+    // coverage. The fuzzer fabricated 'torpedoes', which is not a recipe id,
+    // so the shop refused every job it was ever given. Replacing that pool
+    // with `Object.keys(RECIPES)` swapped it for "0","1","2" — RECIPES is an
+    // array — and refused just as quietly. Caught only by asking whether
+    // anything was accepted.
+    //
+    // So: for each pool drawn from a canonical list, prove the game takes at
+    // least one of it.
+    const g = new Game({ seed: 17n, crewMode: 'original' });
+
+    const accepted = Object.keys(RECIPE_BY_ID).filter((id) => {
+      const r = g.fabricate(id);
+      if (r?.ok) g.fabrication = null;
+      return r?.ok;
+    });
+    assert.ok(accepted.length > 0,
+      'the machine shop accepted none of the recipe ids the fuzzer offers it');
+
+    const took = Object.keys(PRESETS).filter((id) => {
+      g.ship.power.applyPreset(id);
+      return g.ship.power.preset === id;
+    });
+    assert.deepEqual(took, Object.keys(PRESETS), 'a power preset the grid will not take');
+
+    g.startCombat([new Ship('d7', { name: 'IKS Pool' })], { relentless: true });
+    const targetable = SUBSYSTEM_KEYS.filter((k) => g.engagement.targetSubsystem(k));
+    assert.deepEqual(targetable, [...SUBSYSTEM_KEYS],
+      'a subsystem key the targeting computer rejects');
+    g.engagement.end('routed');
+
+    // Distinct reports, not merely seven calls that return: 'sickbay' returned
+    // the security report word for word, and counting calls would have missed
+    // that completely.
+    const spoken = new Set(INTERCOM_DEPTS.map((d) => g.intercom(d)));
+    assert.equal(spoken.size, INTERCOM_DEPTS.length,
+      'two intercom stations give the identical report');
+  });
+
+  test('every optional call it makes names a method that exists', () => {
+    // Comments stripped first. The paragraph above this test quotes the call
+    // it was written for, and a guard that trips over its own explanation is
+    // worse than no guard — it teaches people not to write the explanation.
+    const src = readFileSync(join(HERE_DIR, 'invariants.test.js'), 'utf8')
+      .split('\n').map((line) => line.replace(/\/\/.*$/, '')).join('\n');
+    const named = [...src.matchAll(/\bg\.([a-zA-Z_$][\w$]*)\?\.\(/g)].map((m) => m[1]);
+    // Prove the scrape sees the shape before believing it found nothing.
+    assert.ok(named.length >= 2,
+      `only found ${named.length} optional calls on the game — the scrape is broken, not the code`);
+
+    const g = new Game({ seed: 3n, crewMode: 'original' });
+    const missing = [...new Set(named)].filter((name) => typeof g[name] !== 'function');
+    assert.deepEqual(missing, [],
+      `the fuzzer optionally calls methods Game does not have: ${missing.join(', ')}`);
+  });
 });
