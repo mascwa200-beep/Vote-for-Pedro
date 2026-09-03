@@ -19855,8 +19855,13 @@ const ORDERS = [
  */
 const TRAINING = /\b(?:train|trains|training|trained|teach|teaches|teaching|taught|qualify|qualified|instruct|instructed)\b/;
 
-/** Abilities are addressable by their order phrase, e.g. "attack pattern alpha". */
-function matchAbility(t) {
+/**
+ * Abilities are addressable by their order phrase, e.g. "attack pattern alpha".
+ *
+ * `shortNames` relaxes the one-word rule below, and only the training reading
+ * passes it — see the call site.
+ */
+function matchAbility(t, { shortNames = false } = {}) {
   for (const a of Object.values(ABILITIES)) {
     if (t.includes(normalize(a.order))) return a.id;
     // The ability's own name also addresses it — but only when the name is
@@ -19864,7 +19869,7 @@ function matchAbility(t) {
     // appears in, so "brace the port shields" became a bridge-officer power
     // instead of an order to reinforce a shield facing.
     const name = normalize(a.name);
-    if (name.includes(' ') && t.includes(name)) return a.id;
+    if ((shortNames || name.includes(' ')) && t.includes(name)) return a.id;
   }
   return null;
 }
@@ -19927,7 +19932,20 @@ function parseOrder(raw, crew = null) {
   // printed the ability's ORDER phrase underneath itself, which is the words
   // that use it once learned.
   const ability = matchAbility(t);
-  if (ability && TRAINING.test(t)) return to({ action: 'train', ability });
+  if (TRAINING.test(t)) {
+    // "Train X" names an ability outright, and that is the one context where a
+    // one-word name is not ambiguous. The rule in `matchAbility` exists so a
+    // bare name cannot swallow a sentence that merely contains it — "brace the
+    // port shields" is an order to a shield facing — but nothing else can be
+    // meant by "train stimulants", and Stimulants is the only ability in the
+    // game with a one-word name.
+    //
+    // The Training screen prints `train ${a.name.toLowerCase()}` on every
+    // button it offers, and that is the whole point of a `say:` line: it
+    // teaches the words. For this one ability the words it taught did nothing.
+    const trainee = ability ?? matchAbility(t, { shortNames: true });
+    if (trainee) return to({ action: 'train', ability: trainee });
+  }
   if (ability) {
     const fallback = plain && !plain.unknown && !plain.error ? plain
       : (natural && !natural.unknown && !natural.confirm ? natural : null);
