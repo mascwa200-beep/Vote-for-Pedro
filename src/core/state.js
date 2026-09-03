@@ -2477,6 +2477,17 @@ export class Game {
       hostiles: eng.hostiles.length,
       hullLeft: this.ship.hullPct,
       crewLost: lost,
+      // Which ship fought it, and how many she carried.
+      //
+      // The report outlives the engagement on purpose. It also outlives the
+      // SHIP: Starfleet hands over a different hull when one is lost and when a
+      // command offer is taken, and neither touched this. So a costly battle in
+      // a Galaxy followed by the loss of that Galaxy left the report saying it
+      // had cost 811 of a crew of 750 — more people than the new ship carries —
+      // because the only thing to check the casualties against was whatever
+      // hull the captain was standing on now.
+      shipName: this.ship.name,
+      complement: this.ship.maxCrew,
       shotsFired: eng.shotsFired ?? 0,
       seconds: Math.round(eng.time),
       systemId: this.locationId,

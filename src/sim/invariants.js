@@ -459,9 +459,15 @@ export function checkGame(game) {
     // a number anybody should be shown.
     if (game.lastCombat) {
       const lost = game.lastCombat.crewLost;
-      r.must(ok(lost) && lost >= 0 && lost <= (game.ship?.maxCrew ?? Infinity),
+      // Against the complement the battle was FOUGHT with, not the ship the
+      // captain is on now — those are different ships after a loss or a command
+      // offer, and comparing across them reported a Galaxy's casualties against
+      // a Nebula's crew. Falls back to the current ship for a record written
+      // before the complement was carried.
+      const aboard = game.lastCombat.complement ?? game.ship?.maxCrew ?? Infinity;
+      r.must(ok(lost) && lost >= 0 && lost <= aboard,
         'game.lastCombat.crew', 'error',
-        `the last battle is recorded as costing ${lost} of a crew of ${game.ship?.maxCrew}`);
+        `the last battle is recorded as costing ${lost} of a crew of ${aboard}`);
     }
 
     // An encounter that belongs somewhere else.
