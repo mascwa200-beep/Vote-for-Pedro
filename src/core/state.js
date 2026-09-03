@@ -257,6 +257,9 @@ export class Game {
     this.conGiven = false;
     this.conHours = 0;
     this.conLines = [];
+    // How much the watch could not hold on to. Counted rather than hidden, the
+    // same way `forfeitedHours` records an absence too long to credit.
+    this.conDropped = 0;
     this.log = [];
     this.pendingCombat = null;
     // Which fight an episode is waiting on.
@@ -1365,6 +1368,7 @@ export class Game {
     this.conGiven = given;
     this.conHours = 0;
     this.conLines = [];
+    this.conDropped = 0;
     if (spoken) {
       this.pushLog(`${officer.rank} ${officer.name}, you have the con.`, 'captain');
       this.officerSays(officer.station, 'Aye, Captain. I have the con.', 'report');
@@ -1372,6 +1376,34 @@ export class Game {
     emit('con', { officer, held: true });
     return { ok: true, officer };
   }
+
+  /**
+   * Give the watch officer something to tell the captain when they are back.
+   *
+   * Capped, because this list was emptied by exactly one thing — the captain
+   * taking the con — and filled by every resume and every fight. A captain who
+   * plays off the bridge accumulated it for the whole commission: measured over
+   * five years of twelve-hour absences, 3,650 lines and a 206KB save, with the
+   * autosave ring keeping three of those on a phone. And the report itself
+   * became unreadable, which is worse, because being told what happened while
+   * you were away is the entire reason the con exists.
+   *
+   * `pushLog` has capped the ship's log at 400 since it was written and
+   * `MAX_ABSENCE_HOURS` is the same idea applied to time. This is a spoken
+   * report, so the ceiling is what somebody can stand to be told.
+   */
+  holdForTheCaptain(...lines) {
+    for (const line of lines) {
+      this.conLines.push(line);
+      if (this.conLines.length > Game.MAX_CON_LINES) {
+        this.conLines.shift();
+        this.conDropped++;
+      }
+    }
+  }
+
+  /** The most a watch officer will read out before summarising the rest. */
+  static get MAX_CON_LINES() { return 40; }
 
   /**
    * Take it back, and hear what happened.
@@ -1385,11 +1417,14 @@ export class Game {
     const officer = this.conOfficer;
     if (!this.conStation) return { ok: false, reason: 'You have the con, Captain.', lines: [] };
 
-    const lines = officer ? handbackReport(officer, this.conHours, this.conLines) : this.conLines.slice();
+    const lines = officer
+      ? handbackReport(officer, this.conHours, this.conLines, this.conDropped)
+      : this.conLines.slice();
     this.conStation = null;
     this.conGiven = false;
     this.conHours = 0;
     this.conLines = [];
+    this.conDropped = 0;
     if (spoken) {
       for (const line of lines) this.pushLog(line, 'bridge');
       this.pushLog('I have the con.', 'captain');
@@ -2458,8 +2493,8 @@ export class Game {
         parley: `We were engaged, and it ended in a negotiation.`,
         interrupted: `We were engaged. The action was broken off before it was decided.`,
       }[outcome] ?? `We were engaged. The outcome was ${outcome}.`;
-      this.conLines.push(`${told} Hull integrity is at ${Math.round(this.ship.hullPct * 100)} percent.`);
-      if (lost > 0) this.conLines.push(`We lost ${lost} of the crew.`);
+      this.holdForTheCaptain(`${told} Hull integrity is at ${Math.round(this.ship.hullPct * 100)} percent.`);
+      if (lost > 0) this.holdForTheCaptain(`We lost ${lost} of the crew.`);
     }
 
     this.engagement = null;
@@ -3764,7 +3799,10 @@ export class Game {
       // officer, because the roster is rebuilt from its own record on load and
       // an officer object saved here would be a second, stale copy of them.
       con: this.conStation
-        ? { station: this.conStation, given: this.conGiven === true, hours: this.conHours, lines: this.conLines }
+        ? {
+          station: this.conStation, given: this.conGiven === true,
+          hours: this.conHours, lines: this.conLines, dropped: this.conDropped,
+        }
         : null,
       // Two ids, not a position. The vista is regenerated from the system id on
       // load and is identical every time, so the world is still exactly where
@@ -3875,7 +3913,7 @@ export class Game {
     let report = lines;
     if (relief) {
       this.conHours += pending;
-      this.conLines.push(...lines);
+      this.holdForTheCaptain(...lines);
       if (this.onBridge) {
         report = this.takeCon().lines;
       } else {
@@ -4283,6 +4321,13 @@ export class Game {
     g.conGiven = data.con?.given === true;
     g.conHours = Number(data.con?.hours) || 0;
     g.conLines = Array.isArray(data.con?.lines) ? data.con.lines.slice() : [];
+    // A record written before the cap can carry more than the cap allows. Trim
+    // it on the way in rather than handing the captain the archive it was.
+    g.conDropped = data.con?.dropped ?? 0;
+    if (g.conLines.length > Game.MAX_CON_LINES) {
+      g.conDropped += g.conLines.length - Game.MAX_CON_LINES;
+      g.conLines = g.conLines.slice(-Game.MAX_CON_LINES);
+    }
     // An orbit only survives if it belongs to where the ship actually is. A
     // record saved mid-transit, or one carrying a body that no longer exists,
     // restores to station-keeping rather than to an orbit of nothing.
