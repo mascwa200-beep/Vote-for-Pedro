@@ -32,6 +32,10 @@ import { FACTIONS } from '../src/world/factions.data.js';
 import { addressedTo, answeringFor } from '../src/sim/address.js';
 import { Game } from '../src/core/state.js';
 import { ABILITIES } from '../src/sim/officers.js';
+// The data the templated buttons build their phrases from. `PRESETS` had no
+// importer anywhere until this test used it, which is what it was for.
+import { PRESETS } from '../src/sim/power.js';
+import { ROOMS } from '../src/world/interiors.data.js';
 import { CONSOLES } from '../src/sim/loadout.js';
 import { Ship } from '../src/sim/ship.js';
 import { RECIPES } from '../src/sim/fabrication.js';
@@ -767,23 +771,92 @@ describe('the phrases printed on the buttons are real orders', () => {
   });
 
   test('and so does every phrase the templated buttons build', () => {
-    // The five `say:` values that interpolate. Each is expanded here from the
-    // same data the button uses, because a template cannot be parsed as-is.
+    // Built from the same data the buttons are built from, and checked against
+    // the order each button PERFORMS.
+    //
+    // This used to say it was "expanded here from the same data the button
+    // uses" and was a hand-written restatement of it. It had drifted four ways
+    // at once: the `train <ability>` family was absent entirely, the targeting
+    // buttons had gained a fourth (Warp core) that was never listed, two of
+    // seventeen rooms were spot-checked, and — the sharp one — the station
+    // phrases were written WITH a comma that the chair does not print.
+    //
+    // That last one is why "did it parse" is not the assertion. `chair.js`
+    // prints "engineering report", which is an intercom call. The test checked
+    // "engineering, report", which is a damage report — a different order,
+    // for six of the seven stations — and passed, because any parse at all
+    // satisfied it. A phrase reaching SOME order is not a phrase reaching the
+    // right one.
     const g = new Game({ seed: 5n, crewMode: 'original' });
+    const UI = (file) => readFileSync(join(HERE, '..', 'src', 'ui', file), 'utf8');
+
+    // Subsystem targeting, from the table screens.js maps over. Scraped rather
+    // than imported for the reason the test above gives: screens.js reaches
+    // `document` and cannot be loaded outside a browser.
+    const subsBlock = UI('screens.js').match(/const subs = \[([\s\S]*?)\];/);
+    const subs = subsBlock
+      ? [...subsBlock[1].matchAll(/\[\s*'[a-z_]+',\s*'([^']+)'\s*\]/g)].map((m) => m[1])
+      : [];
+
+    // The chair's intercom buttons, as the chair prints them: no comma.
+    const chairBlock = UI('chair.js').match(/INTERCOM_STATIONS = \[([\s\S]*?)\];/);
+    const stations = chairBlock
+      ? [...chairBlock[1].matchAll(/label:\s*'([^']+)'/g)].map((m) => m[1])
+      : [];
+
+    // Prove each scrape found its buttons before believing what it says about
+    // them — the rule this file already states one test above.
+    assert.ok(subs.length >= 4, `scraped ${subs.length} targeting buttons from screens.js`);
+    assert.ok(stations.length >= 7, `scraped ${stations.length} intercom stations from chair.js`);
+
+    /** Every templated `say:` in the UI, expanded from its own source data. */
     const built = [
-      ...['weapons', 'shields', 'engines'].map((l) => `target their ${l}`),
-      ...['balanced', 'attack', 'defense', 'speed', 'science'].map((p) => `${p} posture`),
-      ...['Engineering', 'Tactical', 'Science', 'Sickbay', 'Helm', 'Comms', 'Security']
-        .map((s) => `${s.toLowerCase()}, report`),
-      'take me to the sickbay', 'take me to the armoury',
+      // screens.js: `target their ${label.toLowerCase()}`
+      ...subs.map((label) => [`target their ${label.toLowerCase()}`, 'target_subsystem']),
+      // screens.js: `${p.id} posture`
+      ...Object.values(PRESETS).map((p) => [`${p.id} posture`, 'preset']),
+      // screens.js: `take me to the ${ROOMS[e.to].name.toLowerCase()}` — all of
+      // them, not a sample.
+      ...Object.values(ROOMS).map((r) => [`take me to the ${String(r.name).toLowerCase()}`, 'go_to_room']),
+      // chair.js: `${s.label.toLowerCase()} report`
+      ...stations.map((s) => [`${s.toLowerCase()} report`, 'intercom']),
+      // screens.js: `train ${a.name.toLowerCase()}` — the family that was
+      // covered by nothing, and the one that was broken.
+      ...Object.values(ABILITIES).map((a) => [`train ${a.name.toLowerCase()}`, 'train']),
     ];
+
     const dud = [];
-    for (const phrase of built) {
+    for (const [phrase, want] of built) {
       const r = parseOrder(phrase, g);
       const o = r.order ?? r;
-      if (r.unknown || !o.action) dud.push(phrase);
+      if (r.unknown || !o.action) dud.push(`"${phrase}" is not understood`);
+      else if (o.action !== want) dud.push(`"${phrase}" is a ${o.action} order, not ${want}`);
     }
-    assert.deepEqual(dud, []);
+    assert.deepEqual(dud, [], `${dud.length} of ${built.length} button phrases do not do what their button does`);
+  });
+
+  test('and every templated button family is one this file covers', () => {
+    // The guard on the guard. The list above is derived per family, so a SIXTH
+    // family added to the UI would simply not be checked by anything — which
+    // is how the training buttons went uncovered for as long as they existed.
+    const templated = new Set();
+    for (const file of readdirSync(join(HERE, '..', 'src', 'ui'))) {
+      if (!file.endsWith('.js')) continue;
+      const src = readFileSync(join(HERE, '..', 'src', 'ui', file), 'utf8');
+      for (const m of src.matchAll(/\bsay:\s*`([^`]*\$\{[^`]*)`/g)) templated.add(`${file}: ${m[1]}`);
+    }
+    // Named here so that adding one is a deliberate act with a test beside it.
+    const COVERED = [
+      'chair.js: ${s.label.toLowerCase()} report',
+      'screens.js: take me to the ${(ROOMS[e.to]?.name ?? e.to).toLowerCase()}',
+      'screens.js: target their ${label.toLowerCase()}',
+      'screens.js: ${p.id} posture',
+      'screens.js: train ${a.name.toLowerCase()}',
+    ];
+    assert.ok(templated.size >= 5, `only scraped ${templated.size} templated say: phrases`);
+    const uncovered = [...templated].filter((t) => !COVERED.includes(t));
+    assert.deepEqual(uncovered, [],
+      'templated button phrases with no family in the test above');
   });
 });
 
