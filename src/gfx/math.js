@@ -12,7 +12,15 @@
 
 import { clamp } from '../core/num.js';
 
-export const DEG = Math.PI / 180;
+// No `DEG` here, deliberately.
+//
+// It was exported from this file and imported by nothing, while
+// `src/ui/tactical3d.js`, `src/gfx/vista.js` and `src/sim/ship.js` each
+// declared the identical `Math.PI / 180` locally. The third of those is the
+// reason not to republish it for them to share: `src/sim/` reaching into
+// `src/gfx/` for a constant couples the simulation to the renderer, and the
+// simulation has to keep running when nothing is drawing at all. One line of
+// arithmetic repeated three times is the cheaper of the two.
 
 // ---------------------------------------------------------------- vectors
 
@@ -54,13 +62,6 @@ export function normalize(a, out = vec3()) {
 
 export const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
-export function lerp(a, b, t, out = vec3()) {
-  out[0] = a[0] + (b[0] - a[0]) * t;
-  out[1] = a[1] + (b[1] - a[1]) * t;
-  out[2] = a[2] + (b[2] - a[2]) * t;
-  return out;
-}
-
 /** Rotate a vector by a quaternion. */
 export function transformQuat(v, q, out = vec3()) {
   const [x, y, z] = v;
@@ -79,7 +80,11 @@ export function transformQuat(v, q, out = vec3()) {
 
 export const quat = (x = 0, y = 0, z = 0, w = 1) => new Float64Array([x, y, z, w]);
 
-export function quatIdentity(out = quat()) {
+// `quatIdentity` and `quatNormalize` are used by the rotations below and by
+// nothing outside this file, so they are not exported. They are not dead —
+// grepping for them outside `math.js` makes them look it, which is why the
+// guard in tests/wiring.test.js counts importers rather than mentions.
+function quatIdentity(out = quat()) {
   out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1;
   return out;
 }
@@ -103,7 +108,7 @@ export function quatMultiply(a, b, out = quat()) {
   return out;
 }
 
-export function quatNormalize(q, out = quat()) {
+function quatNormalize(q, out = quat()) {
   const len = Math.hypot(q[0], q[1], q[2], q[3]);
   if (len === 0) return quatIdentity(out);
   out[0] = q[0] / len; out[1] = q[1] / len; out[2] = q[2] / len; out[3] = q[3] / len;

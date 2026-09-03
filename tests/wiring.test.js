@@ -3020,3 +3020,119 @@ test('and every alias points at a key the console answers to', () => {
     .map(([, from, to]) => `${from} -> ${to}`);
   assert.deepEqual(bad, [], `STATION_PANEL aliases with no console case: ${bad.join(', ')}`);
 });
+
+describe('every symbol the renderer exports is one something imports', () => {
+  // An export nobody imports is the same defect as an ability special nobody
+  // implements, one level down: declared, reachable on paper, and read by
+  // nothing. It matters here more than it looks. The last three real defects
+  // in this project all hid behind something that existed and was never
+  // exercised — a display setting nothing wrote, a guard that scraped one file
+  // of two, an effect kind the renderer had no branch for. A symbol that is
+  // declared and not read is a place where that can happen again without
+  // anything noticing.
+  //
+  // Scoped to `src/gfx/` deliberately. The same census across all of `src/`
+  // finds 114 unimported exports in 50 modules, which is a separate piece of
+  // work with a real allowlist behind it; widening this guard to meet it would
+  // mean writing that allowlist here and now, and an allowlist is where a
+  // guard goes to die.
+
+  const GFX = join(HERE, '..', 'src', 'gfx');
+  const CORPUS = [join(HERE, '..', 'src'), join(HERE, '..', 'tests'), join(HERE, '..', 'tools')];
+
+  const jsFiles = (dir, out = []) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) jsFiles(path, out);
+      else if (/\.(js|mjs)$/.test(entry.name)) out.push(path);
+    }
+    return out;
+  };
+
+  /** Absolute path a relative specifier in `from` points at. */
+  const target = (from, spec) => join(dirname(from), spec);
+
+  test('nothing in src/gfx is exported into the void', () => {
+    const gfxFiles = jsFiles(GFX);
+
+    // What each module offers.
+    const offered = new Map();
+    for (const file of gfxFiles) {
+      const src = readFileSync(file, 'utf8');
+      const names = [];
+      for (const m of src.matchAll(/^export\s+(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)) {
+        names.push(m[1]);
+      }
+      // `export { a, b as c }` — `c` is the name an importer would ask for.
+      for (const m of src.matchAll(/^export\s*\{([^}]*)\}\s*;?\s*$/gm)) {
+        for (const part of m[1].split(',')) {
+          const name = part.trim().split(/\s+as\s+/).pop().trim();
+          if (name) names.push(name);
+        }
+      }
+      offered.set(file, names);
+    }
+
+    // What anything asks for, resolved to the file it asks it OF.
+    //
+    // Resolving the specifier is the whole point. A first pass at this census
+    // matched export names against import text by name alone and cleared
+    // `blueprint.js`'s `PALETTE` — because `room.js` exports that name too and
+    // IS imported, so blueprint's looked used. Two modules, one name, and the
+    // wrong answer.
+    const asked = new Map(gfxFiles.map((f) => [f, new Set()]));
+    const wholesale = new Set();
+    for (const dir of CORPUS) {
+      for (const file of jsFiles(dir)) {
+        const src = readFileSync(file, 'utf8');
+        const take = (spec, list, aliasFirst) => {
+          if (!spec.startsWith('.')) return;
+          const to = target(file, spec);
+          if (!asked.has(to)) return;
+          for (const part of list.split(',')) {
+            // `import { a as b }` asks for `a`; `const { a: b } = await import()`
+            // also asks for `a`. Either way the exported name is on the left.
+            const name = part.trim().split(aliasFirst)[0].trim();
+            if (name) asked.get(to).add(name);
+          }
+        };
+        for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+          take(m[2], m[1], /\s+as\s+/);
+        }
+        // `const { vista } = await import('../src/gfx/vista.js')` — how
+        // tests/sim.test.js reaches the vista, and invisible to the static form.
+        for (const m of src.matchAll(/(?:const|let)\s*\{([^}]*)\}\s*=\s*await\s+import\s*\(\s*['"]([^'"]+)['"]/g)) {
+          take(m[2], m[1], /\s*:\s*/);
+        }
+        // A namespace import takes the module whole; every name in it is then
+        // potentially read, and this guard cannot say otherwise.
+        for (const m of src.matchAll(/import\s+\*\s+as\s+[\w$]+\s+from\s*['"]([^'"]+)['"]/g)) {
+          if (!m[1].startsWith('.')) continue;
+          const to = target(file, m[1]);
+          if (asked.has(to)) wholesale.add(to);
+        }
+      }
+    }
+
+    // Prove the scrape can see before believing what it cannot.
+    //
+    // A census that matches nothing passes every assertion under it, and this
+    // project has shipped that mistake three times. Both halves have to be
+    // demonstrably alive: the export side found symbols, and the import side
+    // resolved to them.
+    const total = [...offered.values()].reduce((n, names) => n + names.length, 0);
+    assert.ok(total >= 60, `only found ${total} exports under src/gfx — the scrape is broken, not the code`);
+    const resolved = [...asked.values()].reduce((n, set) => n + set.size, 0);
+    assert.ok(resolved >= 40, `only ${resolved} imports resolved to a gfx module — nothing is being matched`);
+
+    const orphans = [];
+    for (const [file, names] of offered) {
+      if (wholesale.has(file)) continue;
+      for (const name of names) {
+        if (!asked.get(file).has(name)) orphans.push(`${file.slice(file.indexOf('src/'))} -> ${name}`);
+      }
+    }
+    assert.deepEqual(orphans, [],
+      `${orphans.length} of ${total} exports under src/gfx have no importer anywhere`);
+  });
+});

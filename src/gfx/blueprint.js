@@ -23,8 +23,15 @@ import { vec3 } from './math.js';
 import { MeshBuilder, saucer, tube, box, sphere, mirrored } from './mesh.js';
 import { FEDERATION_FORMS } from './forms.federation.js';
 
-/** Hull plating by faction. Flat shading means these are the whole look. */
-export const PALETTE = {
+/**
+ * Hull plating by faction. Flat shading means these are the whole look.
+ *
+ * Not exported: `paletteFor` below is how the rest of the game asks, and it
+ * falls back to `independent` for a faction with no entry. Handing out the
+ * table itself invites `PALETTE[faction]` at the call site, which is the same
+ * lookup without the fallback.
+ */
+const PALETTE = {
   // Warm off-white, not refit grey. The 1966 miniature photographed as a
   // cream-white hull with darker grey detailing; [0.74, 0.77, 0.82] is the
   // cool grey of the 1979 film refit, which is a different ship.
@@ -414,8 +421,11 @@ const FORMS = {
    * 372 units long instead of 1.25, and then multiplied it by the on-screen
    * scale on top: 31,836 units of Cardassian cruiser inside a 2,600-unit
    * engagement volume. Somebody hit this before and invented the `length_`
-   * name for it — four blueprints have carried the correct value ever since,
-   * and no builder has ever read it.
+   * name for it, and four blueprints have carried the correct value ever
+   * since. This comment used to end "and no builder has ever read it", which
+   * was wrong when it was written: `wedge` reads it on the next line but one,
+   * and `hauler` reads it too. A docblock saying a value is ignored is an
+   * invitation to delete the value.
    */
   wedge(mb, p, b) {
     box(mb, {
@@ -564,7 +574,11 @@ export const BLUEPRINTS = {
   // is one copy too many and the second one always goes stale.
   constitution: { form: 'tos_starfleet', length: 289 },
   constitution_refit: { form: 'starfleet', length: 305, domeRatio: 0.52, domeFlat: 0.22, nacelleHigh: 0.3, pylonSweep: 0.08 },
-  miranda: { form: 'rollbar', length: 278, neck: false },
+  // No `neck: false` here: `neck` is read by the `starfleet` form, which the
+  // Sovereign uses, and the `rollbar` form builds its own saucer and has never
+  // looked at it. Carrying the key made the Miranda look like it was turning
+  // something off.
+  miranda: { form: 'rollbar', length: 278 },
   oberth: { form: 'twinhull', length: 120, lowerY: -0.06 },
   excelsior: { form: 'starfleet', length: 467, saucerStretch: 1.08, hullReach: 1.15, nacelleHigh: 0.46, nacelleWide: 0.68, pylonSweep: 0.02 },
   constellation: { form: 'quadnacelle', length: 260 },
@@ -761,5 +775,3 @@ export const UNITS_PER_METRE = 0.286;
 export function hullScale(classId) {
   return (DIMENSIONS[classId]?.length ?? 200) * UNITS_PER_METRE;
 }
-
-export { FORMS };
