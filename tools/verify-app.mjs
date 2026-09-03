@@ -3781,6 +3781,15 @@ try {
       challenged: g.encounter?.challenge === true,
       // Said out loud, because a perk nobody notices is a perk that does nothing.
       said: g.log.some((l) => /waved through|treaty rider/i.test(l.text ?? '')),
+      // How the ship got there, because it is the only part of this that is not
+      // fixed. A 2%-per-second roll can force the flight out of warp mid-course,
+      // and the first time that happened this check failed once in three runs
+      // with everything else right — the ship parked inside the zone and
+      // nobody having noticed, which was a real defect and not a flaky test.
+      // Reported either way so a future intermittent failure explains itself
+      // instead of costing the same investigation twice.
+      forcedOut: g.log.some((l) => /forced out of warp/i.test(l.text ?? '')),
+      inTheDMZ: g.inTheDMZ === true,
     };
   });
   check('the treaty rider clears the zone, and says so rather than being silent',

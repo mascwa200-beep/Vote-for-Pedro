@@ -29445,6 +29445,33 @@ class Game {
     return 'challenged';
   }
 
+  /**
+   * Notice where the ship has ended up.
+   *
+   * A border is a fact about a position, not about how you got there. Both of
+   * these were called from exactly one place — `arrive()` — so they only ever
+   * ran when a course was flown to its end. There are two other ways to be
+   * standing somewhere: being forced out of warp mid-course, and giving the
+   * order to break off. Neither noticed a line.
+   *
+   * Measured over 400 flights into the Romulan Neutral Zone: every one of the
+   * 354 that arrived was charged as a crossing, and none of the 11 that were
+   * jumped on the way in were. The ship sat inside the Zone with the Romulans
+   * none the wiser, which made being intercepted a way to avoid the treaty
+   * violation you were flying into.
+   *
+   * It also matters in the other direction. `inTheZone` and `inTheDMZ` mean
+   * "already inside, do not say it twice", and leaving by any path that did not
+   * reset them would have left the next entry silent for the rest of the
+   * commission.
+   *
+   * @returns {'challenged'|'cleared'|null} what the DMZ made of it
+   */
+  noticeTheBorder() {
+    this.crossTheZone();
+    return this.enterTheDMZ();
+  }
+
   encounterPerks(systemId) {
     return {
       quietInHostileSpace: this.perk('reduced_detection'),
@@ -30489,8 +30516,18 @@ class Game {
     this.pushLog(`Dropped to impulse at ${near.name}.`, 'helm');
     emit('arrived', { system: near, isNew, aborted: true });
 
+    // Where you stopped is where you are. Breaking off a course inside the
+    // Neutral Zone is the same crossing as flying into it deliberately, and the
+    // Cardassians ask the same question of a heavy cruiser that coasted into
+    // the demilitarised zone as of one that arrived there.
+    const dmz = this.noticeTheBorder();
+
     // Stopping in the middle of nowhere is exactly when something finds you.
-    const enc = rollEncounter(this.encounterStream(this.locationId), this.locationId, { ledger: this.ledger, ...this.encounterPerks(this.locationId) });
+    const enc = rollEncounter(this.encounterStream(this.locationId), this.locationId, {
+      ledger: this.ledger,
+      ...this.encounterPerks(this.locationId),
+      ...(dmz === 'challenged' ? { challengeBy: 'cardassian' } : {}),
+    });
     if (enc && enc.kind !== 'quiet') this.beginEncounter(enc);
     return { ok: true, system: near, isNew };
   }
@@ -30515,10 +30552,9 @@ class Game {
       this.pushLog(`${back.assignment.name} finished on the way. ${back.text}`, 'comms');
     }
 
-    this.crossTheZone();
-    // Beside the crossing, and for the same reason: an arrival is the moment
+    // Beside the crossing, and for the same reason: getting there is the moment
     // somebody notices. What it returns steers the encounter roll below.
-    const dmz = this.enterTheDMZ();
+    const dmz = this.noticeTheBorder();
 
     // Putting in somewhere Starfleet keeps people makes up the ship's
     // complement of specialists. The roster could only ever shrink before
@@ -32186,6 +32222,11 @@ class Game {
             this.locationId = near.id;
             this.transit = null;
             this.pushLog('We have been forced out of warp.', 'helm');
+            // Being jumped on the way in does not make the line you were
+            // dropped behind stop being there. The encounter is already chosen
+            // and already hostile, so this records the border and says so
+            // without re-rolling: you have company either way.
+            this.noticeTheBorder();
             this.beginEncounter(enc);
           }
         }
