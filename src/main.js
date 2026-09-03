@@ -1164,6 +1164,14 @@ class App {
 
   changeShip(classId) {
     const g = this.game;
+    // Same reason as `Game.acceptCommand`: swapping the hull mid-battle leaves
+    // the engagement fighting the ship you just left.
+    if (g.engagement && !g.engagement.over) {
+      audio.play('ui_deny');
+      g.officerSays('engineering', 'Not in the middle of an engagement, Captain.', 'object');
+      this.render();
+      return;
+    }
     const oldName = g.ship.name;
     const oldRegistry = g.ship.registry;
     g.ship = new Ship(classId, { name: oldName, registry: oldRegistry, faction: 'federation', isPlayer: true });

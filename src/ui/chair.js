@@ -109,11 +109,17 @@ export function chairPanel(app) {
   const alerts = ALERTS
     .filter((a) => !(a.level === 'blue' && inCombat))
     .map((a) => button(a.label, press(app, { action: 'alert', level: a.level, chairLabel: a.label }), {
+      // Every chair control already carried the exact words it logs as the
+      // captain's line — and printed none of them. `say` is read off the SAME
+      // `chairLabel` the order carries, so the button and the log cannot drift
+      // apart: what it prints is literally what pressing it says.
+      say: a.label.toLowerCase(),
       color: g.alert === a.level ? 'green' : a.color,
       sub: g.alert === a.level ? 'Current condition' : a.sub,
     }));
 
   const pod = button('Jettison ion pod', press(app, { action: 'jettison_pod', chairLabel: 'jettison the pod' }, 'ui_deny', 'deny'), {
+    say: 'jettison the pod',
     color: 'peach',
     sub: inCombat ? 'Decoy — reads like us for about a minute' : 'Nothing to gain outside a fight',
     disabled: !inCombat || g.podJettisoned,
@@ -122,10 +128,12 @@ export function chairPanel(app) {
   // ---- Left arm: viewscreen, hailing frequencies, shuttle bay ----
   const left = [
     button('On screen', press(app, { action: 'viewscreen', chairLabel: 'on screen' }, 'ui_tap'), {
+      say: 'on screen',
       color: 'ice',
       sub: app.screen === 'viewscreen' ? 'Screen off' : 'The forward view from the bridge',
     }),
     button('Hailing frequencies', press(app, { action: 'hail', chairLabel: 'hailing frequencies open' }), {
+      say: 'hailing frequencies open',
       color: 'blue',
       sub: 'Open a channel',
     }),
@@ -160,13 +168,23 @@ export function chairPanel(app) {
     el('div', { class: 'chair-intercom' }, [
       el('div', { class: 'label', text: 'Intercom' }),
       el('div', { class: 'chair-stations' }, INTERCOM_STATIONS.map((s) =>
-        button(s.label, press(app, { action: 'intercom', dept: s.id, chairLabel: `${s.label}, report` }, 'computer_query'), {
+        // No comma.
+        //
+        // The chair logged `${s.label}, report` as the captain's line, and that
+        // phrase does not do this. "engineering, report" reads the comma as an
+        // address and the rest as a request for a damage report — it parses to
+        // `status`. Without it, "engineering report" is the intercom call the
+        // button makes. The log has been quoting the captain saying a thing
+        // that would have done something else, and printing it on the button is
+        // what made that visible.
+        button(s.label, press(app, { action: 'intercom', dept: s.id, chairLabel: `${s.label} report` }, 'computer_query'), {
+          say: `${s.label.toLowerCase()} report`,
           color: 'ghost',
         }))),
     ]),
     el('div', { class: 'chair-recorder' }, [
       logInput,
-      button('Record', record, { color: 'amber' }),
+      button('Record', record, { color: 'amber', say: 'captain\u2019s log, supplemental' }),
     ]),
   ], 'chair');
 }

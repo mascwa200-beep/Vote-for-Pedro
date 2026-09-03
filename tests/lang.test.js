@@ -12,7 +12,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -32,6 +32,9 @@ import { FACTIONS } from '../src/world/factions.data.js';
 import { addressedTo, answeringFor } from '../src/sim/address.js';
 import { Game } from '../src/core/state.js';
 import { ABILITIES } from '../src/sim/officers.js';
+import { CONSOLES } from '../src/sim/loadout.js';
+import { Ship } from '../src/sim/ship.js';
+import { RECIPES } from '../src/sim/fabrication.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -733,26 +736,52 @@ describe('the phrases printed on the buttons are real orders', () => {
     // button does". A phrase that does not parse is worse than no phrase at
     // all: it teaches a language the game does not speak.
     //
-    // Kept as a list rather than scraped out of the DOM because screens.js
-    // cannot be imported outside a browser — so the discipline is that a new
-    // `say:` gets a line here, and the parity check above covers the rest.
-    const printed = [
-      'stand up', 'take the chair', 'all stop', 'energise', 'use it',
-      'survey that', 'two to beam down', 'break orbit', 'through the door',
-      'scan the system', 'magnify', 'on screen', 'come about', 'climb',
-      'level off', 'dive', 'fire phasers', 'next target', 'open a channel',
-      'steady as she goes', 'request docking', 'get us out of here',
-      'target their weapons', 'target their shields', 'target their engines',
-      'take me to the sickbay',
-      'you have the con', 'i have the con', 'who has the con',
-      'run a level one diagnostic',
-      'balanced posture', 'attack posture', 'defense posture', 'speed posture',
-      'science posture',
+    // Read OUT OF THE SOURCE rather than kept as a list here. This was a hand
+    // maintained list of 35 phrases with a comment asking future changes to add
+    // a line to it, and by the time anyone looked there were 42 `say:` in the
+    // UI and six of the newest were missing from it. A mirror of the code that
+    // relies on discipline to stay a mirror is not a check, it is a second
+    // thing to get wrong. screens.js cannot be imported outside a browser, but
+    // it can be read.
+    const says = [];
+    for (const file of readdirSync(join(HERE, '..', 'src', 'ui'))) {
+      if (!file.endsWith('.js')) continue;
+      const src = readFileSync(join(HERE, '..', 'src', 'ui', file), 'utf8');
+      for (const m of src.matchAll(/\bsay:\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)/g)) {
+        says.push({ file, say: m[1] ?? m[2] ?? m[3] });
+      }
+    }
+    // A scrape that finds nothing passes every assertion below it. This has
+    // happened twice in this project's browser checks, so: prove it found the
+    // buttons before believing what it says about them.
+    assert.ok(says.length >= 40, `only scraped ${says.length} say: phrases from src/ui`);
+
+    const dud = [];
+    for (const { file, say } of says) {
+      // Templated phrases are expanded from their data below.
+      if (say.includes('${')) continue;
+      const r = parseText(say);
+      if (r.unknown || (!r.action && !r.order?.action)) dud.push(`${file}: "${say}"`);
+    }
+    assert.deepEqual(dud, []);
+  });
+
+  test('and so does every phrase the templated buttons build', () => {
+    // The five `say:` values that interpolate. Each is expanded here from the
+    // same data the button uses, because a template cannot be parsed as-is.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    const built = [
+      ...['weapons', 'shields', 'engines'].map((l) => `target their ${l}`),
+      ...['balanced', 'attack', 'defense', 'speed', 'science'].map((p) => `${p} posture`),
+      ...['Engineering', 'Tactical', 'Science', 'Sickbay', 'Helm', 'Comms', 'Security']
+        .map((s) => `${s.toLowerCase()}, report`),
+      'take me to the sickbay', 'take me to the armoury',
     ];
     const dud = [];
-    for (const phrase of printed) {
-      const r = parseText(phrase);
-      if (r.unknown || (!r.action && !r.order?.action)) dud.push(phrase);
+    for (const phrase of built) {
+      const r = parseOrder(phrase, g);
+      const o = r.order ?? r;
+      if (r.unknown || !o.action) dud.push(phrase);
     }
     assert.deepEqual(dud, []);
   });
@@ -1404,5 +1433,201 @@ describe('training an officer is not the same as using what they trained in', ()
         assert.equal(order.ability, id);
       }
     }
+  });
+});
+
+describe('everything in the locker can be asked for by name', () => {
+  test('every device declares a phrase, and the phrase reaches that device', () => {
+    // The devices now declare `say` in CONSOLES, so the button and this test
+    // read one source. It is written down rather than derived from the name
+    // because it is not derivable: "Hull Patch Kit" reads as the watch bill.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    const devices = Object.values(CONSOLES).filter((c) => c.slot === 'device');
+    assert.ok(devices.length >= 5, `only ${devices.length} devices to check`);
+    const wrong = [];
+    for (const c of devices) {
+      if (!c.say) { wrong.push(`${c.id} declares no phrase`); continue; }
+      const r = parseOrder(c.say, g);
+      const o = r.order ?? r;
+      if (o.action !== 'device' || o.device !== c.id) {
+        wrong.push(`${c.id}: "${c.say}" -> ${o.action ?? 'nothing'}${o.device ? ` (${o.device})` : ''}`);
+      }
+    }
+    assert.deepEqual(wrong, []);
+  });
+
+  test('the probe can be launched, which it could not before', () => {
+    // Every wording of the probe — its own name included — was swallowed by
+    // `scan`, and the device intent had no branch for it at all, so the one
+    // thing in the locker you LAUNCH was addressable by nothing.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    for (const said of ['launch a probe', 'send a probe', 'deploy a probe',
+      'launch the probe', 'probe it']) {
+      const r = parseOrder(said, g);
+      const o = r.order ?? r;
+      assert.equal(o.action, 'device', `"${said}"`);
+      assert.equal(o.device, 'probe', `"${said}"`);
+    }
+  });
+
+  test('and asking to scan still scans', () => {
+    // A guard, and the risk of the change: "probe" is a scanning word too.
+    //
+    // "full sensor sweep" is deliberately NOT in this list. It is the
+    // `scan_target` ability with `scan` as its fallback, which is how the game
+    // has always read it — an officer's power first, the plain order behind it
+    // when nobody can execute one. That is correct, and it was my expectation
+    // that was wrong when this test first failed.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    for (const said of ['scan the system', 'long range scan', 'scan the planet']) {
+      const r = parseOrder(said, g);
+      assert.equal((r.order ?? r).action, 'scan', `"${said}"`);
+    }
+  });
+});
+
+describe('two recipes that differ by one short word', () => {
+  test('the hull patch kit can be built by name', () => {
+    // `findRecipe` dropped words of three letters or fewer, and "kit" is the
+    // only thing telling "Hull patch" from "Hull patch kit". They scored
+    // identically, the tie went to whichever came first in the table, and
+    // asking for the kit built the plain patch instead.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    const list = Array.isArray(RECIPES) ? RECIPES : Object.values(RECIPES);
+    const missed = [];
+    for (const r of list) {
+      const o = parseOrder(`fabricate a ${r.name.toLowerCase()}`, g);
+      const got = o.order ?? o;
+      const id = got.recipe?.id ?? got.recipe;
+      if (id !== r.id) missed.push(`"${r.name}" -> ${id ?? 'nothing'}`);
+    }
+    assert.deepEqual(missed, [], `${missed.length} of ${list.length} recipes build something else`);
+  });
+
+  test('but a short word does not decide that a sentence is about recipes', () => {
+    // Lowering the filter outright put "rig" into the vocabulary, from
+    // "Coolant purge rig", and "rig for battle" stopped selecting the attack
+    // posture. Short words break ties between recipes; they do not create one.
+    // (This one already passed before the change and is here to keep it that
+    // way — it is the guard the first attempt at this fix tripped.)
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    assert.equal(parseOrder('rig for battle', g).preset, 'attack');
+  });
+});
+
+describe('you cannot change ships in the middle of a battle', () => {
+  // Taking a new hull builds a new Ship and points `game.ship` at it, and the
+  // running engagement went on holding the OLD object: the enemy kept firing at
+  // a ship you no longer commanded while your orders went to one that was not
+  // in the battle. `game.engagement.ship` is rated FATAL by the watchdog, and
+  // it was reachable from the order line with one phrase, mid-firefight.
+  function fighting(seed = 'tc') {
+    const g = new Game({ seed, crewMode: 'original' });
+    g.commandOffer = { classId: 'constitution_refit', name: 'Constitution-class (refit)' };
+    g.startCombat([new Ship('d7', { name: 'IKS Test' })]);
+    return g;
+  }
+
+  test('accepting a new command is refused while the shooting is going on', () => {
+    const g = fighting();
+    assert.ok(g.engagement && !g.engagement.over, 'the fixture is not in a battle');
+    const r = g.acceptCommand();
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /engagement/i);
+    assert.equal(g.engagement.player, g.ship,
+      'the engagement is fighting a ship the game no longer owns');
+  });
+
+  test('and the offer is still there afterwards', () => {
+    // Refusing must not eat the offer — it is a postponement, not a decline.
+    const g = fighting();
+    g.acceptCommand();
+    assert.ok(g.commandOffer, 'the offer was consumed by a refusal');
+  });
+
+  test('but it is accepted once the battle is over', () => {
+    // A guard on the refusal being narrow: this is the ordinary path and it
+    // passes on the old code too.
+    const g = fighting();
+    g.engagement.end('escaped');
+    const r = g.acceptCommand();
+    assert.equal(r.ok, true, r.reason);
+    // Ending a battle clears the engagement outright rather than leaving a
+    // finished one behind, so there is nothing left holding a stale ship.
+    assert.ok(!g.engagement || g.engagement.over,
+      'an engagement outlived the battle it belonged to');
+  });
+});
+
+describe('the chair quotes the captain saying things that work', () => {
+  test('every intercom call reaches its department', () => {
+    // The chair logs a `chairLabel` as the captain's line, and the line it
+    // logged for the intercom was "<station>, report" — which does not do this.
+    // The comma reads as an address and the rest as a request for a damage
+    // report, so the phrase parses to `status`. Seven buttons, each quoting the
+    // captain saying a thing that would have done something else.
+    //
+    // Found only once the phrase was printed ON the button, where it could be
+    // read — and re-measured through `parseOrder` rather than `parseText`,
+    // which had said it was fine.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    const stations = [
+      ['Engineering', 'engineering'], ['Tactical', 'tactical'],
+      ['Science', 'science'], ['Sickbay', 'medical'], ['Helm', 'helm'],
+      ['Comms', 'comms'], ['Security', 'security'],
+    ];
+    const wrong = [];
+    for (const [label, dept] of stations) {
+      const r = parseOrder(`${label.toLowerCase()} report`, g);
+      const o = r.order ?? r;
+      if (o.action !== 'intercom' || o.dept !== dept) {
+        wrong.push(`"${label} report" -> ${o.action}${o.dept ? ` (${o.dept})` : ''}, wanted intercom (${dept})`);
+      }
+    }
+    assert.deepEqual(wrong, []);
+  });
+
+  test('and the comma really was the difference', () => {
+    // Pinning the cause down, so the fix is not mistaken for a coincidence.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    assert.equal((parseOrder('engineering report', g)).action, 'intercom');
+    assert.equal((parseOrder('engineering, report', g)).action, 'status');
+  });
+
+  test('every control on the chair prints a phrase, from the same field it logs', () => {
+    // Read out of the source: `say` and `chairLabel` must agree, or the button
+    // teaches one thing and the log quotes another.
+    const src = readFileSync(join(HERE, '..', 'src', 'ui', 'chair.js'), 'utf8');
+    const labels = [...src.matchAll(/chairLabel:\s*(?:'([^']*)'|`([^`]*)`)/g)]
+      .map((m) => m[1] ?? m[2]);
+    assert.ok(labels.length >= 4, `only found ${labels.length} chairLabel values`);
+    // The chairLabels themselves — the words the log quotes the captain saying —
+    // read from the source and checked against the order the button sends.
+    //
+    // This is the assertion the intercom defect actually failed, and it has to
+    // compare the ACTION and not merely "did it parse": the old label
+    // "Engineering, report" parsed perfectly well, to `status`. Six of the
+    // seven stations were quoting the captain asking for a damage report.
+    const gg = new Game({ seed: 5n, crewMode: 'original' });
+    const stationNames = ['Engineering', 'Tactical', 'Science', 'Sickbay', 'Helm', 'Comms', 'Security'];
+    const intercomLabel = labels.find((l) => /\$\{s\.label\}/.test(l));
+    assert.ok(intercomLabel, 'no templated intercom chairLabel found in chair.js');
+    const lying = [];
+    for (const st of stationNames) {
+      const phrase = intercomLabel.replace(/\$\{s\.label\}/g, st);
+      const r = parseOrder(phrase, gg);
+      const o = r.order ?? r;
+      if (o.action !== 'intercom') lying.push(`"${phrase}" -> ${o.action ?? 'nothing'}`);
+    }
+    assert.deepEqual(lying, [],
+      'the chair logs the captain saying something that does a different thing');
+    const says = [...src.matchAll(/\bsay:\s*(?:'([^']*)'|`([^`]*)`)/g)]
+      .map((m) => (m[1] ?? m[2]));
+    assert.ok(says.length >= 4, `only found ${says.length} say values in chair.js`);
+    // Every static say in the chair is a phrase the game answers to.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    const dud = says.filter((s) => !s.includes('${'))
+      .filter((s) => { const r = parseOrder(s, g); return r.unknown || !(r.order ?? r).action; });
+    assert.deepEqual(dud, []);
   });
 });

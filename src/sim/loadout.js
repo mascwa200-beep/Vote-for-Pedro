@@ -41,15 +41,27 @@ export const CONSOLES = {
     mods: {}, special: 'crewProtect', value: 0.35, description: 'Fewer crew casualties from hull hits.' },
 
   // --- Devices (consumable, one use per engagement) ---
+  // `say` is the phrase that reaches the device from the order line, declared
+  // here so the button prints it and a test checks it from ONE source.
+  //
+  // It is not derivable from the name, which is why it is written down: saying
+  // "Hull Patch Kit" reads as the watch bill, and "Class-IV Probe" — like every
+  // other wording of the probe — used to be swallowed by `scan`, leaving the
+  // one device in the locker you LAUNCH addressable by nothing at all.
   shield_battery: { id: 'shield_battery', slot: 'device', name: 'Shield Battery', consumable: true,
+    say: 'shield battery',
     description: 'Instantly restores 40% shields to all facings.' },
   weapons_battery: { id: 'weapons_battery', slot: 'device', name: 'Weapons Battery', consumable: true,
+    say: 'weapons battery',
     description: 'Weapon power to maximum for 20 seconds.' },
   engine_battery: { id: 'engine_battery', slot: 'device', name: 'Engine Battery', consumable: true,
+    say: 'engine battery',
     description: 'Engine power to maximum for 20 seconds.' },
   hull_patch: { id: 'hull_patch', slot: 'device', name: 'Hull Patch Kit', consumable: true,
+    say: 'use a hull patch',
     description: 'Restores 20% hull and extinguishes all fires.' },
   probe: { id: 'probe', slot: 'device', name: 'Class-IV Probe', consumable: true,
+    say: 'launch a probe',
     description: 'Full scan of a system or anomaly without approaching it.' },
 };
 

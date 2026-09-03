@@ -239,10 +239,27 @@ const RECIPE_WORDS = RECIPES.map((r) => ({
     .toLowerCase()
     .split(/[\s-]+/)
     .filter((w) => w.length > 3),
+  // The short words, kept separately and used ONLY to break a tie.
+  //
+  // "kit" is three letters and was dropped, and it is the only thing telling
+  // "Hull patch" from "Hull patch kit": both scored identically on [hull,
+  // patch], the tie went to whichever came first in the table, and the kit
+  // could not be built by name at all — asking for one got the plain patch.
+  //
+  // They are not worth a point in the main scoring, though. Lowering the
+  // filter to `> 2` outright puts "rig" into the vocabulary (from "Coolant
+  // purge rig"), and "rig for battle" is an ordinary English order that then
+  // stopped selecting the attack posture. Short words decide between two
+  // recipes that are otherwise indistinguishable; they do not decide whether
+  // a sentence is about recipes at all.
+  short: `${r.name} ${r.id.replace(/_/g, ' ')}`
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .filter((w) => w.length === 3),
 }));
 
 export function findRecipe(text) {
-  let best = null;
+  const scored = [];
   let bestScore = 0;
   for (const r of RECIPE_WORDS) {
     let score = 0;
@@ -250,9 +267,22 @@ export function findRecipe(text) {
       if (text.includes(w)) score += w.length;
       else if (text.includes(w.replace(/s$/, ''))) score += w.length - 1;
     }
-    if (score > bestScore) { bestScore = score; best = r.id; }
+    if (score > 0) scored.push({ id: r.id, score, short: r.short });
+    if (score > bestScore) bestScore = score;
   }
-  return best;
+  if (!bestScore) return null;
+
+  const top = scored.filter((r) => r.score === bestScore);
+  if (top.length === 1) return top[0].id;
+
+  // Two recipes the long words cannot tell apart. Ask the short ones.
+  let best = top[0];
+  let bestExtra = -1;
+  for (const r of top) {
+    const extra = r.short.filter((w) => text.includes(w)).length;
+    if (extra > bestExtra) { bestExtra = extra; best = r; }
+  }
+  return best.id;
 }
 
 /** Which faction is being talked about. */
