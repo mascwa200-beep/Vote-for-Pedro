@@ -137,6 +137,28 @@ export function modal(title, bodyNodes, actions = []) {
     el('div', { class: 'body' }, bodyNodes),
     el('div', { class: 'actions' }, actions),
   ]);
+  // Leave the order line uncovered.
+  //
+  // The dialog is bottom-aligned and grew straight over the order bar, so on a
+  // phone the input sat INSIDE the dialog's footprint and `elementFromPoint`
+  // over it returned the dismiss button: tapping the order line pressed
+  // "Belay that", and there was no way to focus it at all. A dialog that prints
+  // "say make it so" on itself and then covers the only place you could say it
+  // is worse than one that prints nothing.
+  //
+  // Measured rather than assumed, because the bar's height moves with the tap
+  // target and the era's styling. The backdrop still covers the whole screen —
+  // everything else stays dimmed and out of play — and the order bar rides
+  // above it on z-index so it can still be typed into.
+  // Everything from the bar's top edge down, not just the bar's own height:
+  // the navigation sits BELOW it, so reserving the height alone still left the
+  // dialog lapping 42px over the input.
+  const bar = document.querySelector('.orderbar');
+  const clear = bar
+    ? Math.max(0, Math.round(window.innerHeight - bar.getBoundingClientRect().top))
+    : 0;
+  if (clear) back.style.paddingBottom = `calc(12px + var(--safe-bottom) + ${clear}px)`;
+
   back.append(box);
   document.body.append(back);
   const handle = {

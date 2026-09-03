@@ -1307,6 +1307,70 @@ Sources: [Memory Alpha — Demilitarized Zone](https://memory-alpha.fandom.com/w
 
 ---
 
+## 26. The words that answer a question
+
+This game asks the captain questions. When the parser reads something it is
+only half-sure of, it stops and says "I read that as *X* — confirm?", and that
+is the honest half of "type anything and it works": the table cannot cover
+every sentence in English, so instead of guessing it asks.
+
+Which raises the thing this dossier is for: **what does a captain actually say
+to answer?** Not what a menu offers — what the words are.
+
+**"Make it so" is the affirmative, and it is not an invention of the
+franchise.** It is a naval formula. A captain, satisfied with a report or a
+proposal put to him, replies "make it so" — meaning *carry on and do the thing
+you have just described to me*. It turns up in descriptions of Royal Navy
+practice well before television: a 1902 account of life in the King's fleet has
+a captain answering a report with "Thank you, make it so." The franchise took
+it from there rather than coining it; it was first spoken in the pilot of *The
+Next Generation* in 1987 and became the line the character is quoted for.
+
+What matters mechanically is the grammar of it. "Make it so" is not a synonym
+for a specific order — it is an answer to something already on the table. It
+has no object. That is exactly the shape of a reply to "did you mean X?", and
+it is why this game had it wrong: with no pending question to attach to, the
+parser had nowhere to put it and read the verb literally, sending "make it so"
+to the **replicator** to be told there is no specification for "it so".
+
+**"Belay that" is the negative, and it is older still.** In the age of sail a
+line was *belayed* by taking a figure-eight turn around a belaying pin, which
+stopped the rope dead. The physical act became the verbal one: belay means
+stop, cancel, disregard. "Belay my last" is *withdraw what I just said*. Note
+what it does NOT mean — it is not "cease fire". It cancels an ORDER, not an
+action, which is why the natural place for it is answering a question about an
+order that has not been given yet.
+
+**"Aye aye" is not on this list, and that is the finding worth writing down.**
+It is easy to reach for as an affirmative and it is the wrong direction: "aye
+aye" is what a subordinate says *back* to an officer, meaning "I understand the
+order and will carry it out." A captain does not say it to their own computer.
+The captain's affirmatives are "make it so", "engage", "proceed", "carry on",
+"very well" and plain "yes"; "aye aye" belongs to the officer answering. Since
+the whole point of the order line is that the captain is the one talking, it
+stays out.
+
+### What the build takes from this
+
+A pending question gets its own small vocabulary, checked before the order
+parser runs — the same shape the game already uses when a forced channel turns
+the order line into literal speech. Affirmatives execute the reading; "belay
+that", "belay", "cancel", "negative", "as you were" dismiss it. Both phrases go
+ON the buttons, because a button that does not print what says it teaches
+nothing.
+
+And it is checked *before* the parser rather than added to it, so that the
+seventy-odd existing intents keep their meanings: "belay that" with no question
+pending still stops the guns, which is what it means when somebody is shooting
+at you.
+
+Sources: [Memory Alpha — Make It So](https://memory-alpha.fandom.com/wiki/Make_It_So),
+[US Dictionary — "Belay my last"](https://usdictionary.com/idioms/belay-my-last/),
+[Naval Society of PAs — Navy jargon](https://navypa.com/manuals/misc-navy-jargon),
+[HOME.org — Cancelling orders: the naval history of belay](https://h-o-m-e.org/belay-that-order/)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

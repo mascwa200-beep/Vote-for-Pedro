@@ -30,6 +30,7 @@ import { WATCHES } from './sim/watch.js';
 import { Ship, FACINGS, REPEL_STRENGTH, REPEL_DURATION } from './sim/ship.js';
 import { answeringFor } from './sim/address.js';
 import { parseOrder } from './ui/orders.js';
+import { readAnswer, AFFIRM_PHRASE, BELAY_PHRASE } from './lang/answers.js';
 import { SKILLS } from './sim/skills.js';
 import { RNG } from './core/rng.js';
 import { FEAT_BY_ID, ABILITIES as ABILITY_LIST } from './rules/character.js';
@@ -863,8 +864,13 @@ class App {
     const body = [].concat(lines).map((l) => (
       typeof l === 'object' && l?.natural !== undefined ? rollCard(l) : el('p', { text: String(l) })
     ));
+    const dismiss = () => { audio.play('computer_ack'); this.closeModal(); };
     this.modalHandle = this.raiseModal(title, body,
-      actions ?? [button('Acknowledged', () => { audio.play('computer_ack'); this.closeModal(); }, { color: 'blue' })]);
+      actions ?? [button('Acknowledged', dismiss, { color: 'blue', say: 'acknowledged' })]);
+    // A report is not a question, but it blocks the screen exactly like one and
+    // the only way past it was a tap. Either answer puts it away: there is
+    // nothing here to agree or disagree with.
+    if (!actions) this.pendingQuestion = { affirm: dismiss, belay: dismiss };
     audio.play('computer_query');
     return this.modalHandle;
   }
@@ -897,6 +903,9 @@ class App {
     if (!keepConsole && !this._refreshingConsole) this.consoleOpen = null;
     this.modalHandle?.close();
     this.modalHandle = null;
+    // Whatever was being asked is no longer being asked. Left set, the next
+    // "make it so" would answer a question that is not on the screen.
+    this.pendingQuestion = null;
   }
 
   /**
@@ -916,21 +925,31 @@ class App {
       this.executeOrder(forced.confirm ? forced.order : forced, raw);
     }, { color: 'ghost' }));
 
+    const execute = () => {
+      this.closeModal();
+      this.executeOrder(result.order, raw);
+    };
+    const belay = () => {
+      audio.play('ui_deny');
+      this.closeModal();
+    };
+
     this.modalHandle = this.raiseModal('Confirm order', [
       el('p', { class: 'muted', text: `You said: “${raw}”` }),
       el('p', { text: `I read that as: ${result.reading}` }),
       alts.length ? el('p', { class: 'muted', text: 'Or did you mean:' }) : null,
       ...alts,
     ].filter(Boolean), [
-      button('Execute', () => {
-        this.closeModal();
-        this.executeOrder(result.order, raw);
-      }, { color: 'blue' }),
-      button('Belay that', () => {
-        audio.play('ui_deny');
-        this.closeModal();
-      }, { color: 'ghost' }),
+      button('Execute', execute, { color: 'blue', say: AFFIRM_PHRASE }),
+      button('Belay that', belay, { color: 'ghost', say: BELAY_PHRASE }),
     ]);
+    // The one moment the game stops and asks the captain a direct question used
+    // to be the one moment the captain could not answer in words: every spoken
+    // reply — "make it so", "yes", "execute", "do it", even the "belay that"
+    // printed on the button — fell through to the parser and was swallowed, and
+    // the only way out of the dialog was to touch the screen. See
+    // docs/RESEARCH.md §26.
+    this.pendingQuestion = { affirm: execute, belay };
     audio.play('computer_query');
     return this.modalHandle;
   }
@@ -1178,6 +1197,25 @@ class App {
       const outcome = this.game.makeAppeal(text);
       this.showAppealOutcome(outcome);
       return;
+    }
+
+    // A question is on the screen, and this line is an answer to it.
+    //
+    // Checked BEFORE the parser, not added to it, so the existing intents keep
+    // their meanings — with nothing pending, "belay that" still stops the guns,
+    // which is what it means when somebody is shooting at you. A line that is
+    // not an answer falls through and is parsed as an ordinary order: a captain
+    // who says "fire phasers" while being asked something has changed the
+    // subject, and is entitled to.
+    if (this.pendingQuestion) {
+      const answer = readAnswer(text);
+      if (answer) {
+        const act = this.pendingQuestion[answer];
+        this.game?.pushLog(`“${text}”`, 'captain');
+        act();
+        this.render();
+        return;
+      }
     }
 
     const order = parseOrder(text, this.game?.crew ?? null);

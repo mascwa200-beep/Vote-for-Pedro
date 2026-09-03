@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { normalize, readNumber } from '../src/lang/normalize.js';
+import { readAnswer, AFFIRM_PHRASE, BELAY_PHRASE } from '../src/lang/answers.js';
 import { soundex, skeleton, soundsLike } from '../src/lang/phonetic.js';
 import { distance, similarity } from '../src/lang/fuzzy.js';
 import {
@@ -1096,5 +1097,76 @@ describe('every encounter choice can be said', () => {
     assert.equal(parseOrder('withdraw').action, 'warp_out');
     assert.equal(parseOrder('engage them').action, 'fire');
     assert.equal(parseOrder('hail them').action, 'hail');
+  });
+});
+
+// ================================== answering a question the game has asked
+
+describe('the captain can answer a question the game asked', () => {
+  // The parser stops on a plausible-but-unsure reading and asks "I read that as
+  // X, confirm?". Measured in the running game before this existed: every
+  // spoken reply — "make it so", "yes", "execute", "do it", and the "belay
+  // that" printed on the dialog's own button — fell through the parser and was
+  // swallowed, and the dialog stayed up. The only way out was a tap, in a game
+  // whose stated rule is that anything you can tap you can say.
+
+  test('the affirmatives a captain actually uses are all answers', () => {
+    for (const said of [
+      'make it so', 'do it', 'engage', 'proceed', 'carry on', 'very well',
+      'execute', 'confirm', 'affirmative', 'yes', 'aye', 'acknowledged',
+    ]) {
+      assert.equal(readAnswer(said), 'affirm', `"${said}"`);
+    }
+  });
+
+  test('and so are the ways of taking it back', () => {
+    for (const said of [
+      'belay that', 'belay my last', 'belay', 'cancel', 'negative', 'no',
+      'as you were', 'never mind', 'disregard',
+    ]) {
+      assert.equal(readAnswer(said), 'belay', `"${said}"`);
+    }
+  });
+
+  test('punctuation, capitals and being addressed to the computer do not matter', () => {
+    for (const said of ['Make it so.', 'MAKE IT SO', 'Computer, make it so',
+      '  make   it  so  ', 'Number One, belay that!']) {
+      assert.ok(readAnswer(said), `"${said}"`);
+    }
+  });
+
+  test('"aye aye" is not an affirmative, because the captain does not say it', () => {
+    // RESEARCH.md §26: "aye aye" is the reply a subordinate gives back to an
+    // officer — "I understand and will carry out the order". The order line is
+    // the captain talking, so it is not one of the captain's words. Plain "aye"
+    // is, and is kept.
+    assert.equal(readAnswer('aye aye'), null);
+    assert.equal(readAnswer('aye aye sir'), null);
+    assert.equal(readAnswer('aye'), 'affirm');
+  });
+
+  test('an order is not an answer, so changing the subject still works', () => {
+    // A captain who is asked something and says "fire phasers" has changed the
+    // subject and is entitled to. Only actual answers get intercepted.
+    for (const said of ['fire phasers', 'red alert', 'set course for vulcan',
+      'scan the system', 'warp 8', 'hail them']) {
+      assert.equal(readAnswer(said), null, `"${said}" was eaten as an answer`);
+    }
+  });
+
+  test('and the answer vocabulary does not quietly take over an existing order', () => {
+    // These words are checked BEFORE the parser, but only while a question is
+    // pending. With nothing pending the parser still owns them — "belay that"
+    // stops the guns, which is what it means when somebody is shooting at you.
+    const g = new Game({ seed: 5n, crewMode: 'original' });
+    assert.equal(parseOrder('belay that', g).action, 'cease_fire');
+    assert.equal(parseOrder('stand down', g).action, 'alert');
+  });
+
+  test('every phrase on the two buttons is one the game answers to', () => {
+    // The rule the encounter panel broke: a button that prints a phrase which
+    // does not work teaches a phrase that does not work.
+    assert.equal(readAnswer(AFFIRM_PHRASE), 'affirm');
+    assert.equal(readAnswer(BELAY_PHRASE), 'belay');
   });
 });
