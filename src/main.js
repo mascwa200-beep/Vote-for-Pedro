@@ -27,7 +27,7 @@ import {
 
 import { ABILITIES } from './sim/officers.js';
 import { WATCHES } from './sim/watch.js';
-import { Ship, FACINGS, REPEL_STRENGTH, REPEL_DURATION } from './sim/ship.js';
+import { FACINGS, REPEL_STRENGTH, REPEL_DURATION } from './sim/ship.js';
 import { answeringFor } from './sim/address.js';
 import { parseOrder } from './ui/orders.js';
 import { readAnswer, AFFIRM_PHRASE, BELAY_PHRASE } from './lang/answers.js';
@@ -35,7 +35,7 @@ import { SKILLS } from './sim/skills.js';
 import { RNG } from './core/rng.js';
 import { FEAT_BY_ID, ABILITIES as ABILITY_LIST } from './rules/character.js';
 import { CONSOLES } from './sim/loadout.js';
-import { yardReport } from './sim/command.js';
+import { yardReport, takeCommandOf } from './sim/command.js';
 import { venueFor } from './rules/inquiry.js';
 import { TIERS, TRAIT_LIST } from './sim/mastery.js';
 
@@ -1237,9 +1237,34 @@ class App {
     }
     const oldName = g.ship.name;
     const oldRegistry = g.ship.registry;
-    g.ship = new Ship(classId, { name: oldName, registry: oldRegistry, faction: 'federation', isPlayer: true });
-    const refit = g.loadout.refitTo(g.ship.cls.slots);
-    g.applyAllMods();
+    // Through `takeCommandOf`, which is the one path that puts a captain in a
+    // different hull — and whose neighbour already claims to be shared by "all
+    // three ways a captain ends up in a different hull: promotion, a board of
+    // inquiry, and the change-of-command screen". This screen was the one that
+    // was not.
+    //
+    // What it was missing is the line `takeCommandOf` carries a comment for:
+    // "The track follows the captain, not the hull." Nothing here re-pointed
+    // `mastery.classId`, so a Constitution worked up to tier five and then
+    // swapped for an Excelsior at the yard flew the Excelsior on the
+    // Constitution's mastery — five tiers of bonuses on a hull nobody had ever
+    // flown. Measured:
+    //
+    //   changeShip     flying excelsior | track: constitution | tier 5
+    //   takeCommandOf  flying excelsior | track: excelsior    | tier 0
+    //
+    // And there are six shipyards, one of them Sol, so this is a button a
+    // captain can press on the first day.
+    const took = takeCommandOf(g, classId, { name: oldName, registry: oldRegistry });
+    if (!took.ok) {
+      audio.play('ui_deny');
+      g.officerSays('engineering', took.reason ?? 'The yard cannot do that, Captain.', 'object');
+      this.render();
+      return;
+    }
+    const refit = took;
+    // The yard time is this screen's own contribution: the other two ways into
+    // a new hull do not spend four days in dock.
     g.clock.advanceStardate(4);
     g.pushLog(`Transferred command to a ${g.ship.cls.name}.`, 'captain');
     audio.play('dock');

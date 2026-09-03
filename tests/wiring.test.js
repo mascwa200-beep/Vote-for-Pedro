@@ -3226,3 +3226,24 @@ test('the engagement report takes its hull from the fight it describes', () => {
   assert.ok(!/lines\.push\(`Hull at \$\{Math\.round\(g\.ship\.hullPct/.test(panel),
     'the report still reads the live hull');
 });
+
+// The shipyard is one of the three ways into a different hull, and must use the
+// one path that knows what that means.
+//
+// `yardReport`'s comment says it is "shared by all three ways a captain ends up
+// in a different hull — promotion, a board of inquiry, and the change-of-command
+// screen". The screen was the one that was not: `App.changeShip` built its own
+// `new Ship(...)` and never re-pointed `mastery.classId`, so a Constitution
+// worked up to tier five and swapped for an Excelsior at the yard flew the
+// Excelsior on the Constitution's mastery. `main.js` is DOM-bound and cannot be
+// imported here, so this reads it as text the way the rest of this file does.
+test('the shipyard changes ship through the path that knows what that costs', () => {
+  const main = readFileSync(join(HERE, '..', 'src', 'main.js'), 'utf8');
+  const at = main.indexOf('  changeShip(classId) {');
+  assert.ok(at > 0, 'changeShip is no longer defined where this test looks for it');
+  const body = main.slice(at, at + 2400);
+  assert.ok(/takeCommandOf\(g, classId/.test(body),
+    'the shipyard does not go through takeCommandOf');
+  assert.ok(!/new Ship\(classId/.test(body),
+    'the shipyard still builds its own hull, so nothing re-points the mastery track');
+});

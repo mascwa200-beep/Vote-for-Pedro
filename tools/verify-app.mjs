@@ -3102,6 +3102,79 @@ try {
   await page.waitForTimeout(150);
   await page.screenshot({ path: join(SHOTS, '06c-ship-mastery.png') });
 
+  // ------------------------------------------------ the yard, and what it costs
+  //
+  // The one place a captain changes hull by choice, and the only one of the
+  // three that is behind a screen — `Game.acceptCommand` and losing a ship both
+  // go through `takeCommandOf` and are reachable headlessly; this button is not.
+  //
+  // What it must not do is carry the old hull's mastery onto the new one. The
+  // track follows the captain, not the ship, and the yard used to build its own
+  // hull and never say so: a Constitution worked up to tier five and swapped
+  // for an Excelsior flew the Excelsior on the Constitution's five tiers. Six
+  // systems have a shipyard, one of them Sol, so it is a first-day button.
+  //
+  // Driven through the real button, because the whole defect was that the model
+  // half and the screen half had drifted.
+  const yard = await page.evaluate(async () => {
+    const app = window.__app;
+    const g = app.game;
+    const { commandableAt } = await import('./src/world/ships.data.js');
+    // Put her somewhere with a yard, thoroughly worked up, and let the screen
+    // offer whatever the ladder allows.
+    g.locationId = 'sol';
+    g.mastery.points[g.ship.classId] = 100000;
+    app.go('ship');
+    app.render();
+    const was = { cls: g.ship.classId, tier: g.mastery.tier, track: g.mastery.classId,
+      name: g.ship.name, registry: g.ship.registry };
+    const offered = commandableAt(g.progress.shipTier).filter((c) => c.id !== g.ship.classId);
+    const button = [...document.querySelectorAll('.panel')]
+      .find((el) => /Shipyard/i.test(el.querySelector('h2')?.textContent ?? ''))
+      ?.querySelector('button');
+    if (!button) return { was, offered: offered.length, pressed: false };
+    const points = { ...g.mastery.points };
+    const where = g.locationId;
+    button.click();
+    const now = { cls: g.ship.classId, tier: g.mastery.tier, track: g.mastery.classId,
+      name: g.ship.name, registry: g.ship.registry };
+
+    // Put her back the way she was found.
+    //
+    // Two comments in this file already say a check must not leave the world
+    // changed, and this is the fourth time it has bitten: leaving the captain in
+    // a different hull broke "asking for one brings the offer back" two hundred
+    // lines later, because a command offer is computed against the ship being
+    // flown. Everything this block touched — the hull, the track, the points,
+    // the place — goes back.
+    const { takeCommandOf } = await import('./src/sim/command.js');
+    takeCommandOf(g, was.cls, { name: was.name, registry: was.registry });
+    g.mastery.points = points;
+    g.mastery.classId = was.track;
+    g.locationId = where;
+    g.commandOffer = null;
+    app.go('bridge');
+    app.render();
+    return {
+      was, offered: offered.length, pressed: true, now,
+      leftAsFound: g.ship.classId === was.cls && g.mastery.classId === was.track
+        && g.locationId === where,
+    };
+  });
+  await dismissModals(page);
+  check('the yard offers a captain a different hull', yard.pressed && yard.offered > 0,
+    JSON.stringify({ offered: yard.offered, pressed: yard.pressed }));
+  check('and taking it changes the ship', yard.pressed && yard.now.cls !== yard.was.cls,
+    JSON.stringify(yard));
+  check('and the mastery track follows the captain onto her',
+    yard.pressed && yard.now.track === yard.now.cls && yard.now.tier < yard.was.tier,
+    JSON.stringify(yard));
+  check('and she keeps her name and her number through the refit',
+    yard.pressed && yard.now.name === yard.was.name && yard.now.registry === yard.was.registry,
+    JSON.stringify(yard));
+  check('and the yard check left the captain in the ship it found her in',
+    yard.leftAsFound === true, JSON.stringify({ leftAsFound: yard.leftAsFound }));
+
   // ------------------------------------------------ an episode is somewhere
   await nav(page, 'Bridge');
   const place = await page.evaluate(() => {
@@ -3772,11 +3845,30 @@ try {
     g.locationId = 'setlik';
     g.reputation.perks.add('dmz_passage');
     const warning = g.crossingWarningFor(g.galaxy.get('dmz_volnar'));
-    g.setCourse('dmz_volnar');
-    for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(1 / 30);
+    // Flown, not teleported — and flown until she gets there.
+    //
+    // A 2%-per-second roll forces a flight out of warp mid-course, and when it
+    // fired on this leg the ship was dropped back at Setlik and the check
+    // asserted about a voyage that never happened: `forcedOut: true`, `at:
+    // setlik`, and a rider that quite correctly said nothing because the zone
+    // was never entered. A captain in that position lays the course in again,
+    // so this does too. Bounded, and the count is reported, because a leg that
+    // needs ten attempts is a finding of its own.
+    let attempts = 0;
+    while (g.locationId !== 'dmz_volnar' && attempts < 8) {
+      attempts++;
+      g.ship.antimatter = g.ship.maxAntimatter;
+      if (!g.setCourse('dmz_volnar').ok) break;
+      for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(1 / 30);
+      // Being jumped on the way in leaves somebody shooting; break that off
+      // before laying the course in again.
+      if (g.engagement && !g.engagement.over) g.engagement.end('routed');
+      for (let i = 0; i < 60; i++) g.update(1 / 30);
+    }
     app.render();
     return {
       at: g.locationId,
+      attempts,
       warned: warning !== null,
       challenged: g.encounter?.challenge === true,
       // Said out loud, because a perk nobody notices is a perk that does nothing.

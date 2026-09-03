@@ -136,7 +136,7 @@ function nameFor(game, avoid) {
  * @returns {{ok: boolean, ship?: Ship, previous?: string, reason?: string,
  *            stowed?: string[], gained?: Record<string, number>}}
  */
-export function takeCommandOf(game, classId, { name = null } = {}) {
+export function takeCommandOf(game, classId, { name = null, registry = null } = {}) {
   const cls = getShipClass(classId);
   if (!cls) return { ok: false, reason: 'There is no such class in the registry.' };
   const previous = game.ship?.classId ?? null;
@@ -144,6 +144,11 @@ export function takeCommandOf(game, classId, { name = null } = {}) {
 
   game.ship = new Ship(classId, {
     name: name ?? nameFor(game, previousName),
+    // The yard refit keeps her name and her number: it is the same ship coming
+    // out of dock as a different class, not a new command. Promotion and a
+    // board of inquiry pass neither and get a fresh hull with a fresh name,
+    // which is what those are.
+    ...(registry ? { registry } : {}),
     faction: 'federation',
     isPlayer: true,
   });
