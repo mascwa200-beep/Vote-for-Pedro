@@ -391,6 +391,72 @@ function playCommission(spec) {
 
 // ---------------------------------------------------------------- the flights
 //
+/**
+ * Play a commission with the app put down and picked up at every leg.
+ *
+ * Twice a leg: once at warp, and once on arrival. The two save points reach
+ * different states and the second is the one that matters — a ship at warp has
+ * no encounter by construction, because `setCourse` ends one, so a probe that
+ * only saved mid-voyage would report "no encounters lost" having never caught
+ * one. It did, on the first attempt, and the counts below carry `had` beside
+ * every `lost` for exactly that reason.
+ *
+ * @returns {object} what survived and what did not
+ */
+function reloadAtEveryLeg(seed, legs = 20) {
+  let t = 1_800_000_000_000;
+  const opts = { now: () => t, compression: HOUR_PER_TICK };
+  let g = new Game({ seed: BigInt(seed), crewMode: 'original', ...opts });
+  const dog = new Watchdog();
+  const r = {
+    seed, legs: 0, reloads: 0,
+    hadTransit: 0, lostTransit: 0,
+    hadEncounter: 0, lostEncounter: 0,
+    hadOffer: 0, lostOffer: 0,
+    clockDrift: [], violations: [],
+  };
+  const reload = () => {
+    const days = g.campaign.elapsedDays;
+    const at = g.locationId;
+    g = Game.load(JSON.parse(JSON.stringify(g.save())), opts);
+    r.reloads++;
+    if (Math.abs(g.campaign.elapsedDays - days) > 1e-6) {
+      r.clockDrift.push(`${days.toFixed(4)} -> ${g.campaign.elapsedDays.toFixed(4)}`);
+    }
+    if (g.locationId !== at) r.violations.push(`woke at ${g.locationId}, not ${at}`);
+    for (const v of checkAll(g, OPTS)) r.violations.push(`${v.severity} ${v.code}`);
+  };
+
+  for (let leg = 0; leg < legs && !g.over; leg++) {
+    const near = g.galaxy.neighbors(g.locationId);
+    const dest = near[leg % near.length];
+    if (!dest) break;
+    g.ship.antimatter = g.ship.maxAntimatter;
+    if (!g.setCourse(dest.id, 7).ok) continue;
+    r.legs++;
+
+    // Part way, then the app goes away.
+    for (let i = 0; i < 40 && g.transit; i++) { g.update(STEP); dog.tick(g, OPTS); }
+    const underway = !!g.transit;
+    if (underway) r.hadTransit++;
+    reload();
+    if (underway && !g.transit) r.lostTransit++;
+
+    // Finish the leg, then save again where an encounter can be live.
+    for (let i = 0; i < 24 * 365 && g.transit && !g.over; i++) { g.update(STEP); dog.tick(g, OPTS); }
+    const met = g.encounter?.kind ?? null;
+    const offers = g.availableMissions?.()?.length ?? 0;
+    if (met) r.hadEncounter++;
+    if (offers) r.hadOffer++;
+    reload();
+    if (met && !g.encounter) r.lostEncounter++;
+    if (offers && !(g.availableMissions?.()?.length)) r.lostOffer++;
+  }
+  r.dog = dog;
+  r.game = g;
+  return r;
+}
+
 // Flown once, at module load, and asserted from several angles. Three
 // commissions is about four seconds; the file has to stay well under the 19s
 // that `invariants.test.js` already costs, because `node --test` runs files as
@@ -637,3 +703,71 @@ describe('and it plays the same way twice', () => {
 // stardate wandering off on its own; they now spend most of a year or two of a
 // five-year commission and the two numbers move together, because they are the
 // same number read two ways.
+
+// ---------------------------------------------------------------------------
+// A commission played through a save at every leg.
+//
+// The browser saves on `visibilitychange`, so a phone that backgrounds the app
+// is the ordinary case rather than a stress test — and now that a voyage takes
+// real days, a captain is backgrounded mid-leg far more often than when every
+// crossing was over in fourteen seconds. Sixty reloads across three
+// commissions, twice a leg: once at warp and once on arrival.
+
+describe('a commission played through a save at every leg', () => {
+  const RELOADED = COMMISSIONS.map((spec) => reloadAtEveryLeg(spec.seed));
+
+  test('a voyage under way survives being put down and picked up', () => {
+    // 20 live transits per commission, every one of them reloaded. The `had`
+    // count is the control: without it "none were lost" is what a probe that
+    // never caught a ship at warp would also report.
+    for (const r of RELOADED) {
+      assert.ok(r.hadTransit >= 15,
+        `seed ${r.seed} only caught ${r.hadTransit} voyages under way to reload`);
+      assert.equal(r.lostTransit, 0,
+        `seed ${r.seed} lost ${r.lostTransit} of ${r.hadTransit} voyages across a reload`);
+    }
+  });
+
+  test('and the commission clock does not move across a reload', () => {
+    for (const r of RELOADED) {
+      assert.deepEqual(r.clockDrift, [],
+        `seed ${r.seed}: the commission clock moved when nothing happened`);
+    }
+  });
+
+  test('and nothing it woke up in was ever illegal', () => {
+    for (const r of RELOADED) {
+      assert.deepEqual(r.violations, [], `seed ${r.seed} woke up in an illegal state`);
+    }
+  });
+
+  test('and an encounter does NOT survive a save, which is the decision', () => {
+    // Measured: 43 of 43 live encounters are gone after a reload. That is not a
+    // defect — `Game.load` says so in its own words, that a fight, an encounter
+    // and a mission stage "are all things the game re-derives or that should
+    // not resume mid-air", and only a voyage is excepted because it is the one
+    // that is BETWEEN places.
+    //
+    // Written down because it is a decision that now costs more than it used
+    // to: a captain arrives, something is on the viewer, the phone backgrounds
+    // itself, and the contact is gone. If that is ever revisited, this test is
+    // the thing that should fail, deliberately, rather than a silent change of
+    // behaviour nobody notices.
+    const had = RELOADED.reduce((n, r) => n + r.hadEncounter, 0);
+    const lost = RELOADED.reduce((n, r) => n + r.lostEncounter, 0);
+    assert.ok(had >= 20, `only ${had} encounters were live at a save point`);
+    assert.equal(lost, had,
+      `${had - lost} of ${had} encounters survived a save — the load path's stated `
+      + 'decision is that none do, so either it changed or this test is wrong');
+  });
+
+  test('and what a system offers is still offered when you come back', () => {
+    // The other half, and the one that makes the encounter result meaningful
+    // rather than "reloading loses everything": a mission on the board is a
+    // fact about the place, and it is still there.
+    const had = RELOADED.reduce((n, r) => n + r.hadOffer, 0);
+    const lost = RELOADED.reduce((n, r) => n + r.lostOffer, 0);
+    assert.ok(had >= 5, `no system ever had anything on the board at a save point`);
+    assert.equal(lost, 0, `${lost} of ${had} boards were empty after a reload`);
+  });
+});
