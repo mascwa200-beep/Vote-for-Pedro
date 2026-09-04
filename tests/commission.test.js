@@ -54,6 +54,7 @@ import { AWAY_TEMPLATES } from '../src/sim/away.js';
 import { ENCOUNTER_KINDS } from '../src/world/encounters.js';
 import { SUBSYSTEM_KEYS } from '../src/sim/ship.js';
 import { SKILL_LIST } from '../src/sim/skills.js';
+import { Ship } from '../src/sim/ship.js';
 
 const STEP = 1 / 30;
 const OPTS = { arenaRadius: ARENA_RADIUS };
@@ -769,5 +770,119 @@ describe('a commission played through a save at every leg', () => {
     const lost = RELOADED.reduce((n, r) => n + r.lostOffer, 0);
     assert.ok(had >= 5, `no system ever had anything on the board at a save point`);
     assert.equal(lost, 0, `${lost} of ${had} boards were empty after a reload`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Combat, entered and left from every mode.
+//
+// "Engage in combat, combat's done, and the stuff that comes after it" is the
+// part of this game that has to be right, and the soak in invariants.test.js
+// fights sixty-eight engagements without ever leaving the arena. What nothing
+// walked is the SEAM: a fight begun from a standard orbit, from a course under
+// way, from the surface — and what the ship is left holding afterwards.
+
+describe('combat, entered and left from every mode', () => {
+  /** How a captain gets into each mode. Every one an order they could give. */
+  const WAYS_IN = {
+    bridge: () => true,
+    orbit: (g) => g.enterOrbit().ok,
+    transit: (g) => {
+      g.ship.antimatter = g.ship.maxAntimatter;
+      const near = g.galaxy.neighbors(g.locationId);
+      return near.length > 0 && g.setCourse(near[0].id, 7).ok;
+    },
+    ashore: (g) => {
+      if (!g.enterOrbit().ok) return false;
+      g.walk?.enter?.('transporter');
+      return g.beamDown?.()?.ok !== false;
+    },
+  };
+
+  const fought = Object.entries(WAYS_IN).map(([where, getIn]) => {
+    const g = new Game({ seed: 909n, crewMode: 'original', compression: HOUR_PER_TICK });
+    const reached = getIn(g);
+    // What the ship was actually holding when the shooting started. Not
+    // `g.mode`: an orbit and a landing party are their own fields rather than
+    // modes, so reading the mode reports "bridge" for three of these four and
+    // a control built on it passes while measuring nothing.
+    const from = {
+      mode: g.mode,
+      orbit: !!g.orbit,
+      transit: !!g.transit,
+      ashore: !!g.ashore,
+    };
+    // `relentless`, because an ordinary hostile breaks off and this is about
+    // what a fight carried to a decision leaves behind.
+    g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Trial' })], { relentless: true });
+    for (let t = 0; t < 40000 && g.engagement && !g.engagement.over && !g.over; t++) {
+      const e = g.engagement;
+      if (!e.target || e.target.destroyed) e.cycleTarget();
+      const mark = e.target ?? e.liveHostiles[0];
+      if (mark) e.comeAboutTo(mark);
+      e.setThrottle(0.8);
+      g.update(STEP);
+    }
+    for (let t = 0; t < 300 && !g.over; t++) g.update(STEP);
+    return { where, reached, from, g };
+  });
+
+  test('every mode was actually reached, or this proves nothing', () => {
+    // The control. Four rows that all silently failed to leave the bridge
+    // would satisfy every assertion below.
+    for (const f of fought) {
+      assert.equal(f.reached, true, `could not get into ${f.where}`);
+    }
+    // Each way in has to have produced its own distinctive state, or the four
+    // rows are the same row written four times.
+    const by = Object.fromEntries(fought.map((f) => [f.where, f.from]));
+    assert.equal(by.orbit.orbit, true, 'the orbit fight did not begin in orbit');
+    assert.equal(by.transit.transit, true, 'the transit fight did not begin at warp');
+    assert.equal(by.ashore.ashore, true, 'the ashore fight did not begin on the surface');
+    assert.equal(by.bridge.orbit || by.bridge.transit || by.bridge.ashore, false,
+      'the bridge fight began somewhere that was not the bridge');
+    for (const f of fought) assert.ok(LEGAL_MODES.has(f.from.mode), `started in mode "${f.from.mode}"`);
+  });
+
+  test('and every fight reached a decision', () => {
+    for (const f of fought) {
+      assert.ok(f.g.lastCombat, `the fight begun from ${f.where} never ended`);
+      assert.ok(OUTCOMES.includes(f.g.lastCombat.outcome),
+        `${f.where} ended in "${f.g.lastCombat.outcome}"`);
+      assert.ok(!f.g.engagement || f.g.engagement.over,
+        `${f.where} left a fight still running`);
+    }
+  });
+
+  test('and the ship was left holding nothing she should not be', () => {
+    // The whole point. A fight begun at warp must not leave a course running;
+    // one begun on the surface must not leave the captain on it.
+    for (const f of fought) {
+      const held = [
+        f.g.transit ? 'a course' : null,
+        f.g.ashore ? 'a landing party' : null,
+        f.g.encounter ? 'an encounter' : null,
+      ].filter(Boolean);
+      assert.deepEqual(held, [],
+        `a fight begun from ${f.where} (orbit ${f.from.orbit}, warp ${f.from.transit}, `
+        + `ashore ${f.from.ashore}) left the ship holding ${held.join(' and ')}`);
+      assert.ok(LEGAL_MODES.has(f.g.mode), `${f.where} ended in mode "${f.g.mode}"`);
+    }
+  });
+
+  test('and nothing about the state afterwards was illegal', () => {
+    for (const f of fought) {
+      assert.deepEqual(checkAll(f.g, OPTS), [], `the state after ${f.where} was illegal`);
+    }
+  });
+
+  test('and it survives being saved and picked up again', () => {
+    for (const f of fought) {
+      const back = Game.load(JSON.parse(JSON.stringify(f.g.save())), { compression: HOUR_PER_TICK });
+      assert.deepEqual(checkAll(back, OPTS), [], `${f.where}: the record loaded broken`);
+      for (let t = 0; t < 300; t++) back.update(STEP);
+      assert.deepEqual(checkAll(back, OPTS), [],
+        `${f.where}: went wrong 300 ticks after loading`);
+    }
   });
 });
