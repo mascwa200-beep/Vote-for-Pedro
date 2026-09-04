@@ -62,7 +62,12 @@ export function applyAbility(game, officer, ability) {
   // says and it had never been read.
   const reaction = game.character?.mechanic('noObjection')
     ? 'comply'
-    : officer.reactTo({ risk: a.risk ?? 0.2, ethicalWeight: a.ethicalWeight ?? 0 });
+    : officer.reactTo(
+      { risk: a.risk ?? 0.2, ethicalWeight: a.ethicalWeight ?? 0 },
+      // "Argumentative — officers object more." The Tellarite's trait, and it
+      // had never been read by anything.
+      { friction: game.character?.mechanic('officerFriction') ?? 0 },
+    );
 
   // A refusal is a refusal. `reactTo` has documented three answers since it was
   // written and the third one did nothing: the order went through regardless,
@@ -74,6 +79,11 @@ export function applyAbility(game, officer, ability) {
     game.pushLog(`${officer.name}: ${line}`, officer.station);
     return { ok: false, reason: line, ability: a, officer, reaction, line };
   }
+
+  // An objection stated and then overruled costs something. Not much, once —
+  // the captain is allowed to be right — and a great deal over a commission of
+  // being told the same thing by the same officer and giving the order anyway.
+  if (reaction === 'object') officer.regard(-2, 'overruled');
 
   // "Bridge officer cooldowns recover 40% faster."
   officer.startCooldown(a.id, game.character?.mechanic('officerCooldown') ?? 0);

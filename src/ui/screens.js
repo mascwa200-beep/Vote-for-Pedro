@@ -1136,9 +1136,15 @@ export function dutyPanel(app) {
       // inside the tactical overlay, so using it here put the name and the
       // rating hard against each other with no space between them —
       // "Solene ThorneNavigator". Visible in a screenshot and in nothing else.
+      // `person.species` is READ here, and this is the only place it is.
+      // Every duty officer has had one generated, saved and reloaded since the
+      // roster was written, and the panel printed a name, a rating and a
+      // state — so the ship's complement was as uniformly human on the page as
+      // it was varied in the save file.
       nodes.push(el('p', {
         class: person.state === 'lost' ? 'danger' : 'muted',
-        text: `${person.name} — ${person.label} · ${doing}`,
+        text: `${person.name} — ${person.species ? `${person.species} ` : ''}`
+          + `${person.label} · ${doing}`,
       }));
     }
   }

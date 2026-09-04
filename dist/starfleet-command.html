@@ -1827,9 +1827,37 @@ class AwayTeam {
         this.casualties.push({ name: officer.name, killed: true });
         this.members = this.members.filter((o) => o.alive);
       } else if (rng.chance(injuryChance)) {
-        officer.injure(rng.range(0.3, 0.9));
-        result.injured = officer;
-        this.casualties.push({ name: officer.name, injured: true });
+        // The detail is between the officers and whatever is down there, and
+        // until now it was only ever between them and the rarest outcome.
+        //
+        // The branch above absorbs a DEATH into the security detail. Nothing
+        // absorbed an injury, and injuries are the common case: measured over
+        // sixty landings there were nine casualties, every one of them a named
+        // officer, and not one of the four security crewmen on every single
+        // team was so much as scratched. The senior staff were the safest
+        // people on the away team's roster and the redshirts were the safest
+        // people on the ship.
+        //
+        // Half, not all. Letting the detail absorb every injury it could
+        // measured just as wrong in the other direction: all nine casualties
+        // became security crewmen, no named officer was ever hurt again, and
+        // sickbay, `back_to_duty` and the whole injury system went quiet. Four
+        // crewmen and two or three checks a mission means a detail that always
+        // interposes is a detail that never runs out.
+        //
+        // So bringing security halves the chance that the casualty is one of
+        // your officers. That is a number a captain can act on, and it leaves
+        // the risk that makes the choice matter.
+        if (this.security > 0 && rng.chance(0.5)) {
+          this.security--;
+          result.securityHurt = 1;
+          this.casualties.push({ name: 'Security crewman', injured: true });
+          emit('away:security-hurt', { checkType });
+        } else {
+          officer.injure(rng.range(0.3, 0.9));
+          result.injured = officer;
+          this.casualties.push({ name: officer.name, injured: true });
+        }
       }
     }
 
@@ -2219,7 +2247,7 @@ function buildRoster({ mode, era }, rng) {
     const src = ERAS[era] ?? ERAS.tos;
     // `alias: true` entries are the same person double-hatted at a second
     // station; keep one canonical record per station.
-    return src.crew.map((c) => ({ ...c, canon: true, speciesId: null }));
+    return src.crew.map((c) => ({ ...c, speciesId: null }));
   }
   return generateCrew(rng);
 }
@@ -19236,7 +19264,6 @@ class Officer {
     Object.assign(this, {
       station: 'tactical', name: 'Officer', species: 'Human', rank: 'Lieutenant',
       discipline: 80, daring: 70, candor: 70, expertise: 80,
-      canon: false,
       // What the captain calls them when there is no time for a surname.
       // Read by src/sim/address.js; saved, because a name somebody answers to
       // that stops working after a reload is worse than never having it.
@@ -19347,16 +19374,102 @@ class Officer {
 
   /**
    * How this officer responds to an order they consider questionable.
+   *
+   * `relationship` finally means something here. It was declared on this class
+   * with the comment "-100..100, how they feel about serving under you", saved,
+   * loaded — and appeared on exactly three lines in the whole of `src/`, all
+   * three of them moving the number in and out of the save file. Nothing
+   * incremented it, nothing decremented it, and nothing branched on it.
+   *
+   * What it buys is the benefit of the doubt. An officer who has served you
+   * through a year of this gives you the order; one whose objections you have
+   * overruled six times does not, and says so. It is expressed as a shift in
+   * the two scores that already decide this — twenty points of candor and
+   * discipline across the full range — rather than as a fourth rule, so a
+   * captain the crew would follow anywhere reads as officers who are simply
+   * less argumentative, which is what it is.
+   *
+   * @param {object} order `risk` and `ethicalWeight`, both 0..1
+   * @param {object} opts `friction` from the captain's own traits — the
+   *        Tellarite's "Officers object more" is 0.2, and it had never been
+   *        read either.
    * @returns {'comply'|'object'|'refuse'}
    */
-  reactTo(order) {
+  reactTo(order, { friction = 0 } = {}) {
     const risk = order.risk ?? 0;             // 0..1
     const ethics = order.ethicalWeight ?? 0;  // 0..1, e.g. Prime Directive
-    if (ethics > 0.5 && this.discipline < 70 && this.candor > 75) return 'refuse';
+    const trust = Math.max(-1, Math.min(1, this.relationship / 100)) - friction * 2;
+    const candor = this.candor - trust * 20;
+    const discipline = this.discipline + trust * 20;
+    if (ethics > 0.5 && discipline < 70 && candor > 75) return 'refuse';
     if (risk > 0.7 && this.daring < 45) return 'object';
-    if (ethics > 0.3 && this.candor > 70) return 'object';
-    if (risk > 0.5 && this.candor > 80) return 'object';
+    if (ethics > 0.3 && candor > 70) return 'object';
+    if (risk > 0.5 && candor > 80) return 'object';
     return 'comply';
+  }
+
+  /**
+   * How this officer feels about serving under you, moved by something that
+   * happened.
+   *
+   * Bounded at the range the field was declared with. Small numbers on
+   * purpose: this is a five-year commission, and a relationship that could be
+   * bought back with one good afternoon is not one.
+   */
+  regard(delta, reason = '') {
+    const before = this.relationship;
+    this.relationship = Math.max(-100, Math.min(100, before + delta));
+    if (this.relationship !== before && reason) {
+      emit('officer:regard', { officer: this, delta: this.relationship - before, reason });
+    }
+    return this.relationship;
+  }
+
+  /** What the next level costs. Rising, so the fourth is not the first. */
+  static xpForLevel(level) { return 200 * level; }
+
+  /**
+   * Service tells.
+   *
+   * `xp` and `level` were declared here, defaulted, saved, loaded and guarded
+   * by an invariant in `sim/invariants.js` — and the only writes anywhere in
+   * `src/` were those two defaults. Measured over twelve battles, twelve
+   * landings, thirty-six days and forty-eight thousand experience, while the
+   * captain went from his first command to Captain: every officer aboard came
+   * out byte-identical to the day they were commissioned.
+   *
+   * What a level buys is `expertise`, which is the one number an officer has
+   * where a captain has a character sheet — and which is read in five places
+   * that matter: how fast their station comes off cooldown, how well they conn
+   * the ship when the captain is not on the bridge, how a detail they lead
+   * turns out, and who gets picked for one.
+   *
+   * Deliberately NOT new abilities. `Game.trainOfficer` is the route to those
+   * and it is gated on the CAPTAIN's rank, with a comment saying that is on
+   * purpose — "what a crew is allowed to train for is a function of the ship's
+   * standing orders" — so growing into them here would quietly undercut a
+   * decision the game has already made.
+   *
+   * Called `serve`, not `addXP`. `CaptainProgress.addXP` is a different
+   * currency with a promotion, a feat and skill points behind it, and
+   * `tests/rules.test.js` guards it with a net across the whole tree that
+   * nothing may call `.addXP` outside `Game.awardXP` — because ten call sites
+   * once dropped the promotion on the floor. Two unrelated things sharing a
+   * name is how that net comes to be loosened to let one of them through.
+   */
+  serve(amount) {
+    if (!this.alive || !(amount > 0)) return null;
+    this.xp += amount;
+    let gained = 0;
+    while (this.xp >= Officer.xpForLevel(this.level)) {
+      this.xp -= Officer.xpForLevel(this.level);
+      this.level++;
+      gained++;
+      this.expertise = Math.min(100, this.expertise + 2);
+    }
+    if (!gained) return null;
+    emit('officer:level', { officer: this, level: this.level, expertise: this.expertise });
+    return { level: this.level, gained, expertise: this.expertise };
   }
 
   /** A line in this officer's voice. Generated from traits, not quoted. */
@@ -19414,7 +19527,12 @@ class Officer {
     return {
       station: this.station, name: this.name, species: this.species, rank: this.rank,
       discipline: this.discipline, daring: this.daring, candor: this.candor,
-      expertise: this.expertise, canon: this.canon, aliases: this.aliases,
+      // No `canon`. It was defaulted here, set true for the canonical roster
+      // in crews.data.js, saved, reloaded — and read by nothing, ever. What
+      // the screens actually ask is `game.crewMode === 'canon'`, which is the
+      // game-level fact; a per-officer copy of it is a second source of truth
+      // that can only ever drift away from the first.
+      expertise: this.expertise, aliases: this.aliases,
       alive: this.alive, injured: this.injured, injurySeverity: this.injurySeverity,
       xp: this.xp, level: this.level, abilities: this.abilities, relationship: this.relationship,
     };
@@ -30891,7 +31009,12 @@ function applyAbility(game, officer, ability) {
   // says and it had never been read.
   const reaction = game.character?.mechanic('noObjection')
     ? 'comply'
-    : officer.reactTo({ risk: a.risk ?? 0.2, ethicalWeight: a.ethicalWeight ?? 0 });
+    : officer.reactTo(
+      { risk: a.risk ?? 0.2, ethicalWeight: a.ethicalWeight ?? 0 },
+      // "Argumentative — officers object more." The Tellarite's trait, and it
+      // had never been read by anything.
+      { friction: game.character?.mechanic('officerFriction') ?? 0 },
+    );
 
   // A refusal is a refusal. `reactTo` has documented three answers since it was
   // written and the third one did nothing: the order went through regardless,
@@ -30903,6 +31026,11 @@ function applyAbility(game, officer, ability) {
     game.pushLog(`${officer.name}: ${line}`, officer.station);
     return { ok: false, reason: line, ability: a, officer, reaction, line };
   }
+
+  // An objection stated and then overruled costs something. Not much, once —
+  // the captain is allowed to be right — and a great deal over a commission of
+  // being told the same thing by the same officer and giving the order anyway.
+  if (reaction === 'object') officer.regard(-2, 'overruled');
 
   // "Bridge officer cooldowns recover 40% faster."
   officer.startCooldown(a.id, game.character?.mechanic('officerCooldown') ?? 0);
@@ -36514,6 +36642,15 @@ class Game {
     const lines = officer
       ? handbackReport(officer, this.conHours, this.conLines, this.conDropped)
       : this.conLines.slice();
+    // A watch stood and handed back properly is how an officer comes to think
+    // well of a captain. `conHours` was accumulated by the live ticker and by
+    // the offline catch-up and read by exactly one thing — the report that is
+    // being built on the line above — so a first officer could stand the whole
+    // commission and be no different at the end of it.
+    if (officer && this.conHours >= 4) {
+      officer.regard(Math.min(3, Math.floor(this.conHours / 8) + 1), 'a watch stood');
+      officer.serve(Math.round(this.conHours * 2));
+    }
     this.conStation = null;
     this.conGiven = false;
     this.conHours = 0;
@@ -37715,6 +37852,48 @@ class Game {
     return true;
   }
 
+  /**
+   * What a battle did for the people who fought it.
+   *
+   * Experience for everyone still standing a post, and regard that follows the
+   * outcome: a crew that wins with you thinks better of you, and one that
+   * watched you lose the ship does not. The officer who had the con through it
+   * gets the larger share of both, which is the same principle as everything
+   * else added this run — the con is a job, and doing it is worth something.
+   *
+   * Casualties cost regard from everybody, because they were somebody's
+   * shipmates. That is the one term here that does not care whether you won.
+   */
+  creditOfficers(outcome, { xp = 55 } = {}) {
+    const won = outcome === 'victory' || outcome === 'routed';
+    const lost = outcome === 'destroyed';
+    // What a fight costs in people, measured rather than guessed. Over thirty
+    // single-D7 battles the ship lost a median of 26% of her complement — so
+    // the first draft of this, which docked regard above 8%, fired in 27 of 30
+    // and had a crew that won twelve battles in a row finishing at -50. That
+    // is not "casualties cost something", it is "fighting costs something",
+    // and it drowned every other term in the method.
+    //
+    // A quarter of the ship's people is the cost of a hard fight. Nearly half
+    // is a butcher's bill, and it is the one that is meant to be felt.
+    const bledFrac = this.ship.maxCrew > 0
+      ? (this.ship.maxCrew - this.ship.crew) / this.ship.maxCrew : 0;
+    const holder = this.conStation;
+    for (const o of this.crew.officers) {
+      if (!o.alive) continue;
+      const share = o.station === holder ? 1.5 : 1;
+      o.serve(Math.round(xp * share * (won ? 1 : 0.6)));
+      if (won) o.regard(Math.round(2 * share), 'a fight won');
+      if (lost) o.regard(-6, 'the ship lost');
+      if (bledFrac > 0.45) o.regard(-3, 'a butcher\'s bill');
+      else if (bledFrac > 0.25) o.regard(-1, 'casualties');
+    }
+    // Expertise moved, and expertise is one of the things the ship's own
+    // performance is computed from now.
+    this.refreshCommand();
+    this.applyAllMods();
+  }
+
   /** Called when Engagement emits combat:end. */
   finishCombat(outcome) {
     const eng = this.engagement;
@@ -37728,6 +37907,11 @@ class Game {
     // A battle teaches a crew their ship whatever the outcome — losing teaches
     // too. An exercise does not: the simulator is not this hull.
     if (!simulated) this.creditMastery('battle');
+    // And it teaches the officers their jobs, on the same terms and behind the
+    // same guard. `creditMastery` has been the crew learning the HULL since it
+    // was written; the people standing at the stations learned nothing from
+    // anything, ever.
+    if (!simulated) this.creditOfficers(outcome);
 
     const killed = eng.hostiles.filter((s) => s.destroyed);
     for (const s of killed) {
@@ -38267,6 +38451,31 @@ class Game {
     const lost = team.casualties.filter((c) => c.killed).length;
 
     this.applyAwayOutcome(template, outcome, won, total);
+
+    // What going down there did for the people who went.
+    //
+    // The landing party is where officers are actually hurt and killed — those
+    // are the only two call sites of `injure` and `kill` in the game — and it
+    // was the one place service could plainly be seen to count for something
+    // and did not. A party that comes back whole thinks better of the captain
+    // who sent it; one that carries somebody back does not, and the officer
+    // carried has the strongest opinion of all.
+    // Named officers only. `team.casualties` also carries anonymous security
+    // losses — "Security crewman" — and the game models those as the expected
+    // cost of a landing party; docking the senior staff's regard every time one
+    // of them does not come back would make every away mission a grievance.
+    const names = new Set(this.crew.officers.map((o) => o.name));
+    const hurt = new Set(team.casualties
+      .filter((c) => (c.injured || c.killed) && names.has(c.name))
+      .map((c) => c.name));
+    for (const o of team.members) {
+      if (!o.alive) continue;
+      o.serve(25 * total + 20 * won);
+      if (outcome === 'success') o.regard(2, 'a landing that went well');
+      if (hurt.size) o.regard(hurt.has(o.name) ? -5 : -2, 'an officer hurt on the surface');
+    }
+    // Expertise may have moved, and the ship is computed from it.
+    this.applyAllMods();
 
     const report = {
       ok: true, id: template.id, title: template.title, outcome,
@@ -41163,9 +41372,15 @@ function dutyPanel(app) {
       // inside the tactical overlay, so using it here put the name and the
       // rating hard against each other with no space between them —
       // "Solene ThorneNavigator". Visible in a screenshot and in nothing else.
+      // `person.species` is READ here, and this is the only place it is.
+      // Every duty officer has had one generated, saved and reloaded since the
+      // roster was written, and the panel printed a name, a rating and a
+      // state — so the ship's complement was as uniformly human on the page as
+      // it was varied in the save file.
       nodes.push(el('p', {
         class: person.state === 'lost' ? 'danger' : 'muted',
-        text: `${person.name} — ${person.label} · ${doing}`,
+        text: `${person.name} — ${person.species ? `${person.species} ` : ''}`
+          + `${person.label} · ${doing}`,
       }));
     }
   }

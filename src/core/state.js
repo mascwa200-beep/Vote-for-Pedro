@@ -1707,6 +1707,15 @@ export class Game {
     const lines = officer
       ? handbackReport(officer, this.conHours, this.conLines, this.conDropped)
       : this.conLines.slice();
+    // A watch stood and handed back properly is how an officer comes to think
+    // well of a captain. `conHours` was accumulated by the live ticker and by
+    // the offline catch-up and read by exactly one thing — the report that is
+    // being built on the line above — so a first officer could stand the whole
+    // commission and be no different at the end of it.
+    if (officer && this.conHours >= 4) {
+      officer.regard(Math.min(3, Math.floor(this.conHours / 8) + 1), 'a watch stood');
+      officer.serve(Math.round(this.conHours * 2));
+    }
     this.conStation = null;
     this.conGiven = false;
     this.conHours = 0;
@@ -2908,6 +2917,48 @@ export class Game {
     return true;
   }
 
+  /**
+   * What a battle did for the people who fought it.
+   *
+   * Experience for everyone still standing a post, and regard that follows the
+   * outcome: a crew that wins with you thinks better of you, and one that
+   * watched you lose the ship does not. The officer who had the con through it
+   * gets the larger share of both, which is the same principle as everything
+   * else added this run — the con is a job, and doing it is worth something.
+   *
+   * Casualties cost regard from everybody, because they were somebody's
+   * shipmates. That is the one term here that does not care whether you won.
+   */
+  creditOfficers(outcome, { xp = 55 } = {}) {
+    const won = outcome === 'victory' || outcome === 'routed';
+    const lost = outcome === 'destroyed';
+    // What a fight costs in people, measured rather than guessed. Over thirty
+    // single-D7 battles the ship lost a median of 26% of her complement — so
+    // the first draft of this, which docked regard above 8%, fired in 27 of 30
+    // and had a crew that won twelve battles in a row finishing at -50. That
+    // is not "casualties cost something", it is "fighting costs something",
+    // and it drowned every other term in the method.
+    //
+    // A quarter of the ship's people is the cost of a hard fight. Nearly half
+    // is a butcher's bill, and it is the one that is meant to be felt.
+    const bledFrac = this.ship.maxCrew > 0
+      ? (this.ship.maxCrew - this.ship.crew) / this.ship.maxCrew : 0;
+    const holder = this.conStation;
+    for (const o of this.crew.officers) {
+      if (!o.alive) continue;
+      const share = o.station === holder ? 1.5 : 1;
+      o.serve(Math.round(xp * share * (won ? 1 : 0.6)));
+      if (won) o.regard(Math.round(2 * share), 'a fight won');
+      if (lost) o.regard(-6, 'the ship lost');
+      if (bledFrac > 0.45) o.regard(-3, 'a butcher\'s bill');
+      else if (bledFrac > 0.25) o.regard(-1, 'casualties');
+    }
+    // Expertise moved, and expertise is one of the things the ship's own
+    // performance is computed from now.
+    this.refreshCommand();
+    this.applyAllMods();
+  }
+
   /** Called when Engagement emits combat:end. */
   finishCombat(outcome) {
     const eng = this.engagement;
@@ -2921,6 +2972,11 @@ export class Game {
     // A battle teaches a crew their ship whatever the outcome — losing teaches
     // too. An exercise does not: the simulator is not this hull.
     if (!simulated) this.creditMastery('battle');
+    // And it teaches the officers their jobs, on the same terms and behind the
+    // same guard. `creditMastery` has been the crew learning the HULL since it
+    // was written; the people standing at the stations learned nothing from
+    // anything, ever.
+    if (!simulated) this.creditOfficers(outcome);
 
     const killed = eng.hostiles.filter((s) => s.destroyed);
     for (const s of killed) {
@@ -3460,6 +3516,31 @@ export class Game {
     const lost = team.casualties.filter((c) => c.killed).length;
 
     this.applyAwayOutcome(template, outcome, won, total);
+
+    // What going down there did for the people who went.
+    //
+    // The landing party is where officers are actually hurt and killed — those
+    // are the only two call sites of `injure` and `kill` in the game — and it
+    // was the one place service could plainly be seen to count for something
+    // and did not. A party that comes back whole thinks better of the captain
+    // who sent it; one that carries somebody back does not, and the officer
+    // carried has the strongest opinion of all.
+    // Named officers only. `team.casualties` also carries anonymous security
+    // losses — "Security crewman" — and the game models those as the expected
+    // cost of a landing party; docking the senior staff's regard every time one
+    // of them does not come back would make every away mission a grievance.
+    const names = new Set(this.crew.officers.map((o) => o.name));
+    const hurt = new Set(team.casualties
+      .filter((c) => (c.injured || c.killed) && names.has(c.name))
+      .map((c) => c.name));
+    for (const o of team.members) {
+      if (!o.alive) continue;
+      o.serve(25 * total + 20 * won);
+      if (outcome === 'success') o.regard(2, 'a landing that went well');
+      if (hurt.size) o.regard(hurt.has(o.name) ? -5 : -2, 'an officer hurt on the surface');
+    }
+    // Expertise may have moved, and the ship is computed from it.
+    this.applyAllMods();
 
     const report = {
       ok: true, id: template.id, title: template.title, outcome,

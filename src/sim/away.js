@@ -234,9 +234,37 @@ export class AwayTeam {
         this.casualties.push({ name: officer.name, killed: true });
         this.members = this.members.filter((o) => o.alive);
       } else if (rng.chance(injuryChance)) {
-        officer.injure(rng.range(0.3, 0.9));
-        result.injured = officer;
-        this.casualties.push({ name: officer.name, injured: true });
+        // The detail is between the officers and whatever is down there, and
+        // until now it was only ever between them and the rarest outcome.
+        //
+        // The branch above absorbs a DEATH into the security detail. Nothing
+        // absorbed an injury, and injuries are the common case: measured over
+        // sixty landings there were nine casualties, every one of them a named
+        // officer, and not one of the four security crewmen on every single
+        // team was so much as scratched. The senior staff were the safest
+        // people on the away team's roster and the redshirts were the safest
+        // people on the ship.
+        //
+        // Half, not all. Letting the detail absorb every injury it could
+        // measured just as wrong in the other direction: all nine casualties
+        // became security crewmen, no named officer was ever hurt again, and
+        // sickbay, `back_to_duty` and the whole injury system went quiet. Four
+        // crewmen and two or three checks a mission means a detail that always
+        // interposes is a detail that never runs out.
+        //
+        // So bringing security halves the chance that the casualty is one of
+        // your officers. That is a number a captain can act on, and it leaves
+        // the risk that makes the choice matter.
+        if (this.security > 0 && rng.chance(0.5)) {
+          this.security--;
+          result.securityHurt = 1;
+          this.casualties.push({ name: 'Security crewman', injured: true });
+          emit('away:security-hurt', { checkType });
+        } else {
+          officer.injure(rng.range(0.3, 0.9));
+          result.injured = officer;
+          this.casualties.push({ name: officer.name, injured: true });
+        }
       }
     }
 
