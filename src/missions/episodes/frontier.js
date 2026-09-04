@@ -29,6 +29,22 @@ const onVar = (key, ifSet, ifNot) => {
 /** The nine-second gap in a Borg cube's shield harmonics, if we found it. */
 const withWindow = onVar('has_window', 'engage_window', 'engage');
 
+/**
+ * Which room the board convenes in, read off the record it convened about.
+ *
+ * `Ledger.assessment()` already exists and already bands a service score —
+ * `rules/inquiry.js` decides its finding on the same six bands, deliberately,
+ * so that the screen and the board cannot disagree about the same record. The
+ * finale reads them too rather than inventing a seventh answer.
+ */
+const byRecord = (m) => {
+  const a = m.ctx.game.ledger.assessment();
+  if (a.id === 'exemplary' || a.id === 'distinguished') return 'commended';
+  if (a.id === 'censure' || a.id === 'concerning' || a.id === 'inquiry') return 'censured';
+  return 'questioned';
+};
+byRecord.targets = ['commended', 'questioned', 'censured'];
+
 /** Waiting for a cloaked ship to move first, with the sensors cold. */
 const whoSeesWhoFirst = onVar('running_silent', 'sighted', 'ambushed');
 
@@ -569,25 +585,102 @@ export const FRONTIER_EPISODES = [
   },
 
   // -------------------------------------------------------------------------
+  //
+  // "The board has read all of it before you walked in."
+  //
+  // It had not. This was one stage, one choice, +1000 experience: the Act-5
+  // review of a five-year command, and the only thing it knew about that
+  // command was that it had reached flag rank. Forty-two of the forty-three
+  // flags the episodes set were written and read by nothing, so a captain who
+  // falsified a shakedown report, started a shooting war at Archanis, or sent
+  // Starfleet the Borg shield harmonics walked into the same room and heard the
+  // same sentence.
+  //
+  // `requiresCompleted: []` is gone rather than filled in — `[].every()` is
+  // true, so it gated nothing, and gating the finale on a list of episodes
+  // would strand a captain who took a different route through the galaxy. What
+  // the board says is what varies. That is the better answer anyway: a review
+  // of a thin career should say so, not fail to convene.
   {
     id: 'homecoming', title: 'Homecoming', system: 'sol', act: 5, minRank: 8,
-    requiresCompleted: [],
     summary: 'Starfleet convenes to review your command in full.',
     stages: {
       start: {
-        text: 'Earth. A full review of your command — every log, every decision, every name on the casualty list. The board has read all of it before you walked in.',
+        text: 'Earth. A full review of your command — every log, every decision, every name on the casualty list. The board has read all of it before you walked in, and the president of the board is holding the summary rather than reading it, which is its own kind of answer.',
         speaker: 'Starfleet Command',
         choices: [
-          { id: 'stand', label: 'Stand for the review', outcome: 'review',
-            effects: { xp: 1000 } },
+          { id: 'stand', label: 'Stand for the review', next: byRecord,
+            effects: { xp: 400 } },
+        ],
+      },
+
+      commended: {
+        text: 'The summary is read aloud because the board wants it in the record aloud. Colonies standing that would not be. Treaties that hold. A first contact conducted by somebody who took the question seriously. The president asks whether you have anything to add, in the tone of a man who hopes you do not.',
+        speaker: 'Starfleet Command',
+        choices: [
+          { id: 'nothing', label: 'Nothing to add', outcome: 'commended',
+            effects: { xp: 1200, standing: { federation: 20 } } },
+          { id: 'crew', label: 'Say it was the ship’s company, and mean it',
+            outcome: 'commended', requires: { officer: 'first_officer' },
+            effects: { xp: 1500, standing: { federation: 26 }, flag: 'credited_the_crew' } },
+          // Some years later, that decision comes back in your favour — the
+          // ending text of `outpost_silence` promised exactly this, about a
+          // warbird nobody made you spare, and `spared_warbird` was write-only.
+          { id: 'romulan', label: 'Let the Romulan deposition be read',
+            outcome: 'commended', requires: { flag: 'spared_warbird' },
+            effects: { xp: 1600, standing: { federation: 22, romulan: 25 },
+              flag: 'romulan_testimony' } },
+        ],
+      },
+
+      questioned: {
+        text: 'The summary is not read aloud. It is passed along the table, and each member of the board reads the same three pages and puts them down before looking up. The president asks you to account for the record in your own words.',
+        speaker: 'Starfleet Command',
+        choices: [
+          { id: 'account', label: 'Account for it plainly', outcome: 'reviewed',
+            effects: { xp: 1000, standing: { federation: 8 } } },
+          // The shakedown report, six ranks and five years ago.
+          { id: 'correct', label: 'Correct the trials report before they ask about it',
+            outcome: 'reviewed', requires: { flag: 'falsified_report' },
+            effects: { xp: 1400, standing: { federation: 14 }, flag: 'came_clean' } },
+          { id: 'borg', label: 'Point them at what the fleet did with the harmonics',
+            outcome: 'commended', requires: { flag: 'borg_weakness' },
+            effects: { xp: 1800, standing: { federation: 24 } } },
+          { id: 'kang', label: 'Ask that the Klingon letter be entered',
+            outcome: 'commended', requires: { flag: 'kang_respects_you' },
+            effects: { xp: 1600, standing: { federation: 16, klingon: 20 } } },
+        ],
+      },
+
+      censured: {
+        text: 'Nobody offers you a chair. The president reads the finding first and the evidence afterwards, which is the order they use when the finding was decided before the room filled. There is a casualty list on the table, face up, and it is the longest document in front of anybody.',
+        speaker: 'Starfleet Command',
+        choices: [
+          { id: 'accept', label: 'Accept the finding', outcome: 'censured',
+            effects: { xp: 600, standing: { federation: -10 } } },
+          { id: 'defend', label: 'Defend every one of them', outcome: 'censured',
+            effects: { xp: 900, record: { order_disobeyed: 1 } } },
+          // A board that has already decided will still hear a treaty read.
+          { id: 'treaties', label: 'Ask that the treaties be read into it too',
+            outcome: 'reviewed', requires: { flag: 'dmz_accord' },
+            effects: { xp: 1300, standing: { federation: 10 } } },
+          { id: 'resolved', label: 'Refer them to the inquiry’s own finding',
+            outcome: 'reviewed', requires: { flag: 'inquiry_resolved' },
+            effects: { xp: 1200, standing: { federation: 12 } } },
         ],
       },
     },
     start: 'start',
     endings: {
-      review: { label: 'Command reviewed',
+      commended: { label: 'Commended',
+        text: 'The commission ends the way very few of them do: with the board on its feet. What remains is the record, and the record is good.',
+        effects: { flag: ['command_reviewed', 'commended_command'] } },
+      reviewed: { label: 'Command reviewed',
         text: 'The finding is read into the record, and the record is what remains.',
         effects: { flag: 'command_reviewed' } },
+      censured: { label: 'Censured',
+        text: 'The finding is read into the record. So are the names. That is what remains, and you will be the one who carries it.',
+        effects: { flag: ['command_reviewed', 'censured_command'] } },
     },
   },
 ];
