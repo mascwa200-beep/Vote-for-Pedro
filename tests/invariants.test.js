@@ -1938,14 +1938,27 @@ test('an enemy ship has a name, whoever fielded it', () => {
   const named = (s) => s.name && !/^\w+ vessel \d+$/i.test(s.name) && !/^Hostile/i.test(s.name);
 
   assert.equal(hostileName('klingon', 0), HOSTILE_NAMES.klingon[0]);
-  assert.equal(hostileName('klingon', HOSTILE_NAMES.klingon.length), HOSTILE_NAMES.klingon[0],
-    'the list does not wrap');
+  // The list used to wrap round to the first name again, which contradicted
+  // the assertion three lines below it: past the end of the list, two ships in
+  // one engagement had the same name and the tactical display offered the
+  // captain two identical targets. It never came up while a force was one or
+  // two hulls. A force is now built to a strength, the Orion list is three
+  // names long, and three raiders is the commonest Orion encounter there is.
+  assert.equal(hostileName('klingon', HOSTILE_NAMES.klingon.length),
+    `${HOSTILE_NAMES.klingon[0]} II`, 'the list wraps onto a name already in use');
   assert.equal(hostileName('nobody_in_particular', 0), 'Unknown Vessel');
 
+  // Past the end of the shortest list in the table, which is where it broke.
+  const orions = Array.from({ length: 6 }, (_, i) => hostileName('orion', i));
+  assert.equal(new Set(orions).size, 6, `six raiders, ${new Set(orions).size} names`);
+
+  // `strength` is in Constitutions, not hulls — a warbird is 1.67 of one, so
+  // three Constitutions of Romulan is a warbird with a scout or two alongside.
   const fleet = buildHostiles(g.rng, 'romulan', 3, ['warbird', 'scoutship']);
-  assert.equal(fleet.length, 3);
+  assert.ok(fleet.length >= 1 && fleet.length <= 6, `${fleet.length} hulls`);
   for (const s of fleet) assert.ok(named(s), `an unnamed hostile: ${s.name}`);
-  assert.equal(new Set(fleet.map((s) => s.name)).size, 3, 'three ships, one name');
+  assert.equal(new Set(fleet.map((s) => s.name)).size, fleet.length,
+    `${fleet.length} ships, ${new Set(fleet.map((s) => s.name)).size} names`);
 
   // And the relief that answers a distress call comes from the same table.
   g.startCombat([new Ship('d7', { name: 'Hostile' })]);

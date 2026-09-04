@@ -8,6 +8,7 @@ import { SYSTEM_BY_ID, SECTORS } from './systems.data.js';
 import { FACTIONS, isHostile } from './factions.data.js';
 import { Ship } from '../sim/ship.js';
 import { buildHostiles } from '../sim/combat.js';
+import { shipPower } from '../sim/assess.js';
 
 /** Which hostile hulls each faction fields. */
 const FLEETS = {
@@ -212,7 +213,7 @@ export const SALVAGE_POOL = [
 
 export function rollEncounter(rng, systemId, {
   ledger, inTransit = false, quietInHostileSpace = false, halveHostile = false,
-  distressSooner = false, challengeBy = null,
+  distressSooner = false, challengeBy = null, player = null,
 } = {}) {
   const system = SYSTEM_BY_ID[systemId];
   if (!system) return null;
@@ -222,6 +223,11 @@ export function rollEncounter(rng, systemId, {
   // asks about it — see RESEARCH.md §25, and `Game.enterTheDMZ`, which is what
   // decides that this is one of those arrivals.
   if (challengeBy) return buildChallenge(rng, system, challengeBy, ledger);
+
+  // What a garrison sees coming. Zero when the caller does not pass a ship,
+  // which leaves the presence table on its own and is what every test that
+  // rolls encounters without a game does.
+  const intruder = player ? shipPower(player) : 0;
 
   // Safe space is mostly quiet; the frontier is not.
   let danger = system.faction === 'federation' && !system.contested ? 0.18
@@ -269,8 +275,8 @@ export function rollEncounter(rng, systemId, {
 
   const built = (() => {
     switch (pick.kind) {
-      case 'patrol': return buildPatrol(rng, system, presence, ledger);
-      case 'ambush': return buildAmbush(rng, system, presence, ledger);
+      case 'patrol': return buildPatrol(rng, system, presence, ledger, intruder);
+      case 'ambush': return buildAmbush(rng, system, presence, ledger, intruder);
       case 'distress': return buildDistress(rng, system);
       case 'derelict': return buildDerelict(rng, system);
       case 'convoy': return buildConvoy(rng, system, presence);
@@ -309,6 +315,74 @@ export function article(word) {
   return /^[aeiou]/i.test(String(word ?? '')) ? 'An' : 'A';
 }
 
+/**
+ * How much force a faction has out here, in Constitutions.
+ *
+ * `SECTOR_PRESENCE` already says this and has said it since the map was
+ * written: Klingons are a 1 at Andor and a 9 at Qo'noS. Until now the number
+ * only decided WHO you met, never how much of them — a patrol was `rng.int(1,2)`
+ * hulls in both places, so a border sweep and the defence of the homeworld were
+ * the same encounter with a different adjective.
+ *
+ * Per point of presence. A 9 is a fight a Constitution should think about; a 1
+ * is a single light hull asking what you are doing here.
+ */
+const STRENGTH_PER_PRESENCE = 0.22;
+
+/** An ambush is chosen by the people springing it. It is heavier on purpose. */
+const AMBUSH_MULTIPLIER = 1.7;
+
+/** Raiders shooting up a freighter brought enough for a freighter. */
+const RAIDER_STRENGTH = 0.5;
+
+/**
+ * How much of what a captain is flying a defence force answers with.
+ *
+ * Presence alone tops out at nine, so the heaviest patrol in the game was worth
+ * 2.0 Constitutions and a Sovereign is worth 6.8 of one. Measured over four
+ * thousand rolls, the band a hostile encounter came out at:
+ *
+ *     ship           no contest  favourable  even  dangerous  outmatched
+ *     Miranda                0%          0%   24%        26%         46%
+ *     Constitution           0%         24%   26%        22%         24%
+ *     Excelsior             50%         13%   27%         6%          0%
+ *     Galaxy                63%         28%    5%         0%          0%
+ *     Sovereign             67%         30%    0%         0%          0%
+ *
+ * A flagship never met anything. This is not the enemy scaling to the player —
+ * it is a garrison seeing a warship coming and sending what that is worth, and
+ * it is scaled by presence, so it is a real answer at Qo'noS and a shrug at
+ * Andor. A Miranda over Qo'noS is still in exactly as much trouble as it was:
+ * a 0.36 response added to a 2.0 garrison changes nothing about a 0.45 ship.
+ *
+ * The coefficient was swept rather than chosen, over the same four thousand
+ * rolls split by where the ship actually is — home space, the near frontier,
+ * and deep space — reading the share of hostile encounters that came out
+ * dangerous or worse:
+ *
+ *     coefficient   Constitution near   Excelsior deep   Sovereign deep
+ *     0.42                        29%              27%              1%
+ *     0.60                        39%              37%              7%
+ *     0.80                        41%              47%             11%
+ *     1.00                        42%              57%             27%
+ *
+ * 0.80 is where a flagship finally has something to worry about without an
+ * Excelsior spending half the map being hunted. At 1.00 the Excelsior's
+ * favourable band collapses from 26% to 1%, which is a ship that has stopped
+ * having good days.
+ */
+const RESPONSE_TO_INTRUDER = 0.8;
+
+/** The presence table's own ceiling, so a response is a fraction of a full one. */
+const FULL_PRESENCE = 9;
+
+const forceStrength = (presence, factionId, { scale = 1, playerPower = 0 } = {}) => {
+  const here = presence?.[factionId] ?? 2;
+  const garrison = here * STRENGTH_PER_PRESENCE;
+  const answer = RESPONSE_TO_INTRUDER * Math.max(0, playerPower) * (here / FULL_PRESENCE);
+  return Math.max(0.15, (garrison + answer) * scale);
+};
+
 function pickFaction(rng, presence, { exclude = ['federation'] } = {}) {
   const options = Object.entries(presence)
     .filter(([id]) => !exclude.includes(id))
@@ -317,15 +391,14 @@ function pickFaction(rng, presence, { exclude = ['federation'] } = {}) {
   return rng.weighted(options).id;
 }
 
-function buildPatrol(rng, system, presence, ledger) {
+function buildPatrol(rng, system, presence, ledger, intruder = 0) {
   const factionId = pickFaction(rng, presence);
   const standing = ledger?.standingOf(factionId) ?? FACTIONS[factionId]?.baseStanding ?? 0;
   const hostile = isHostile(standing);
-  const count = rng.int(1, factionId === 'borg' ? 1 : 2);
   const errand = rng.pick(PATROL_ERRANDS);
   return {
     kind: 'patrol', system, factionId, hostile,
-    ships: makeShips(rng, factionId, count),
+    ships: makeShips(rng, factionId, forceStrength(presence, factionId, { playerPower: intruder })),
     hailable: FACTIONS[factionId]?.hailable ?? false,
     subtype: hostile ? 'intercept' : errand.id,
     title: `${FACTIONS[factionId]?.adjective ?? 'Unknown'} patrol`,
@@ -441,12 +514,12 @@ function buildTrap(rng, system) {
   };
 }
 
-function buildAmbush(rng, system, presence, ledger) {
+function buildAmbush(rng, system, presence, ledger, intruder = 0) {
   const factionId = pickFaction(rng, presence, { exclude: ['federation', 'independent'] });
-  const count = rng.int(2, 3);
   return {
     kind: 'ambush', system, factionId, hostile: true, surprise: true,
-    ships: makeShips(rng, factionId, count),
+    ships: makeShips(rng, factionId, forceStrength(presence, factionId,
+      { scale: AMBUSH_MULTIPLIER, playerPower: intruder })),
     hailable: false,
     title: 'Ambush',
     text: FACTIONS[factionId]?.cloakCapable
@@ -466,7 +539,7 @@ function buildDistress(rng, system) {
   const factionId = pick.hostile ? rng.pick(['orion', 'klingon', 'ferengi']) : null;
   return {
     kind: 'distress', system, subtype: pick.id, hostile: pick.hostile, factionId,
-    ships: pick.hostile ? makeShips(rng, factionId, rng.int(1, 2)) : [],
+    ships: pick.hostile ? makeShips(rng, factionId, RAIDER_STRENGTH) : [],
     victims: pick.hostile ? [new Ship('freighter', { name: 'SS Kobayashi', faction: 'independent' })] : [],
     lives: rng.int(80, 2400),
     title: 'Distress call',
@@ -600,12 +673,13 @@ function buildAnomaly(rng, system) {
   };
 }
 
-function makeShips(rng, factionId, count) {
+/** @param strength in Constitutions — see `buildHostiles`, not a hull count. */
+function makeShips(rng, factionId, strength) {
   const pool = FLEETS[factionId] ?? ['orion_raider'];
   // One table, in src/sim/combat.js. This file used to carry its own copy,
   // which is how a Klingon cruiser could be an IKS Rotarran in an encounter
   // and "klingon vessel 1" when a mission stage started the same fight.
-  return buildHostiles(rng, factionId, count, pool);
+  return buildHostiles(rng, factionId, strength, pool);
 }
 
 /** Hazard tick for systems that are actively dangerous to sit in. */

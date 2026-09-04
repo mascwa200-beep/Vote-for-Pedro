@@ -19,6 +19,8 @@
 // Nothing here changes a battle. It reads the ships and says what the bridge
 // would say.
 
+import { SHIP_CLASSES } from '../world/ships.data.js';
+
 /**
  * Sustained damage a ship can put out, per second, on paper.
  *
@@ -51,6 +53,65 @@ export const powerOf = (ships) => {
   const live = (ships ?? []).filter((s) => s && !s.destroyed && !s.withdrawn);
   if (!live.length) return 0;
   return live.reduce((n, s) => n + outputOf(s), 0) * live.reduce((n, s) => n + enduranceOf(s), 0);
+};
+
+/**
+ * The same arithmetic on a class rather than a hull, so a force can be costed
+ * before it is built.
+ *
+ * Read straight off `SHIP_CLASSES` — `maxHull` is `cls.hull` and `maxShield` is
+ * `cls.shields / 6`, so `enduranceOf`'s six facings come back to `cls.shields`
+ * exactly. No `Ship` is constructed, which keeps this module out of a cycle and
+ * makes costing a fleet free.
+ */
+const classStats = (classId) => {
+  const cls = SHIP_CLASSES[classId];
+  if (!cls) return { output: 0, endurance: 0 };
+  return {
+    output: outputOf(cls),
+    endurance: enduranceOf({ maxHull: cls.hull ?? 0, maxShield: (cls.shields ?? 0) / 6 }),
+  };
+};
+
+/**
+ * A class's fighting power, in Constitutions.
+ *
+ * The unit is the ship of the line the game is named around, so the numbers in
+ * the tables read as something: a Bird-of-Prey is 0.41 of a Constitution, a
+ * Negh'Var is 4.6 of one, an Orion raider is 0.09 of one. That last number is
+ * the whole point — the raider's own description says "dangerous in threes,
+ * worthless alone", and until now the generator only ever fielded one or two.
+ */
+export const classPower = (classId) => {
+  const { output, endurance } = classStats(classId);
+  const unit = classStats('constitution');
+  return (output * endurance) / (unit.output * unit.endurance);
+};
+
+/**
+ * What a list of classes is worth together, under the same square law.
+ *
+ * Not the sum of `classPower` — that is the point of the law. Three Orion
+ * raiders are worth 0.8 of a Constitution, not 0.27, which is why three of them
+ * is a fight and one of them is an errand.
+ */
+export const forcePower = (classIds) => {
+  const stats = (classIds ?? []).map(classStats);
+  const unit = classStats('constitution');
+  return (stats.reduce((n, s) => n + s.output, 0) * stats.reduce((n, s) => n + s.endurance, 0))
+    / (unit.output * unit.endurance);
+};
+
+/**
+ * A live hull's power, in the same Constitutions.
+ *
+ * `classPower` costs a class off the table; this costs the ship that actually
+ * exists, refits, damage mods and all. What a defence force sees on its
+ * long-range sensors when it decides how many ships to send.
+ */
+export const shipPower = (ship) => {
+  const unit = classStats('constitution');
+  return powerOf([ship]) / (unit.output * unit.endurance);
 };
 
 /**

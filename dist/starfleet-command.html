@@ -26168,6 +26168,8 @@ __define("src/sim/assess.js", function (__exports, __require) {
 // Nothing here changes a battle. It reads the ships and says what the bridge
 // would say.
 
+const { SHIP_CLASSES } = __require("src/world/ships.data.js");
+
 /**
  * Sustained damage a ship can put out, per second, on paper.
  *
@@ -26200,6 +26202,65 @@ const powerOf = (ships) => {
   const live = (ships ?? []).filter((s) => s && !s.destroyed && !s.withdrawn);
   if (!live.length) return 0;
   return live.reduce((n, s) => n + outputOf(s), 0) * live.reduce((n, s) => n + enduranceOf(s), 0);
+};
+
+/**
+ * The same arithmetic on a class rather than a hull, so a force can be costed
+ * before it is built.
+ *
+ * Read straight off `SHIP_CLASSES` — `maxHull` is `cls.hull` and `maxShield` is
+ * `cls.shields / 6`, so `enduranceOf`'s six facings come back to `cls.shields`
+ * exactly. No `Ship` is constructed, which keeps this module out of a cycle and
+ * makes costing a fleet free.
+ */
+const classStats = (classId) => {
+  const cls = SHIP_CLASSES[classId];
+  if (!cls) return { output: 0, endurance: 0 };
+  return {
+    output: outputOf(cls),
+    endurance: enduranceOf({ maxHull: cls.hull ?? 0, maxShield: (cls.shields ?? 0) / 6 }),
+  };
+};
+
+/**
+ * A class's fighting power, in Constitutions.
+ *
+ * The unit is the ship of the line the game is named around, so the numbers in
+ * the tables read as something: a Bird-of-Prey is 0.41 of a Constitution, a
+ * Negh'Var is 4.6 of one, an Orion raider is 0.09 of one. That last number is
+ * the whole point — the raider's own description says "dangerous in threes,
+ * worthless alone", and until now the generator only ever fielded one or two.
+ */
+const classPower = (classId) => {
+  const { output, endurance } = classStats(classId);
+  const unit = classStats('constitution');
+  return (output * endurance) / (unit.output * unit.endurance);
+};
+
+/**
+ * What a list of classes is worth together, under the same square law.
+ *
+ * Not the sum of `classPower` — that is the point of the law. Three Orion
+ * raiders are worth 0.8 of a Constitution, not 0.27, which is why three of them
+ * is a fight and one of them is an errand.
+ */
+const forcePower = (classIds) => {
+  const stats = (classIds ?? []).map(classStats);
+  const unit = classStats('constitution');
+  return (stats.reduce((n, s) => n + s.output, 0) * stats.reduce((n, s) => n + s.endurance, 0))
+    / (unit.output * unit.endurance);
+};
+
+/**
+ * A live hull's power, in the same Constitutions.
+ *
+ * `classPower` costs a class off the table; this costs the ship that actually
+ * exists, refits, damage mods and all. What a defence force sees on its
+ * long-range sensors when it decides how many ships to send.
+ */
+const shipPower = (ship) => {
+  const unit = classStats('constitution');
+  return powerOf([ship]) / (unit.output * unit.endurance);
 };
 
 /**
@@ -26276,6 +26337,9 @@ const ASSESSMENT_BANDS = BANDS.map((b) => b.id);
 __exports.outputOf = outputOf;
 __exports.enduranceOf = enduranceOf;
 __exports.powerOf = powerOf;
+__exports.classPower = classPower;
+__exports.forcePower = forcePower;
+__exports.shipPower = shipPower;
 __exports.assessEngagement = assessEngagement;
 __exports.ASSESSMENT_BANDS = ASSESSMENT_BANDS;
 
@@ -26297,7 +26361,7 @@ const { emit } = __require("src/core/events.js");
 const { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } = __require("src/sim/ship.js");
 const { chooseAction } = __require("src/sim/ai.js");
 const { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } = __require("src/sim/arena.js");
-const { assessEngagement } = __require("src/sim/assess.js");
+const { assessEngagement, classPower, forcePower } = __require("src/sim/assess.js");
 const { clamp, wrapDegrees, finite } = __require("src/core/num.js");
 const WEAPON_RANGE = {
   beam: 900,
@@ -27428,28 +27492,146 @@ const HOSTILE_NAMES = {
   independent: ['SS Vico', 'SS Odin', 'SS Norkova'],
 };
 
-/** The nth ship of a faction in one engagement. */
+/**
+ * The nth ship of a faction in one engagement.
+ *
+ * The lists are short — three Orion names, two Tholian — and a patrol is no
+ * longer one or two hulls, so the wrap has to say which one it is. Four raiders
+ * used to be Syndicate Raider, Green Wind, Profit Margin and Syndicate Raider
+ * again, which the tactical display then offered as two identical targets.
+ */
 function hostileName(factionId, index = 0) {
   const list = HOSTILE_NAMES[factionId] ?? ['Unknown Vessel'];
-  return list[index % list.length];
+  const name = list[index % list.length];
+  const lap = Math.floor(index / list.length);
+  return lap ? `${name} ${romanNumeral(lap + 1)}` : name;
 }
+
+/**
+ * II, III… for a hull whose name has come round again.
+ *
+ * Lives here rather than in `core/state.js`, which had the only copy, because
+ * there are now two places that run out of names: reinforcements added by the
+ * difficulty setting, and a force built to a strength that wants more hulls
+ * than the faction has names for. Both have to agree, or `stripSuffix` — which
+ * matches `I{1,3}|IV|V|VI` — silently stops stripping.
+ */
+const ROMAN = ['', '', 'II', 'III', 'IV', 'V', 'VI'];
+const romanNumeral = (n) => ROMAN[n] ?? String(n);
+
+/** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
+const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
+
+/**
+ * Never more hulls than the tactical display can stay readable with.
+ *
+ * The same six `Game.scaleHostileFleet` uses, and for the same reason. Kept
+ * here as well because a force is now built to a WEIGHT, and the arithmetic
+ * that turns a weight into hulls will happily ask for nine Orion raiders.
+ */
+const MAX_FORCE_HULLS = 6;
+
+/**
+ * How often a force is drawn without regard to what the situation was worth.
+ *
+ * One encounter in twelve. High enough that a long commission meets a capital
+ * ship; low enough that meeting one is a thing that happened rather than a
+ * Tuesday.
+ */
+const CAPITAL_CHANCE = 0.08;
 
 /**
  * A hostile force of a given strength, drawn from a pool of classes.
  *
- * Written when combat was, and called from nowhere for the whole life of the
- * project: `world/encounters.js` grew its own copy rather than importing this
- * one. It is the single builder now.
+ * `strength` is in Constitutions (see `classPower`), not in hulls. That is the
+ * whole change: for the life of the project this argument was named `strength`,
+ * documented as strength, and used as a count — `rng.int(1, 2)` hulls picked
+ * uniformly from a pool spanning a scout to a battleship.
+ *
+ * Measured through `rollEncounter`, one encounter kind in one system, four
+ * hundred rolls of each, against a Constitution:
+ *
+ *     Qo'noS      "A Klingon patrol"    ratio 0.05 .. 2.44  — 45x
+ *                 worst: two Negh'Vars (hopeless, dead every time)
+ *                 best:  one Bird-of-Prey (favourable, free)
+ *     Rigel       "An Orion patrol"     ratio 1.32 .. 10.72
+ *                 worst: two Marauders (still in the player's favour)
+ *                 best:  one Orion raider (no contest)
+ *
+ * Identical text both times. The captain could not tell a walkover from a
+ * funeral, and 47% of Klingon patrols were funerals.
+ *
+ * How it builds: pick a lead from the classes that could plausibly make up a
+ * force this size — nothing whose single hull outweighs the whole force by more
+ * than `overshoot` — then add escorts, each lighter than the lead, for as long
+ * as adding one brings the force CLOSER to the target. The square law does the
+ * rest: `n` identical hulls are worth n² of one, so light classes arrive in
+ * packs and capitals arrive alone, without either being written down anywhere.
+ *
+ *     strength   klingon                       orion
+ *     0.6        a Bird-of-Prey                three raiders
+ *     1.0        two Birds-of-Prey, or a D7    three raiders
+ *     1.6        a D7, or a Vor'cha            four raiders
+ *     2.5        a Vor'cha, or two K't'ingas   five raiders
+ *     4.0        a Vor'cha and a Bird-of-Prey  six raiders
+ *                or a Negh'Var, alone
+ *
+ * The Orion raider's own description says "Dangerous in threes, worthless
+ * alone." It is now possible for the game to field three.
  */
 function buildHostiles(rng, factionId, strength = 1, classPool = []) {
-  const count = Math.max(1, Math.round(strength));
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    const cls = rng.pick(classPool);
-    if (!cls) break;
-    out.push(new Ship(cls, { name: hostileName(factionId, i), faction: factionId }));
+  const classes = pickForce(rng, strength, classPool);
+  return classes.map((cls, i) => new Ship(cls, {
+    name: hostileName(factionId, i), faction: factionId,
+  }));
+}
+
+/**
+ * The classes that make up a force of the given strength.
+ *
+ * Split out from `buildHostiles` so it can be costed and asserted on without
+ * building ships, and so the encounter text can say what is coming.
+ */
+function pickForce(rng, strength, classPool = [], {
+  overshoot = 1.6, capitalChance = CAPITAL_CHANCE,
+} = {}) {
+  const armed = [...new Set(classPool)].filter((c) => classPower(c) > 0);
+  // A convoy of freighters is a pool with no fighting power in it. It is still
+  // a thing that turns up, so it comes back as one hull rather than as nothing.
+  if (!armed.length) return classPool.slice(0, 1);
+
+  const want = Math.max(0.01, strength);
+  // Sometimes what turns up is not what the situation warranted. Costing every
+  // force to the target made a Borg cube unreachable — the Borg pool is two
+  // capitals and the deepspace garrison is worth 0.2 of a Constitution, so the
+  // affordability rule fielded a bioship every time and the cube, which is the
+  // game's whole illustration of a fight you run from, stopped existing outside
+  // scripted missions. It also left a Sovereign with nothing to fear anywhere
+  // on the map: 1% of deep-space encounters rated dangerous and none worse.
+  //
+  // This is the encounter that is genuinely out of scale, and it is rare on
+  // purpose. The captain is not ambushed by it in the dark: the bridge weighs
+  // the fight and says so before a shot is fired.
+  const wild = rng.chance(capitalChance);
+  const affordable = wild ? armed : armed.filter((c) => classPower(c) <= want * overshoot);
+  const lightest = armed.reduce((a, b) => (classPower(a) <= classPower(b) ? a : b));
+  const eligible = affordable.length ? affordable : [lightest];
+  // Weighted by the pool's own repetition, because that is how the fleet tables
+  // say which hull is common: the Klingon list names bird_of_prey twice.
+  const weighted = classPool.filter((c) => eligible.includes(c));
+  const lead = rng.pick(weighted.length ? weighted : eligible);
+
+  // An escort is lighter than the ship it escorts. Two Negh'Vars is not a
+  // patrol with a big flagship, it is a war.
+  const escorts = armed.filter((c) => classPower(c) <= classPower(lead));
+  const force = [lead];
+  while (force.length < MAX_FORCE_HULLS) {
+    const err = Math.abs(forcePower(force) - want);
+    const better = escorts.filter((c) => Math.abs(forcePower([...force, c]) - want) < err);
+    if (!better.length) break;
+    force.push(rng.pick(better));
   }
-  return out;
+  return force;
 }
 
 __exports.FACINGS = FACINGS;
@@ -27468,7 +27650,12 @@ __exports.rangeFactor = rangeFactor;
 __exports.Engagement = Engagement;
 __exports.HOSTILE_NAMES = HOSTILE_NAMES;
 __exports.hostileName = hostileName;
+__exports.romanNumeral = romanNumeral;
+__exports.stripSuffix = stripSuffix;
+__exports.MAX_FORCE_HULLS = MAX_FORCE_HULLS;
+__exports.CAPITAL_CHANCE = CAPITAL_CHANCE;
 __exports.buildHostiles = buildHostiles;
+__exports.pickForce = pickForce;
 
 });
 
@@ -30838,6 +31025,7 @@ const { SYSTEM_BY_ID, SECTORS } = __require("src/world/systems.data.js");
 const { FACTIONS, isHostile } = __require("src/world/factions.data.js");
 const { Ship } = __require("src/sim/ship.js");
 const { buildHostiles } = __require("src/sim/combat.js");
+const { shipPower } = __require("src/sim/assess.js");
 
 /** Which hostile hulls each faction fields. */
 const FLEETS = {
@@ -31040,7 +31228,7 @@ const SALVAGE_POOL = [
 ];
 function rollEncounter(rng, systemId, {
   ledger, inTransit = false, quietInHostileSpace = false, halveHostile = false,
-  distressSooner = false, challengeBy = null,
+  distressSooner = false, challengeBy = null, player = null,
 } = {}) {
   const system = SYSTEM_BY_ID[systemId];
   if (!system) return null;
@@ -31050,6 +31238,11 @@ function rollEncounter(rng, systemId, {
   // asks about it — see RESEARCH.md §25, and `Game.enterTheDMZ`, which is what
   // decides that this is one of those arrivals.
   if (challengeBy) return buildChallenge(rng, system, challengeBy, ledger);
+
+  // What a garrison sees coming. Zero when the caller does not pass a ship,
+  // which leaves the presence table on its own and is what every test that
+  // rolls encounters without a game does.
+  const intruder = player ? shipPower(player) : 0;
 
   // Safe space is mostly quiet; the frontier is not.
   let danger = system.faction === 'federation' && !system.contested ? 0.18
@@ -31097,8 +31290,8 @@ function rollEncounter(rng, systemId, {
 
   const built = (() => {
     switch (pick.kind) {
-      case 'patrol': return buildPatrol(rng, system, presence, ledger);
-      case 'ambush': return buildAmbush(rng, system, presence, ledger);
+      case 'patrol': return buildPatrol(rng, system, presence, ledger, intruder);
+      case 'ambush': return buildAmbush(rng, system, presence, ledger, intruder);
       case 'distress': return buildDistress(rng, system);
       case 'derelict': return buildDerelict(rng, system);
       case 'convoy': return buildConvoy(rng, system, presence);
@@ -31137,6 +31330,74 @@ function article(word) {
   return /^[aeiou]/i.test(String(word ?? '')) ? 'An' : 'A';
 }
 
+/**
+ * How much force a faction has out here, in Constitutions.
+ *
+ * `SECTOR_PRESENCE` already says this and has said it since the map was
+ * written: Klingons are a 1 at Andor and a 9 at Qo'noS. Until now the number
+ * only decided WHO you met, never how much of them — a patrol was `rng.int(1,2)`
+ * hulls in both places, so a border sweep and the defence of the homeworld were
+ * the same encounter with a different adjective.
+ *
+ * Per point of presence. A 9 is a fight a Constitution should think about; a 1
+ * is a single light hull asking what you are doing here.
+ */
+const STRENGTH_PER_PRESENCE = 0.22;
+
+/** An ambush is chosen by the people springing it. It is heavier on purpose. */
+const AMBUSH_MULTIPLIER = 1.7;
+
+/** Raiders shooting up a freighter brought enough for a freighter. */
+const RAIDER_STRENGTH = 0.5;
+
+/**
+ * How much of what a captain is flying a defence force answers with.
+ *
+ * Presence alone tops out at nine, so the heaviest patrol in the game was worth
+ * 2.0 Constitutions and a Sovereign is worth 6.8 of one. Measured over four
+ * thousand rolls, the band a hostile encounter came out at:
+ *
+ *     ship           no contest  favourable  even  dangerous  outmatched
+ *     Miranda                0%          0%   24%        26%         46%
+ *     Constitution           0%         24%   26%        22%         24%
+ *     Excelsior             50%         13%   27%         6%          0%
+ *     Galaxy                63%         28%    5%         0%          0%
+ *     Sovereign             67%         30%    0%         0%          0%
+ *
+ * A flagship never met anything. This is not the enemy scaling to the player —
+ * it is a garrison seeing a warship coming and sending what that is worth, and
+ * it is scaled by presence, so it is a real answer at Qo'noS and a shrug at
+ * Andor. A Miranda over Qo'noS is still in exactly as much trouble as it was:
+ * a 0.36 response added to a 2.0 garrison changes nothing about a 0.45 ship.
+ *
+ * The coefficient was swept rather than chosen, over the same four thousand
+ * rolls split by where the ship actually is — home space, the near frontier,
+ * and deep space — reading the share of hostile encounters that came out
+ * dangerous or worse:
+ *
+ *     coefficient   Constitution near   Excelsior deep   Sovereign deep
+ *     0.42                        29%              27%              1%
+ *     0.60                        39%              37%              7%
+ *     0.80                        41%              47%             11%
+ *     1.00                        42%              57%             27%
+ *
+ * 0.80 is where a flagship finally has something to worry about without an
+ * Excelsior spending half the map being hunted. At 1.00 the Excelsior's
+ * favourable band collapses from 26% to 1%, which is a ship that has stopped
+ * having good days.
+ */
+const RESPONSE_TO_INTRUDER = 0.8;
+
+/** The presence table's own ceiling, so a response is a fraction of a full one. */
+const FULL_PRESENCE = 9;
+
+const forceStrength = (presence, factionId, { scale = 1, playerPower = 0 } = {}) => {
+  const here = presence?.[factionId] ?? 2;
+  const garrison = here * STRENGTH_PER_PRESENCE;
+  const answer = RESPONSE_TO_INTRUDER * Math.max(0, playerPower) * (here / FULL_PRESENCE);
+  return Math.max(0.15, (garrison + answer) * scale);
+};
+
 function pickFaction(rng, presence, { exclude = ['federation'] } = {}) {
   const options = Object.entries(presence)
     .filter(([id]) => !exclude.includes(id))
@@ -31145,15 +31406,14 @@ function pickFaction(rng, presence, { exclude = ['federation'] } = {}) {
   return rng.weighted(options).id;
 }
 
-function buildPatrol(rng, system, presence, ledger) {
+function buildPatrol(rng, system, presence, ledger, intruder = 0) {
   const factionId = pickFaction(rng, presence);
   const standing = ledger?.standingOf(factionId) ?? FACTIONS[factionId]?.baseStanding ?? 0;
   const hostile = isHostile(standing);
-  const count = rng.int(1, factionId === 'borg' ? 1 : 2);
   const errand = rng.pick(PATROL_ERRANDS);
   return {
     kind: 'patrol', system, factionId, hostile,
-    ships: makeShips(rng, factionId, count),
+    ships: makeShips(rng, factionId, forceStrength(presence, factionId, { playerPower: intruder })),
     hailable: FACTIONS[factionId]?.hailable ?? false,
     subtype: hostile ? 'intercept' : errand.id,
     title: `${FACTIONS[factionId]?.adjective ?? 'Unknown'} patrol`,
@@ -31269,12 +31529,12 @@ function buildTrap(rng, system) {
   };
 }
 
-function buildAmbush(rng, system, presence, ledger) {
+function buildAmbush(rng, system, presence, ledger, intruder = 0) {
   const factionId = pickFaction(rng, presence, { exclude: ['federation', 'independent'] });
-  const count = rng.int(2, 3);
   return {
     kind: 'ambush', system, factionId, hostile: true, surprise: true,
-    ships: makeShips(rng, factionId, count),
+    ships: makeShips(rng, factionId, forceStrength(presence, factionId,
+      { scale: AMBUSH_MULTIPLIER, playerPower: intruder })),
     hailable: false,
     title: 'Ambush',
     text: FACTIONS[factionId]?.cloakCapable
@@ -31294,7 +31554,7 @@ function buildDistress(rng, system) {
   const factionId = pick.hostile ? rng.pick(['orion', 'klingon', 'ferengi']) : null;
   return {
     kind: 'distress', system, subtype: pick.id, hostile: pick.hostile, factionId,
-    ships: pick.hostile ? makeShips(rng, factionId, rng.int(1, 2)) : [],
+    ships: pick.hostile ? makeShips(rng, factionId, RAIDER_STRENGTH) : [],
     victims: pick.hostile ? [new Ship('freighter', { name: 'SS Kobayashi', faction: 'independent' })] : [],
     lives: rng.int(80, 2400),
     title: 'Distress call',
@@ -31428,12 +31688,13 @@ function buildAnomaly(rng, system) {
   };
 }
 
-function makeShips(rng, factionId, count) {
+/** @param strength in Constitutions — see `buildHostiles`, not a hull count. */
+function makeShips(rng, factionId, strength) {
   const pool = FLEETS[factionId] ?? ['orion_raider'];
   // One table, in src/sim/combat.js. This file used to carry its own copy,
   // which is how a Klingon cruiser could be an IKS Rotarran in an encounter
   // and "klingon vessel 1" when a mission stage started the same fight.
-  return buildHostiles(rng, factionId, count, pool);
+  return buildHostiles(rng, factionId, strength, pool);
 }
 
 /** Hazard tick for systems that are actively dangerous to sit in. */
@@ -33539,7 +33800,7 @@ const { Ship, FACINGS, SHIELD_OVERCHARGE } = __require("src/sim/ship.js");
 const { Crew, Officer, ABILITIES, ABILITY_LIST } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP, SKILLS } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
-const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
+const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES, romanNumeral, stripSuffix, MAX_FORCE_HULLS } = __require("src/sim/combat.js");
 const { buildArena } = __require("src/sim/arena.js");
 const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
@@ -33598,8 +33859,12 @@ const { CampaignClock, absenceReport, COMMISSION_DAYS } = __require("src/campaig
 /**
  * Ceiling on hostiles in one engagement. Beyond this the tactical display
  * stops being readable on a phone, whatever the difficulty asks for.
+ *
+ * One constant, in `sim/combat.js`, because there are now two places that can
+ * ask for too many hulls: the difficulty setting adding reinforcements, and a
+ * force costed to a strength that would rather have nine Orion raiders.
  */
-const MAX_HOSTILES = 6;
+const MAX_HOSTILES = MAX_FORCE_HULLS;
 
 /**
  * How much lived time the tick loop banks before spending it on the ship.
@@ -33638,12 +33903,6 @@ const PLACE_TEMPLATES = new Set(['colony_rescue', 'diplomatic_landing', 'covert_
  * four, which is where the old number landed for every voyage at once.
  */
 const INTERCEPT_PER_HOUR = 0.001;
-
-/** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
-const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
-
-const ROMAN = ['', '', 'II', 'III', 'IV', 'V', 'VI'];
-const romanNumeral = (n) => ROMAN[n] ?? String(n);
 
 /** Events the Idealist trait doubles reputation for. */
 const PEACEFUL_EVENTS = new Set([
@@ -34241,6 +34500,11 @@ class Game {
       quietInHostileSpace: this.perk('reduced_detection'),
       halveHostile: this.perk('route_intel') && this.galaxy.visited.has(systemId),
       distressSooner: this.perk('folk_hero'),
+      // Not a perk, and here anyway for the reason above: a garrison sizes its
+      // answer to what it can see coming, and the three call sites have to
+      // agree about that too. A fourth that forgets it gets a patrol built for
+      // nobody in particular.
+      player: this.ship,
     };
   }
 

@@ -582,6 +582,29 @@ they concentrate fire while you divide yours. That fight is one to **break
 off**, not win. `get us out of here` starts an eight-second warp-out, and it
 works: disengaging is a real outcome, not a failure state.
 
+### What turns up, and how much of it
+
+A patrol is an amount of force, not a number of hulls, and the amount comes
+from how much of that faction is where you are. Klingons are a token presence
+at Andor and the whole navy at Qo'noS, so an encounter with the same name means
+a very different fight in each place.
+
+The hulls follow from the same arithmetic. Light ships arrive in packs because
+that is the only way they matter — three Orion raiders are nine times one, not
+three — and capital ships arrive alone or with escorts lighter than themselves.
+You will meet two Birds-of-Prey where you would meet one D7, and four raiders
+where you would meet one Galor.
+
+Fly something heavier and the answer gets heavier, in proportion to how much
+attention the locals were paying in the first place. A dreadnought over the
+Klingon homeworld draws a fleet; the same ship at Andor draws the same bored
+scout a shuttle would.
+
+And roughly one encounter in twelve is drawn without regard to any of that.
+That is where the Borg cube lives, and the Negh'Var that has no business being
+on a border. Read the odds on the tactical display before you commit — that
+line exists for exactly these.
+
 ---
 
 ## Reputation

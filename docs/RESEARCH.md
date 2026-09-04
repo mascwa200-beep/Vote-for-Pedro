@@ -1943,6 +1943,127 @@ display carries a live one — a battle that was outmatched three ships ago is n
 outmatched now, and the pill is the number a captain reads to decide whether to
 run. Nothing about a battle changes; the fight the captain chooses does.
 
+## 34. A patrol was a number of hulls, not an amount of force
+
+`buildHostiles(rng, factionId, strength, pool)` has had that third argument
+named `strength`, and documented as strength, since combat was written. It was
+used as a count. The encounter generator asked for `rng.int(1, 2)` of them and
+drew each one uniformly from a pool spanning a scout to a battleship.
+
+Measured through `rollEncounter` — **one** encounter kind, in **one** system,
+four hundred rolls of each, weighed against a Constitution with the assessment
+from §33:
+
+| where | what it says | fighting power | spread |
+| --- | --- | --- | --- |
+| Qo'noS | "A Klingon patrol" | 0.05 – 2.44 | **45×** |
+| Archanis | "A Klingon patrol" | 0.05 – 2.44 | **45×** |
+| Rigel | "An Orion patrol" | 1.32 – 10.72 | 8× |
+
+At Qo'noS the worst roll is two Negh'Vars, which kills a Constitution every
+time, and the best is one Bird-of-Prey, which is free. **Identical text.** 47% of
+Klingon patrols were funerals and the captain could not tell which until it was
+too late to leave.
+
+At Rigel the failure runs the other way: an Orion patrol was never a fight at
+all. The Orion Raider's own description in `ships.data.js` reads *"Dangerous in
+threes, worthless alone"* and the generator had never once fielded three.
+
+### What a hull is worth
+
+Costing every class by the §33 arithmetic, in Constitutions:
+
+| class | tier | power | | class | tier | power |
+| --- | --- | --- | --- | --- | --- | --- |
+| Orion Raider | 2 | 0.09 | | Galor | 4 | 0.77 |
+| Romulan Scout | 2 | 0.10 | | K't'inga | 4 | 0.93 |
+| Marauder | 3 | 0.19 | | D7 | 4 | 1.00 |
+| Tholian Spinner | 4 | 0.26 | | Warbird | 6 | 1.67 |
+| Bird-of-Prey | 3 | 0.41 | | Vor'cha | 5 | 2.26 |
+| Jem'Hadar attack | 5 | 0.69 | | Negh'Var | 7 | 4.63 |
+| | | | | Borg cube | 10 | 20.52 |
+
+A Negh'Var is fifty-one Orion raiders' worth of ship, and both were "one to two
+hulls in a patrol."
+
+### The square law does the work
+
+`n` identical hulls are worth n² of one — that is §33's whole finding — so
+asking for a **strength** and solving for the count gives packs of light hulls
+and lone capitals without either being written down anywhere:
+
+| strength | Klingon | Orion |
+| --- | --- | --- |
+| 0.6 | a Bird-of-Prey | three raiders |
+| 1.0 | two Birds-of-Prey, or a D7 | three raiders |
+| 1.6 | a D7, or a Vor'cha | four raiders |
+| 2.5 | a Vor'cha, or two K't'ingas | five raiders |
+| 4.0 | a Vor'cha and a Bird-of-Prey, or a Negh'Var alone | six raiders |
+
+Escorts fall out of the same arithmetic: after the lead ship, add hulls lighter
+than it for as long as adding one brings the force *closer* to the target. A
+Warbird arrives with two scouts; a Keldon arrives with a Galor; two Negh'Vars
+never arrive together, because that is not a patrol, it is a war.
+
+### Where the strength comes from
+
+`SECTOR_PRESENCE` has said this since the map was written — Klingons are a 1 at
+Andor and a 9 at Qo'noS — and the number only ever decided **who** you met,
+never how much of them. It decides both now.
+
+That alone left the top of the game empty. Presence caps at nine, so the
+heaviest patrol in the galaxy was worth 2.0 Constitutions and a Sovereign is
+worth 6.8 of one. Share of hostile encounters by band, four thousand rolls,
+split by where the ship actually is:
+
+| ship | home | near frontier | deep space |
+| --- | --- | --- | --- |
+| Miranda | 76% even | 57% dangerous | 69% outmatched |
+| Constitution | 76% favourable | 54% even | 39% outmatched |
+| Excelsior | 100% no contest | 54% no contest | 26% dangerous |
+| Galaxy | 100% no contest | 56% no contest | **1% dangerous, 0% worse** |
+| Sovereign | 100% no contest | 54% no contest | **1% dangerous, 0% worse** |
+
+A ship the game lets you earn had nothing left to be afraid of. So a garrison
+answers what it can see coming — not the enemy scaling to the player, but a
+defence force sizing its response to a warship in its space, and scaled by
+presence so it is a real answer at Qo'noS and a shrug at Andor. The coefficient
+was swept, not chosen; share of encounters rating dangerous or worse:
+
+| coefficient | Constitution, near | Excelsior, deep | Sovereign, deep |
+| --- | --- | --- | --- |
+| 0.42 | 29% | 27% | 1% |
+| 0.60 | 39% | 37% | 7% |
+| **0.80** | **41%** | **47%** | **11%** |
+| 1.00 | 42% | 57% | 27% |
+
+At 1.00 the Excelsior's favourable band collapses from 26% to 1% — a ship that
+has stopped having good days. 0.80 it is. A Miranda over Qo'noS is in exactly as
+much trouble as before: 0.36 of a response added to a 2.0 garrison changes
+nothing about a 0.45 ship.
+
+### Two things this broke, and what they cost
+
+**The Borg cube stopped existing.** The Borg pool is two capitals and the
+deep-space garrison is worth a fraction of a Constitution, so costing every
+force to the situation fielded a bioship every time — deleting the game's whole
+illustration of a fight you break off rather than win. One force in twelve is
+now drawn without regard to what the situation warranted. That is also what puts
+a Negh'Var in front of a lone cruiser, and it is the pairing that makes §33 earn
+its keep: the encounter is genuinely out of scale, and the bridge weighs it and
+says so before a shot is fired.
+
+**Two ships got the same name.** `hostileName` wrapped the faction's name list
+round to the start, and the Orion list is three names long. It had never come up
+while a force was one or two hulls; three raiders is now the commonest Orion
+encounter there is, and the tactical display was offering the captain two
+identical targets. The existing invariant asserted *both* the wrap and that a
+fleet has distinct names, which cannot both be true past the length of the list.
+It wraps onto `II` now, and `stripSuffix` — which already matched `I{1,3}|IV|V|VI`
+for the difficulty setting's reinforcements — was already ready for it.
+
+## Attribution
+
 Star Trek and all associated marks are the property of Paramount. This dossier
 records publicly documented facts and measurements, restated in my own words,
 with links to the sources consulted. No text, artwork, audio or other creative
