@@ -25065,7 +25065,7 @@ __define("src/sim/command.js", function (__exports, __require) {
 // is an OFFER, and it can be refused.
 
 const { Ship } = __require("src/sim/ship.js");
-const { getShipClass } = __require("src/world/ships.data.js");
+const { getShipClass, FEDERATION_REGISTRIES } = __require("src/world/ships.data.js");
 const { hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
 const { emit } = __require("src/core/events.js");
 
@@ -25162,6 +25162,30 @@ function nameFor(game, avoid) {
 }
 
 /**
+ * A hull number for a new command, which is not the one you just lost.
+ *
+ * `Ship` falls back to `FEDERATION_REGISTRIES[0]` when given no registry, and
+ * that is `NCC-1701`. So every Federation hull the captain was ever handed
+ * carried the same number, and nine of the ten registries in that list had
+ * never been used by anything. Losing the Enterprise and being given a
+ * Constellation produced `USS Lexington NCC-1701` — a fresh name on the dead
+ * ship's number, which is the one thing a registry is for.
+ *
+ * `takeCommandOf`'s own comment already says what should happen — promotion and
+ * a board of inquiry "get a fresh hull with a fresh name" — and the name half
+ * was the only half that happened.
+ *
+ * Worth knowing: this is why #116's "the yard keeps her number" assertion was
+ * vacuous. It compared `NCC-1701` against `NCC-1701` and passed without the fix
+ * it was written for, because every fresh hull carried that number.
+ */
+function registryFor(game, avoid) {
+  const pool = FEDERATION_REGISTRIES.filter((r) => r !== avoid);
+  if (!pool.length) return FEDERATION_REGISTRIES[0];
+  return pool[Math.floor(game.rng.float() * pool.length) % pool.length];
+}
+
+/**
  * Put the captain aboard a different hull.
  *
  * The crew come too — they followed Kirk from ship to ship and it would be a
@@ -25197,9 +25221,10 @@ function takeCommandOf(game, classId, { name = null, registry = null } = {}) {
     name: name ?? nameFor(game, previousName),
     // The yard refit keeps her name and her number: it is the same ship coming
     // out of dock as a different class, not a new command. Promotion and a
-    // board of inquiry pass neither and get a fresh hull with a fresh name,
-    // which is what those are.
-    ...(registry ? { registry } : {}),
+    // board of inquiry pass neither and get a fresh hull with a fresh name AND
+    // a fresh number, which is what those are — the number used to fall through
+    // to `Ship`'s default and come out as the registry of the ship just lost.
+    registry: registry ?? registryFor(game, game.ship?.registry ?? null),
     faction: 'federation',
     isPlayer: true,
   });

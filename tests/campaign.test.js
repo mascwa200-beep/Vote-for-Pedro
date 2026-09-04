@@ -12,6 +12,8 @@ import assert from 'node:assert/strict';
 import { CampaignClock, COMMISSION_DAYS, MAX_ABSENCE_HOURS, absenceReport } from '../src/campaign/clock.js';
 import { checksum } from '../src/core/save.js';
 import { Game } from '../src/core/state.js';
+import { takeCommandOf } from '../src/sim/command.js';
+import { FEDERATION_REGISTRIES } from '../src/world/ships.data.js';
 import { checkAll } from '../src/sim/invariants.js';
 import { ARENA_RADIUS } from '../src/sim/combat.js';
 import { readFileSync } from 'node:fs';
@@ -1128,6 +1130,77 @@ describe('a captain who is no longer a captain', () => {
         assert.match(r.error ?? r.reason ?? '', /command has ended/i,
           `${what}: "${order}" was refused, but for the wrong reason: ${r.error ?? r.reason}`);
       }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A new command gets a new number.
+//
+// `Ship` falls back to `FEDERATION_REGISTRIES[0]` when given no registry, and
+// that is NCC-1701. So every Federation hull a captain was ever handed carried
+// the same number, and nine of the ten registries in that list had never been
+// used by anything. Lose the Enterprise, be given a Constellation, and she is
+// `USS Lexington NCC-1701` — a fresh name on the dead ship's number.
+
+describe('a new command gets a new number', () => {
+  /** Lose the ship you have and be given another, the way the game does it. */
+  const relievedOfHer = (seed) => {
+    const g = new Game({ seed, crewMode: 'original', compression: HOUR_PER_TICK });
+    const lost = { name: g.ship.name, registry: g.ship.registry, classId: g.ship.classId };
+    g.ship.hull = 0;
+    g.ship.destroyed = true;
+    for (let i = 0; i < 400 && !g.over; i++) g.update(SIM_STEP);
+    return { g, lost, got: { name: g.ship.name, registry: g.ship.registry, classId: g.ship.classId } };
+  };
+
+  test('the replacement does not carry the lost ship’s registry', () => {
+    // Across several seeds, because one seed drawing a different number could
+    // be luck rather than a rule.
+    const runs = [3n, 31n, 77n, 909n, 4242n].map(relievedOfHer);
+    for (const r of runs) {
+      assert.equal(r.g.shipsLost, 1, 'the first ship was not recorded as lost');
+      assert.ok(!r.g.over, `the career ended on the first loss: ${r.g.overReason}`);
+      assert.notEqual(r.got.registry, r.lost.registry,
+        `${r.got.name} came out of the yard carrying ${r.lost.name}'s number`);
+      assert.ok(FEDERATION_REGISTRIES.includes(r.got.registry),
+        `${r.got.registry} is not a Starfleet registry`);
+      assert.notEqual(r.got.name, r.lost.name, 'and she was given the same name too');
+    }
+    // The control that makes the above mean something: the lost ships really
+    // did all carry the same number, so "different from the lost one" is a
+    // claim about the fix and not about the seeds happening to differ.
+    const lostNumbers = new Set(runs.map((r) => r.lost.registry));
+    assert.equal(lostNumbers.size, 1,
+      `the ships lost carried ${lostNumbers.size} different numbers, so this proves less than it looks`);
+  });
+
+  test('and the yard refit still keeps her name and her number', () => {
+    // The other half, and the reason this is not simply "always draw a new
+    // number": a refit is the SAME ship coming out of dock as a different
+    // class. `takeCommandOf`'s comment says so, and #116 exists to make it true.
+    const g = new Game({ seed: 31n, crewMode: 'original', compression: HOUR_PER_TICK });
+    const was = { name: g.ship.name, registry: g.ship.registry };
+    const r = takeCommandOf(g, 'excelsior', { name: was.name, registry: was.registry });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(g.ship.name, was.name, 'the yard renamed her');
+    assert.equal(g.ship.registry, was.registry, 'the yard renumbered her');
+    assert.equal(g.ship.classId, 'excelsior', 'the yard did not refit her');
+  });
+
+  test('and every registry in the list is one the game can hand out', () => {
+    // Nine of the ten had never been used by anything, which is how a list of
+    // ten numbers sat in the data for the whole project as one number.
+    const seen = new Set();
+    for (let seed = 1; seed <= 60; seed++) {
+      const g = new Game({ seed: BigInt(seed), crewMode: 'original', compression: HOUR_PER_TICK });
+      takeCommandOf(g, 'constellation');
+      seen.add(g.ship.registry);
+    }
+    assert.ok(seen.size >= 5,
+      `sixty new commands drew only ${seen.size} distinct numbers: ${[...seen].join(', ')}`);
+    for (const r of seen) {
+      assert.ok(FEDERATION_REGISTRIES.includes(r), `${r} is not in the list`);
     }
   });
 });
