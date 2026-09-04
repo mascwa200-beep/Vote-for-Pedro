@@ -25608,6 +25608,7 @@ const COVER_DOCTRINE = {
  * routinely has a mean shield above 0.55 and one facing at nothing, which is
  * exactly the ship that should be behind a rock.
  */
+const SPLIT_OFFSET = 110;
 const COVER_LEAVE_SHIELDS = 0.6;
 const weakestShield = (ship) => Math.min(
   ...['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'].map((f) => ship.shieldPctOf(f)),
@@ -25748,12 +25749,51 @@ function presentStrongestShield(ship, threat) {
  * not shooting straight.
  */
 function chooseElevation(ship, target, doctrine, rng) {
-  const dorsalWeak = target.shieldPctOf('dorsal') < target.shieldPctOf('ventral');
-  const bias = dorsalWeak ? 1 : -1;
-  const commitment = doctrine === 'aggressive' ? 1 : doctrine === 'ambush' ? 0.8 : 0.45;
   const spread = ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1);
-  // Aim to sit above or below the target rather than level with it.
-  const wantOffset = bias * commitment * 220 * (0.7 + 0.3 * spread);
+  const dorsal = target.shieldPctOf('dorsal');
+  const ventral = target.shieldPctOf('ventral');
+
+  // WHICH SIDE, when neither is weaker.
+  //
+  // `dorsal < ventral` with both at full is false, so the bias was -1 on the
+  // opening tick of every engagement ever fought; the ship then went below,
+  // shot the ventral shield, and made `dorsal < ventral` false for the rest of
+  // the battle. Self-reinforcing, and the measurement is unambiguous: over
+  // 133,804 ticks with two or more hostiles alive, the player's DORSAL shield
+  // was the facing under attack 0.0% of the time and its ventral 15%. One of
+  // the six facings the ship carries was decorative.
+  //
+  // The tie-break is the ship's own orbit direction rather than a new random
+  // draw: it is already 50/50, it is already persistent, and taking a draw
+  // here would move every seeded fixture in the suite. It also means a pair of
+  // attackers that split left and right split high and low as well.
+  const MARGIN = 0.12;
+  const known = Math.abs(dorsal - ventral) > MARGIN;
+  const bias = known ? (dorsal < ventral ? 1 : -1) : spread;
+
+  const commitment = doctrine === 'aggressive' ? 1 : doctrine === 'ambush' ? 0.8 : 0.45;
+
+  // HOW FAR: unchanged at 220, and the reason it is unchanged is worth as much
+  // as the fix above.
+  //
+  // A shield facing is decided by the dominant axis of the bearing in the
+  // target's own frame, so reaching the dorsal shield "ought" to need an offset
+  // bigger than the horizontal separation — 220 at a preferred range of 300 to
+  // 800 is a slight climb that still reads as a bow shot. Scaling the offset to
+  // the range was written, measured, and thrown away: it moved the dorsal share
+  // not at all (6% either way) and put the median battle in a debris field from
+  // 59 seconds to 189, because a ship that climbs to its own engagement range
+  // arrives late and by a longer route.
+  //
+  // The share of shots that land dorsally does not come from where the attacker
+  // holds station. It comes from the PLAYER manoeuvring underneath somebody who
+  // has chosen the high side, which the tie-break above is what makes possible.
+  //
+  // The `(0.7 + 0.3 * spread)` factor that used to be here is gone with it: it
+  // made a dive four tenths as deep as a climb, which was invisible while every
+  // ship in the game dived and is a lopsided pair of attackers now that they
+  // split.
+  const wantOffset = bias * commitment * (known ? 220 : SPLIT_OFFSET);
   return (target.z ?? 0) + wantOffset;
 }
 
@@ -26019,7 +26059,15 @@ function chooseAction(ship, engagement, dt, opts = {}) {
         const lead = doctrine === 'aggressive' ? 0 : 25;
         ship.desiredHeading = toTarget + (ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1)) * lead;
         // Hold the elevation that keeps the target's weaker face toward us.
-        ship.desiredPitch = ship.elevationTo(target);
+        //
+        // Which is what the comment has always said and what the line under it
+        // did not do: `elevationTo(target)` points AT the target, so a ship in
+        // the pocket levelled off — and the pocket is where a ship spends most
+        // of a battle. `chooseElevation` was only ever consulted while closing
+        // or backing off.
+        const hold = chooseElevation(ship, target, doctrine, rng);
+        const flat = Math.hypot(target.x - ship.x, target.y - ship.y);
+        ship.desiredPitch = Math.atan2(hold - (ship.z ?? 0), flat) * 180 / Math.PI;
       }
       ship.throttle = 0.55;
     }
