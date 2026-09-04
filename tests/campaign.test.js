@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { CampaignClock, COMMISSION_DAYS, MAX_ABSENCE_HOURS, absenceReport } from '../src/campaign/clock.js';
 import { checksum } from '../src/core/save.js';
 import { Game } from '../src/core/state.js';
-import { takeCommandOf } from '../src/sim/command.js';
+import { takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
 import { FEDERATION_REGISTRIES } from '../src/world/ships.data.js';
 import { checkAll } from '../src/sim/invariants.js';
 import { ARENA_RADIUS } from '../src/sim/combat.js';
@@ -1202,5 +1202,83 @@ describe('a new command gets a new number', () => {
     for (const r of seen) {
       assert.ok(FEDERATION_REGISTRIES.includes(r), `${r} is not in the list`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The whole command ladder, one rung at a time.
+//
+// Nine promotions from an Oberth to a Galaxy. Nothing walked it: `wiring` takes
+// one command, `#116` swaps one hull at the yard, and the tour never leaves the
+// class it starts in. What a captain who serves long enough to see all nine
+// actually gets — a fresh ship each time, the track following the captain, the
+// bays resized, and nothing illegal at any rung — was never checked end to end.
+
+describe('the whole command ladder, one rung at a time', () => {
+  const climbed = (() => {
+    const g = new Game({ seed: 5n, crewMode: 'original', compression: HOUR_PER_TICK });
+    const rungs = [];
+    for (const { id } of COMMAND_LADDER) {
+      if (id === g.ship.classId) continue;
+      const before = { name: g.ship.name, registry: g.ship.registry };
+      const r = takeCommandOf(g, id);
+      rungs.push({
+        id, ok: r.ok, reason: r.reason,
+        name: g.ship.name, registry: g.ship.registry, classId: g.ship.classId,
+        mastery: g.mastery?.classId,
+        sameNameAsLast: g.ship.name === before.name,
+        sameNumberAsLast: g.ship.registry === before.registry,
+        violations: checkAll(g, { arenaRadius: ARENA_RADIUS }).map((v) => `${v.severity} ${v.code}`),
+      });
+      for (let i = 0; i < 60; i++) g.update(SIM_STEP);
+    }
+    return { g, rungs };
+  })();
+
+  test('every rung on the ladder can actually be taken', () => {
+    // The control: a ladder where every promotion is refused would satisfy
+    // every assertion below about the ones that were not.
+    assert.ok(climbed.rungs.length >= 8,
+      `only ${climbed.rungs.length} rungs were attempted`);
+    const refused = climbed.rungs.filter((r) => !r.ok);
+    assert.deepEqual(refused.map((r) => `${r.id}: ${r.reason}`), [],
+      'rungs the ladder offers and the game refuses');
+    for (const r of climbed.rungs) {
+      assert.equal(r.classId, r.id, `asked for ${r.id} and got ${r.classId}`);
+    }
+  });
+
+  test('and the track follows the captain up it', () => {
+    // `takeCommandOf`'s stated rule — "the track follows the captain, not the
+    // hull" — which #116 exists to make true from the shipyard screen too.
+    for (const r of climbed.rungs) {
+      assert.equal(r.mastery, r.id,
+        `flying a ${r.classId} with the mastery track pointed at ${r.mastery}`);
+    }
+  });
+
+  test('and each new command is a different ship from the last', () => {
+    for (const r of climbed.rungs) {
+      assert.equal(r.sameNumberAsLast, false,
+        `${r.id} came out of the yard carrying the number she went in with`);
+      assert.equal(r.sameNameAsLast, false,
+        `${r.id} came out of the yard carrying the name she went in with`);
+      assert.ok(FEDERATION_REGISTRIES.includes(r.registry),
+        `${r.registry} is not a Starfleet registry`);
+    }
+  });
+
+  test('and nothing anywhere on the ladder was illegal', () => {
+    for (const r of climbed.rungs) {
+      assert.deepEqual(r.violations, [], `${r.id} was an illegal state`);
+    }
+    // And the ship at the top survives being put down and picked up.
+    const back = Game.load(JSON.parse(JSON.stringify(climbed.g.save())),
+      { compression: HOUR_PER_TICK });
+    for (let i = 0; i < 300; i++) back.update(SIM_STEP);
+    assert.equal(back.ship.classId, climbed.g.ship.classId, 'woke up in a different hull');
+    assert.equal(back.ship.registry, climbed.g.ship.registry, 'woke up with a different number');
+    assert.deepEqual(checkAll(back, { arenaRadius: ARENA_RADIUS }), [],
+      'the ship at the top of the ladder loaded broken');
   });
 });
