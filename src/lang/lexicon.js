@@ -1220,10 +1220,11 @@ export const INTENTS = [
       'provide escort', 'escort them', 'see them through',
       'make contact anyway', 'make contact',
       'use the device', 'everything to auxiliary', 'ride it out', 'sit it out',
+      'observe them', 'watch them', 'watch what they are doing', 'keep an eye on them',
     ],
     keywords: {
       assistance: 2.6, escort: 2.6, aid: 2, ignore: 2.4, board: 1.8,
-      alongside: 2.2, ride: 1.6,
+      alongside: 2.2, ride: 1.6, observe: 2.6,
     },
     veto: ['course for', 'warp', 'drill', 'mission', 'orders'],
     build: (c) => {
@@ -1238,6 +1239,10 @@ export const INTENTS = [
         [/\buse the device\b/, 'trap_device'],
         [/\beverything to\b/, 'trap_power'],
         [/\bride it out|sit it out\b/, 'trap_wait'],
+        // Watching a patrol rather than hailing it. Deliberately not `scan`,
+        // which catalogues an anomaly; "watch" and "observe" are the words a
+        // bridge uses for a ship going about its business.
+        [/\bobserve|watch them|watch what|keep an eye\b/, 'observe'],
       ].find(([re]) => re.test(t));
       return { action: 'encounter_choice', choice: map?.[1] ?? null };
     },

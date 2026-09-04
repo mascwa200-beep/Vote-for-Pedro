@@ -377,6 +377,33 @@ test('every intercom station gives a report built from live ship state', () => {
   assert.ok(g.log.length > before, 'nothing reached the ship’s log');
 });
 
+test('and every station still answers with the ship under way', () => {
+  // The other half of the state, and the half nothing had ever asked in.
+  // `helm` is the only report with two branches, and the one it takes at warp
+  // read `transit.factor` — a field `Transit` has never had; the constructor
+  // takes `warpFactor` and stores it under that name. So "helm report" threw
+  // on every ship that was actually going somewhere, for the whole life of the
+  // intercom, and the test above could not see it because a ship in spacedock
+  // takes the other branch.
+  //
+  // Found by the order monkey in tools/verify-app.mjs, which gives every
+  // phrasing the parser knows to a running game at whatever moment it is in.
+  const g = gameWith();
+  const dest = g.galaxy.neighbors(g.locationId)[0];
+  assert.ok(dest, 'nowhere to go from the starting system');
+  const set = g.setCourse(dest.id ?? dest);
+  assert.ok(g.transit, `no course was laid in: ${JSON.stringify(set)}`);
+
+  for (const dept of ['engineering', 'medical', 'tactical', 'science', 'helm', 'comms', 'security']) {
+    const text = g.intercom(dept);
+    assert.ok(text && text.length > 10, `${dept} said nothing while under way`);
+    assert.ok(!/undefined|NaN|\[object/.test(text), `${dept}: ${text}`);
+  }
+  // And the helm says the warp factor it is actually flying.
+  assert.match(g.intercom('helm'), new RegExp(`warp ${g.transit.warpFactor.toFixed(1)}`),
+    g.intercom('helm'));
+});
+
 test('an intercom report changes when the ship does', () => {
   const g = gameWith();
   const quiet = g.intercom('medical');

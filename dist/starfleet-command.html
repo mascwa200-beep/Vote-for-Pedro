@@ -21301,10 +21301,11 @@ const INTENTS = [
       'provide escort', 'escort them', 'see them through',
       'make contact anyway', 'make contact',
       'use the device', 'everything to auxiliary', 'ride it out', 'sit it out',
+      'observe them', 'watch them', 'watch what they are doing', 'keep an eye on them',
     ],
     keywords: {
       assistance: 2.6, escort: 2.6, aid: 2, ignore: 2.4, board: 1.8,
-      alongside: 2.2, ride: 1.6,
+      alongside: 2.2, ride: 1.6, observe: 2.6,
     },
     veto: ['course for', 'warp', 'drill', 'mission', 'orders'],
     build: (c) => {
@@ -21319,6 +21320,10 @@ const INTENTS = [
         [/\buse the device\b/, 'trap_device'],
         [/\beverything to\b/, 'trap_power'],
         [/\bride it out|sit it out\b/, 'trap_wait'],
+        // Watching a patrol rather than hailing it. Deliberately not `scan`,
+        // which catalogues an anomaly; "watch" and "observe" are the words a
+        // bridge uses for a ship going about its business.
+        [/\bobserve|watch them|watch what|keep an eye\b/, 'observe'],
       ].find(([re]) => re.test(t));
       return { action: 'encounter_choice', choice: map?.[1] ?? null };
     },
@@ -35553,9 +35558,17 @@ class Game {
         + `Shields ${s.shieldsUp ? 'up' : 'down'}.`,
       science: () => `Sensors at ${pct(s.subsystems.sensors)}. `
         + `${this.location.name}, ${this.location.type}${this.location.hazard ? `, ${this.location.hazard.replace(/_/g, ' ')}` : ''}.`,
+      // `warpFactor`, not `factor`. `Transit` has never had a `factor` — the
+      // constructor takes `warpFactor` and stores it under that name — so
+      // "helm report" threw on every ship that was actually under way, for the
+      // whole life of the intercom. Invisible because it needs the one order
+      // given in the one state; found by the order monkey in
+      // tools/verify-app.mjs, which gives every phrasing at every moment.
       helm: () => (this.transit
-        ? `Underway for ${this.transit.to.name}, warp ${this.transit.factor.toFixed(1)}.`
-        : `Station keeping at ${this.location.name}. Engines at ${pct(s.subsystems.engines)}.`),
+        ? `Underway for ${this.transit.to?.name ?? 'the next system'}, `
+          + `warp ${(this.transit.warpFactor ?? 1).toFixed(1)}.`
+        : `Station keeping at ${this.location?.name ?? 'these coordinates'}. `
+          + `Engines at ${pct(s.subsystems.engines)}.`),
       comms: () => `Subspace is clear, Captain. ${this.reputation ? 'Nothing on the priority channels.' : ''}`.trim(),
       security: () => `${s.crew} aboard, all decks reporting. Hull at ${pct(s.hullPct)}.`,
     };
@@ -36307,6 +36320,24 @@ class Game {
    *
    * @returns {Array<{id, label, sub, color, say}>}
    */
+  /**
+   * What you get for watching a patrol instead of hailing it.
+   *
+   * Keyed by the errand the encounter already chose. `PATROL_ERRANDS` in
+   * world/encounters.js says what they are doing; this says what a careful
+   * look at it is worth, which is the other half of the same sentence.
+   */
+  static PATROL_WATCH = {
+    scanning: { seen: 'They are mapping our shield harmonics, politely, and logging the result. We log theirs.' },
+    border_run: { seen: 'The cutter runs the line to a hundredth of a degree. Navigation now has the line to a hundredth of a degree.' },
+    tender: { seen: 'Buoy servicing, done well. Their escort has a sensor blind spot aft and does not know it.' },
+    search: { seen: 'The pattern is a search for wreckage, not a ship. Whatever they lost, they lost it badly.' },
+    convoy_screen: { seen: 'Something large is behind them running dark. We do not get a profile, but we get a mass.' },
+    relief: { seen: 'Relief supplies, and the manifest is on an open channel because nobody expected anyone to read it.' },
+    survey: { seen: 'A standard grid, worked properly. Science quietly copies their gridding method.' },
+    default: { seen: 'They go about their business and we go about ours, both of us watching.' },
+  };
+
   encounterChoices() {
     const enc = this.encounter;
     if (!enc) return [];
@@ -36381,6 +36412,18 @@ class Game {
       }
       case 'patrol':
         if (enc.hailable) add('hail', 'Hail them', 'hail them', null, 'lilac');
+        // Watching is always available, and is the only thing available at all
+        // when the faction does not answer hails. Measured over twenty
+        // thousand encounters, 109 of them — every non-hostile patrol from the
+        // Dominion, the Tholians or the Borg — offered a single button reading
+        // "Continue", which is not an encounter, it is a notification.
+        //
+        // And `subtype` has carried a real errand since the errand table was
+        // written: a tender servicing navigation buoys, a destroyer screening
+        // something you cannot see, a squadron quartering the system for
+        // something it will not name. Nothing had ever read it back.
+        add('observe', 'Watch what they are doing', 'observe them',
+          'Passive sensors, and a line in the log.', 'ice');
         add('withdraw', 'Continue', 'withdraw', null, 'ghost');
         break;
       case 'signal': {
@@ -36415,7 +36458,15 @@ class Game {
         // the wrong faction, the wrong ships, and a set of choices belonging
         // to a situation that ended some time ago.
         this.encounter = null;
-        this.startCombat(enc.ships ?? [], { name: enc.title });
+        this.startCombat(enc.ships ?? [], {
+          name: enc.title,
+          // What the encounter already knew about itself and never passed on.
+          surprise: enc.surprise ?? false,
+          // The freighter in "a civilian freighter is under attack" was built,
+          // given a name, and left out of the battle. `Engagement` has taken
+          // `opts.allies` all along.
+          allies: enc.victims ?? [],
+        });
         return { messages: ['Engaging.'], combat: true };
 
       case 'hail': {
@@ -36516,6 +36567,28 @@ class Game {
           out.messages.push('The readings will not resolve. Science recommends a closer approach.');
         }
         break;
+      }
+
+      // Watching a patrol go about its business. Not `scan`, which catalogues an
+      // anomaly and marks a system surveyed — a tender is neither.
+      case 'observe': {
+        const what = Game.PATROL_WATCH[enc.subtype] ?? Game.PATROL_WATCH.default;
+        const quality = 0.5 + this.progress.scanBonus + this.sensorQuality * 0.3;
+        if (this.rng.chance(quality)) {
+          this.awardXP(90);
+          out.messages.push(what.seen);
+        } else {
+          this.awardXP(30);
+          out.messages.push('They are careful. We learn very little, and they know we tried.');
+        }
+        // Through `endEncounter`, not by hand. The first draft of this cleared
+        // `this.encounter`, stood the alert down and emitted the event — and
+        // forgot the one line that puts the mode back, leaving the game in
+        // ENCOUNTER mode with no encounter in it. The order monkey in
+        // tools/verify-app.mjs found it within one run: "no order throws,
+        // whenever it is given — helm report".
+        this.endEncounter();
+        return out;
       }
 
       case 'approach': {
@@ -36863,6 +36936,38 @@ class Game {
     if (this.perk('first_strike')) {
       for (const s of fleet) for (const w of s.weapons) w.cooldown = w.cycle;
       this.pushLog('Their gunnery is slow off the mark, Captain. Empire doctrine.', 'tactical');
+    }
+    // The other side of it: being jumped.
+    //
+    // `buildAmbush` has set `surprise: true` since encounters were written and
+    // NOTHING had ever read it, so "Sensors read nothing — then everything.
+    // Ships decloaking off both bows" opened exactly like a routine patrol,
+    // with every gun on both sides ready. Measured through `resolveEncounter`:
+    // patrol and ambush came back byte for byte identical.
+    //
+    // Symmetrical with `first_strike` on purpose, and in the same place: one
+    // side opens a cycle behind, which is a real free volley and the whole
+    // meaning of the word.
+    //
+    // Two species sell a defence against this and neither had anything to
+    // defend against. The Caitian's Predator's Instinct — "You always act
+    // first in an engagement, and can never be surprised" — cancels it
+    // outright; the Saurian's Wide Spectrum Vision — "Advantage against
+    // ambushes" — halves it, because seeing it coming is not the same as
+    // having been ready.
+    if (opts.surprise) {
+      const immune = this.character?.mechanic('surpriseImmune')
+        || this.character?.mechanic('alwaysFirst');
+      const warned = this.character?.mechanic('ambushAdvantage');
+      if (immune) {
+        this.pushLog('You saw them before they moved. We are already turning.', 'tactical');
+      } else {
+        const share = warned ? 0.5 : 1;
+        for (const w of this.ship.weapons) w.cooldown = Math.max(w.cooldown, w.cycle * share);
+        this.pushLog(warned
+          ? 'Contact — but we had them a half-second early. Guns are coming round.'
+          : 'They were waiting for us, Captain. We are late to our own fight.', 'tactical');
+      }
     }
     // What an episode found out about them, spent.
     //
