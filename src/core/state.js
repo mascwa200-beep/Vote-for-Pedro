@@ -88,6 +88,23 @@ const MAX_HOSTILES = 6;
  */
 const LIVED_SLICE_HOURS = 0.25;
 
+/**
+ * The chance, per commission hour under way, that something drops us out.
+ *
+ * This was `0.02 * dt` — two per cent per second of PLAY — which worked only
+ * because a voyage lasted four to twenty-six seconds whatever its length, and
+ * so came to roughly a one-in-four chance per voyage regardless of whether the
+ * ship was crossing a system or the Federation. Left alone against a clock that
+ * now runs a twelve-day voyage for twelve days, it would have made being
+ * intercepted a certainty within the first minute.
+ *
+ * Per hour instead, so the risk is proportional to the time spent exposed —
+ * which is the shape it should always have had. A ten-hour hop is about one in
+ * a hundred; the two-hundred-and-ninety-hour run to Vulcan is about one in
+ * four, which is where the old number landed for every voyage at once.
+ */
+const INTERCEPT_PER_HOUR = 0.001;
+
 /** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
 const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
 
@@ -1772,7 +1789,8 @@ export class Game {
 
     const near = t.nearestSystem(this.galaxy);
     this.locationId = near.id;
-    this.clock.advanceStardate(t.totalHours * t.progress / 24);
+    // Same reason as `arrive`: the hours flown before breaking off have
+    // already been spent by the clock that flew them.
     this.transit = null;
     this.orbit = null;
     this.mode = MODES.BRIDGE;
@@ -1804,7 +1822,11 @@ export class Game {
     const t = this.transit;
     if (!t) return;
     this.locationId = t.to.id;
-    this.clock.advanceStardate(t.totalHours / 24);
+    // The calendar is NOT advanced here any more. It used to be handed the
+    // whole voyage at the door, because the voyage itself took fourteen
+    // seconds and the days had to come from somewhere. They are spent as they
+    // pass now, hour by hour, by whoever is spending them — the tick loop or a
+    // resume — so granting them again on arrival would pay for the trip twice.
     // Distance under way is where a crew actually learn a ship. Docked time is
     // not credited, which is why this is here and not in the campaign sync.
     //
@@ -1812,12 +1834,11 @@ export class Game {
     // for the same journey at warp 4 as at warp 8, so the way to master your
     // ship was to crawl. See EARNINGS in sim/mastery.js.
     this.creditMastery('lightYear', t.route?.lightYears ?? 0);
-    // A detail sent out before a two-day voyage is finished when you arrive.
-    // The transit is where the bulk of a commission's hours actually pass, and
-    // nothing aboard used to notice them going by.
-    for (const back of advanceAssignments(this, t.totalHours, this.rng)) {
-      this.pushLog(`${back.assignment.name} finished on the way. ${back.text}`, 'comms');
-    }
+    // A detail sent out before a two-day voyage used to be advanced by the
+    // whole voyage here, because the voyage took fourteen seconds and nothing
+    // aboard noticed its hours going by. Those hours are now spent as they
+    // pass, by `passTime`, so advancing them again on arrival would bring a
+    // survey party back from a fortnight's work after a week of it.
 
     // Beside the crossing, and for the same reason: getting there is the moment
     // somebody notices. What it returns steers the encounter roll below.
@@ -3407,7 +3428,12 @@ export class Game {
     // them thirty times a second with four ten-thousandths of an hour each is
     // both wasteful and, for anything that rounds, wrong. A quarter of an hour
     // is short enough that nothing waits on it and long enough to be a number.
-    this.livedHours += this.campaign?.advanceOpen(dt) ?? 0;
+    const lived = this.campaign?.advanceOpen(dt) ?? 0;
+    // The stardate is the commission clock read out loud. Twelve call sites
+    // still advance it by hand for a specific act; this is the one that
+    // advances it because time is passing, which is what a date is.
+    if (lived > 0) this.clock.advanceStardate(lived / 24);
+    this.livedHours += lived;
     if (this.livedHours >= LIVED_SLICE_HOURS) {
       const lived = this.livedHours;
       this.livedHours = 0;
@@ -3526,9 +3552,11 @@ export class Game {
     switch (this.mode) {
       case MODES.TRANSIT: {
         if (!this.transit) { this.mode = MODES.BRIDGE; break; }
-        const state = this.transit.update(dt);
-        if (state === 'arrived') this.arrive();
-        else if (this.rng.chance(0.02 * dt) && !this.transit.interrupted) {
+        // Commission hours, not seconds of play. Fed every tick rather than in
+        // the quarter-hour slices the ship's work is spent in, so the course
+        // plot advances smoothly instead of jumping.
+        const arrived = this.flyOn(lived);
+        if (!arrived && this.rng.chance(INTERCEPT_PER_HOUR * lived) && !this.transit.interrupted) {
           // Something drops us out of warp mid-course.
           //
           // On the MAIN stream, unlike the arrival roll. Being intercepted is
@@ -3936,6 +3964,27 @@ export class Game {
   // -------------------------------------------------- the five-year mission
 
   /**
+   * Fly the course, if one is laid in, for a span of the commission.
+   *
+   * Deliberately not part of `passTime`, and deliberately fed a different
+   * number. `passTime` spends WORK — hours of damage control and of the machine
+   * shop, capped at `MAX_ABSENCE_HOURS` per absence, because a ship nobody is
+   * commanding does not repair itself at full rate for a month. A voyage is not
+   * work. It is the calendar: the ship is at warp whether anyone is watching or
+   * not, and she does not stop three days out because the app was closed for a
+   * fortnight. Flying her on capped hours put her 72 hours into a 291-hour run
+   * no matter how long the captain was away.
+   *
+   * @param {number} hours commission hours elapsed, uncapped
+   */
+  flyOn(hours) {
+    if (!(hours > 0) || !this.transit) return false;
+    if (this.transit.update(hours) !== 'arrived') return false;
+    this.arrive();
+    return true;
+  }
+
+  /**
    * What a span of hours does to a ship, whoever was watching.
    *
    * All of this lived inside `syncCampaign` and was reachable from nowhere
@@ -4014,7 +4063,11 @@ export class Game {
    */
   syncCampaign() {
     if (!this.campaign) return { hours: 0, lines: [] };
-    const { hours, forfeited, wentBackwards } = this.campaign.sync();
+    const { hours, elapsed, forfeited, wentBackwards } = this.campaign.sync();
+    // The ship flies on the calendar, not on the work allowance. Done before
+    // the early return below, because a voyage completing is the whole reason
+    // an absence with nothing to repair is still worth something.
+    this.flyOn(elapsed);
     const pending = this.campaign.drainPending();
     if (pending <= 0) {
       // The clock going backwards is worth a line in the log: it is the kind of

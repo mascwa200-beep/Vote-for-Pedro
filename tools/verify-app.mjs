@@ -80,6 +80,32 @@ async function thawClock(page) {
 }
 
 /**
+ * Run something with the commission compressed, and put the clock back after.
+ *
+ * A voyage is flown in commission hours now — Sol to Vulcan at warp 8 is 291 of
+ * them — so a harness that waits for an arrival in wall-clock seconds waits
+ * forever. Compression is the game's own answer to that: it is on the Options
+ * screen with "this is not the five-year mission" written under it, and this is
+ * a harness turning the same dial a player can.
+ *
+ * Restored in a `finally`, and the restore is asserted by the caller. This file
+ * has been bitten four separate times by a check that left the game in a state
+ * two hundred lines of later checks then measured.
+ */
+async function atCompression(page, factor, fn) {
+  const was = await page.evaluate((f) => {
+    const before = globalThis.__app.game.campaign.compression;
+    globalThis.__app.game.campaign.compression = f;
+    return before;
+  }, factor);
+  try {
+    return await fn();
+  } finally {
+    await page.evaluate((w) => { globalThis.__app.game.campaign.compression = w; }, was);
+  }
+}
+
+/**
  * Go to a screen that no longer has a tab.
  *
  * The viewer, the tactical plot and the galaxy map used to be nav destinations
@@ -306,12 +332,21 @@ try {
   check('a typed natural order puts the ship at warp', inTransit === 'transit', `mode=${inTransit}`);
   await page.screenshot({ path: join(SHOTS, '03-transit.png') });
 
-  // Let the transit run to arrival.
-  await page.waitForFunction(() => globalThis.__app.game.mode !== 'transit', null, { timeout: 40000 });
-  const arrived = await page.evaluate(() => ({
-    location: globalThis.__app.game.locationId,
-    stardate: globalThis.__app.game.clock.stardate,
-  }));
+  // Let the transit run to arrival. Compressed, because the voyage is 291
+  // commission hours and this harness has forty seconds.
+  const arrived = await atCompression(page, 200000, async () => {
+    await page.waitForFunction(() => globalThis.__app.game.mode !== 'transit', null, { timeout: 40000 });
+    return page.evaluate(() => ({
+      location: globalThis.__app.game.locationId,
+      stardate: globalThis.__app.game.clock.stardate,
+      days: globalThis.__app.game.campaign.elapsedDays,
+    }));
+  });
+  check('and the commission was charged the days the voyage took',
+    arrived.days > 10, `${arrived.days?.toFixed?.(2)} days`);
+  check('and the clock was put back where it was found',
+    await page.evaluate(() => globalThis.__app.game.campaign.compression) === 1,
+    'the harness left the commission compressed');
   check('the ship arrives at the ordered destination', arrived.location === 'vulcan', arrived.location);
   check('stardate advanced with the distance travelled', arrived.stardate > 4523.3, String(arrived.stardate));
 
@@ -3776,8 +3811,14 @@ try {
 
     const dest = g.galaxy.get('dmz_volnar');
     const warning = g.crossingWarningFor(dest);
+    // One tick is one commission hour at this factor, so the budget below is a
+    // number of hours, and no charted course is a year long. Put back before
+    // this block returns, like everything else this file borrows.
+    const wasCompressed = g.campaign.compression;
+    g.campaign.compression = 108000;
     const laid = g.setCourse('dmz_volnar');
-    for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(1 / 30);
+    for (let i = 0; i < 24 * 365 && g.transit; i++) g.update(1 / 30);
+    g.campaign.compression = wasCompressed;
     app.render();
     const text = document.body.textContent ?? '';
     return {
@@ -3855,16 +3896,19 @@ try {
     // so this does too. Bounded, and the count is reported, because a leg that
     // needs ten attempts is a finding of its own.
     let attempts = 0;
+    const wasCompressed = g.campaign.compression;
+    g.campaign.compression = 108000;   // one tick, one commission hour
     while (g.locationId !== 'dmz_volnar' && attempts < 8) {
       attempts++;
       g.ship.antimatter = g.ship.maxAntimatter;
       if (!g.setCourse('dmz_volnar').ok) break;
-      for (let i = 0; i < 30 * 3000 && g.transit; i++) g.update(1 / 30);
+      for (let i = 0; i < 24 * 365 && g.transit; i++) g.update(1 / 30);
       // Being jumped on the way in leaves somebody shooting; break that off
       // before laying the course in again.
       if (g.engagement && !g.engagement.over) g.engagement.end('routed');
       for (let i = 0; i < 60; i++) g.update(1 / 30);
     }
+    g.campaign.compression = wasCompressed;
     app.render();
     return {
       at: g.locationId,

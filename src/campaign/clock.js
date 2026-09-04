@@ -85,7 +85,11 @@ export class CampaignClock {
    * result rather than the wall clock, so there is exactly one place where real
    * time enters the simulation.
    *
-   * @returns {{hours: number, forfeited: number, wentBackwards: boolean}}
+   * @returns {{hours: number, elapsed: number, forfeited: number, wentBackwards: boolean}}
+   *   `hours` is WORK — capped, what the ship can be credited for. `elapsed` is
+   *   the CALENDAR — uncapped, what actually went by. They are different
+   *   quantities and the difference matters: a fortnight away is a fortnight of
+   *   the five years gone, and it is not a fortnight of damage control.
    */
   sync() {
     const wall = this.now();
@@ -98,7 +102,7 @@ export class CampaignClock {
       // against, and it never falls.
       wentBackwards = true;
       this.lastSeen = wall;
-      return { hours: 0, forfeited: 0, wentBackwards };
+      return { hours: 0, elapsed: 0, forfeited: 0, wentBackwards };
     }
 
     const rawHours = (wall - this.lastSeen) / MS_PER_HOUR;
@@ -116,9 +120,10 @@ export class CampaignClock {
     // The calendar does not wait for you, and it is banked at the compression
     // in force right now rather than recomputed later from the current
     // setting. That is what stops the Options switch rewriting history.
-    this.commissionHours += rawHours * this.compression;
+    const elapsed = rawHours * this.compression;
+    this.commissionHours += elapsed;
 
-    return { hours: credited, forfeited, wentBackwards };
+    return { hours: credited, elapsed, forfeited, wentBackwards };
   }
 
   /**

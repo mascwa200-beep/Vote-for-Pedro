@@ -58,6 +58,21 @@ const gameWith = (opts = {}) => new Game({
   seed: 1n, crewMode: 'original', ...opts,
 });
 
+/**
+ * Compression at which one tick is one commission hour.
+ *
+ * A voyage is flown in commission hours now, not in the four to twenty-six
+ * seconds of play every voyage used to take regardless of its length. Sol to
+ * Vulcan at warp 8 is 291 hours, so a test that ticks its way to a destination
+ * has to compress the commission — the same accommodation `campaign.test.js`
+ * uses to run five years in a few milliseconds, and the same one the Options
+ * screen offers with "this is not the five-year mission" written under it.
+ *
+ * One tick is 1/30 of a second, so 108,000 makes it exactly one hour. Chosen
+ * so "tick until she arrives" reads as the number of hours the voyage takes.
+ */
+const HOUR_PER_TICK = 108000;
+
 // ================================================================ enemy count
 
 test('the difficulty enemy-count lever reaches an actual fight', () => {
@@ -581,7 +596,7 @@ test('and leaving the system loses it, which is what the game says it costs', ()
   // once you were elsewhere, so it looked lost — but the object survived in the
   // save, and coming back handed it straight back. A wreck could be banked for
   // the whole five years and cashed in whenever the stores ran low.
-  const g = gameWith();
+  const g = gameWith({ compression: HOUR_PER_TICK });
   const home = g.locationId;
   g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
   g.engagement.hostiles[0].destroyed = true;
@@ -610,7 +625,7 @@ test('breaking off a fight actually leaves', () => {
   // panel said "we are clear and at warp", and the ship stayed in the same
   // system, in the same orbit, having burned nothing. The one ending in the
   // game that is ABOUT leaving was the only one that did not move you.
-  const g = gameWith();
+  const g = gameWith({ compression: HOUR_PER_TICK });
   const home = g.locationId;
   const body = g.location?.bodies?.find((b) => b.kind !== 'star');
   if (body) g.enterOrbit(body.id);
@@ -737,7 +752,7 @@ test('closing the app at warp does not put the ship back where it started', () =
   // way to Vulcan woke at Sol with the antimatter for the trip already spent,
   // no days elapsed and no course laid in. The fuel was charged; the voyage
   // was not. Escapes make it worse, because those transits are not chosen.
-  const g = gameWith({ seed: 12n });
+  const g = gameWith({ seed: 12n, compression: HOUR_PER_TICK });
   const home = g.locationId;
   const fuelBefore = g.ship.antimatter;
   assert.equal(g.setCourse('vulcan', 6).ok, true);
@@ -747,7 +762,9 @@ test('closing the app at warp does not put the ship back where it started', () =
   assert.ok(wasAt > 0 && wasAt < 1, `progress was ${wasAt}`);
   assert.ok(g.ship.antimatter < fuelBefore, 'the course was free');
 
-  const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+  // Compression is a setting rather than part of the record, so it is passed
+  // back in on load exactly as `App.resumeOrStart` passes the player's.
+  const back = Game.load(JSON.parse(JSON.stringify(g.save())), { compression: HOUR_PER_TICK });
   assert.ok(back.transit, 'the voyage was lost with the app');
   assert.equal(back.mode, 'transit', `woke up in ${back.mode} mode`);
   assert.equal(back.transit.to.id, 'vulcan', 'woke up on a different course');
@@ -2695,7 +2712,7 @@ describe('the bays belong to the ship, not to the captain', () => {
 describe('what a voyage teaches a crew', () => {
   /** Fly one course at a warp factor and report the mastery it paid. */
   const voyage = (from, to, warp) => {
-    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos' });
+    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos', compression: HOUR_PER_TICK });
     g.locationId = from;
     g.ship.antimatter = 100;
     const before = g.mastery.current;

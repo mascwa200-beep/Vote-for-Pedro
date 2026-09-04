@@ -561,3 +561,115 @@ describe('time passes while somebody is watching it', () => {
     assert.ok(g.campaign.elapsedDays > 0.2, 'and time stopped, which it does not');
   });
 });
+
+// ---------------------------------------------------------------------------
+// A voyage takes the hours it takes.
+//
+// `Transit.realSeconds` was `clamp(log10(hours + 10) * 9, 4, 26)` and progress
+// was `elapsedReal / realSeconds`, so every voyage in the galaxy took between
+// four and twenty-six seconds of play whatever its length. Sol to Vulcan at
+// warp 8 is 291 hours; it was over in fourteen seconds, and the days it should
+// have cost were handed to the calendar in a lump at the door.
+
+/** Compression at which one tick is one commission hour. */
+const HOUR_PER_TICK = 108000;
+
+describe('a voyage takes the hours it takes', () => {
+  const underway = (opts = {}) => {
+    const g = new Game({ seed: 31n, crewMode: 'original', ...opts });
+    g.ship.antimatter = g.ship.maxAntimatter;
+    assert.equal(g.setCourse('vulcan', 8).ok, true, 'could not lay in the course');
+    return g;
+  };
+
+  test('a long haul is a long haul and a short hop is not', () => {
+    // The measurement the old scale could not make: two voyages of very
+    // different lengths took the same fourteen seconds.
+    const far = underway({ compression: HOUR_PER_TICK });
+    const near = new Game({ seed: 31n, crewMode: 'original', compression: HOUR_PER_TICK });
+    near.ship.antimatter = near.ship.maxAntimatter;
+    assert.equal(near.setCourse('alpha_centauri', 8).ok, true);
+    assert.ok(far.transit.totalHours > near.transit.totalHours * 2,
+      `${far.transit.totalHours}h vs ${near.transit.totalHours}h — pick a longer haul`);
+
+    // Fly both for the same span of the commission. The short one must be
+    // further along, and by the ratio of their lengths.
+    for (const g of [far, near]) {
+      for (let i = 0; i < 10 && g.transit; i++) g.update(SIM_STEP);   // ten hours of it
+    }
+    assert.ok(near.transit.progress > far.transit.progress * 2,
+      `after ten hours: near ${near.transit.progress}, far ${far.transit.progress}`);
+  });
+
+  test('and ten hours of the commission fly ten hours of it', () => {
+    const g = underway({ compression: HOUR_PER_TICK });
+    const total = g.transit.totalHours;
+    for (let i = 0; i < 10 && g.transit; i++) g.update(SIM_STEP);
+    assert.ok(g.transit, `the whole ${total}h voyage finished in ten hours`);
+    assert.ok(Math.abs(g.transit.spentHours - 10) < 0.01,
+      `flew ${g.transit.spentHours} hours in ten`);
+  });
+
+  test('and she arrives while the app is closed', () => {
+    // The half that makes it a commission rather than a wait. Lay in a course,
+    // put the phone down, come back: the ship is where you sent her.
+    const now = fakeClock();
+    const g = underway({ now });
+    const total = g.transit.totalHours;
+    assert.ok(total > MAX_ABSENCE_HOURS, `pick a voyage longer than one absence (${total}h)`);
+
+    now.advance(Math.ceil(total + 1) * HOUR);
+    g.syncCampaign();
+
+    assert.equal(g.transit, null, `still under way after ${total} hours away`);
+    assert.equal(g.locationId, 'vulcan', `woke up at ${g.locationId}`);
+  });
+
+  test('and the calendar is not paid twice for the same trip', () => {
+    // Arrival used to hand the clock the whole voyage, because the voyage took
+    // fourteen seconds and the days had to come from somewhere. They are spent
+    // as they pass now, so granting them again would charge for the trip twice.
+    const now = fakeClock();
+    const g = underway({ now, compression: HOUR_PER_TICK });
+    const total = g.transit.totalHours;
+    const before = g.clock.stardate;
+    for (let i = 0; i < Math.ceil(total) + 50 && g.transit; i++) g.update(SIM_STEP);
+    assert.equal(g.transit, null, 'never arrived');
+
+    const days = g.clock.stardate - before;
+    assert.ok(Math.abs(days - total / 24) < 0.5,
+      `a ${(total / 24).toFixed(1)}-day voyage moved the calendar ${days.toFixed(1)} days`);
+  });
+
+  test('and a record written on the old scale resumes where it left off', () => {
+    // Saves already on phones carry `elapsedReal` against the old four-to-
+    // twenty-six-second budget. Read as hours it would strand a ship eleven
+    // seconds into a twelve-day run; read as the fraction it stood for, a
+    // captain three quarters of the way to Vulcan is still three quarters of
+    // the way to Vulcan.
+    const g = underway();
+    const total = g.transit.totalHours;
+    const record = JSON.parse(JSON.stringify(g.save()));
+    delete record.transit.spentHours;
+    const budget = Math.max(4, Math.min(26, Math.log10(total + 10) * 9));
+    record.transit.elapsedReal = budget * 0.75;
+
+    const back = Game.load(record);
+    assert.ok(back.transit, 'the old voyage did not load at all');
+    assert.ok(Math.abs(back.transit.progress - 0.75) < 1e-6,
+      `resumed at ${back.transit.progress} rather than three quarters`);
+    assert.ok(Math.abs(back.transit.spentHours - total * 0.75) < 1e-6,
+      `resumed ${back.transit.spentHours} hours into a ${total}-hour voyage`);
+  });
+
+  test('and breaking off part way does not refund the hours flown', () => {
+    const g = underway({ compression: HOUR_PER_TICK });
+    const before = g.clock.stardate;
+    while (g.transit && g.transit.progress < 0.5) g.update(SIM_STEP);
+    assert.ok(g.transit, 'the voyage finished before it could be broken off');
+    const flown = g.transit.spentHours;
+    assert.ok(g.dropOutOfWarp().ok, 'the order to break off was refused');
+    const moved = (g.clock.stardate - before) * 24;
+    assert.ok(Math.abs(moved - flown) < 1, `flew ${flown}h and the calendar moved ${moved}h`);
+  });
+});
