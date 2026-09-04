@@ -6329,16 +6329,52 @@ const FORMS = {
         r1: nr * 0.82,
         segments: seg(10),
         color: p.hull,
+        capAft: true,
       });
-      // The bussard cap: the one emissive detail on the whole hull.
+      // The bussard collar, then the dome set into it.
+      //
+      // Second of the four details `tos_starfleet` lists as the difference
+      // between "Federation ship" and a named one: "domes set into a collar,
+      // not the bare spheres the generic form uses". It was a bare sphere
+      // stuck on the end of a tube, which reads as a ball bearing rather than
+      // as the front of a warp nacelle.
+      tube(m, {
+        origin: vec3(nx + nl - nr * 0.3, ny, nz),
+        length: nr * 0.6,
+        r0: nr * 0.9,
+        r1: nr * 1.06,
+        segments: seg(12),
+        color: p.trim,
+      });
       sphere(m, {
-        origin: vec3(nx + nl, ny, nz),
-        radius: nr * 1.05,
-        segments: seg(8),
-        rings: 5,
+        origin: vec3(nx + nl + nr * 0.4, ny, nz),
+        radius: nr * 1.04,
+        segments: seg(10),
+        rings: 6,
         color: p.glow,
       });
+      // The intercooler grille along the outboard face, which does more for
+      // the read of a nacelle than its cost suggests: it is the one thing that
+      // says which way is outboard.
+      box(m, {
+        center: vec3(nx + nl * 0.45, ny - nr * 0.55, nz),
+        size: vec3(nl * 0.42, nr * 0.17, nr * 0.5),
+        color: p.trim,
+      });
     });
+
+    // The hangar: a flat transom closing the stern.
+    //
+    // Fourth of the four. A secondary hull that tapers to a capped cylinder
+    // has no stern — the shuttlebay is where a Federation ship ends, and
+    // without it the hull just stops.
+    if (b.hangar !== false) {
+      box(mb, {
+        center: vec3(-0.5, hy, 0),
+        size: vec3(hullR1 * 0.3, hullR1 * 1.15, hullR1 * 1.0),
+        color: p.trim,
+      });
+    }
   },
 
   /**
