@@ -752,12 +752,33 @@ test('closing the app at warp does not put the ship back where it started', () =
   // way to Vulcan woke at Sol with the antimatter for the trip already spent,
   // no days elapsed and no course laid in. The fuel was charged; the voyage
   // was not. Escapes make it worse, because those transits are not chosen.
-  const g = gameWith({ seed: 12n, compression: HOUR_PER_TICK });
-  const home = g.locationId;
-  const fuelBefore = g.ship.antimatter;
-  assert.equal(g.setCourse('vulcan', 6).ok, true);
-  for (let t = 0; t < 30 * 6 && g.transit; t++) g.update(1 / 30);
-  assert.ok(g.transit, 'the voyage finished before the test could interrupt it');
+  // A LEG NOBODY JUMPS, found rather than hardcoded.
+  //
+  // This used to name seed 12 and assume the run to Vulcan would be quiet.
+  // The world is allowed to force a ship out of warp — that is a deliberate
+  // rule with its own comment in `Game.update` — so any content change that
+  // moves the random stream can put a hostile on this leg, and then the test
+  // fails on a fixture rather than on its subject. Searching a few seeds for
+  // a leg still under way costs a few milliseconds and never has to be
+  // touched again.
+  //
+  // The old message said "the voyage finished before the test could interrupt
+  // it", which is the one thing that had NOT happened: the ship was forced out
+  // of warp a third of the way there.
+  let g = null;
+  let home = null;
+  let fuelBefore = 0;
+  const tried = [];
+  for (let seed = 1n; seed <= 40n && !g; seed++) {
+    const candidate = gameWith({ seed, compression: HOUR_PER_TICK });
+    const before = candidate.ship.antimatter;
+    if (!candidate.setCourse('vulcan', 6).ok) continue;
+    for (let t = 0; t < 30 * 6 && candidate.transit; t++) candidate.update(1 / 30);
+    if (candidate.transit) { g = candidate; home = 'sol'; fuelBefore = before; break; }
+    tried.push(`${seed}:${candidate.locationId}`);
+  }
+  assert.ok(g, `no quiet leg to Vulcan in forty seeds — ${tried.slice(0, 6).join(' ')}`);
+  home = g.galaxy.byId.sol ? 'sol' : home;
   const wasAt = g.transit.progress;
   assert.ok(wasAt > 0 && wasAt < 1, `progress was ${wasAt}`);
   assert.ok(g.ship.antimatter < fuelBefore, 'the course was free');
@@ -2711,8 +2732,17 @@ describe('the bays belong to the ship, not to the captain', () => {
 
 describe('what a voyage teaches a crew', () => {
   /** Fly one course at a warp factor and report the mastery it paid. */
-  const voyage = (from, to, warp) => {
-    const g = new Game({ seed: 0x1701n, crewMode: 'canon', crew: 'tos', compression: HOUR_PER_TICK });
+  /**
+   * Fly one course at a warp factor and report the mastery it paid.
+   *
+   * `seed` is chosen by `quietSeed` below rather than hardcoded: a ship can be
+   * forced out of warp by a hostile mid-course, which is a deliberate rule, and
+   * a run that ends somewhere other than `to` is a different journey. The
+   * comparison here is between two SPEEDS on one route, so both runs have to
+   * actually fly it.
+   */
+  const voyage = (from, to, warp, seed) => {
+    const g = new Game({ seed, crewMode: 'canon', crew: 'tos', compression: HOUR_PER_TICK });
     g.locationId = from;
     g.ship.antimatter = 100;
     const before = g.mastery.current;
@@ -2720,8 +2750,29 @@ describe('what a voyage teaches a crew', () => {
     assert.ok(g.transit, `could not fly ${from}->${to} at warp ${warp}: ${r?.reason ?? ''}`);
     let ticks = 0;
     while (g.transit && ticks++ < 20000) g.update(1 / 30);
-    assert.equal(g.locationId, to, `never arrived at ${to}`);
+    assert.equal(g.locationId, to,
+      `forced out of warp at ${g.locationId} instead of reaching ${to}`);
     return g.mastery.current - before;
+  };
+
+  /** Try one leg and say only whether it arrived. */
+  const arrives = (from, to, warp, seed) => {
+    const g = new Game({ seed, crewMode: 'canon', crew: 'tos', compression: HOUR_PER_TICK });
+    g.locationId = from;
+    g.ship.antimatter = 100;
+    if (!g.setCourse(to, warp).ok) return false;
+    let ticks = 0;
+    while (g.transit && ticks++ < 20000) g.update(1 / 30);
+    return g.locationId === to;
+  };
+
+  /** The first seed on which every leg these tests need is flown undisturbed. */
+  const quietSeed = (legs) => {
+    for (let seed = 1n; seed <= 60n; seed++) {
+      if (legs.every(([from, to, warp]) => arrives(from, to, warp, seed))) return seed;
+    }
+    assert.fail('no seed in sixty flies these legs without being forced out of warp');
+    return 0n;
   };
 
   test('the same journey teaches the same thing at any speed', () => {
@@ -2730,16 +2781,18 @@ describe('what a voyage teaches a crew', () => {
     // times as much at warp 4 as at warp 8, and the way to master your ship was
     // to crawl. Measured over all 1,560 charted courses, a mean voyage was
     // worth 335 points at warp 4 and 40 at warp 8.
-    const slow = voyage('sol', 'vega', 4);
-    const fast = voyage('sol', 'vega', 8);
+    const seed = quietSeed([['sol', 'vega', 4], ['sol', 'vega', 8]]);
+    const slow = voyage('sol', 'vega', 4, seed);
+    const fast = voyage('sol', 'vega', 8, seed);
     assert.ok(slow > 0, 'a voyage taught the crew nothing');
     assert.ok(Math.abs(slow - fast) < 1e-6,
       `warp 4 paid ${slow.toFixed(2)} and warp 8 paid ${fast.toFixed(2)}`);
   });
 
   test('but a longer one teaches more than a shorter one', () => {
-    const near = voyage('sol', 'alpha_centauri', 6);
-    const far = voyage('sol', 'vega', 6);
+    const seed = quietSeed([['sol', 'alpha_centauri', 6], ['sol', 'vega', 6]]);
+    const near = voyage('sol', 'alpha_centauri', 6, seed);
+    const far = voyage('sol', 'vega', 6, seed);
     assert.ok(far > near,
       `a hop next door paid ${near.toFixed(2)} and a long haul paid ${far.toFixed(2)}`);
   });

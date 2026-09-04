@@ -3816,8 +3816,46 @@ try {
     // this block returns, like everything else this file borrows.
     const wasCompressed = g.campaign.compression;
     g.campaign.compression = 108000;
-    const laid = g.setCourse('dmz_volnar');
-    for (let i = 0; i < 24 * 365 && g.transit; i++) g.update(1 / 30);
+
+    // FLY IT UNTIL WE GET THERE, and cross the line exactly once.
+    //
+    // A ship can be forced out of warp mid-course by a hostile — a deliberate
+    // rule with its own comment in `Game.update` — and this block used to lay
+    // the course once and assume the leg was quiet. It stopped being quiet the
+    // day the encounter tables changed, and then the check failed on its
+    // fixture rather than on the demilitarised zone: dropped back at Setlik
+    // with a Cardassian patrol on the viewer, which reads almost exactly like
+    // the challenge it is not.
+    //
+    // Being dropped inside the zone also sets `inTheDMZ`, and the challenge
+    // only fires on a FIRST crossing — so the flag is put back before the last
+    // approach, which is the thing being staged.
+    let laid = { ok: false };
+    for (let attempt = 0; attempt < 8 && !g.encounter?.challenge; attempt++) {
+      // Back to the start of the run each time, OUTSIDE the zone. Setlik is
+      // not in it — the crossing is the point — and a ship dropped inside the
+      // zone by a hostile has already crossed the line, so the challenge for
+      // the arrival at Volnar would never fire. Re-staging from outside is
+      // what makes each attempt the same experiment.
+      g.locationId = 'setlik';
+      g.inTheDMZ = false;
+      g.encounter = null;
+      const r = g.setCourse('dmz_volnar');
+      if (attempt === 0) laid = r;
+      if (!r.ok) break;
+      for (let i = 0; i < 24 * 365 && g.transit; i++) g.update(1 / 30);
+      if (g.locationId === 'dmz_volnar' && g.encounter?.challenge) break;
+      // Forced out somewhere short of it, or arrived having already crossed.
+      // Leave through the door the game offers rather than deleting the
+      // encounter behind its back, then put the ship back together and go
+      // again.
+      const choices = g.encounterChoices?.() ?? [];
+      const out = choices.find((c) => c.id === 'withdraw') ?? choices[choices.length - 1];
+      if (out) g.resolveEncounter(out.id);
+      if (g.engagement) { g.engagement.end('routed'); g.update(1 / 30); }
+      g.ship.restore?.();
+      g.ship.antimatter = 100;
+    }
     g.campaign.compression = wasCompressed;
     app.render();
     const text = document.body.textContent ?? '';

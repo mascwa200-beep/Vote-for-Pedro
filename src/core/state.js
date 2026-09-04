@@ -1922,7 +1922,13 @@ export class Game {
   beginEncounter(encounter) {
     this.encounter = encounter;
     this.mode = MODES.ENCOUNTER;
-    this.pushLog(encounter.text, 'science');
+    // WHO IS TELLING YOU. Science, for everything, was right when everything
+    // on the viewer was a sensor contact — an anomaly, a derelict, a hull on
+    // an intercept course. A courier hailing with the mail is comms, and the
+    // department heads asking for a night off is not a sensor reading at all;
+    // the panel prints this as the station heading, so a note from the crew
+    // arrived over the caption SCIENCE.
+    this.pushLog(encounter.text, encounter.from ?? 'science');
     if (encounter.hostile) this.setAlert('red');
     else if (encounter.kind === 'anomaly' || encounter.kind === 'derelict') this.setAlert('yellow');
     emit('encounter:begin', encounter);
@@ -2027,6 +2033,17 @@ export class Game {
         if (enc.hailable) add('hail', 'Hail them', 'hail them', null, 'lilac');
         add('withdraw', 'Continue', 'withdraw', null, 'ghost');
         break;
+      case 'signal': {
+        // Two ways for a quiet watch to go, and the second one is real: a
+        // captain on a schedule declines a beacon he has no time for, and the
+        // hours a signal costs are the same hours everything else costs.
+        const sig = enc.signal ?? {};
+        add('answer', sig.answer ?? 'Answer', sig.say ?? 'answer it',
+          `${sig.hint ?? ''}${sig.hours ? ` About ${sig.hours} hours.` : ''}`.trim(), 'green');
+        add('withdraw', 'Log it and continue', 'withdraw',
+          'It goes in the record either way.', 'ghost');
+        break;
+      }
       default:
         add('withdraw', 'Continue', 'withdraw', null, 'ghost');
         break;
@@ -2197,6 +2214,51 @@ export class Game {
           }
           this.awardXP(350);
         }
+        break;
+      }
+
+      case 'answer': {
+        // A signal answered. Everything it gives is something the game already
+        // models — hours off the commission clock, experience, standing with
+        // whoever asked, and a line in the record. Nothing here invents a
+        // statistic to justify a sentence of prose.
+        const sig = enc.signal ?? {};
+        this.encounter = null;
+        if (sig.hours) this.spendHours(sig.hours);
+        if (sig.xp) this.awardXP(sig.xp);
+        if (sig.standing) {
+          // Whoever actually asked. A colony administrator in Federation space
+          // credits the Federation; a freighter master out past the border
+          // credits the people who live there.
+          const who = enc.system?.faction ?? 'federation';
+          this.ledger.adjustStanding(who, sig.standing, sig.title ?? 'Answered a signal');
+        }
+        if (sig.charts) {
+          // Their track, which is the two systems next door they have just
+          // come through. Real knowledge, gained by being sociable.
+          const neighbours = (enc.system?.links ?? []).slice(0, 2);
+          for (const id of neighbours) this.galaxy.markSurveyed(id, 'Reported by passing traffic');
+          if (neighbours.length) {
+            out.messages.push(`Their track covers ${neighbours.length} system`
+              + `${neighbours.length === 1 ? '' : 's'} next door.`);
+          }
+        }
+        if (sig.rested) {
+          // A rested watch, expressed in the only currency the game has for
+          // it: every bridge officer's tray comes off cooldown.
+          let cleared = 0;
+          for (const o of this.crew?.officers ?? []) {
+            for (const k of Object.keys(o.cooldowns ?? {})) {
+              if (o.cooldowns[k] > 0) { o.cooldowns[k] = 0; cleared++; }
+            }
+          }
+          if (cleared) out.messages.push('Every station reports ready.');
+        }
+        this.ledger.record('signal_answered', {
+          text: `${sig.title ?? 'Signal'} at ${enc.system?.name ?? 'an unnamed system'}`,
+          system: enc.system?.id,
+        });
+        out.messages.push(sig.result ?? 'Answered.');
         break;
       }
 
