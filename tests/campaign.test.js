@@ -452,3 +452,112 @@ describe('the backup ring', () => {
     assert.equal(save.loadSave(), null, 'returned data when every record was junk');
   });
 });
+
+// ---------------------------------------------------------------------------
+// The commission runs while you are on the bridge.
+//
+// `commissionHours` was written by `syncCampaign` and by nothing else, and
+// `syncCampaign` runs on load and when the tab comes back — so the five-year
+// mission advanced only while nobody was playing it, and the hours a captain
+// sat through were then billed a second time as an absence.
+
+import { SIM_STEP } from '../src/core/time.js';
+
+/** Hold the conn for a span, with the wall clock keeping pace as a phone would. */
+function holdTheConn(g, now, hours) {
+  const ticks = Math.round(hours * 3600 / SIM_STEP);
+  for (let i = 0; i < ticks; i++) {
+    now.advance(SIM_STEP * 1000);
+    g.update(SIM_STEP);
+  }
+  return g;
+}
+
+describe('time passes while somebody is watching it', () => {
+  const hurt = (now, opts = {}) => {
+    const g = new Game({ seed: 9n, crewMode: 'original', now, ...opts });
+    g.ship.hull = g.ship.maxHull * 0.3;
+    return g;
+  };
+
+  test('two hours in the chair are two hours of the commission', () => {
+    // Measured before the fix: 0.0000 days. The clock only ran when you left.
+    const now = fakeClock();
+    const g = hurt(now);
+    holdTheConn(g, now, 2);
+    assert.ok(Math.abs(g.campaign.elapsedDays * 24 - 2) < 0.01,
+      `two hours of play advanced the commission by ${(g.campaign.elapsedDays * 24).toFixed(3)} hours`);
+  });
+
+  test('and are not then charged again as an absence', () => {
+    // The other half, and the one with teeth. Before the fix, backgrounding
+    // and immediately foregrounding after two hours of play credited the whole
+    // two hours as time away — repairing the hull for them, and having the
+    // watch officer report on a watch the captain had stood themselves.
+    const now = fakeClock();
+    const g = hurt(now);
+    holdTheConn(g, now, 2);
+    const hull = g.ship.hullPct;
+
+    const r = g.syncCampaign();   // the tab goes away and comes straight back
+    assert.equal(r.hours, 0, `credited ${r.hours} hours of absence to a captain who never left`);
+    assert.deepEqual(r.lines, [], `reported an absence that did not happen: ${r.lines.join(' / ')}`);
+    assert.equal(g.ship.hullPct, hull, 'the same hours repaired the ship twice');
+  });
+
+  test('and the same span does the same work, watched or not', () => {
+    // The parity that stops "close the app to repair" being a strategy. Two
+    // days at the conn and two days ashore have to leave the same ship.
+    const atTheConn = fakeClock();
+    const played = hurt(atTheConn);
+    holdTheConn(played, atTheConn, 48);
+
+    const ashore = fakeClock();
+    const left = hurt(ashore);
+    ashore.advance(48 * HOUR);
+    left.syncCampaign();
+
+    assert.ok(Math.abs(played.ship.hullPct - left.ship.hullPct) < 1e-9,
+      `at the conn ${played.ship.hullPct} vs ashore ${left.ship.hullPct}`);
+    assert.ok(Math.abs(played.campaign.elapsedDays - left.campaign.elapsedDays) < 1e-6,
+      `${played.campaign.elapsedDays} vs ${left.campaign.elapsedDays} days`);
+  });
+
+  test('and compression scales the hours in the chair too', () => {
+    // Otherwise the setting the game offers for demonstrating a five-year
+    // mission would only apply to the part of it nobody is watching.
+    const now = fakeClock();
+    const g = hurt(now, { compression: 24 });
+    holdTheConn(g, now, 2);
+    assert.ok(Math.abs(g.campaign.elapsedDays - 2) < 0.01,
+      `two hours at x24 gave ${g.campaign.elapsedDays.toFixed(3)} days, not two`);
+  });
+
+  test('and a save mid-watch neither loses nor duplicates the banked minutes', () => {
+    // Lived time is spent in quarter-hour slices, so there is always a
+    // remainder in hand. Dropping it on every save would let a player put the
+    // app down and pick it up to keep a job permanently minutes from done.
+    const now = fakeClock();
+    const g = hurt(now);
+    holdTheConn(g, now, 0.1);
+    assert.ok(g.livedHours > 0, 'nothing was banked at all');
+
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())), { now });
+    assert.ok(Math.abs(back.livedHours - g.livedHours) < 1e-9,
+      `banked ${g.livedHours} and reloaded ${back.livedHours}`);
+    assert.equal(back.syncCampaign().hours, 0, 'the watch was credited again on reload');
+  });
+
+  test('and a fight is still not a repair yard', () => {
+    // The guard that was inside `syncCampaign` moved into `passTime`, so it now
+    // covers the tick path as well as the absence one — which it has to, since
+    // the tick path is the one that runs during a battle.
+    const now = fakeClock();
+    const g = hurt(now);
+    g.engagement = { over: false };
+    const hull = g.ship.hullPct;
+    holdTheConn(g, now, 6);
+    assert.equal(g.ship.hullPct, hull, 'damage control rebuilt the hull mid-engagement');
+    assert.ok(g.campaign.elapsedDays > 0.2, 'and time stopped, which it does not');
+  });
+});
