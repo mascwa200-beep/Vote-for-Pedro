@@ -114,6 +114,10 @@ const ENCOUNTER_POLICY = {
   convoy: ['escort', 'withdraw'],
   first_contact: ['contact_peaceful', 'contact_prewarp', 'withdraw'],
   trapped: ['trap_device', 'trap_power', 'trap_wait'],
+  // A quiet watch is still a watch. Both halves, because "log it and continue"
+  // is a real answer on a schedule and the coverage assertion below wants to
+  // have seen the captain give it.
+  signal: ['answer', 'withdraw'],
 };
 
 /**

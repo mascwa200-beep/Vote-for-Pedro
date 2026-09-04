@@ -1253,6 +1253,9 @@ describe('a reputation project that grants nothing', () => {
     assert.notEqual(added[0], added[1], `the hulk yielded two of the same: ${added.join(', ')}`);
   });
 
+  // What the "nothing much happened" branch of `rollEncounter` can produce.
+  const QUIET_WATCH = new Set(['quiet', 'anomaly', 'signal']);
+
   test('signal dampening quietens hostile space, and only hostile space', () => {
     // Rates over 3,000 rolls, not one: an encounter table is a distribution
     // and a single draw says nothing about it.
@@ -1260,7 +1263,12 @@ describe('a reputation project that grants nothing', () => {
       let n = 0;
       for (let i = 0; i < 3000; i++) {
         const e = rollEncounter(new RNG(BigInt(i + 1)), systemId, opts);
-        if (e && e.kind !== 'quiet' && e.kind !== 'anomaly') n++;
+        // The kinds a QUIET WATCH produces do not count as something finding
+        // you, which is what this perk is about. That set is quiet, anomaly
+        // and — since the traffic of a working galaxy was added — signal:
+        // all three come out of the same branch, the one taken when the
+        // danger roll says nothing much happened.
+        if (e && !QUIET_WATCH.has(e.kind)) n++;
       }
       return n / 3000;
     };

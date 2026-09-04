@@ -52,7 +52,147 @@ export const SECTOR_PRESENCE = {
 };
 
 export const ENCOUNTER_KINDS = [
-  'patrol', 'distress', 'derelict', 'anomaly', 'ambush', 'convoy', 'first_contact', 'quiet',
+  'patrol', 'distress', 'derelict', 'anomaly', 'ambush', 'convoy', 'first_contact',
+  'signal', 'quiet',
+];
+
+/**
+ * The traffic of a galaxy somebody actually lives in.
+ *
+ * Measured over four thousand rolls before this existed, the commonest thing
+ * that happened to a captain was an anomaly: 52% of every non-quiet encounter
+ * in the game, all seven of them the same sentence with a different noun in
+ * it. The cause is structural rather than a weighting mistake — in safe
+ * Federation space `danger` is 0.18, so 82% of rolls take the quiet branch,
+ * and that branch was a coin flip between nothing at all and "Sensors are
+ * reading a gravitic eddy. Science requests permission to investigate."
+ *
+ * These are what a starship in charted space actually meets. Low stakes on
+ * purpose — a courier is not a crisis — but not nothing: a mail packet is the
+ * only news from home a five-year mission gets, and the ship's own people are
+ * what a commission is made of between systems.
+ *
+ * `answer` is what taking the call costs and gives. A signal nobody answers is
+ * a line in the log and no more, which is a real choice on a schedule.
+ */
+export const SIGNALS = [
+  {
+    id: 'mail_packet',
+    from: 'comms',
+    title: 'Courier packet',
+    text: 'A Starfleet courier is holding station with a mail packet for us. '
+      + 'Nine weeks of it.',
+    answer: 'Take the packet aboard',
+    say: 'take the packet aboard',
+    hint: 'The only news from home this mission gets.',
+    result: 'The packet is distributed within the hour. The mess is loud tonight.',
+    hours: 0.4,
+    xp: 60,
+  },
+  {
+    id: 'passing_ship',
+    from: 'comms',
+    title: 'Passing traffic',
+    text: 'A Federation transport outbound on the reciprocal heading. '
+      + 'They are asking to exchange position reports.',
+    answer: 'Exchange reports',
+    say: 'exchange reports',
+    hint: 'Courtesy, and a look at where they have been.',
+    result: 'Their track fills in two systems of ours that were guesswork.',
+    hours: 0.2,
+    xp: 40,
+    charts: true,
+  },
+  {
+    id: 'relay_drift',
+    from: 'comms',
+    title: 'Subspace relay',
+    text: 'The relay buoy in this system has drifted out of alignment. '
+      + 'Nobody within a month of here will be able to raise Starfleet.',
+    answer: 'Realign it',
+    say: 'realign it',
+    hint: 'An hour of the watch, and a sector keeps its mail.',
+    result: 'The buoy is back on its bearing and answering. Logged with Operations.',
+    hours: 1.1,
+    xp: 90,
+    standing: 2,
+  },
+  {
+    id: 'colony_survey',
+    from: 'comms',
+    title: 'Colony request',
+    text: 'A colony administrator is asking whether we would run a weather '
+      + 'sweep on our way past. Their own satellite failed in the spring.',
+    answer: 'Run the sweep',
+    say: 'run the sweep',
+    hint: 'Twenty minutes of sensor time. It matters to them.',
+    result: 'Science hands over a season of forecasts. The administrator is '
+      + 'audibly relieved.',
+    hours: 0.6,
+    xp: 80,
+    standing: 2,
+  },
+  {
+    id: 'fleet_news',
+    from: 'comms',
+    title: 'General frequency',
+    text: 'Fleet news on the general frequency. Promotions, losses, and a '
+      + 'shipyard schedule nobody believes.',
+    answer: 'Pipe it through the ship',
+    say: 'pipe it through the ship',
+    hint: 'Everyone aboard knows somebody on that list.',
+    result: 'The list is read on all decks. Two names on it are known here.',
+    hours: 0.2,
+    xp: 30,
+  },
+  {
+    id: 'navigational_buoy',
+    from: 'comms',
+    title: 'Automated beacon',
+    text: 'A beacon on the distress band — automated, decades old, and '
+      + 'repeating a hazard warning for a star that has since stopped being one.',
+    answer: 'Update it and move on',
+    say: 'update it',
+    hint: 'Somebody has to, and nobody has since 2251.',
+    result: 'The beacon carries a current warning now. Small work, honest work.',
+    hours: 0.5,
+    xp: 50,
+    standing: 1,
+  },
+  {
+    id: 'medical_consult',
+    from: 'comms',
+    title: 'Medical consult',
+    text: 'A freighter master is asking for the doctor. One of his people has '
+      + 'something he has never seen and no surgeon closer than Starbase 11.',
+    answer: 'Put the doctor on',
+    say: 'put the doctor on',
+    hint: 'A consultation over subspace, and a diagnosis.',
+    result: 'A diagnosis, a treatment, and a very quiet thank you.',
+    hours: 0.7,
+    xp: 70,
+    standing: 3,
+  },
+  {
+    id: 'shore_request',
+    from: 'bridge',
+    title: 'A request from the crew',
+    text: 'The department heads have put a note in front of you. The watch has '
+      + 'been long and they are asking for a night of it back.',
+    answer: 'Grant it',
+    say: 'grant it',
+    hint: 'The best part of two hours. The watch comes back sharp.',
+    result: 'The mess is opened, the music is bad, and every officer aboard is '
+      + 'ready for whatever is next.',
+    hours: 1.6,
+    xp: 40,
+    // The one real effect the game can give a rested watch, and it is a good
+    // one: every bridge officer's tray comes off cooldown. There is no morale
+    // stat in this game, and inventing one to justify a line of prose would be
+    // the wrong way round — this uses what is already modelled, and a captain
+    // who spends two hours before a border crossing gets a full tray for it.
+    rested: true,
+  },
 ];
 
 /**
@@ -102,7 +242,12 @@ export function rollEncounter(rng, systemId, {
   if (rng.chance(system.hazard ? 0.1 : 0.045)) return buildTrap(rng, system);
 
   if (rng.float() > danger && !inTransit) {
-    return rng.chance(0.45) ? { kind: 'quiet', system } : buildAnomaly(rng, system);
+    // Nothing much happened — but "nothing much" is most of a five-year
+    // mission and it was a coin flip between silence and a generic anomaly.
+    // Three ways for a quiet watch to go now, and the anomaly is the least
+    // likely of them: it is the one that repeats.
+    if (rng.chance(0.55)) return { kind: 'quiet', system };
+    return rng.chance(0.5) ? buildSignal(rng, system) : buildAnomaly(rng, system);
   }
 
   const table = [
@@ -116,6 +261,9 @@ export function rollEncounter(rng, systemId, {
     { kind: 'ambush', weight: system.contested || system.border ? 24 : 8 },
     { kind: 'convoy', weight: 10 },
     { kind: 'first_contact', weight: system.unexplored ? 22 : 2 },
+    // Traffic is thickest where people are, which is the opposite of every
+    // other row in this table.
+    { kind: 'signal', weight: system.faction === 'federation' ? 14 : 6 },
   ];
   const pick = rng.weighted(table);
 
@@ -127,6 +275,7 @@ export function rollEncounter(rng, systemId, {
       case 'derelict': return buildDerelict(rng, system);
       case 'convoy': return buildConvoy(rng, system, presence);
       case 'first_contact': return buildFirstContact(rng, system);
+      case 'signal': return buildSignal(rng, system);
       case 'anomaly':
       default: return buildAnomaly(rng, system);
     }
@@ -173,16 +322,37 @@ function buildPatrol(rng, system, presence, ledger) {
   const standing = ledger?.standingOf(factionId) ?? FACTIONS[factionId]?.baseStanding ?? 0;
   const hostile = isHostile(standing);
   const count = rng.int(1, factionId === 'borg' ? 1 : 2);
+  const errand = rng.pick(PATROL_ERRANDS);
   return {
     kind: 'patrol', system, factionId, hostile,
     ships: makeShips(rng, factionId, count),
     hailable: FACTIONS[factionId]?.hailable ?? false,
+    subtype: hostile ? 'intercept' : errand.id,
     title: `${FACTIONS[factionId]?.adjective ?? 'Unknown'} patrol`,
     text: hostile
       ? `${FACTIONS[factionId].adjective} vessels closing on an intercept course. They are arming weapons.`
-      : `${article(FACTIONS[factionId].adjective)} ${FACTIONS[factionId].adjective} patrol is holding position and scanning us. No weapons charged — yet.`,
+      : `${article(FACTIONS[factionId].adjective)} ${FACTIONS[factionId].adjective} `
+        + `${errand.text}`,
   };
 }
+
+/**
+ * What a patrol that is not hostile is actually doing out here.
+ *
+ * Measured over four thousand rolls, `patrol` was the single commonest
+ * encounter in the game at 15% of everything — and it had exactly one line of
+ * text. A government's ships have somewhere to be, and saying where is most of
+ * what makes two encounters with the same faction feel like two encounters.
+ */
+const PATROL_ERRANDS = [
+  { id: 'scanning', text: 'patrol is holding position and scanning us. No weapons charged — yet.' },
+  { id: 'border_run', text: 'border cutter is running the line, and has slowed to look at us.' },
+  { id: 'tender', text: 'tender is out here servicing navigation buoys, with an escort that would rather be elsewhere.' },
+  { id: 'search', text: 'squadron is quartering the system in a search pattern. They do not say what for.' },
+  { id: 'convoy_screen', text: 'destroyer is screening something we cannot see, and would like us to keep our distance.' },
+  { id: 'relief', text: 'ship is running relief supplies and is behind schedule.' },
+  { id: 'survey', text: 'survey ship is working a grid and is visibly annoyed at the interruption.' },
+];
 
 /**
  * Being asked what a warship is doing here.
@@ -306,29 +476,75 @@ function buildDistress(rng, system) {
   };
 }
 
+/**
+ * What kind of dead ship it is.
+ *
+ * Three lines of text and no other difference, before this: the risk was rolled
+ * separately from the description, so "something cut it open from the inside"
+ * could be the safest derelict in the game and a quiet intact hull the most
+ * dangerous. The risk belongs to the thing being described.
+ */
+const DERELICTS = [
+  { id: 'intact', risk: [0.10, 0.22],
+    text: 'A ship adrift, no power, no life signs on the first sweep. Hull is intact.' },
+  { id: 'opened', risk: [0.42, 0.62],
+    text: 'A drifting hulk. Something cut it open from the inside.' },
+  { id: 'biosigns', risk: [0.35, 0.55],
+    text: 'An unregistered vessel, dark, tumbling slowly. Sensors read faint biosigns.' },
+  { id: 'scuttled', risk: [0.18, 0.30],
+    text: 'A freighter, scuttled deliberately and recently. The hold was emptied first.' },
+  { id: 'ancient', risk: [0.25, 0.40],
+    text: 'A hull of no configuration in the database, and metallurgy that says it has '
+      + 'been out here a very long time.' },
+  { id: 'starfleet', risk: [0.30, 0.48],
+    text: 'A Starfleet hull. The registry is burned off and the log buoy is gone.' },
+  { id: 'plague', risk: [0.50, 0.70],
+    text: 'A transport with her running lights still on, her hatches sealed from outside, '
+      + 'and a quarantine beacon nobody has answered.' },
+];
+
 function buildDerelict(rng, system) {
+  const d = rng.pick(DERELICTS);
   return {
     kind: 'derelict', system,
+    subtype: d.id,
     title: 'Derelict vessel',
-    text: rng.pick([
-      'A ship adrift, no power, no life signs on the first sweep. Hull is intact.',
-      'A drifting hulk. Something cut it open from the inside.',
-      'An unregistered vessel, dark, tumbling slowly. Sensors read faint biosigns.',
-    ]),
+    text: d.text,
     salvage: rng.pick(SALVAGE_POOL),
-    risk: rng.range(0.15, 0.5),
+    // The risk belongs to the wreck being described, not to a separate roll.
+    risk: rng.range(d.risk[0], d.risk[1]),
     hostile: false,
   };
 }
 
+/**
+ * What the convoy is carrying, and what it is worth to them to arrive.
+ *
+ * The reward was a flat 200–700 with no relation to the cargo, so escorting
+ * medical supplies through a war zone and escorting grain paid the same. The
+ * cargo sets the purse and the purse says what the run is.
+ */
+const CARGOES = [
+  { id: 'grain', pay: [180, 320], text: 'grain hulls, riding low and slow' },
+  { id: 'medical', pay: [420, 760], text: 'medical freighters on a deadline they will not discuss' },
+  { id: 'colonists', pay: [300, 560], text: 'colony transports with four thousand people aboard' },
+  { id: 'dilithium', pay: [600, 980], text: 'ore carriers under seal, and a purser who keeps counting them' },
+  { id: 'machinery', pay: [260, 480], text: 'heavy-lift ships carrying a shipyard in pieces' },
+  { id: 'unspecified', pay: [500, 900], text: 'three unmarked hulls whose master will not say what is in them' },
+];
+
 function buildConvoy(rng, system, presence) {
   const factionId = pickFaction(rng, presence, { exclude: [] });
+  const adj = FACTIONS[factionId]?.adjective ?? 'civilian';
+  const cargo = rng.pick(CARGOES);
   return {
     kind: 'convoy', system, factionId, hostile: false,
+    subtype: cargo.id,
     title: 'Merchant convoy',
-    text: `${article(FACTIONS[factionId]?.adjective ?? 'civilian')} ${FACTIONS[factionId]?.adjective ?? 'civilian'} convoy hails us for an escort through the sector.`,
+    text: `${article(adj)} ${adj} convoy — ${cargo.text} — hails us for an escort `
+      + 'through the sector.',
     hailable: true,
-    escortReward: rng.int(200, 700),
+    escortReward: rng.int(cargo.pay[0], cargo.pay[1]),
   };
 }
 
@@ -341,6 +557,28 @@ function buildFirstContact(rng, system) {
     text: 'An unknown vessel of unfamiliar configuration. No match in the database. They are transmitting.',
     // The Prime Directive is a live question here, not decoration.
     preWarp: rng.chance(0.35),
+  };
+}
+
+/**
+ * A signal, and whether it is worth the ship's time.
+ *
+ * Deliberately not gated on anything: a courier finds you wherever you are,
+ * and a beacon nobody has serviced since 2251 is more likely on the frontier
+ * than at Earth, not less.
+ */
+function buildSignal(rng, system) {
+  const sig = rng.pick(SIGNALS);
+  return {
+    kind: 'signal', system, hostile: false, hailable: false,
+    subtype: sig.id,
+    // Who is telling you. `beginEncounter` prints this as the station heading
+    // on the panel, and a note from the department heads is not a sensor
+    // reading.
+    from: sig.from ?? 'comms',
+    signal: sig,
+    title: sig.title,
+    text: sig.text,
   };
 }
 
