@@ -1,5 +1,37 @@
 // Episodes 9-16: the Neutral Zone, Cardassian space, and the dark past the relays.
 
+/**
+ * Where a stage goes when what the captain knows should decide it.
+ *
+ * `next` has accepted a function — `(mission, applied) => stageId` — since the
+ * mission engine was written, and nothing in sixteen episodes had ever passed
+ * one. It is the only way a stage can read `mission.vars`, so all nine of the
+ * variables episodes set were written, serialised into the save file, and read
+ * by nothing at all.
+ *
+ * These are here rather than inline so the routing reads as a decision with a
+ * name, and so a test can hold one.
+ */
+const onVar = (key, ifSet, ifNot) => {
+  const route = (m) => (m.vars[key] ? ifSet : ifNot);
+  // Both places it can go, declared.
+  //
+  // A function is opaque, and the thing the episode graph is checked for is
+  // that no route points at a stage that does not exist — the check that
+  // catches a renamed stage. Rather than exempting dynamic routing from it,
+  // the routing says where it can land and stays checkable. See
+  // `tests/sim.test.js` "every episode is structurally sound".
+  route.targets = [ifSet, ifNot];
+  route.reads = key;
+  return route;
+};
+
+/** The nine-second gap in a Borg cube's shield harmonics, if we found it. */
+const withWindow = onVar('has_window', 'engage_window', 'engage');
+
+/** Waiting for a cloaked ship to move first, with the sensors cold. */
+const whoSeesWhoFirst = onVar('running_silent', 'sighted', 'ambushed');
+
 export const FRONTIER_EPISODES = [
   // -------------------------------------------------------------------------
   {
@@ -22,7 +54,7 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'tachyon', label: 'Flood the area with tachyons', next: 'revealed',
             requires: { skill: 'sensors', ranks: 1 }, effects: { xp: 400 } },
-          { id: 'wait', label: 'Hold position and wait for it to move first', next: 'ambushed',
+          { id: 'wait', label: 'Hold position and wait for it to move first', next: whoSeesWhoFirst,
             effects: { xp: 200 } },
           { id: 'withdraw', label: 'Withdraw and report', outcome: 'reported',
             effects: { xp: 500, record: { anomaly_catalogued: 1 }, flag: 'romulan_cloak_reported',
@@ -47,6 +79,24 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'fight', label: 'Return fire', next: 'battle',
             effects: { combat: { faction: 'romulan', ships: ['warbird'] }, damage: 0.15 } },
+        ],
+      },
+      sighted: {
+        // The other half of `running_silent`. A ship that came in on passive
+        // sensors and then held still is the one doing the watching, and the
+        // variable that recorded the choice was read by nothing.
+        text: 'Nothing radiates. Nothing pings. And after nineteen minutes of a silence your crew is holding rather than keeping, the distortion moves — across your bow, unhurried, with no idea you are there.',
+        speaker: 'Science',
+        choices: [
+          { id: 'fire', label: 'Fire now, into where it has to be', next: 'battle',
+            effects: {
+              // Decloaked and not expecting it. The warbird is the same ship;
+              // it simply has not raised anything yet.
+              combat: { faction: 'romulan', ships: ['warbird'], shieldsAt: 0.15 },
+              xp: 700, standing: { romulan: -20 }, flag: 'fired_first_neutral_zone',
+            } },
+          { id: 'watch', label: 'Let it go and follow it', next: 'revealed',
+            effects: { xp: 800, record: { anomaly_catalogued: 1 } } },
         ],
       },
       negotiate: {
@@ -124,6 +174,13 @@ export const FRONTIER_EPISODES = [
             effects: { xp: 800, damage: 0.2 } },
           { id: 'retreat', label: 'Get us out', outcome: 'catalogued',
             effects: { xp: 500, damage: 0.1, record: { anomaly_catalogued: 2 } } },
+          // A ship that took the probe's telemetry first knows where the
+          // convergence is; a ship that flew straight in is finding out. Only
+          // the second one has to do this the hard way, and `entered` recorded
+          // which it was and was read by nothing.
+          { id: 'blind', label: 'Run the pulse off the ship’s own readings', next: 'pulse',
+            requires: { var: { entered: true } },
+            effects: { xp: 1000, damage: 0.34, flag: 'devron_blind' } },
         ],
       },
       pulse: {
@@ -154,8 +211,13 @@ export const FRONTIER_EPISODES = [
         text: 'Six thousand doses of a vaccine Bajor needs inside forty hours, and the only route in time is through the Badlands. Plasma storms, no sensors past two thousand kilometres, and a standing advisory against exactly this.',
         speaker: 'Bridge',
         choices: [
+          // No `setVar` here. `escorting` was set on this choice and this
+          // choice is the only way into the stage that would have read it, so
+          // it was true at every point it could ever have been tested — a
+          // variable that distinguishes nothing. Deleted rather than given a
+          // reader, because there is nothing for a reader to learn from it.
           { id: 'go', label: 'Take the convoy through', next: 'inside',
-            effects: { xp: 300, setVar: { escorting: true } } },
+            effects: { xp: 300 } },
           { id: 'long', label: 'Take the long route. They can wait', outcome: 'late',
             effects: { xp: 150, time: 3, record: { lives_lost: 900 }, standing: { federation: -8 } } },
         ],
@@ -251,6 +313,14 @@ export const FRONTIER_EPISODES = [
           { id: 'sign', label: 'Sign', outcome: 'accord',
             effects: { xp: 1400, standing: { federation: 18, cardassian: 16 },
               record: { treaty_signed: 1 }, flag: 'dmz_accord' } },
+          // There are two ways to this table: he withdrew the clause, or you
+          // gave it to him. `conceded` recorded which and was read by nothing,
+          // so the same signature was worth the same either way. A point
+          // conceded in the first hour is still in the text in the last one.
+          { id: 'recover', label: 'Take the conceded point back before you sign',
+            outcome: 'accord', requires: { var: { conceded: true } },
+            effects: { xp: 1700, standing: { federation: 22, cardassian: 4 },
+              record: { treaty_signed: 1 }, flag: ['dmz_accord', 'dmz_clause_recovered'] } },
         ],
       },
       standoff: {
@@ -258,7 +328,7 @@ export const FRONTIER_EPISODES = [
         speaker: 'Starfleet Command',
         choices: [
           { id: 'accept', label: 'Accept the outcome', outcome: 'failed',
-            effects: { xp: 300, standing: { federation: -12 }, record: { treaty_broken: 0 } } },
+            effects: { xp: 300, standing: { federation: -12 } } },
         ],
       },
     },
@@ -368,6 +438,12 @@ export const FRONTIER_EPISODES = [
             effects: { xp: 400, setVar: { deflected: true } } },
           { id: 'terminate', label: 'End the contact', outcome: 'avoided',
             effects: { xp: 200 } },
+          // Only a ship that scanned it first knows there is nobody aboard —
+          // which makes its opening question about consent a question about
+          // itself, and lets the captain say so.
+          { id: 'name_it', label: 'Tell it you know what it is, and answer anyway',
+            next: 'dialogue', requires: { var: { scanned_first: true } },
+            effects: { xp: 1100, flag: 'grid_candid' } },
         ],
       },
       dialogue: {
@@ -379,6 +455,14 @@ export const FRONTIER_EPISODES = [
               standing: { federation: 25 }, flag: 'grid_9902_contact' } },
           { id: 'defer', label: 'Defer to the Federation Council', outcome: 'deferred',
             effects: { xp: 1400, record: { first_contact: 1 }, standing: { federation: 12 } } },
+          // It asked a question about consent and was answered with procedure.
+          // Nine hours later that is still the first thing it knows about us,
+          // and a captain who chose it can say so. `deflected` recorded the
+          // choice and nothing had ever read it back.
+          { id: 'apologise', label: 'Answer the question it asked nine hours ago',
+            outcome: 'contact', requires: { var: { deflected: true } },
+            effects: { xp: 2000, record: { first_contact: 1, anomaly_catalogued: 2 },
+              standing: { federation: 20 }, flag: ['grid_9902_contact', 'grid_answered_late'] } },
         ],
       },
     },
@@ -416,7 +500,7 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'transmit', label: 'Transmit it to Starfleet immediately', next: 'transmitted',
             effects: { xp: 1600, standing: { federation: 25 }, flag: 'borg_weakness' } },
-          { id: 'use', label: 'Use it yourself', next: 'engage',
+          { id: 'use', label: 'Use it yourself', next: withWindow,
             effects: { xp: 900, setVar: { has_window: true } } },
         ],
       },
@@ -426,7 +510,7 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'comply', label: 'Comply. Shadow and report', outcome: 'intelligence',
             effects: { xp: 2200, standing: { federation: 30 }, record: { lives_saved: 40000 } } },
-          { id: 'engage', label: 'Engage anyway', next: 'engage',
+          { id: 'engage', label: 'Engage anyway', next: withWindow,
             effects: { record: { order_disobeyed: 1 }, setVar: { has_window: true }, standing: { federation: -10 } } },
         ],
       },
@@ -440,6 +524,11 @@ export const FRONTIER_EPISODES = [
         ],
       },
       engage: {
+        // Which of these two stages the captain gets is the whole point of the
+        // forty hours. `next` as a function has been supported since the engine
+        // was written and nothing used it, so a ship that had found a nine-
+        // second gap in the shield harmonics and chosen to use it fought a cube
+        // at full shields — measured identical, facing for facing. RESEARCH §35.
         text: 'It does not manoeuvre. It does not hail. It absorbs the first full spread and continues at the same speed, and then it fires.',
         speaker: 'Tactical',
         choices: [
@@ -449,6 +538,22 @@ export const FRONTIER_EPISODES = [
             effects: { xp: 600, damage: 0.15 } },
         ],
       },
+      engage_window: {
+        text: 'Forty-one minutes, and your science officer counts it down. The harmonics rotate. For nine seconds the cube is a shape with nothing over it, and every weapon you have is already pointed at it.',
+        speaker: 'Science',
+        choices: [
+          { id: 'fight', label: 'Fire into the window', outcome: 'engaged_window',
+            effects: {
+              // Nine seconds is the whole advantage. It is not a different
+              // cube: same hull, same guns, same forty-two thousand tonnes of
+              // it — the shields are simply not there when the spread lands.
+              combat: { faction: 'borg', ships: ['borg_cube'], shieldsAt: 0 },
+              damage: 0.12, xp: 2400,
+            } },
+          { id: 'break', label: 'Let it pass. We have what Starfleet needs', outcome: 'survived',
+            effects: { xp: 900 } },
+        ],
+      },
     },
     start: 'start',
     endings: {
@@ -456,6 +561,9 @@ export const FRONTIER_EPISODES = [
         text: 'The fleets meet it at Wolf 359 with nine seconds of warning they would not have had. It is not a victory. It is fewer names.' },
       evacuated: { label: 'Colonies evacuated', text: 'Twelve thousand alive who would not have been. The cube continues.' },
       engaged: { label: 'Engaged the cube', text: 'You slowed it by four hours. Starfleet used every one of them.' },
+      engaged_window: { label: 'Fired into the window',
+        text: 'Nine seconds of a cube with nothing over it. It does not stop — nothing stops it — but it arrives at Wolf 359 leaking atmosphere from a wound nobody had put in one before, and the fleet knows exactly where to aim.',
+        effects: { flag: 'borg_hurt' } },
       survived: { label: 'Broke off', text: 'The ship survives. So does the cube, and it is still on course.' },
     },
   },

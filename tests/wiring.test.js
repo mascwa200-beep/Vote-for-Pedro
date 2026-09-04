@@ -1143,8 +1143,18 @@ describe('every episode graph is sound', () => {
       assert.ok(ids.has(ep.start), `${ep.id}: start stage "${ep.start}" does not exist`);
       for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
         for (const c of stage.choices ?? []) {
+          // A `next` that is a function routes on what the captain did. It
+          // used to be dropped on the floor here — `typeof c.next === 'string'`
+          // and otherwise null — so a dynamic route at a stage somebody
+          // renamed would have passed this test in silence. Such a route
+          // declares the stages it can reach; walk them.
+          const dynamic = typeof c.next === 'function' ? (c.next.targets ?? []) : [];
+          if (typeof c.next === 'function' && !dynamic.length) {
+            missing.push(`${ep.id}/${sid} -> a route that will not say where it goes`);
+          }
           for (const n of [
             typeof c.next === 'string' ? c.next : null,
+            ...dynamic,
             c.branch?.success, c.branch?.failure,
           ].filter(Boolean)) {
             if (!ids.has(n)) missing.push(`${ep.id}/${sid} -> "${n}"`);

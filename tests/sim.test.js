@@ -604,7 +604,19 @@ test('every episode is structurally sound', () => {
       for (const choice of stage.choices) {
         assert.ok(choice.id && choice.label, `${ep.id}/${stageId} choice needs id and label`);
         // A choice must either go somewhere real or terminate the episode.
-        if (choice.next) {
+        if (typeof choice.next === 'function') {
+          // Routing that reads what the captain did. The engine has accepted a
+          // function here since it was written; the check that a route lands on
+          // a real stage is worth more than the convenience of a bare closure,
+          // so such a route declares every stage it can reach and this walks
+          // them. A function with no `targets` is unroutable and fails here.
+          assert.ok(choice.next.targets?.length,
+            `${ep.id}/${stageId}/${choice.id} routes dynamically without declaring its targets`);
+          for (const target of choice.next.targets) {
+            assert.ok(ep.stages[target],
+              `${ep.id}/${stageId}/${choice.id} can route to missing stage "${target}"`);
+          }
+        } else if (choice.next) {
           assert.ok(ep.stages[choice.next],
             `${ep.id}/${stageId}/${choice.id} points at missing stage "${choice.next}"`);
         } else if (choice.branch) {
