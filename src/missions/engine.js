@@ -297,7 +297,10 @@ export class Mission {
     }
 
     if (effects.time) {
-      g.clock.advanceStardate(effects.time);
+      // Authored in days, spent in hours, through the door every other timed
+      // order in the game goes through — so a stage that says "this took three
+      // days" is three days of the commission and of the ship's work.
+      g.spendHours(effects.time * 24);
     }
 
     return out;

@@ -12,9 +12,15 @@ import assert from 'node:assert/strict';
 import { CampaignClock, COMMISSION_DAYS, MAX_ABSENCE_HOURS, absenceReport } from '../src/campaign/clock.js';
 import { checksum } from '../src/core/save.js';
 import { Game } from '../src/core/state.js';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { Ship } from '../src/sim/ship.js';
 import { AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } from '../src/sim/away.js';
+import { ABILITY_LIST } from '../src/sim/officers.js';
 
+const HERE = dirname(fileURLToPath(import.meta.url));
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
 
@@ -781,5 +787,123 @@ describe('a landing party costs time, and a world is done with once', () => {
     assert.equal(g.awayMission('diplomatic_landing').ok, true);
     assert.ok(g.ship.hullPct > hull,
       `damage control did nothing for the ${HAZARD_LEVEL.routine.hours} hours the party was down`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One clock.
+//
+// `advanceStardate` had fifteen callers, each with its own number in days, and
+// not one of them touched the commission clock. That is how the bridge came to
+// show a stardate that had wandered a year and a half from a commission still
+// on day one: twenty-five hops moved one number and left the other where it
+// started. Every order that costs time goes through `spendHours` now, and the
+// date has three callers left — time going by, an order that cost some, and an
+// absence.
+
+describe('one clock', () => {
+  /** Every order in the game that costs the captain time. */
+  const TIMED_ORDERS = {
+    'a long-range scan': (g) => g.sensorSweep(),
+    'ordered repairs': (g) => { g.ship.hull = g.ship.maxHull * 0.5; return g.effectRepairs(); },
+    'docking': (g) => { g.ship.hull = g.ship.maxHull * 0.5; return g.dock(); },
+    'an afternoon at the bench': (g) => {
+      g.ship.hull = g.ship.maxHull * 0.9;
+      assert.ok(g.fabricate('hull_patch').ok !== false, 'nothing went on the bench');
+      return g.workTheShop(8);
+    },
+    'a landing party': (g) => {
+      g.locationId = 'vulcan';
+      assert.ok(g.enterOrbit().ok);
+      return g.awayMission('diplomatic_landing');
+    },
+    'training an officer': (g) => {
+      // Named against the real table rather than a guessed accessor. An
+      // ability the officer already holds, or one above the captain's rank,
+      // is refused — and a refused order that costs no time would make this
+      // row of the table pass for the wrong reason, which the `moved` count
+      // below is there to catch.
+      // In their own department, within the captain's clearance, and not one
+      // they already hold — `trainOfficer` refuses all three, and a refusal
+      // costs no time, which would make this row pass for the wrong reason.
+      let pair = null;
+      for (const o of g.crew.officers.filter((x) => x.alive && !x.injured)) {
+        const a = ABILITY_LIST.find((x) => x.dept === o.dept
+          && x.rank <= g.progress.rank.tier
+          && !o.abilities.includes(x.id));
+        if (a) { pair = { officer: o, ability: a }; break; }
+      }
+      assert.ok(pair, 'nobody aboard could be trained in anything');
+      const r = g.trainOfficer(pair.officer, pair.ability.id);
+      assert.equal(r.ok !== false, true, `training was refused: ${r?.reason}`);
+      return r;
+    },
+  };
+
+  test('every order that costs time moves both clocks by the same amount', () => {
+    // The measurement that names the whole defect. Before this, each of these
+    // moved the stardate and left the commission where it was.
+    const disagreed = [];
+    let moved = 0;
+    for (const [what, order] of Object.entries(TIMED_ORDERS)) {
+      const g = new Game({ seed: 12n, crewMode: 'original' });
+      const sd = g.clock.stardate;
+      const days = g.campaign.elapsedDays;
+      order(g);
+      const onTheDate = (g.clock.stardate - sd) * 24;
+      const onTheCommission = (g.campaign.elapsedDays - days) * 24;
+      if (onTheDate > 0) moved++;
+      if (Math.abs(onTheDate - onTheCommission) > 1e-6) {
+        disagreed.push(`${what}: date ${onTheDate.toFixed(2)}h, commission ${onTheCommission.toFixed(2)}h`);
+      }
+    }
+    // The control: an order list where nothing costs time would pass the
+    // agreement check trivially.
+    assert.ok(moved === Object.keys(TIMED_ORDERS).length,
+      `only ${moved} of ${Object.keys(TIMED_ORDERS).length} orders cost any time at all`);
+    assert.deepEqual(disagreed, [], 'orders where the two clocks disagree');
+  });
+
+  test('and the date is moved by three things and no others', () => {
+    // Read from the source, because this is a claim about the shape of the code
+    // and no behavioural test can see a fourth caller being added.
+    const src = readFileSync(join(HERE, '..', 'src', 'core', 'state.js'), 'utf8');
+    const callers = src.split('\n').filter((l) => /clock\.advanceStardate\(/.test(l));
+    assert.equal(callers.length, 3,
+      `advanceStardate has ${callers.length} callers in state.js:\n  ${callers.join('\n  ')}`);
+    for (const dir of ['main.js', 'missions/engine.js']) {
+      const other = readFileSync(join(HERE, '..', 'src', dir), 'utf8');
+      assert.ok(!/clock\.advanceStardate\(/.test(other),
+        `${dir} moves the date by hand instead of through spendHours`);
+    }
+  });
+
+  test('and an hour at the bench is an hour like any other', () => {
+    // `workTheShop` called `advanceFabrication` and `advanceAssignments` itself
+    // and nothing else, so its hours were the one span in the game that
+    // repaired no hull and healed nobody.
+    const g = new Game({ seed: 12n, crewMode: 'original' });
+    g.ship.hull = g.ship.maxHull * 0.5;
+    assert.ok(g.fabricate('hull_patch').ok !== false);
+    const hull = g.ship.hullPct;
+    const r = g.workTheShop(8);
+    assert.equal(r.ok, true, r.reason ?? r.error);
+    assert.ok(g.ship.hullPct > hull,
+      'eight hours at the bench and damage control did nothing anywhere else');
+  });
+
+  test('and the shop still reports what it finished, exactly once', () => {
+    // `spendHours` writes finished work into the log; `workTheShop` reports it
+    // through its return value. Both would be two lines for one job.
+    const g = new Game({ seed: 12n, crewMode: 'original' });
+    g.ship.hull = g.ship.maxHull * 0.5;
+    assert.ok(g.fabricate('hull_patch').ok !== false);
+    const before = g.log.length;
+    const r = g.workTheShop(400);
+    assert.equal(r.ok, true, r.reason ?? r.error);
+    assert.ok(r.done, 'four hundred hours and the bench was never cleared');
+    const said = g.log.slice(before).filter((l) => /is finished, Captain/.test(l.text ?? ''));
+    assert.equal(said.length, 0,
+      `the shop announced its own job as well as reporting it: ${said.map((l) => l.text).join(' | ')}`);
   });
 });
