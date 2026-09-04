@@ -282,7 +282,7 @@ android/      WebView shell, manifest, resources for the APK
 **Content:** 43 star systems, 31 ship classes, 16 authored episodes, 12
 species, 12 difficulties, 6 reputation tracks, 38 synthesized sound cues, and
 a command lexicon of 1489 phrasings tested against a 610-order corpus,
-and 31 procedurally generated hulls averaging 1029 triangles each.
+and 31 procedurally generated hulls averaging 1058 triangles each.
 
 ## Development
 

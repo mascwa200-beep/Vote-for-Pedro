@@ -1525,6 +1525,77 @@ Sources: [Memory Alpha — Galor-class](https://memory-alpha.fandom.com/wiki/Gal
 
 ---
 
+## 29. The last two, and the one that was the wrong creature entirely
+
+§28 ended with a list of two: `compact` and `cube`, the only forms left building
+a ship with no lit port on it. One of them was hiding something much worse than
+a missing window.
+
+**The bioship was a Borg cube.** Normalised to its own bounding box and
+rasterised into an occupancy grid, `bioship` and `borg_cube` measured **0.000
+apart** — the same object, squashed to 600 × 420 × 200 instead of three
+kilometres cubed. Everything the class data says about it says it is not a Borg
+ship at all: a crew of **one**, no decks, a hull that regenerates 120 a second,
+weapons that adapt within seconds, and a bioplasmic discharge for a beam. It is
+an organic vessel and it was drawn as the most industrial object in the game.
+
+It gets its own form: an ellipsoid body with a ridged spine, three prongs
+curving forward — a mirrored pair plus one on the dorsal line — and a core
+burning inside the body that shows through the gaps between them. Two box
+segments per prong, because a single box cannot curve and the curve is the
+silhouette.
+
+No lit ports on it, and that is not an omission. A vessel with one occupant and
+no decks has nowhere to put a window; the core does the same job, which is to
+say that the thing is alive and under way.
+
+**A Borg cube's structures were inside the Borg cube.** Fourteen boxes placed by
+a trigonometric walk at 0.36 of the half-extent in x and y — which is inside a
+cube whose faces are at 0.5 — so ten of the fourteen were paid for and could not
+be seen from anywhere. Measured on the built mesh, **22% of the hull's faces**
+were sealed inside it. A cube has no silhouette to read and no lighting to model
+it, so the surface is the whole of the design: it now carries a lattice on each
+of the six faces with conduits running between them.
+
+That is measured **per piece, not per face**. A box bolted to a hull has a back
+face against it that is hidden and is meant to be; asking every triangle to
+reach the surface fails on ninety-six of those. The pieces are the mesh's
+connected components, found by union-find over quantised vertex positions, and
+every box is one because nothing here shares vertices with anything else.
+
+**A Defiant and a runabout got their ports.** The last form with none, and the
+one that needs them least and most at once: a Defiant is famously a warship with
+almost no habitable hull, and it is also the ship a captain most often flies.
+The body is a swept wedge with a flat upper surface, so a ring about the x axis
+cannot lie on it and `portRow` does the work instead.
+
+That change broke a test, correctly, and the break is the interesting part. The
+suite's rim-band control was `portsOf('defiant').length === 0` — a true
+statement about a hull that had no ports at all, and one that stopped being a
+control the moment it got some. What the control is *for* is that a rim band
+runs round the widest part of a hull, which a wedge does not have. Restated as a
+ratio of the ports' own beam to the hull's:
+
+| class | ports' beam / hull beam |
+|---|---|
+| seven saucer cruisers | 0.99–1.00 |
+| Miranda (the saucer IS the ship) | 0.84 |
+| Constellation | 0.76 |
+| **Defiant, runabout** | **0.32, 0.33** |
+
+### What the build takes from this
+
+Every crewed hull in the game now carries lit ports, and the two forms that do
+not are the two that should not: the Borg do not fit windows, and a bioship has
+nobody to look out of one.
+
+Sources: [Memory Alpha — Species 8472 bioship](https://memory-alpha.fandom.com/wiki/Bioship),
+[Memory Alpha — Borg cube](https://memory-alpha.fandom.com/wiki/Borg_cube),
+[Memory Alpha — Defiant-class](https://memory-alpha.fandom.com/wiki/Defiant-class),
+[Memory Alpha — Danube-class runabout](https://memory-alpha.fandom.com/wiki/Danube-class)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

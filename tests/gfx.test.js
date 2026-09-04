@@ -2170,8 +2170,34 @@ describe('no two Federation classes are the same shape', () => {
     assert.equal(decks(portsOf('miranda')), 1,
       'a Miranda has no secondary hull, so it cannot have flank ports on one');
     // And a Defiant has no saucer at all.
-    assert.equal(portsOf('defiant').length, 0,
-      'a Defiant is a wedge with no primary hull to put a rim band on');
+    //
+    // This control used to be `portsOf('defiant').length === 0`, which was a
+    // true statement about a hull that had no ports on it AT ALL — and it
+    // stopped being a control the moment the Defiant got some. What it is
+    // actually for is that the band above is a RIM band: on a saucer ship the
+    // ports run round the widest part of the hull, and on a wedge they cannot.
+    //
+    // Measured as the ports' own beam over the hull's: 0.99–1.00 on all seven
+    // cruisers, 0.84 on a Miranda whose saucer IS the ship, 0.76 on a
+    // Constellation, and 0.32 on a Defiant and a runabout — whose lights are a
+    // row along the top of a wedge, which is the correct answer for a warship
+    // with four decks and no primary hull.
+    const beamRatio = (id) => {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      let hull = 0;
+      for (let i = 0; i < m.vertexCount; i++) hull = Math.max(hull, Math.abs(m.data[i * f + 2]));
+      const ports = portsOf(id).reduce((n, v) => Math.max(n, Math.abs(v[2])), 0);
+      return hull > 0 ? ports / hull : 0;
+    };
+    for (const id of ['constitution', 'galaxy', 'sovereign']) {
+      assert.ok(beamRatio(id) > 0.95, `${id}'s ports reach only ${beamRatio(id).toFixed(2)} of its beam`);
+    }
+    for (const id of ['defiant', 'runabout']) {
+      assert.ok(portsOf(id).length > 0, `${id} has no lit ports at all`);
+      assert.ok(beamRatio(id) < 0.6,
+        `${id} has a rim band, and it is a wedge with no rim: ${beamRatio(id).toFixed(2)} of its beam`);
+    }
   });
 
   test('a hull is lit with trim, not upholstered in light', () => {

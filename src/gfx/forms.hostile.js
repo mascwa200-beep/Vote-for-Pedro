@@ -653,4 +653,173 @@ export const HOSTILE_FORMS = {
       count: b.engines ?? 2,
     });
   },
+
+  /**
+   * A Borg cube.
+   *
+   * It stays a cube — its published figures are equal on all three axes, and
+   * "literally a cube" was the right call. What was wrong was the clutter: a
+   * trigonometric walk placed fourteen boxes at 0.36 of the half-extent in x
+   * and y, which is INSIDE the cube, so ten of the fourteen were paid for and
+   * could not be seen. Measured, 22% of the hull's faces were buried.
+   *
+   * Structures now sit ON the six faces, in a lattice, with conduits running
+   * between them: a cube has no silhouette to read and no lighting to model
+   * it, so the surface is the whole of the design.
+   *
+   * The asymmetry is deliberate and a test asserts it stays. A Borg vessel is
+   * accreted rather than laid down, and it is the one hull in the fleet that
+   * should not be the same on both sides.
+   */
+  cube(mb, p, b) {
+    const s = b.size ?? 1.1;
+    const h = s / 2;
+    box(mb, { center: vec3(), size: vec3(s, s, s), color: p.hull });
+
+    // Six faces, each with its own lattice. `axis` is the face normal and the
+    // two others are the plane it is laid out in.
+    const FACES = [[0, 1], [0, -1], [1, 1], [1, -1], [2, 1], [2, -1]];
+    let n = 0;
+    for (const [axis, dir] of FACES) {
+      const u = (axis + 1) % 3;
+      const v = (axis + 2) % 3;
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          n++;
+          // Deterministic, and deliberately not a grid: two of every nine
+          // cells are left empty and the sizes vary, so the face reads as
+          // machinery rather than as tiling.
+          const k = ((n * 2654435761) >>> 0) / 4294967296;
+          if (k < 0.22) continue;
+          const centre = [0, 0, 0];
+          centre[axis] = dir * h * 0.94;
+          centre[u] = (i - 1) * s * 0.3;
+          centre[v] = (j - 1) * s * 0.3;
+          const size = [0, 0, 0];
+          size[axis] = s * (0.06 + k * 0.1);
+          size[u] = s * (0.1 + k * 0.14);
+          size[v] = s * (0.1 + (1 - k) * 0.14);
+          const lit = k > 0.92;
+          box(mb, {
+            center: vec3(centre[0], centre[1], centre[2]),
+            size: vec3(size[0], size[1], size[2]),
+            color: lit ? p.glow : p.trim,
+            glow: lit ? 1 : 0,
+          });
+        }
+      }
+      // A conduit across the face, lit. The green is the only thing on a cube
+      // that says it is powered.
+      const bar = [0, 0, 0];
+      bar[axis] = dir * h * 0.99;
+      const bs = [0, 0, 0];
+      bs[axis] = s * 0.025;
+      bs[u] = s * 0.86;
+      bs[v] = s * 0.028;
+      box(mb, {
+        center: vec3(bar[0], bar[1], bar[2]),
+        size: vec3(bs[0], bs[1], bs[2]),
+        color: p.glow,
+        glow: 1,
+      });
+    }
+  },
+
+  /**
+   * An organic vessel: three curved prongs reaching forward off a spined body,
+   * with the drive burning inside it.
+   *
+   * It was a Borg cube. Normalised to its own bounding box, the two measured
+   * ZERO apart on an occupancy grid — the same object, squashed to 600 by 420
+   * by 200 instead of three kilometres cubed. Everything the class data says
+   * about it says it is not a Borg ship: a crew of one, a hull that regenerates
+   * a hundred and twenty a second, weapons that adapt within seconds, and a
+   * bioplasmic discharge for a beam.
+   *
+   * No lit ports, and that is not an omission: a vessel with one occupant and
+   * no decks has nowhere to put a window. What it has instead is a core that
+   * shows through the gaps between the prongs, which is the same job — it says
+   * the thing is alive and under way.
+   */
+  bioship(mb, p, b) {
+    const high = b.ratioHeight ?? 0.33;
+    const wide = b.ratioBeam ?? 0.7;
+
+    // The body: an ellipsoid drawn out fore and aft, heaviest astern.
+    sphere(mb, {
+      origin: vec3(-0.12, 0, 0),
+      radius: 1,
+      segments: seg(9),
+      rings: 6,
+      scale: vec3(0.4, high * 0.62, wide * 0.6),
+      color: p.hull,
+      banding: 0.22,
+    });
+    // The core, burning inside it and visible between the prongs.
+    sphere(mb, {
+      origin: vec3(-0.04, 0, 0),
+      radius: 1,
+      segments: seg(7),
+      rings: 4,
+      scale: vec3(0.14, high * 0.2, wide * 0.24),
+      color: p.glow,
+      glow: 1,
+    });
+    // A ridged dorsal spine, which is what makes it read as grown rather than
+    // built at all sizes.
+    greebles(mb, {
+      from: vec3(-0.4, high * 0.5, 0),
+      to: vec3(0.14, high * 0.34, 0),
+      count: b.spineCount ?? 6,
+      size: vec3(0.09, high * 0.3, wide * 0.16),
+      vary: 0.45,
+      color: p.trim,
+      lit: p.glow,
+      litEvery: 4,
+    });
+
+    // Three prongs: a pair reaching forward and out, and one on the spine.
+    // Each is two segments so it CURVES, which a single box cannot do and is
+    // the whole silhouette of the class.
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(0.24, -high * 0.06, wide * 0.42),
+        size: vec3(0.44, high * 0.24, wide * 0.24),
+        sweep: -0.1,
+        dip: high * 0.12,
+        color: p.hull,
+      });
+      box(m, {
+        center: vec3(0.5, -high * 0.2, wide * 0.5),
+        size: vec3(0.3, high * 0.18, wide * 0.18),
+        sweep: 0.14,
+        dip: high * 0.16,
+        color: p.trim,
+      });
+      // The tip, lit: this is where a bioplasmic discharge comes from.
+      box(m, {
+        center: vec3(0.64, -high * 0.3, wide * 0.46),
+        size: vec3(0.1, high * 0.12, wide * 0.12),
+        color: p.glow,
+        glow: 1,
+      });
+    });
+    box(mb, {
+      center: vec3(0.26, high * 0.44, 0),
+      size: vec3(0.46, high * 0.22, wide * 0.2),
+      rake: 0.12,
+      color: p.hull,
+    });
+    box(mb, {
+      center: vec3(0.52, high * 0.54, 0),
+      size: vec3(0.26, high * 0.15, wide * 0.14),
+      color: p.trim,
+    });
+    box(mb, {
+      center: vec3(0.66, high * 0.58, 0),
+      size: vec3(0.08, high * 0.1, wide * 0.07),
+      color: p.glow,
+      glow: 1,
+    });
+  },
 };

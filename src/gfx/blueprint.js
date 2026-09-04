@@ -610,32 +610,6 @@ const FORMS = {
     });
   },
 
-  /** Literally a cube. There is nothing else to say about it. */
-  cube(mb, p, b) {
-    // A Borg cube is a cube because it IS one — its published figures are equal
-    // on all three axes, so the ratios below give it back exactly that. Anything
-    // else built by this form (the bioship) is not a cube, and drawing it as one
-    // made it three times as tall as its own dimensions say.
-    const s = b.size ?? 1.1;
-    const sy = s * ((b.ratioHeight ?? 1) / 1);
-    const sz = s * ((b.ratioBeam ?? 1) / 1);
-    box(mb, { center: vec3(), size: vec3(s, sy, sz), color: p.hull });
-    // Surface clutter, so it does not read as a flat-shaded box at a distance.
-    for (let i = 0; i < 14; i++) {
-      const t = i / 14;
-      const a = t * Math.PI * 2 * 3.7;
-      box(mb, {
-        center: vec3(Math.cos(a) * s * 0.36, Math.sin(a * 1.7) * sy * 0.36, Math.sin(a) * sz * 0.5),
-        size: vec3(s * 0.2, sy * 0.18, sz * 0.12),
-        color: i % 4 === 0 ? p.glow : p.trim,
-        // The lit quarter is genuinely lit. A cube has no silhouette to read
-        // and no lighting to model it — the green is the only thing that says
-        // it is powered, and it was a pale green surface taking a key light.
-        glow: i % 4 === 0 ? 1 : 0,
-      });
-    }
-  },
-
   /** A working hull: cylinder, bridge block, cargo spine. `length_` — see wedge. */
   hauler(mb, p, b) {
     tube(mb, {
@@ -816,7 +790,7 @@ export const BLUEPRINTS = {
   jem_hadar_attack: { form: 'dominion', length: 178, length_: 0.86, prongSweep: 0.12 },
   jem_hadar_battleship: { form: 'dominion', length: 800, heavy: true, length_: 1.1, prongSweep: 0.2, ridgeCount: 7, engines: 5 },
   borg_cube: { form: 'cube', length: 3040, size: 1.15 },
-  bioship: { form: 'cube', length: 600, size: 0.85 },
+  bioship: { form: 'bioship', length: 600 },
   transport: { form: 'hauler', length: 120, length_: 1.0, r0: 0.13, r1: 0.11 },
   freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.155, r1: 0.13 },
 };
