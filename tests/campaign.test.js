@@ -973,3 +973,80 @@ describe('coming back to a ship that has been somewhere', () => {
       'a ship that never left Sol was told about a voyage');
   });
 });
+
+// ---------------------------------------------------------------------------
+// The same leg, flown two ways.
+//
+// The verification the plan asked for and nothing had run: a commission played
+// across a simulated close-and-return has to arrive at the same place with the
+// same clock as one watched the whole way. Running it by hand is what turned up
+// the NaN tank, because the fingerprints disagreed and the field that disagreed
+// was `NaN`.
+
+describe('the same leg, flown two ways', () => {
+  const HOURS = 300;   // Sol -> Vulcan at warp 8 is 291.5 of them
+
+  const laidIn = (now) => {
+    const g = new Game({ seed: 61n, crewMode: 'original', now, compression: HOUR_PER_TICK });
+    g.ship.antimatter = g.ship.maxAntimatter;
+    g.ship.hull = g.ship.maxHull * 0.6;
+    assert.equal(g.setCourse('vulcan', 8).ok, true, 'could not lay in the course');
+    assert.ok(g.transit.totalHours < HOURS,
+      `the voyage is ${g.transit.totalHours}h and the test only spends ${HOURS}`);
+    return g;
+  };
+
+  /** Watched the whole way: one commission hour per tick. */
+  const watchedAllTheWay = () => {
+    let t = 1_800_000_000_000;
+    const g = laidIn(() => t);
+    for (let i = 0; i < HOURS; i++) g.update(SIM_STEP);
+    return g;
+  };
+
+  /** Closed for exactly the same span of the commission. */
+  const closedAndResumed = () => {
+    let t = 1_800_000_000_000;
+    const g = laidIn(() => t);
+    t += (HOURS / HOUR_PER_TICK) * HOUR;
+    g.syncCampaign();
+    return g;
+  };
+
+  test('she is in the same place, on the same date, with the same clock', () => {
+    const watched = watchedAllTheWay();
+    const closed = closedAndResumed();
+
+    // The control first: both actually got somewhere. Two ships that never
+    // left Sol would agree about everything.
+    assert.equal(watched.locationId, 'vulcan', `watched ended at ${watched.locationId}`);
+    assert.ok(!watched.transit, 'the watched voyage never finished');
+
+    assert.equal(closed.locationId, watched.locationId,
+      `closed ended at ${closed.locationId}, watched at ${watched.locationId}`);
+    assert.equal(closed.mode, watched.mode,
+      `closed woke in ${closed.mode}, watched in ${watched.mode}`);
+    assert.ok(Math.abs(closed.clock.stardate - watched.clock.stardate) < 1e-6,
+      `stardate ${closed.clock.stardate} vs ${watched.clock.stardate}`);
+    assert.ok(Math.abs(closed.campaign.elapsedDays - watched.campaign.elapsedDays) < 1e-6,
+      `commission ${closed.campaign.elapsedDays} vs ${watched.campaign.elapsedDays} days`);
+  });
+
+  test('and the ship herself came through it the same way', () => {
+    // Hull and tank as well as the clock, because "the same place" is not much
+    // of a claim if the ship that got there is a different ship. This is also
+    // the assertion the NaN tank failed: `undefined` in, NaN out, and the two
+    // paths disagreed on a field nobody was looking at.
+    const watched = watchedAllTheWay();
+    const closed = closedAndResumed();
+    for (const [what, a, b] of [
+      ['hull', watched.ship.hullPct, closed.ship.hullPct],
+      ['antimatter', watched.ship.antimatter, closed.ship.antimatter],
+      ['torpedoes', watched.ship.torpedoes, closed.ship.torpedoes],
+    ]) {
+      assert.ok(Number.isFinite(a) && Number.isFinite(b),
+        `${what} is not a number: watched ${a}, closed ${b}`);
+      assert.ok(Math.abs(a - b) < 1e-9, `${what}: watched ${a}, closed ${b}`);
+    }
+  });
+});
