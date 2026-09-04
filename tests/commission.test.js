@@ -153,6 +153,8 @@ function playCommission(spec) {
     episodeStages: new Set(),
     missionFights: 0,
     leftEncounterBehind: 0,
+    putInForFuel: 0,
+    putInForRepair: 0,
     hullRecoveries: 0,
     lastHullPct: 1,
     minHullPct: 1,
@@ -290,9 +292,16 @@ function playCommission(spec) {
       const offer = g.availableMissions?.() ?? [];
       if (!m && offer.length) dest = g.locationId;   // it is offered here
     }
-    if (!dest && (g.ship.hullPct < 0.5 || g.ship.antimatter < g.ship.maxAntimatter * 0.25)) {
+    // Put in when she is hurt or thirsty. This read `g.ship.maxAntimatter`
+    // when the ship had no such property, so the right-hand side was NaN and
+    // `x < NaN` is false forever: the fuel half of this rule had never once
+    // fired, and one of the three commissions ended stranded because of it.
+    // Recorded now, and asserted, so a rule that stops firing says so.
+    const low = g.ship.hullPct < 0.5;
+    const thirsty = g.ship.antimatter < g.ship.maxAntimatter * 0.25;
+    if (!dest && (low || thirsty)) {
       const yard = g.galaxy.neighbors(g.locationId).find((n) => n.facilities?.includes('dock'));
-      if (yard) dest = yard.id;
+      if (yard) { dest = yard.id; if (thirsty) j.putInForFuel++; if (low) j.putInForRepair++; }
     }
     if (!dest) {
       const near = g.galaxy.neighbors(g.locationId);
@@ -532,6 +541,33 @@ describe('and the things this file exists to reach', () => {
     const left = FLOWN.reduce((n, j) => n + j.leftEncounterBehind, 0);
     assert.ok(left >= 6,
       `only ${left} legs set course with an encounter live, so #114 is barely tested`);
+  });
+
+  test('and the rule about putting in is a rule and not a NaN', () => {
+    // This read `g.ship.maxAntimatter` when no such property existed, so the
+    // right-hand side was NaN and `x < NaN` is false forever: the fuel half of
+    // the driver's "put in when she is hurt or thirsty" rule had never once
+    // fired, silently, for as long as this file existed.
+    //
+    // What is asserted is the EXPRESSION, not that it fires. Measured at every
+    // decision point across three commissions, the hull is 1.00 and the tank
+    // never falls below a third — because a fortnight under way repairs a full
+    // hull, which `passTime` says in its own comment and which only became
+    // reachable once a voyage took a fortnight. The rule is dormant because
+    // the ship does not need it, and that is a balance fact rather than a
+    // broken probe. A comparison against NaN is a broken probe.
+    const g = FLOWN[0].game;
+    assert.ok(Number.isFinite(g.ship.maxAntimatter),
+      `ship.maxAntimatter is ${g.ship.maxAntimatter}, so the fuel rule compares against NaN`);
+    const quarter = g.ship.maxAntimatter * 0.25;
+    assert.ok(Number.isFinite(quarter), `a quarter tank is ${quarter}`);
+    // Both halves: false for a full tank, and TRUE for an empty one. Without
+    // the second, `x < NaN` would satisfy the first.
+    assert.equal(g.ship.maxAntimatter < quarter, false, 'a full tank read as thirsty');
+    assert.equal(0 < quarter, true, 'an empty tank did not read as thirsty');
+    // And the counter exists to be read, whichever way the balance falls.
+    const put = FLOWN.reduce((n, j) => n + j.putInForFuel + j.putInForRepair, 0);
+    assert.ok(Number.isFinite(put), 'the driver did not record what it did');
   });
 
   test('and a landing party went down on every kind of ground there is', () => {
