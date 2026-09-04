@@ -14803,6 +14803,14 @@ const CORE_EPISODES = [
       report: {
         // A report is written wherever the ship is. `system: null` is a stage
         // that happens on board rather than at a place.
+        //
+        // NOT `where: 'quarters'`, though the speaker has been 'Ready Room' all
+        // along. This is the fifth screen of the first episode in the game, and
+        // the room gate is enforced now — so putting it in the captain's
+        // quarters makes "walk to a compartment" a thing a new captain has to
+        // work out before they can finish the tutorial. The scenes that ask you
+        // to get up are ones where being in the room is the point: a survivor
+        // waking in sickbay, eighty-two people arriving in the transporter room.
         system: null,
         text: 'The trials are done. What goes in the report?',
         speaker: 'Ready Room',
@@ -15085,6 +15093,11 @@ const CORE_EPISODES = [
         ],
       },
       revived: {
+        // The speaker has said 'Sickbay' since this was written, and the text
+        // says "nobody in the room wants to answer" — about a room the captain
+        // was never in. `where` names the compartment a scene happens in; it
+        // was read by the mission panel and set by no stage in the game.
+        where: 'sickbay',
         text: 'She wakes. Lieutenant Commander Aris Vell, tactical officer, USS Kyushu. She asks whether the fleet held. Nobody in the room wants to answer.',
         speaker: 'Sickbay',
         choices: [
@@ -15243,6 +15256,10 @@ const CORE_EPISODES = [
     summary: 'Starfleet has questions about your command, and this time they are formal.',
     stages: {
       start: {
+        // Conference room four, Starbase 11. Not a compartment of this ship, so
+        // the room gate does not apply — but the DEFAULT is 'bridge', and the
+        // engine enforces it now, so a scene that is not aboard has to say so.
+        where: 'anywhere',
         text: 'Starbase 11, conference room four. Three flag officers, a JAG advocate, and your own service record on the table between you. The advocate begins reading it aloud.',
         speaker: 'Judge Advocate',
         choices: [
@@ -15255,6 +15272,7 @@ const CORE_EPISODES = [
         ],
       },
       defence: {
+        where: 'anywhere',
         text: 'You argue it through. The board listens. Your first officer is called and asked, under oath, whether they ever considered relieving you.',
         speaker: 'Judge Advocate',
         choices: [
@@ -15265,6 +15283,7 @@ const CORE_EPISODES = [
         ],
       },
       accept: {
+        where: 'anywhere',
         text: 'The advocate stops reading. One of the admirals leans back. "That is the first useful thing anyone has said in this room today."',
         speaker: 'Admiral',
         choices: [
@@ -15272,6 +15291,7 @@ const CORE_EPISODES = [
         ],
       },
       verdict: {
+        where: 'anywhere',
         text: 'The board withdraws for four hours and returns.',
         speaker: 'Board of Inquiry',
         choices: [
@@ -15688,6 +15708,9 @@ const FRONTIER_EPISODES = [
         ],
       },
       lock: {
+        // Eighty-two people arrive four waves at a time and the captain was on
+        // the bridge for all of it. Speaker: 'Transporter Room'.
+        where: 'transporter',
         text: 'You hold at the line and your transporter chief does something with a phase discriminator that should not work. Eighty-two people arrive in the cargo bay in four waves. The Merrimack is still inside the web when it closes.',
         speaker: 'Transporter Room',
         choices: [
@@ -31973,6 +31996,7 @@ __define("src/missions/engine.js", function (__exports, __require) {
 // outcome outlive the episode.
 
 const { emit } = __require("src/core/events.js");
+const { ROOMS } = __require("src/world/interiors.data.js");
 class Mission {
   /**
    * @param {object} def episode definition
@@ -32037,6 +32061,50 @@ class Mission {
     return { ok: false, need, reason: `We would have to be at ${name}, Captain.` };
   }
 
+  /**
+   * Is the captain in the compartment this stage happens in?
+   *
+   * The other half of `testLocation`, and the half that was missing. `where`
+   * names a room aboard ship — `'bridge'` by default, `'anywhere'`, `'surface'`
+   * for a scene ashore, or any `ROOMS` key — and until now it was read only by
+   * `stageIsHere` in the mission panel, which stops DRAWING the choices.
+   *
+   * Drawing is not enforcing. The `mission_choice` order looks up
+   * `mission.choices()` and takes the one at an index, checking only whether it
+   * is locked, so a captain standing on the bridge could say "option two" and
+   * advance a scene happening in sickbay. Measured before any stage set a
+   * `where` at all:
+   *
+   *     the captain is standing in : bridge
+   *     the scene is happening in  : sickbay
+   *     choices the engine offers  : accept, question
+   *     gave the order anyway      : start -> trials
+   *
+   * It was invisible only because no shipped stage had ever set one. So the
+   * room is enforced here, beside the star system, before anything uses it.
+   *
+   * @returns {{ok: boolean, reason?: string, need?: string}}
+   */
+  testWhere(stage = this.stage) {
+    const need = stage?.where ?? 'bridge';
+    if (need === 'anywhere') return { ok: true };
+    // One place value. `Game.ashore` is itself `walk.roomId === 'surface'`, so
+    // reading both would be reading the same fact twice — and asking for
+    // `ashore` when there is no walker at all throws inside the getter.
+    const at = this.ctx.game?.walk?.roomId;
+    // A game with no interior — a harness, a half-built state — is not in the
+    // wrong room, it is nowhere. Same reasoning as `testLocation`.
+    if (!at) return { ok: true };
+    if (at === need) return { ok: true };
+    if (need === 'surface') {
+      return { ok: false, need, reason: 'This is happening on the surface, Captain.' };
+    }
+    if (at === 'surface') {
+      return { ok: false, need, reason: 'This is happening aboard ship, Captain.' };
+    }
+    return { ok: false, need, reason: `They are waiting for you in ${ROOMS[need]?.name ?? need}.` };
+  }
+
   /** Choices the player can currently take, with locked ones explained. */
   choices() {
     const stage = this.stage;
@@ -32044,11 +32112,15 @@ class Mission {
     // The whole stage is somewhere, so this is tested once rather than per
     // choice — every choice at a stage happens in the same place.
     const here = this.testLocation(stage);
+    // And the same for the compartment. A stage is at a place and in a room;
+    // both are facts about the whole stage rather than about a choice.
+    const inside = here.ok ? this.testWhere(stage) : { ok: true };
     return stage.choices
       .filter((c) => !c.hidden || this.test(c.hidden) === false)
       .map((c) => {
         const gate = c.requires ? this.testRequirement(c.requires) : { ok: true };
         if (!here.ok) return { ...c, locked: true, lockReason: here.reason };
+        if (!inside.ok) return { ...c, locked: true, lockReason: inside.reason };
         return { ...c, locked: !gate.ok, lockReason: gate.reason };
       });
   }
@@ -40752,20 +40824,25 @@ function encounterPanel(app) {
  * stage, because that is where most of an episode happens and defaulting the
  * other way would strand every existing episode.
  */
+// Both of these ask the MISSION now rather than answering for themselves.
+//
+// The panel used to own this rule and be the only thing that enforced it, by
+// declining to draw the choices — while `mission_choice` took a choice by index
+// out of `mission.choices()` and checked only whether it was locked. So a
+// captain on the bridge could say "option two" and advance a scene happening in
+// sickbay. `Mission.testWhere` is the one answer now, beside the one about
+// which star system a stage is in; a second copy here would eventually
+// disagree with it.
 function stageIsHere(g, stage) {
-  const where = stage?.where ?? 'bridge';
-  if (where === 'anywhere') return true;
-  if (where === 'surface') return g.ashore;
-  if (g.ashore) return false;
-  return g.walk?.roomId === where;
+  return g.missions?.active?.testWhere(stage)?.ok ?? true;
 }
 
 /** What to say when the captain is in the wrong place for it. */
 function stageElsewhere(g, stage) {
   const where = stage?.where ?? 'bridge';
   if (where === 'surface') return 'This is happening on the surface. Beam down.';
-  const room = ROOMS[where];
-  return `They are waiting for you in ${room?.name ?? where}.`;
+  const said = g.missions?.active?.testWhere(stage)?.reason;
+  return said ?? `They are waiting for you in ${ROOMS[where]?.name ?? where}.`;
 }
 
 /**

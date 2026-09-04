@@ -6,6 +6,7 @@
 // outcome outlive the episode.
 
 import { emit } from '../core/events.js';
+import { ROOMS } from '../world/interiors.data.js';
 
 export class Mission {
   /**
@@ -71,6 +72,50 @@ export class Mission {
     return { ok: false, need, reason: `We would have to be at ${name}, Captain.` };
   }
 
+  /**
+   * Is the captain in the compartment this stage happens in?
+   *
+   * The other half of `testLocation`, and the half that was missing. `where`
+   * names a room aboard ship — `'bridge'` by default, `'anywhere'`, `'surface'`
+   * for a scene ashore, or any `ROOMS` key — and until now it was read only by
+   * `stageIsHere` in the mission panel, which stops DRAWING the choices.
+   *
+   * Drawing is not enforcing. The `mission_choice` order looks up
+   * `mission.choices()` and takes the one at an index, checking only whether it
+   * is locked, so a captain standing on the bridge could say "option two" and
+   * advance a scene happening in sickbay. Measured before any stage set a
+   * `where` at all:
+   *
+   *     the captain is standing in : bridge
+   *     the scene is happening in  : sickbay
+   *     choices the engine offers  : accept, question
+   *     gave the order anyway      : start -> trials
+   *
+   * It was invisible only because no shipped stage had ever set one. So the
+   * room is enforced here, beside the star system, before anything uses it.
+   *
+   * @returns {{ok: boolean, reason?: string, need?: string}}
+   */
+  testWhere(stage = this.stage) {
+    const need = stage?.where ?? 'bridge';
+    if (need === 'anywhere') return { ok: true };
+    // One place value. `Game.ashore` is itself `walk.roomId === 'surface'`, so
+    // reading both would be reading the same fact twice — and asking for
+    // `ashore` when there is no walker at all throws inside the getter.
+    const at = this.ctx.game?.walk?.roomId;
+    // A game with no interior — a harness, a half-built state — is not in the
+    // wrong room, it is nowhere. Same reasoning as `testLocation`.
+    if (!at) return { ok: true };
+    if (at === need) return { ok: true };
+    if (need === 'surface') {
+      return { ok: false, need, reason: 'This is happening on the surface, Captain.' };
+    }
+    if (at === 'surface') {
+      return { ok: false, need, reason: 'This is happening aboard ship, Captain.' };
+    }
+    return { ok: false, need, reason: `They are waiting for you in ${ROOMS[need]?.name ?? need}.` };
+  }
+
   /** Choices the player can currently take, with locked ones explained. */
   choices() {
     const stage = this.stage;
@@ -78,11 +123,15 @@ export class Mission {
     // The whole stage is somewhere, so this is tested once rather than per
     // choice — every choice at a stage happens in the same place.
     const here = this.testLocation(stage);
+    // And the same for the compartment. A stage is at a place and in a room;
+    // both are facts about the whole stage rather than about a choice.
+    const inside = here.ok ? this.testWhere(stage) : { ok: true };
     return stage.choices
       .filter((c) => !c.hidden || this.test(c.hidden) === false)
       .map((c) => {
         const gate = c.requires ? this.testRequirement(c.requires) : { ok: true };
         if (!here.ok) return { ...c, locked: true, lockReason: here.reason };
+        if (!inside.ok) return { ...c, locked: true, lockReason: inside.reason };
         return { ...c, locked: !gate.ok, lockReason: gate.reason };
       });
   }

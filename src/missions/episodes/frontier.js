@@ -393,6 +393,9 @@ export const FRONTIER_EPISODES = [
         ],
       },
       lock: {
+        // Eighty-two people arrive four waves at a time and the captain was on
+        // the bridge for all of it. Speaker: 'Transporter Room'.
+        where: 'transporter',
         text: 'You hold at the line and your transporter chief does something with a phase discriminator that should not work. Eighty-two people arrive in the cargo bay in four waves. The Merrimack is still inside the web when it closes.',
         speaker: 'Transporter Room',
         choices: [
