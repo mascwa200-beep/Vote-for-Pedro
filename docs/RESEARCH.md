@@ -1676,6 +1676,80 @@ different — small, sixteen pieces, and being behind one is a decision. That is
 the line between a manoeuvre and a condition, and it is why cover is in the AI
 and weather is in the arena.
 
+---
+
+## 31. The order no enemy captain had ever given
+
+The player has been able to call a shot at a named system since the order line
+existed. `fireWeapon` read `this.targetedSubsystem` for the player and passed
+`null` for everybody else, so a Klingon captain who had been fighting for two
+minutes had never once tried for the engines.
+
+It is worth about three times the subsystem damage of untargeted fire —
+`takeDamage` applies 3.2× the hull fraction to a named system, against 1.8× on a
+roll it usually loses. Measured across a hundred and twenty fights against five
+factions, the lowest any of the player's systems fell to *during* the battle:
+
+| opponent | before | after |
+|---|---|---|
+| Klingon | lifesupport 0.873 | **shields 0.000** |
+| Cardassian | weapons 0.887 | **weapons 0.002** |
+| Romulan | weapons 0.911 | **engines 0.424** |
+
+Before, the worst-hit system was whatever the random draw picked, and it barely
+moved. After, each faction reliably wrecks the one thing its own doctrine
+depends on: a Romulan strikes and leaves, so he wants you unable to follow; a
+pirate wants the hull intact and you unable to leave with it; the Borg want the
+shields flat because that is the door a boarding party comes through; the
+Dominion do not weigh what it costs, so they shoot at the warp core.
+
+*(Read after the fight instead of during it, every number is 1.000 for every
+opponent including the ones that killed the player twenty-four times out of
+twenty-four — ending an engagement runs `resolveCombat` and the ship that comes
+back is repaired.)*
+
+### And the manual was right about something the code was not doing
+
+> *"Targeting a subsystem trades total damage for a specific outcome."*
+
+It did not. Naming a system was **strictly better** than not naming one: the
+hull took exactly as much and the system took three times as much. A choice with
+no cost is not a choice, and it stayed one only because nothing but the player
+could make it. Once every enemy captain could too, the free upgrade showed:
+
+| share of hull damage a called shot keeps | player destroyed | median battle |
+|---|---|---|
+| 1.00 (free, as it was) | 53 / 120 | 40 s |
+| 0.85 | 48 | 45 s |
+| **0.70** | **48** | **50 s** |
+| 0.55 | 37 | 65 s |
+| 0.40 | 15 | 80 s |
+| *(nobody but the player calls one)* | *38* | *46 s* |
+
+0.55 restores the old death rate and stretches the battle by forty percent,
+because the **player's** called shots get weaker along with everybody else's.
+0.70 keeps the battle the length it was and the player dies more — which is the
+right trade. A longer fight is a worse fight, and the extra deaths come from the
+enemy doing something the player has always been able to do, announced in the
+log, with a whole repair-and-power system to answer it.
+
+### What the build takes from this
+
+One system per doctrine, chosen by what that doctrine's method needs rather than
+by damage; a single log line per ship when it starts, because the threshold is a
+shield facing and a shield facing is crossed over and over; and the cost applied
+in `takeDamage`, where it lands on both sides at once.
+
+Two things worth remembering about measuring it. The subsystem has to be read at
+its **low-water mark during the fight**, not afterwards. And `fireWeapon` names
+the subsystem in two places — once when it queues a torpedo and once when a beam
+resolves immediately — so disabling one of them left every assertion passing,
+because a D7 carries torpedoes and they were enough on their own.
+
+---
+
+## Attribution
+
 Star Trek and all associated marks are the property of Paramount. This dossier
 records publicly documented facts and measurements, restated in my own words,
 with links to the sources consulted. No text, artwork, audio or other creative

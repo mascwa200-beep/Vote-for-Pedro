@@ -65,6 +65,30 @@ export const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResis
 export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /**
+ * What a called shot costs in hull damage, as a share of what it would have
+ * done aimed at the ship generally. See `takeDamage`.
+ *
+ * Measured across a hundred and twenty fights against five factions, with the
+ * simple pilot the balance suite flies, once every enemy captain could call one:
+ *
+ *     share of hull damage kept    player destroyed    median battle
+ *     1.00  (free, as it was)         53 / 120             40 s
+ *     0.85                            48                   45 s
+ *     0.70                            48                   50 s
+ *     0.55                            37                   65 s
+ *     0.40                            15                   80 s
+ *     (nobody but the player calls)   38                   46 s
+ *
+ * 0.55 restores the old death rate and stretches the battle by forty percent,
+ * because the PLAYER'S called shots get weaker with everyone else's. 0.70 keeps
+ * the battle the length it was and the player dies more — which is the right
+ * trade: a longer fight is a worse fight, and the extra deaths come from the
+ * enemy doing something the player has always been able to do, announced in
+ * the log, with a whole repair and power system to answer it.
+ */
+export const CALLED_SHOT_HULL = 0.7;
+
+/**
  * How much better the crew fight a fire when nobody is shooting at them.
  *
  * During an action the damage-control parties are whoever can be spared while
@@ -664,6 +688,18 @@ export class Ship {
       incoming *= 1 - adapt;
       this.adaptation[type] = Math.min(0.9, adapt + 0.012);
     }
+
+    // A CALLED SHOT PUTS THE SAME ENERGY SOMEWHERE SMALLER.
+    //
+    // Naming a system was strictly better than not naming one: the hull took
+    // exactly as much and the system took 3.2 times the hull fraction instead
+    // of 1.8 on a roll it usually lost. A choice with no cost is not a choice,
+    // and it stayed one only because nothing but the player could make it.
+    //
+    // Three tenths of the hull damage buys the precision, for both sides — see
+    // the measurements on CALLED_SHOT_HULL. A captain who calls a shot is
+    // trading the kill for the cripple, which is what calling a shot is.
+    if (subsystem) incoming *= CALLED_SHOT_HULL;
 
     let shieldDamage = 0;
     let hullDamage = 0;

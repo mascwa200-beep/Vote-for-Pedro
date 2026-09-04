@@ -451,7 +451,7 @@ export class Engagement {
         kind: 'torpedo', attacker, target, weapon,
         x: attacker.x, y: attacker.y, z: attacker.z ?? 0,
         speed: 420, life: 6,
-        subsystem: attacker === this.player ? this.targetedSubsystem : null,
+        subsystem: attacker === this.player ? this.targetedSubsystem : (attacker.calledShot ?? null),
       });
       emit('combat:fire', { attacker, weapon, type: 'torpedo' });
       return true;
@@ -459,8 +459,14 @@ export class Engagement {
 
     // Beams and cannons resolve immediately, with a visible trace.
     //
+    // A called shot, from either side.
+    //
+    // This read `null` for everybody who was not the player, so the order the
+    // player has had since the order line existed — worth about three times the
+    // subsystem damage of untargeted fire — was one no enemy captain had ever
+    // given. `ai.js` decides what each doctrine goes for and sets it.
     const result = this.resolveHit(attacker, target, weapon, distance,
-      attacker === this.player ? this.targetedSubsystem : null);
+      attacker === this.player ? this.targetedSubsystem : (attacker.calledShot ?? null));
     this.effects.push({
       kind: weapon.type,
       from: { x: attacker.x, y: attacker.y, z: attacker.z ?? 0 },

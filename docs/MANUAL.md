@@ -211,7 +211,9 @@ they are how you hurt something whose shields you cannot break.
 
 ### Subsystem targeting
 
-Targeting a subsystem trades total damage for a specific outcome:
+Targeting a subsystem trades total damage for a specific outcome. A called shot
+does **70% of the hull damage** it would have done aimed at the ship generally,
+and roughly three times the damage to the system you named.
 
 - **Engines** — stop something from running or manoeuvring. Use it on
   Birds-of-Prey before they can disengage.
@@ -219,6 +221,14 @@ Targeting a subsystem trades total damage for a specific outcome:
 - **Shields** — collapses their regeneration.
 - **Warp core** — starts a breach. It is the fastest kill and the least
   survivable for them.
+
+**They do it to you.** Each faction goes for the system its own way of fighting
+depends on, and the log says so once — *"IKS Amar is firing on our shields."*
+Klingons want your shields down so they can finish it; Cardassians take your
+guns away first; Romulans go for your engines so you cannot follow them home;
+the Dominion shoot at your warp core because they do not weigh what it costs;
+the Borg want your shields flat because that is the door a boarding party comes
+through. Reroute power, order repairs, or turn a fresh facing to them.
 
 ### Range and weapon types
 
