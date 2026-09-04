@@ -4210,6 +4210,9 @@ export class Game {
 
     const ship = this.ship;
     const before = { hull: ship.hullPct, fires: ship.fires };
+    // Who was in sickbay when the captain left, so the ones who are not any
+    // more can be named on their way back.
+    const wereHurt = this.crew.officers.filter((o) => o.alive && o.injured);
 
     const { finished, returned } = this.passTime(pending);
     if (finished) {
@@ -4225,7 +4228,10 @@ export class Game {
 
     const lines = fighting
       ? [`${pending < 24 ? `${Math.round(pending)} hours` : `${(pending / 24).toFixed(1)} days`} have passed, and we are still under fire. Nothing has been repaired.`]
-      : absenceReport(pending, { ship, forfeited, voyage, finished, returned });
+      : absenceReport(pending, {
+        ship, forfeited, voyage, finished, returned,
+        backOnDuty: wereHurt.filter((o) => o.alive && !o.injured).map((o) => o.name),
+      });
     if (before.fires > 0 && ship.fires === 0) {
       lines.push('All fires are out. Damage control has secured the affected decks.');
     }

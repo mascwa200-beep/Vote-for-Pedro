@@ -1355,3 +1355,74 @@ describe('what the ship got done while nobody was watching', () => {
       `${left}h left before the save and ${back.fabrication.hoursRemaining}h after`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The ship's people, not only her plating.
+//
+// The third and fourth findings of one shape. The report finds room for "all
+// fires are out" and had nothing to say about a named bridge officer who spent
+// three days in sickbay and walked back onto the bridge. In a game where the
+// ones who die on an away mission are the ones you sent, that is at least as
+// much news as a fire going out.
+
+describe('the ship’s people, not only her plating', () => {
+  const withHurtCrew = (now) => {
+    const g = new Game({ seed: 12n, crewMode: 'original', now });
+    const [bad, light] = g.crew.officers;
+    bad.injure(0.9);      // still in sickbay after three days
+    light.injure(0.3);    // back on her feet
+    return { g, bad, light };
+  };
+
+  test('an officer who comes back on duty is named', () => {
+    const now = fakeClock();
+    const { g, bad, light } = withHurtCrew(now);
+    assert.equal(bad.injured, true);
+    assert.equal(light.injured, true);
+
+    now.advance(72 * HOUR);
+    const r = g.syncCampaign();
+
+    // The control on the whole test: one recovered and one did not, so the
+    // report has something to say and something to leave out. If both had
+    // recovered, "names the recovered" and "names everyone" look identical.
+    assert.equal(light.injured, false, 'the lightly hurt officer never recovered');
+    assert.equal(bad.injured, true, 'the badly hurt officer recovered too — pick a worse wound');
+
+    const said = r.lines.filter((l) => l.includes(light.name));
+    assert.ok(said.length, `${light.name} came back on duty and was not mentioned: ${r.lines.join(' | ')}`);
+    assert.match(said[0], /sickbay/i, said[0]);
+    assert.deepEqual(r.lines.filter((l) => l.includes(bad.name) && /back on duty/i.test(l)), [],
+      `${bad.name} is still in sickbay and was reported back on duty`);
+  });
+
+  test('and a ship with nobody hurt is not told about sickbay', () => {
+    // The same control the bench line needed. A report that always mentions
+    // the crew is not reporting the crew.
+    const now = fakeClock();
+    const g = new Game({ seed: 12n, crewMode: 'original', now });
+    g.ship.hull = g.ship.maxHull * 0.6;
+    assert.deepEqual(g.crew.officers.filter((o) => o.injured).map((o) => o.name), [],
+      'this crew was supposed to be fit');
+    now.advance(72 * HOUR);
+    const r = g.syncCampaign();
+    assert.ok(r.lines.length, 'no report at all');
+    assert.deepEqual(r.lines.filter((l) => /sickbay|back on duty/i.test(l)), [],
+      'a ship with nobody hurt was told somebody came out of sickbay');
+  });
+
+  test('and the shields coming back is deliberately NOT reported', () => {
+    // They return over every quiet absence, and a line that appears in every
+    // report is not reporting anything. Written down so the omission reads as
+    // a decision rather than as the same defect left unfixed.
+    const now = fakeClock();
+    const g = new Game({ seed: 12n, crewMode: 'original', now });
+    for (const f of Object.keys(g.ship.shields)) g.ship.shields[f] = 0;
+    now.advance(72 * HOUR);
+    const r = g.syncCampaign();
+    assert.ok(g.ship.shields[Object.keys(g.ship.shields)[0]] > 0,
+      'the shields did not come back, so this asserts nothing');
+    assert.deepEqual(r.lines.filter((l) => /shield/i.test(l)), [],
+      'the report started mentioning shields');
+  });
+});

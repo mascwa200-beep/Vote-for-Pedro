@@ -261,6 +261,7 @@ export class CampaignClock {
  */
 export function absenceReport(hours, {
   ship = null, forfeited = 0, voyage = null, finished = null, returned = [],
+  backOnDuty = [],
 } = {}) {
   const lines = [];
   if (hours < 0.5) return lines;
@@ -294,6 +295,23 @@ export function absenceReport(hours, {
   // same was true of a survey party that had been out for a day and a half:
   // committing to a two-day job is supposed to be a decision, and a decision
   // whose outcome is not reported is a decision the player never sees land.
+  // The ship's PEOPLE, not only her plating. An officer hurt on an away mission
+  // spent three days in sickbay, came back on duty, and this report — which
+  // finds room for "all fires are out" — did not mention them. In a game where
+  // the ones who die are the ones you sent, somebody walking back onto the
+  // bridge is at least as much news as a fire going out.
+  //
+  // Shields are deliberately NOT here, though they come back over the same
+  // absence. They come back over EVERY quiet absence, and a line that appears
+  // in every report is not reporting anything — which is what the control on
+  // the bench line exists to catch.
+  if (backOnDuty.length === 1) {
+    lines.push(`${backOnDuty[0]} is out of sickbay and back on duty.`);
+  } else if (backOnDuty.length > 1) {
+    const names = backOnDuty.slice(0, -1).join(', ');
+    lines.push(`${names} and ${backOnDuty[backOnDuty.length - 1]} are out of sickbay and back on duty.`);
+  }
+
   if (finished) {
     lines.push(`${finished.recipe?.name ?? 'The job on the bench'} was finished while you were away.`);
   }
