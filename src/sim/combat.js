@@ -417,6 +417,26 @@ export class Engagement {
     const distance = attacker.distanceTo(target);
     if (distance > (WEAPON_RANGE[weapon.type] ?? 900)) return false;
 
+    // Nobody fires through rock.
+    //
+    // The first version let the shot go, spent the cooldown, and drew the
+    // beam terminating on the rock — legible, and wrong: a gunner with no
+    // firing solution does not pull the trigger, and a cooldown burned on a
+    // shot that cannot arrive is a punishment for the enemy's position rather
+    // than a reward for your own. Holding fire is what makes cover COVER:
+    // getting a rock between you and them stops the incoming fire instead of
+    // making it miss.
+    //
+    // Checked here, before the cooldown, so it applies to every shooter in
+    // the fight — the player's auto-fire, the hostiles, and the allies.
+    if (blockedBy(this.arena, attacker, target)) {
+      if (attacker === this.player && !this.saidBlocked) {
+        this.saidBlocked = true;
+        this.pushLog('No firing solution — there is rock between us and them.', 'tactical');
+      }
+      return false;
+    }
+
     weapon.cooldown = weapon.cycle;
     // Whether a shot was ever fired in this engagement, which the after-action
     // report needs and could not otherwise know. "Nobody fired" is a real thing
@@ -439,26 +459,13 @@ export class Engagement {
 
     // Beams and cannons resolve immediately, with a visible trace.
     //
-    // Unless there is a rock in the way, in which case the trace stops at the
-    // rock and nothing arrives. The cooldown is spent either way: firing into
-    // cover costs you the shot, which is the entire reason cover is worth
-    // flying to.
-    const rock = blockedBy(this.arena, attacker, target);
-    const result = rock
-      ? { hit: false, reason: 'blocked' }
-      : this.resolveHit(attacker, target, weapon, distance,
-        attacker === this.player ? this.targetedSubsystem : null);
-    if (rock && attacker === this.player && !this.saidBlocked) {
-      this.saidBlocked = true;
-      this.pushLog('No firing solution — there is rock between us and them.', 'tactical');
-    }
+    const result = this.resolveHit(attacker, target, weapon, distance,
+      attacker === this.player ? this.targetedSubsystem : null);
     this.effects.push({
       kind: weapon.type,
       from: { x: attacker.x, y: attacker.y, z: attacker.z ?? 0 },
-      to: rock
-        ? this.stoppedAt(attacker, target, rock)
-        : { x: target.x, y: target.y, z: target.z ?? 0 },
-      life: 0.35, hit: result.hit, faction: attacker.faction, blocked: !!rock,
+      to: { x: target.x, y: target.y, z: target.z ?? 0 },
+      life: 0.35, hit: result.hit, faction: attacker.faction,
     });
     emit('combat:fire', { attacker, weapon, type: weapon.type, result });
     return true;
@@ -927,29 +934,6 @@ export class Engagement {
    * Clamping alone would leave a ship grinding against the edge at full
    * throttle forever, which looks broken and pins the auto-framing camera.
    */
-  /**
-   * Where a shot that hit a rock actually stopped, for the trace.
-   *
-   * A beam drawn all the way to a target it never reached is a lie the player
-   * would reasonably act on — it looks exactly like a shot that connected and
-   * did nothing. The trace ends on the rock's near face.
-   */
-  stoppedAt(from, to, rock) {
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const dz = (to.z ?? 0) - (from.z ?? 0);
-    const len = Math.hypot(dx, dy, dz) || 1;
-    // Distance along the shot to the rock's centre, pulled back by its radius.
-    const along = Math.max(0,
-      ((rock.x - from.x) * dx + (rock.y - from.y) * dy + (rock.z - (from.z ?? 0)) * dz) / len
-      - rock.r);
-    return {
-      x: from.x + (dx / len) * along,
-      y: from.y + (dy / len) * along,
-      z: (from.z ?? 0) + (dz / len) * along,
-    };
-  }
-
   /**
    * What standing in the gas does, every tick, to everyone standing in it.
    *

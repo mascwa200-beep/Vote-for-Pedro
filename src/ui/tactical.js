@@ -100,6 +100,7 @@ export class TacticalView {
     ctx.translate(this.view.x, this.view.y);
 
     this.drawGrid(ctx, width, height);
+    this.drawTerrain(ctx, engagement.arena);
     this.drawRangeRings(ctx, engagement.player);
 
     for (const e of engagement.effects) this.drawEffect(ctx, e);
@@ -138,6 +139,41 @@ export class TacticalView {
       ctx.moveTo(originX - halfW, y); ctx.lineTo(originX + halfW, y);
     }
     ctx.stroke();
+  }
+
+  /**
+   * The terrain, in plan.
+   *
+   * The flat plot is the fallback when WebGL is unavailable, and it is a
+   * complete view of the fight rather than a decorative one — so it has to
+   * show the rocks. Without them a shot stops in empty space and the display
+   * is lying about why.
+   *
+   * Drawn at full radius rather than at the cross-section through z = 0. A
+   * plan view already flattens altitude — that is what the drop lines in the
+   * 3D view exist to put back — and a rock that shrinks and vanishes as it
+   * rises out of the plane is a rock the player stops believing in while it is
+   * still blocking their guns.
+   */
+  drawTerrain(ctx, arena) {
+    if (!arena?.features?.length) return;
+    const tint = arena.tint
+      ? `${Math.round(arena.tint[0] * 255)},${Math.round(arena.tint[1] * 255)},${Math.round(arena.tint[2] * 255)}`
+      : '200,180,255';
+    for (const f of arena.features) {
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+      if (f.type === 'solid') {
+        ctx.fillStyle = 'rgba(96,92,86,0.55)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(150,144,134,0.7)';
+        ctx.lineWidth = 1.5 / this.view.scale;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = `rgba(${tint},0.10)`;
+        ctx.fill();
+      }
+    }
   }
 
   /** Weapon range rings around the player — the reason to close or hold. */
