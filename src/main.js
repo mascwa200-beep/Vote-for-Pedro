@@ -11,6 +11,7 @@ import { TacticalView } from './ui/tactical.js';
 import { TacticalView3D } from './ui/tactical3d.js';
 import { Renderer } from './gfx/gl.js';
 import { FirstPersonView } from './ui/firstperson.js';
+import { stationReport } from './sim/consoles.js';
 import { GalaxyMap } from './ui/galaxymap.js';
 import * as screens from './ui/screens.js';
 import { warpSwitches } from './ui/chair.js';
@@ -750,8 +751,24 @@ class App {
     if (w.atStation) {
       const key = STATION_PANEL[w.atStation.panel] ?? w.atStation.panel;
       if (!key) {
+        // Four stations open no panel — environmental, gravity and the
+        // security board on the bridge, and the CMO's desk in sickbay — and
+        // they are not places you give orders from. They are places you ASK
+        // something, and the answer is a page of readings the ship already
+        // has. See src/sim/consoles.js.
+        //
+        // What was here before said "That station is not mine to work,
+        // Captain", spoken by the officer standing at it — which is the one
+        // person it certainly is.
+        const report = stationReport(g, w.atStation.id);
+        if (report) {
+          audio.play('computer_query');
+          haptic('tap');
+          this.showMessage(report.title, report.lines);
+          return;
+        }
         audio.play('ui_deny');
-        g.officerSays(w.atStation.crew ?? 'ops', 'That station is not mine to work, Captain.', 'object');
+        g.officerSays(w.atStation.crew ?? 'ops', 'There is nothing on this board for you, Captain.', 'object');
         this.render();
         return;
       }

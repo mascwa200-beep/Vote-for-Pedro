@@ -206,7 +206,7 @@ export function occupantsOf(game, roomId) {
   // scattering them uniformly through seventeen rooms would make a raid look
   // like a crowd.
   const boarders = game.ship?.boarders ?? 0;
-  if (boarders > 0 && BOARDED_ROOMS.has(roomId)) {
+  if (boarders > 0 && boardedRooms(boarders).includes(roomId)) {
     const here = Math.max(1, Math.min(3, Math.round(boarders / 12)));
     for (let i = 0; i < here; i++) {
       const at = place(room, roomId, i, 'intruder');
@@ -223,10 +223,26 @@ export function occupantsOf(game, roomId) {
   return out;
 }
 
-/** Where a boarding party goes: the corridors, and what is worth taking. */
-const BOARDED_ROOMS = new Set([
-  'corridor_a', 'corridor_rec', 'corridor_sec', 'engineering', 'armoury', 'bridge',
-]);
+/**
+ * Where a boarding party has got to, in the order it gets there.
+ *
+ * They beam into a corridor and work toward what is worth taking. A party is
+ * NOT in every one of these at once — that was the first version, and it made
+ * the security board on the bridge useless: thirty intruders reported contacts
+ * on all six locations, which tells a captain nothing and leaves nowhere on
+ * the ship that is clear. How far down the list they have got is how many of
+ * them there are.
+ */
+const BOARDING_PRIORITY = [
+  'corridor_sec', 'corridor_a', 'engineering', 'armoury', 'corridor_rec', 'bridge',
+];
+
+/** The rooms a party of this size has reached. */
+export function boardedRooms(boarders) {
+  if (!(boarders > 0)) return [];
+  const reach = Math.max(1, Math.min(BOARDING_PRIORITY.length, Math.round(boarders / 8)));
+  return BOARDING_PRIORITY.slice(0, reach);
+}
 
 /**
  * How many people are aboard this room, for a caption.
