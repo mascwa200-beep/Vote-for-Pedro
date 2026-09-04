@@ -27391,7 +27391,10 @@ class Mission {
     }
 
     if (effects.time) {
-      g.clock.advanceStardate(effects.time);
+      // Authored in days, spent in hours, through the door every other timed
+      // order in the game goes through — so a stage that says "this took three
+      // days" is three days of the commission and of the ship's work.
+      g.spendHours(effects.time * 24);
     }
 
     return out;
@@ -30189,7 +30192,8 @@ class Game {
         : 'The readings are thin, Captain. More power to auxiliary and I can do better.');
     }
 
-    this.clock.advanceStardate(0.1);
+    // A long look at something. Two and a half hours of it.
+    this.spendHours(2.4);
     return lines;
   }
 
@@ -30299,7 +30303,7 @@ class Game {
     const blue = this.alert === 'blue';
     const before = s.hullPct;
     s.repair(s.maxHull * (blue ? 0.18 : 0.12));
-    this.clock.advanceStardate(blue ? 0.6 : 0.8);
+    this.spendHours(blue ? 14.4 : 19.2);
     this.pushLog(
       `Repair teams restored hull integrity to ${Math.round(s.hullPct * 100)}%.`
         + (blue ? ' Maintenance stations made the difference.' : ''),
@@ -31149,7 +31153,7 @@ class Game {
       case 'trap_wait': {
         const trap = enc.trap;
         if (!trap) return out;
-        this.clock.advanceStardate(trap.waitHours / 24);
+        this.spendHours(trap.waitHours);
         if (trap.damage) {
           this.ship.takeDamage(this.ship.maxHull * trap.damage, {
             bearing: 0, type: 'kinetic', rng: this.rng,
@@ -31171,7 +31175,7 @@ class Game {
         this.awardXP(300 + lives / 6);
         this.ledger.adjustStanding('federation', STANDING_EFFECTS.answered_distress, 'Answered a distress call');
         this.earnReputation('distress_answered');
-        this.clock.advanceStardate(0.6);
+        this.spendHours(14.4);
         out.messages.push(`Assistance rendered. ${lives} lives saved.`);
         if (enc.hostile && enc.ships?.length) {
           // Spent, exactly as in `engage` above and for the same reason. The
@@ -31269,7 +31273,7 @@ class Game {
         this.latinum += Math.round((enc.escortReward ?? 300) * (this.perk('better_prices') ? 1.25 : 1));
         this.earnReputation('escort_completed');
         this.awardXP(280);
-        this.clock.advanceStardate(0.8);
+        this.spendHours(19.2);
         out.messages.push(`Escort complete. ${enc.escortReward ?? 300} credits transferred.`);
         break;
       }
@@ -32489,7 +32493,7 @@ class Game {
     this.klingonAnswered = false;
     this.marauderHired = false;
     const yard = this.perk('free_refit') ? 0.5 : (damaged ? 2.5 : 0.5);
-    this.clock.advanceStardate(yard);
+    this.spendHours(yard * 24);
     this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`
       + (this.perk('free_refit') && damaged ? ' Priority yard access — she was turned round overnight.' : ''),
       'engineering');
@@ -32507,7 +32511,7 @@ class Game {
       this.promotionHeld = false;
       // Two days for it. A hearing is not a formality you attend between
       // resupply and departure.
-      this.clock.advanceStardate(2);
+      this.spendHours(48);
       this.pushLog(finding.text, 'comms');
       if (finding.reducedTo) {
         this.pushLog(`Your rank is now ${finding.reducedTo}.`, 'captain');
@@ -33085,23 +33089,34 @@ class Game {
    *
    * Distinct from the tick loop, which spends hours as they pass. This spends
    * them because an ORDER cost them: the ship is somewhere else afterwards in
-   * time rather than in space, and the twelve remaining `advanceStardate`
-   * callers are the queue for this door.
+   * time rather than in space.
+   *
+   * With this door open, `advanceStardate` has exactly three callers left, and
+   * between them they are the whole of why a date moves: time going by while
+   * the captain sits there, an order that cost some, and an absence. It used to
+   * have fifteen, each with its own number in days, none of which touched the
+   * commission clock — which is how the bridge came to show a stardate that had
+   * wandered a year and a half from a commission still on day one.
    *
    * @param {number} hours commission hours the order cost
+   * @param {object} opts `announce: false` for a caller that reports what came
+   *   back itself, so the shop's job is not written into the log twice.
+   * @returns {{hours: number, finished: object|null, returned: object[]}}
    */
-  spendHours(hours) {
-    if (!(hours > 0)) return 0;
+  spendHours(hours, { announce = true } = {}) {
+    if (!(hours > 0)) return { hours: 0, finished: null, returned: [] };
     this.campaign?.spend(hours);
     this.clock.advanceStardate(hours / 24);
     const { finished, returned } = this.passTime(hours);
-    if (finished) {
-      this.pushLog(`${finished.recipe.name} is finished, Captain. ${finished.text}`, 'engineering');
+    if (announce) {
+      if (finished) {
+        this.pushLog(`${finished.recipe.name} is finished, Captain. ${finished.text}`, 'engineering');
+      }
+      for (const back of returned) {
+        this.pushLog(`${back.assignment.name} is back aboard. ${back.text}`, 'comms');
+      }
     }
-    for (const back of returned) {
-      this.pushLog(`${back.assignment.name} is back aboard. ${back.text}`, 'comms');
-    }
-    return hours;
+    return { hours, finished, returned };
   }
 
   /**
@@ -33411,7 +33426,7 @@ class Game {
     }
 
     if (!officer.learn(abilityId)) return { ok: false, reason: 'Training did not take, Captain.' };
-    this.clock.advanceStardate(1);
+    this.spendHours(24);
     this.applyAllMods();
     this.pushLog(`${officer.name} completed training in ${ability.name}.`, 'captain');
     return { ok: true, officer, ability };
@@ -33460,17 +33475,20 @@ class Game {
     // Spending hours is spending hours: this used to sit below the guard
     // beneath it, so a survey party sent out on a ship with nothing on the
     // bench never came back at all.
-    const back = advanceAssignments(this, hours, this.rng);
-    if (!this.fabrication) {
-      if (back.length) {
-        this.clock.advanceStardate(hours / 24);
-        return { ok: true, done: null, back, remaining: 0 };
-      }
+    //
+    // Through `spendHours` rather than by calling `advanceFabrication` and
+    // `advanceAssignments` here, which is what it used to do. Those were the
+    // right two functions and they were not the whole span: an hour at the
+    // bench was the one hour in the game that repaired no hull and healed
+    // nobody, because it never went through the door every other hour does.
+    // `announce: false` because this reports what came back to its caller.
+    const bench = !!this.fabrication;
+    const { finished, returned } = this.spendHours(hours, { announce: false });
+    if (!bench) {
+      if (returned.length) return { ok: true, done: null, back: returned, remaining: 0 };
       return { ok: false, reason: 'Nothing on the bench, Captain.' };
     }
-    const done = advanceFabrication(this, hours);
-    this.clock.advanceStardate(hours / 24);
-    return { ok: true, done, remaining: this.fabrication?.hoursRemaining ?? 0 };
+    return { ok: true, done: finished, back: returned, remaining: this.fabrication?.hoursRemaining ?? 0 };
   }
 
   /** Strip a wreck for stores. */
@@ -37991,8 +38009,10 @@ class App {
     }
     const refit = took;
     // The yard time is this screen's own contribution: the other two ways into
-    // a new hull do not spend four days in dock.
-    g.clock.advanceStardate(4);
+    // a new hull do not spend four days in dock. Through `spendHours`, so those
+    // four days are four days of the commission and of the ship's work, not
+    // four days that only the calendar noticed.
+    g.spendHours(96);
     g.pushLog(`Transferred command to a ${g.ship.cls.name}.`, 'captain');
     audio.play('dock');
     this.showMessage('Change of Command', [

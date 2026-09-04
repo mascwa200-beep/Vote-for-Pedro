@@ -1264,8 +1264,10 @@ class App {
     }
     const refit = took;
     // The yard time is this screen's own contribution: the other two ways into
-    // a new hull do not spend four days in dock.
-    g.clock.advanceStardate(4);
+    // a new hull do not spend four days in dock. Through `spendHours`, so those
+    // four days are four days of the commission and of the ship's work, not
+    // four days that only the calendar noticed.
+    g.spendHours(96);
     g.pushLog(`Transferred command to a ${g.ship.cls.name}.`, 'captain');
     audio.play('dock');
     this.showMessage('Change of Command', [
