@@ -25,6 +25,7 @@ import {
   windowRing, windowBelt, windowDeck,
 } from './mesh.js';
 import { FEDERATION_FORMS } from './forms.federation.js';
+import { KLINGON_FORMS } from './forms.klingon.js';
 
 /**
  * Hull plating by faction. Flat shading means these are the whole look.
@@ -73,6 +74,12 @@ const FORMS = {
   // no secondary hull, two hulls, four nacelles, no saucer. See
   // src/gfx/forms.federation.js and docs/RESEARCH.md §14.
   ...FEDERATION_FORMS,
+
+  // The hulls the player fights. `raptor` and `kdf_cruiser` live in
+  // src/gfx/forms.klingon.js for the same reason the Federation ones moved out
+  // of this file: it was 1,144 lines before either of them had any detail on
+  // it at all.
+  ...KLINGON_FORMS,
 
   /**
    * Saucer, secondary hull, and two nacelles on pylons. The Federation
@@ -600,68 +607,6 @@ const FORMS = {
     });
   },
 
-  /**
-   * A wide, low predator: forward command pod on a neck, swept wings.
-   * Wider than long with the wings down, per the research.
-   */
-  raptor(mb, p, b) {
-    tube(mb, {
-      origin: vec3(-0.35, 0, 0),
-      length: b.bodyLength ?? 0.6,
-      r0: b.bodyR0 ?? 0.2,
-      r1: b.bodyR1 ?? 0.12,
-      segments: seg(10),
-      color: p.hull,
-    });
-    // Neck forward to the command head.
-    box(mb, {
-      center: vec3(0.4, -0.02, 0),
-      size: vec3(0.5, 0.08, 0.11),
-      color: p.trim,
-    });
-    box(mb, {
-      center: vec3(0.72, -0.02, 0),
-      size: vec3(0.22, 0.14, 0.24),
-      color: p.hull,
-    });
-
-    const span = b.wingSpan ?? 0.72;
-    const droop = b.wingDroop ?? -0.16;
-    mirrored(mb, (m) => {
-      box(m, {
-        center: vec3(-0.18, droop * 0.5, span * 0.5),
-        size: vec3(0.62, 0.05, span),
-        sweep: b.wingSweep ?? 0.42,
-        color: p.hull,
-      });
-      // Wing-tip disruptor housing, lit: on a Klingon hull the wingtips are
-      // where the guns are, and a lit muzzle is what tells you so.
-      box(m, {
-        center: vec3(-0.02, droop, span),
-        size: vec3(0.3, 0.07, 0.08),
-        color: p.glow,
-        glow: 0.8,
-      });
-    });
-
-    // The engine bank, on the aft face.
-    //
-    // Every Federation hull in this file has glowing engines and not one
-    // hostile did, so a Klingon cruiser drawn alongside a Constitution read as
-    // a derelict. This is the cheapest possible fix and the correct one: the
-    // one part of a warship you can always see running.
-    tube(mb, {
-      origin: vec3(-0.4, 0, 0),
-      length: 0.05,
-      r0: (b.bodyR0 ?? 0.2) * 0.52,
-      r1: (b.bodyR0 ?? 0.2) * 0.6,
-      segments: seg(9),
-      color: p.glow,
-      glow: 1,
-      capFore: false,
-    });
-  },
-
   /** Two great curved arms meeting fore and aft around an open centre. */
   warbird(mb, p, b) {
     const span = b.wingSpan ?? 0.58;
@@ -958,15 +903,21 @@ export const BLUEPRINTS = {
   runabout: { form: 'compact', length: 23, segments: 12 },
 
   // ---- Klingon ----
-  bird_of_prey: { form: 'raptor', length: 158, wingSpan: 0.98, wingSweep: 0.46, wingDroop: -0.8 },
-  d7: { form: 'raptor', length: 228, wingSpan: 0.52, wingSweep: 0.3, wingDroop: -0.1, bodyLength: 0.7 },
-  ktinga: { form: 'raptor', length: 235, wingSpan: 0.52, wingSweep: 0.32, wingDroop: -0.1, bodyLength: 0.72 },
-  vorcha: { form: 'raptor', length: 481, wingSpan: 0.62, wingSweep: 0.5, wingDroop: -0.16, bodyLength: 0.9, bodyR0: 0.16 },
-  neghvar: { form: 'raptor', length: 682, wingSpan: 0.62, wingSweep: 0.54, wingDroop: 0.02, bodyLength: 1.0, bodyR0: 0.19 },
+  //
+  // Four of these five were the same wedge. `kdf_cruiser` is the boom-and-neck
+  // silhouette the cruisers actually have, and `spine`/`plates`/`prow` are what
+  // separate the four classes built by it — the D7 and the K't'inga have the
+  // same published dimensions to the metre, so nothing about proportion can
+  // tell them apart and the refit's ribbed hull has to be built.
+  bird_of_prey: { form: 'raptor', length: 158, wingSpan: 0.9, wingSweep: 0.3, wingDroop: -0.72, headWide: 1.0 },
+  d7: { form: 'kdf_cruiser', length: 228, neckThick: 0.26, bulbSize: 0.58, bulbX: 0.42, boomWide: 0.26, boomLength: 0.42, nacelleLength: 1.1, nacelleR: 0.24, wingSweep: 0.06 },
+  ktinga: { form: 'kdf_cruiser', length: 235, spine: true, plates: true, neckThick: 0.32, bulbSize: 0.64, bulbX: 0.40, boomWide: 0.32, boomLength: 0.46, nacelleLength: 1.0, nacelleR: 0.28, wingSweep: 0.12 },
+  vorcha: { form: 'kdf_cruiser', length: 481, spine: true, prow: true, neckThick: 0.46, bulbSize: 0.56, bulbX: 0.40, boomWide: 0.4, boomLength: 0.54, nacelleLength: 0.92, nacelleR: 0.24, wingSweep: 0.2, prowSweep: 0.24 },
+  neghvar: { form: 'kdf_cruiser', length: 682, spine: true, plates: true, prow: true, neckThick: 0.46, bulbSize: 0.5, bulbX: 0.5, boomX: -0.32, boomWide: 0.34, boomLength: 0.6, nacelleY: -0.45, nacelleLength: 0.9, nacelleR: 0.2, wingSweep: 0.26, prowSweep: 0.32, engines: 5 },
 
   // ---- Romulan ----
   warbird: { form: 'warbird', length: 1041, wingSpan: 0.62 },
-  scoutship: { form: 'raptor', length: 68, wingSpan: 0.48, wingSweep: 0.2, wingDroop: -0.18, bodyLength: 0.42, bodyR0: 0.14 },
+  scoutship: { form: 'raptor', length: 68, wingSpan: 0.48, wingSweep: 0.2, wingDroop: -0.1, bodyLength: 0.42, bodyR0: 0.14, headWide: 0.8, spineCount: 4, engines: 2 },
 
   // ---- Cardassian ----
   galor: { form: 'wedge', length: 372, length_: 1.25, width: 0.36, sweep: 0.34 },
@@ -974,7 +925,7 @@ export const BLUEPRINTS = {
 
   // ---- Everyone else ----
   marauder: { form: 'warbird', length: 366, wingSpan: 0.5 },
-  orion_raider: { form: 'raptor', length: 110, wingSpan: 0.44, wingSweep: 0.24, bodyLength: 0.5 },
+  orion_raider: { form: 'raptor', length: 110, wingSpan: 0.44, wingSweep: 0.24, bodyLength: 0.5, headWide: 0.9, spineCount: 5, wingNacelle: 0.26 },
   tholian_web_spinner: { form: 'wedge', length: 130, length_: 0.8, width: 0.44, height: 0.1, sweep: 0.1 },
   jem_hadar_attack: { form: 'wedge', length: 178, length_: 0.9, width: 0.46, height: 0.1, sweep: 0.4 },
   jem_hadar_battleship: { form: 'wedge', length: 800, length_: 1.4, width: 0.44, height: 0.24, sweep: 0.44 },

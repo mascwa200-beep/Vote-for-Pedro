@@ -190,7 +190,7 @@ export function tube(mb, {
  */
 export function box(mb, {
   center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0, flare = 0,
-  color = [0.6, 0.64, 0.7], glow = 0,
+  dip = 0, color = [0.6, 0.64, 0.7], glow = 0,
 } = {}) {
   const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
   const [cx, cy, cz] = center;
@@ -204,9 +204,17 @@ export function box(mb, {
   // whole gap in y AND the whole gap in z: a solid block filling the corner,
   // which is what a Galaxy was carrying, a quarter of the ship's length across.
   // Shearing z by height makes the same box a strut.
+  //
+  // `dip` is the fourth, and it is `flare` transposed: it drops the outboard
+  // (+z) end in y. A Bird-of-Prey's wings are DIHEDRAL — they leave the hull at
+  // the centreline and end far below it — and without a shear that says so the
+  // only way to draw one is to lower the whole plate, which is what this form
+  // did. Measured on the built mesh, a Bird-of-Prey's wing root sat 0.29 units
+  // below the body it is attached to: from the side the wing was a plate
+  // floating under the ship with a gap of clear space between them.
   const p = (sx, sy, sz) => vec3(
     cx + sx * hx - (sz > 0 ? sweep : 0) - (sy > 0 ? rake : 0),
-    cy + sy * hy,
+    cy + sy * hy - (sz > 0 ? dip : 0),
     cz + sz * hz + (sy > 0 ? flare : 0),
   );
 
@@ -380,6 +388,53 @@ export function windowBelt(mb, {
     const forA = at(origin, x + length, c0 * R1, s0 * R1);
     const forB = at(origin, x + length, c1 * R1, s1 * R1);
     mb.quad(aftA, aftB, forB, forA, color, glow);
+  }
+  return mb;
+}
+
+/**
+ * A run of small raised boxes along a line: machinery, plating, deck housings.
+ *
+ * WHY A HULL NEEDS THIS.
+ *
+ * Flat shading with no textures means a surface has exactly one cue that it is
+ * made of anything — its silhouette against the next surface. A tapered tube is
+ * therefore a tapered tube at every distance, and a hostile hull built out of
+ * four of them reads as a shape rather than as a ship. The Federation hulls
+ * escaped that by accident: a saucer, a neck, a secondary hull, two pylons and
+ * two nacelles already put seven silhouettes against each other. A Klingon
+ * cruiser has three.
+ *
+ * `litEvery` is the other half. Every third or fourth box drawn at full glow is
+ * a row of running lights along a spine, which costs no extra geometry at all
+ * and is the single cheapest thing that says a hull is CREWED.
+ *
+ * Sizes vary deterministically — a hash of the index, not a random draw, so a
+ * hull is the same hull every time it is built and nothing here can move the
+ * simulation's stream.
+ */
+export function greebles(mb, {
+  from = vec3(), to = vec3(1, 0, 0), count = 6, size = vec3(0.06, 0.03, 0.06),
+  vary = 0.4, color = [0.5, 0.52, 0.5], glow = 0, lit = null, litEvery = 0,
+} = {}) {
+  for (let i = 0; i < count; i++) {
+    // Centres of `count` equal spans, so nothing sits on the end caps.
+    const t = (i + 0.5) / count;
+    // FNV-ish, off the index alone: two boxes at the same index are the same
+    // box, and a hull rebuilt is the hull it was.
+    const h = ((i * 2654435761) >>> 0) / 4294967296;
+    const k = 1 + (h * 2 - 1) * vary;
+    const on = litEvery > 0 && i % litEvery === 0;
+    box(mb, {
+      center: vec3(
+        from[0] + (to[0] - from[0]) * t,
+        from[1] + (to[1] - from[1]) * t,
+        from[2] + (to[2] - from[2]) * t,
+      ),
+      size: vec3(size[0] * k, size[1] * (2 - k), size[2] * k),
+      color: on ? (lit ?? color) : color,
+      glow: on ? 1 : glow,
+    });
   }
   return mb;
 }

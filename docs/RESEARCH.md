@@ -1371,6 +1371,80 @@ Sources: [Memory Alpha — Make It So](https://memory-alpha.fandom.com/wiki/Make
 
 ---
 
+## 27. Seven ships, one wedge — the other half of §14
+
+§14 was about twelve Federation classes built by one function. Everything it
+says applies with more force to the hulls on the other side of a battle, and
+nobody had looked.
+
+Measured on the built meshes: thirteen Federation classes carry between 716 and
+2,142 triangles, a band of lit ports around the rim, two more rows on the plate,
+ports down each flank of the secondary hull, a copper deflector, an impulse deck
+and glowing bussard domes. Every Klingon class carried **241 triangles and no
+lit ports at all** — and it was the same 241 for all five, plus the Romulan
+scout and the Orion raider on the same form. A Bird-of-Prey is a 158-metre
+raider with three decks and thirty-six aboard; a Negh'Var is a 682-metre
+battleship with thirty-five decks and two and a half thousand.
+
+The asymmetry is backwards. A captain sees their own ship in the shipyard and on
+the status board. They see these *across a battle, for the length of a battle*,
+which is most of what the game is.
+
+### What tells the Klingon classes apart
+
+Two silhouettes, not one, and no setting of either produces the other:
+
+| Class | The thing that identifies it |
+|---|---|
+| B'rel Bird-of-Prey | **Wider than it is long** with the wings down; forward head on a raked neck, wings carrying both the guns and the engines |
+| D7 battlecruiser | Bulbous command section at the end of a **long thin neck**, broad boom astern with the nacelles at its tips |
+| K't'inga | A D7 refit: **ribbed dorsal spine** and armoured flank plating on the neck, heavier boom |
+| Vor'cha attack cruiser | The boom widened into a delta, with **forward wings off the neck** and a heavy disruptor at each tip |
+| Negh'Var | The Vor'cha proportions at battleship scale, nacelles slung low, five engine ports |
+
+The D7 and the K't'inga are the interesting pair. Their published figures are
+identical to the metre — 152 m of beam and 60 m of height, on lengths of 228 and
+235 — so **nothing about proportion can ever separate them**, and the refit's
+plating has to be built. Held to the same shape fingerprint the Federation
+classes must clear (0.2), the two measured 0.085 apart.
+
+### What the primitives were missing
+
+Two gaps, both found by building against them rather than by reasoning:
+
+- **A wing has no dihedral.** `box` could shear fore-and-aft two ways (`sweep`,
+  `rake`) and outboard one way (`flare`), but it could not drop its outboard end
+  in y. So a drooping wing had to be a plate *lowered whole*, and a
+  Bird-of-Prey's wing root sat 0.29 units below the body it grows out of, with
+  its nacelle another 0.29 below that. From the side it was four objects in a
+  diagonal line. `dip` is `flare` transposed and fixes it in one term.
+- **A tapered tube is a tapered tube at every distance.** Flat shading with no
+  textures leaves a surface exactly one cue that it is made of anything — its
+  silhouette against the next surface. The Federation hulls escaped that by
+  accident, because a saucer, a neck, a secondary hull, two pylons and two
+  nacelles already put seven silhouettes against each other; a Klingon cruiser
+  has three. A run of small raised housings along a spine or a deck is the
+  cheapest fix, and every third or fourth one drawn at full glow is a row of
+  running lights for no extra geometry at all.
+
+### What the build takes from this
+
+Two forms — `raptor` and `kdf_cruiser` — with `spine`, `plates` and `prow` as
+the switches that separate four cruisers whose proportions cannot. Ports on
+every one of them, placed against the surface they sit on rather than at a
+fraction of it: a belt at 0.8 of a head's half-width is a row of lights *inside
+the head*, which is the same failure the intercooler grille shipped with, and
+the cure is to measure by slicing the hull at the port's own station rather than
+by looking at it.
+
+Sources: [Memory Alpha — B'rel-class](https://memory-alpha.fandom.com/wiki/B%27rel-class),
+[Memory Alpha — D7-class](https://memory-alpha.fandom.com/wiki/D7-class),
+[Memory Alpha — K't'inga-class](https://memory-alpha.fandom.com/wiki/K%27t%27inga-class),
+[Memory Alpha — Vor'cha-class](https://memory-alpha.fandom.com/wiki/Vor%27cha-class),
+[Memory Alpha — Negh'Var-class](https://memory-alpha.fandom.com/wiki/Negh%27Var-class)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
