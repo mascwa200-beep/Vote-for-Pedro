@@ -12,6 +12,7 @@
 import { emit } from '../core/events.js';
 import { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } from './ship.js';
 import { chooseAction } from './ai.js';
+import { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } from './arena.js';
 import { clamp, wrapDegrees, finite } from '../core/num.js';
 
 export const WEAPON_RANGE = {
@@ -150,7 +151,28 @@ export class Engagement {
     this.separationTimer = 0;
     // Seconds of ion-pod decoy still confusing hostile targeting.
     this.decoyTimer = 0;
-    this.canWarpOut = opts.canWarpOut !== false;
+    /**
+     * The terrain this fight is fought in. See src/sim/arena.js.
+     *
+     * Never null. An open-space fight gets OPEN_ARENA, which is frozen and
+     * empty, so every call site below can ask it questions unconditionally.
+     * Filled in by `placeCombatants` below, which is the only place that knows
+     * where everyone starts — and a rock dropped on top of a starting position
+     * is a hostile that cannot be shot from anywhere, because every line to it
+     * crosses the rock it is standing in.
+     */
+    this.arena = opts.arena ?? OPEN_ARENA;
+    /**
+     * The stream the terrain is rolled from, and why it is not `rng`.
+     *
+     * Building an arena takes random draws. Taking them from the fight's own
+     * stream would have moved every seeded outcome in the game on the day
+     * terrain was added — the same battle would play out differently depending
+     * on whether the place it happened in had weather. `Game.startCombat`
+     * derives a separate stream keyed by the system.
+     */
+    this.arenaRng = opts.arenaRng ?? null;
+    this.hazard = opts.hazard ?? null;
     // Nobody in this fight breaks off. Set only by the Kobayashi Maru, where a
     // hostile that could be routed would make the no-win scenario winnable by
     // flying — which is the one thing it must never be.
@@ -165,11 +187,17 @@ export class Engagement {
     // Whether the tactical officer has already remarked on a torpedo being
     // swatted down. Explicitly false rather than undefined, like `over`.
     this.saidPointDefence = false;
+    // Same, for a shot that broke against a rock and for the gas closing in.
+    this.saidBlocked = false;
+    this.saidMurk = false;
     // Ships whose destruction has already been announced. A death is a
     // one-time event and the sweep that finds it runs every tick.
     this.mourned = new Set();
 
     this.placeCombatants();
+    // Metreon gas will not let a warp field form. Read AFTER the arena is
+    // built, which placeCombatants does.
+    this.canWarpOut = opts.canWarpOut !== false && !this.arena.noWarp;
   }
 
   /**
@@ -235,6 +263,19 @@ export class Engagement {
       s.pitch = 0; s.desiredPitch = 0;
       s.throttle = 0.4;
     });
+
+    // And the terrain, now that there are positions to keep clear of.
+    //
+    // Rebuilt rather than kept when reinforcements arrive, because
+    // `placeCombatants` runs again for those and the new arrivals need the
+    // same guarantee the first wave got. The stream is derived and rewound to
+    // the same seed each time, so the rocks do not move — see `arenaRng`.
+    if (this.arenaRng && this.hazard) {
+      this.arena = buildArena(this.arenaRng(), this.hazard, {
+        radius: ARENA_RADIUS,
+        clear: this.allShips.map((s) => ({ x: s.x, y: s.y, z: s.z ?? 0 })),
+      });
+    }
   }
 
   // ---------------- orders ----------------
@@ -312,7 +353,15 @@ export class Engagement {
 
   /** Attempt to break off. Takes time, and the enemy gets those seconds. */
   beginWarpOut() {
-    if (!this.canWarpOut) { this.pushLog('Cannot disengage — we are pinned.', 'helm'); return false; }
+    if (!this.canWarpOut) {
+      // Say WHY. "We are pinned" is the Kobayashi Maru's answer and it is the
+      // wrong one in the Briar Patch, where the reason is a property of the
+      // place the captain chose to fly into and could choose to leave.
+      this.pushLog(this.arena.noWarp
+        ? `No warp field will form in ${this.arena.name}, Captain. We fight or we crawl.`
+        : 'Cannot disengage — we are pinned.', 'helm');
+      return false;
+    }
     if (this.player.subsystems.warpcore < 0.2 || this.player.coreEjected) {
       this.pushLog('Warp drive is offline. We cannot outrun them.', 'engineering');
       return false;
@@ -389,13 +438,27 @@ export class Engagement {
     }
 
     // Beams and cannons resolve immediately, with a visible trace.
-    const result = this.resolveHit(attacker, target, weapon, distance,
-      attacker === this.player ? this.targetedSubsystem : null);
+    //
+    // Unless there is a rock in the way, in which case the trace stops at the
+    // rock and nothing arrives. The cooldown is spent either way: firing into
+    // cover costs you the shot, which is the entire reason cover is worth
+    // flying to.
+    const rock = blockedBy(this.arena, attacker, target);
+    const result = rock
+      ? { hit: false, reason: 'blocked' }
+      : this.resolveHit(attacker, target, weapon, distance,
+        attacker === this.player ? this.targetedSubsystem : null);
+    if (rock && attacker === this.player && !this.saidBlocked) {
+      this.saidBlocked = true;
+      this.pushLog('No firing solution — there is rock between us and them.', 'tactical');
+    }
     this.effects.push({
       kind: weapon.type,
       from: { x: attacker.x, y: attacker.y, z: attacker.z ?? 0 },
-      to: { x: target.x, y: target.y, z: target.z ?? 0 },
-      life: 0.35, hit: result.hit, faction: attacker.faction,
+      to: rock
+        ? this.stoppedAt(attacker, target, rock)
+        : { x: target.x, y: target.y, z: target.z ?? 0 },
+      life: 0.35, hit: result.hit, faction: attacker.faction, blocked: !!rock,
     });
     emit('combat:fire', { attacker, weapon, type: weapon.type, result });
     return true;
@@ -406,8 +469,16 @@ export class Engagement {
     const falloff = rangeFactor(weapon.type, distance);
     if (falloff <= 0) return { hit: false, reason: 'out of range' };
 
+    // Gas at either end of the shot. Standing in it blinds you; standing in
+    // it also hides you, and the worse of the two is what the gunner has to
+    // work with. "The nebula will scramble our shields and sensors" — this is
+    // the sensors half.
+    const murk = Math.max(
+      conditionsAt(this.arena, attacker).sensorNoise,
+      conditionsAt(this.arena, target).sensorNoise,
+    );
     const accuracy = 0.92 * attacker.mod('accuracy')
-      * (0.7 + 0.3 * attacker.subsystems.sensors);
+      * (0.7 + 0.3 * attacker.subsystems.sensors) * (1 - murk);
     // A decoy in the water only troubles the people shooting at us.
     const decoy = (target === this.player && this.decoyTimer > 0) ? 0.22 : 0;
     const evade = target.defenseRating + (target.cloaked ? 0.5 : 0) + decoy;
@@ -568,6 +639,13 @@ export class Engagement {
     // DAMAGE_CONTROL_OFF_ACTION in src/sim/ship.js.
     for (const s of this.allShips) s.update(dt, this.rng, { inAction: true });
 
+    // And then the weather, to everyone in it.
+    //
+    // AFTER the ships have updated, so the regeneration a hull just did inside
+    // a nebula is taken back off it rather than fighting the suppression for
+    // priority. Before it, the two alternate and the shields flicker.
+    this.weatherOn(dt);
+
     // Whatever died on that step gets its explosion before anything else acts.
     this.reportDeaths();
 
@@ -604,6 +682,7 @@ export class Engagement {
     if (this.decoyTimer > 0) this.decoyTimer = Math.max(0, this.decoyTimer - dt);
 
     this.holdTheArena();
+    this.keepOutOfRocks();
     this.settleWithdrawals(dt);
 
     this.updateProjectiles(dt);
@@ -732,6 +811,29 @@ export class Engagement {
       const dy = p.target.y - p.y;
       const dz = (p.target.z ?? 0) - (p.z ?? 0);
       const dist = Math.hypot(dx, dy, dz);
+
+      // A torpedo that flies into a rock detonates on the rock.
+      //
+      // Tested along the SEGMENT it is about to travel, not at the point it
+      // ends up. A projectile moves 420 units a second — fourteen a tick at
+      // 1/30 — and testing only the arrival point means anything thinner than
+      // that is tunnelled straight through. That is not a problem at today's
+      // rock sizes and is exactly the kind of thing that stops being true
+      // quietly.
+      if (dist > 0) {
+        const step = Math.min(dist, p.speed * dt);
+        const ahead = {
+          x: p.x + (dx / dist) * step,
+          y: p.y + (dy / dist) * step,
+          z: (p.z ?? 0) + (dz / dist) * step,
+        };
+        const struck = insideSolid(this.arena, p) ?? blockedBy(this.arena, p, ahead);
+        if (struck) {
+          this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.5 });
+          p.dead = true;
+          continue;
+        }
+      }
       if (dist < 26) {
         // A torpedo that has arrived has arrived.
         //
@@ -825,6 +927,94 @@ export class Engagement {
    * Clamping alone would leave a ship grinding against the edge at full
    * throttle forever, which looks broken and pins the auto-framing camera.
    */
+  /**
+   * Where a shot that hit a rock actually stopped, for the trace.
+   *
+   * A beam drawn all the way to a target it never reached is a lie the player
+   * would reasonably act on — it looks exactly like a shot that connected and
+   * did nothing. The trace ends on the rock's near face.
+   */
+  stoppedAt(from, to, rock) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = (to.z ?? 0) - (from.z ?? 0);
+    const len = Math.hypot(dx, dy, dz) || 1;
+    // Distance along the shot to the rock's centre, pulled back by its radius.
+    const along = Math.max(0,
+      ((rock.x - from.x) * dx + (rock.y - from.y) * dy + (rock.z - (from.z ?? 0)) * dz) / len
+      - rock.r);
+    return {
+      x: from.x + (dx / len) * along,
+      y: from.y + (dy / len) * along,
+      z: (from.z ?? 0) + (dz / len) * along,
+    };
+  }
+
+  /**
+   * What standing in the gas does, every tick, to everyone standing in it.
+   *
+   * Shields will not hold a charge and a cloak will not hold at all. Both are
+   * the Mutara Nebula and both cut in the player's favour as often as against
+   * it — a Bird-of-Prey cannot hide in there either, which is the whole reason
+   * a Constitution would choose to fight in one.
+   */
+  weatherOn(dt) {
+    if (!this.arena.features.length) return;
+    for (const s of this.allShips) {
+      if (s.destroyed) continue;
+      const c = conditionsAt(this.arena, s);
+      if (c.depth <= 0) continue;
+
+      if (c.breaksCloak && s.cloaked) {
+        s.decloak();
+        this.pushLog(`${s === this.player ? 'Our' : `${s.name}'s`} cloak will not hold in this.`,
+          s === this.player ? 'engineering' : 'tactical');
+      }
+      if (c.shieldSuppression > 0 && s.shieldsUp) {
+        // A share of the ceiling a second, so it bites the same on a runabout
+        // as on a Galaxy rather than being decided by which has more to lose.
+        const bleed = s.maxShield * 0.12 * c.shieldSuppression * dt;
+        for (const f of FACINGS) s.shields[f] = Math.max(0, s.shields[f] - bleed);
+      }
+      if (s === this.player && !this.saidMurk && c.depth > 0.4) {
+        this.saidMurk = true;
+        this.pushLog(`We are in the ${this.arena.name}. Sensors and shields are both going to suffer.`,
+          'science');
+      }
+    }
+  }
+
+  /**
+   * Nobody flies through a rock.
+   *
+   * The alternative is not merely ugly: a ship parked inside a solid feature
+   * cannot be shot from anywhere — every line to it crosses the rock it is
+   * standing in — which is a hostile that cannot be killed and an end
+   * condition that never fires. Pushed out along the radius rather than
+   * stopped, because stopping it leaves it there.
+   */
+  keepOutOfRocks() {
+    if (!this.arena.features.length) return;
+    for (const s of this.allShips) {
+      if (s.destroyed) continue;
+      const rock = insideSolid(this.arena, s);
+      if (!rock) continue;
+      const dx = s.x - rock.x;
+      const dy = s.y - rock.y;
+      const dz = (s.z ?? 0) - rock.z;
+      // Dead centre has no outward direction, so pick one rather than divide
+      // by zero. It is a degenerate case and it does happen: a ship that
+      // starts a manoeuvre from inside gets pushed to the same face every
+      // tick, which is fine — what matters is that it leaves.
+      const d = Math.hypot(dx, dy, dz);
+      const [ux, uy, uz] = d > 1e-6 ? [dx / d, dy / d, dz / d] : [1, 0, 0];
+      const surface = rock.r + 12;
+      s.x = rock.x + ux * surface;
+      s.y = rock.y + uy * surface;
+      s.z = rock.z + uz * surface;
+    }
+  }
+
   holdTheArena() {
     for (const s of this.allShips) {
       const d = Math.hypot(s.x, s.y, s.z ?? 0);

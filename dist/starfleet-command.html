@@ -7687,6 +7687,99 @@ function bodyMesh(kind = 'planet', seed = 0) {
   });
 }
 
+/**
+ * A tumbling piece of rock or hull, for a debris field.
+ *
+ * A sphere is what the SIMULATION uses — `blockedBy` in sim/arena.js tests a
+ * segment against a sphere, and it has to, because a per-triangle test on
+ * sixteen rocks for every shot of every tick is not a phone budget. So the
+ * drawn shape has to READ as the sphere it is: lumpy enough not to be a
+ * billiard ball, and nowhere far enough off the sphere for a shot to look
+ * like it should have got past.
+ *
+ * The displacement is on the RINGS, not per vertex. Flat shading means every
+ * triangle already has its own three vertices, so moving them individually
+ * tears the surface into confetti; moving whole latitude bands keeps it a
+ * closed solid and still kills the silhouette of a ball.
+ *
+ * `seed` picks one of eight shapes, so a field is not sixteen copies of one
+ * rock, and the memo means eight meshes are built for the life of the process.
+ */
+function rockMesh(seed = 0) {
+  return memo(`rock:${seed & 7}`, () => {
+    const mb = new MeshBuilder();
+    const rings = 9;
+    const segs = 14;
+    const n = (i) => 0.78 + 0.44 * ((Math.imul(i + 1, 0x9e3779b1) ^ (seed * 2654435761)) >>> 8 & 255) / 255;
+    const at = (ring, seg) => {
+      const t = (ring / rings) * Math.PI;
+      const a = (seg / segs) * Math.PI * 2;
+      // Two bands blended, so a rock is squashed on one axis as well as lumpy.
+      const rad = n(ring) * (0.82 + 0.24 * n(seg % 5 + 40));
+      return vec3(
+        Math.sin(t) * Math.cos(a) * rad,
+        Math.cos(t) * rad,
+        Math.sin(t) * Math.sin(a) * rad,
+      );
+    };
+    const base = [0.40, 0.38, 0.36];
+    for (let ring = 0; ring < rings; ring++) {
+      const shade = 0.82 + 0.3 * n(ring + 17);
+      const c = [base[0] * shade, base[1] * shade, base[2] * shade];
+      for (let seg = 0; seg < segs; seg++) {
+        const A = at(ring, seg); const B = at(ring, seg + 1);
+        const C = at(ring + 1, seg + 1); const D = at(ring + 1, seg);
+        if (ring === 0) mb.tri(A, C, D, c);
+        else if (ring === rings - 1) mb.tri(A, B, C, c);
+        else mb.quad(A, B, C, D, c);
+      }
+    }
+    return mb;
+  });
+}
+
+/**
+ * The shell of a gas cloud, drawn from the inside as well as the outside.
+ *
+ * A nebula in this game is a sphere two and a half thousand units across with
+ * the whole battle inside it, so the one thing it must not be is a solid ball
+ * hiding the fight. It is drawn at very low alpha with BOTH windings present —
+ * the same shell twice, once facing out and once facing in — because back-face
+ * culling would otherwise make a cloud you are standing in disappear
+ * completely, which is the exact moment the player most needs to be told they
+ * are in one.
+ */
+function cloudMesh() {
+  return memo('cloud', () => {
+    const mb = new MeshBuilder();
+    const rings = 10;
+    const segs = 16;
+    // A SMOOTH shell, deliberately.
+    //
+    // The first version wobbled the radius per face to keep the horizon from
+    // being a perfect circle, and rendered as a heap of glass shards: every
+    // face is the same emissive colour, so what the eye reads is how many
+    // layers a view ray crosses, and an irregular shell makes that vary
+    // face-to-face in hard-edged triangles. A round shell crossed twice at
+    // every angle reads as a ball of gas — thicker at the rim, where the ray
+    // travels further through it, which is what gas actually does.
+    const at = (ring, seg) => {
+      const t = (ring / rings) * Math.PI;
+      const a = (seg / segs) * Math.PI * 2;
+      return vec3(Math.sin(t) * Math.cos(a), Math.cos(t), Math.sin(t) * Math.sin(a));
+    };
+    for (let ring = 0; ring < rings; ring++) {
+      for (let seg = 0; seg < segs; seg++) {
+        const A = at(ring, seg); const B = at(ring, seg + 1);
+        const C = at(ring + 1, seg + 1); const D = at(ring + 1, seg);
+        mb.quad(A, B, C, D, [1, 1, 1], 1);
+        mb.quad(A, D, C, B, [1, 1, 1], 1);   // and the inside face
+      }
+    }
+    return mb;
+  });
+}
+
 // ------------------------------------------------------------------ orbit
 //
 // A world seen from standard orbit is a different object from a world seen on
@@ -8042,6 +8135,8 @@ __exports.starfield = starfield;
 __exports.WARP_LENGTH = WARP_LENGTH;
 __exports.warpfield = warpfield;
 __exports.bodyMesh = bodyMesh;
+__exports.rockMesh = rockMesh;
+__exports.cloudMesh = cloudMesh;
 __exports.worldMesh = worldMesh;
 __exports.limbMesh = limbMesh;
 __exports.gridMesh = gridMesh;
@@ -8615,7 +8710,7 @@ __define("src/ui/tactical3d.js", function (__exports, __require) {
 const { vec3, mat4, quat, identity, multiply, perspective, lookAt, compose, normalMatrix, quatFromEuler, project, sub, length: vlength, normalize, cross } = __require("src/gfx/math.js");
 const { Renderer } = __require("src/gfx/gl.js");
 const { hullMesh, hullScale, paletteFor } = __require("src/gfx/blueprint.js");
-const { starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, VOLUME } = __require("src/gfx/scene.js");
+const { starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, VOLUME } = __require("src/gfx/scene.js");
 const { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } = __require("src/gfx/vista.js");
 const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { fitCanvas } = __require("src/ui/touch.js");
@@ -9047,6 +9142,10 @@ class TacticalView3D {
 
     this.drawEnvironment();
     if (this.vistaSource) this.drawVista(dt);
+    // Rock before ships, gas after: solid geometry wants the depth buffer
+    // filled behind it, and a translucent shell wants everything it is meant
+    // to be in front of already drawn.
+    this.drawTerrain(engagement.arena, 'solid');
     for (const ship of this.lastShips) {
       // Your own hull is not on your own viewscreen. The camera is standing
       // where the bridge is; there is nothing in front of it but space.
@@ -9055,6 +9154,7 @@ class TacticalView3D {
       this.drawShip(ship, ship === engagement.target);
     }
     this.drawEffects(engagement);
+    this.drawTerrain(engagement.arena, 'cloud');
 
     this.stats.drawCalls = this.renderer.drawCalls;
     this.stats.triangles = this.renderer.triangles;
@@ -9235,6 +9335,63 @@ class TacticalView3D {
       alpha: 0.55,
       tint: [1, 1, 1],
     });
+  }
+
+  /**
+   * The terrain of the engagement, as geometry.
+   *
+   * One draw per feature, which is the same budget a ship costs — sixteen
+   * rocks is sixteen draws, and the measurement in the hull budget says this
+   * renderer is bound by draw calls. That is the ceiling on how much terrain
+   * a fight can have, and it is why `ARENA_KINDS` counts features in the
+   * teens rather than the hundreds.
+   *
+   * Rock and gas are drawn in separate passes because they want opposite
+   * things from the depth buffer — see the call sites.
+   */
+  drawTerrain(arena, pass) {
+    if (!arena?.features?.length) return;
+    for (let i = 0; i < arena.features.length; i++) {
+      const f = arena.features[i];
+      if (f.type !== pass) continue;
+      this._pos[0] = f.x; this._pos[1] = f.z; this._pos[2] = f.y;
+      if (f.type === 'solid') {
+        // A fixed tumble per rock rather than an animated one: a debris field
+        // that spins is a debris field whose collision spheres are lying, and
+        // the spheres are what the simulation actually tests against.
+        quatFromEuler(i * 0.7, i * 1.3, i * 2.1, this._quat);
+        compose(this._pos, this._quat, f.r, this._model);
+        this.renderer.draw(`rock:${i & 7}`, rockMesh(i), {
+          model: this._model,
+          normalMatrix: normalMatrix(this._model, this._normal),
+          tint: [1, 1, 1],
+          fogFar: VOLUME * 4,
+        });
+        continue;
+      }
+      compose(this._pos, quat(), f.r, this._model);
+      this.renderer.draw('cloud', cloudMesh(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model, this._normal),
+        emissive: 1,
+        // Fainter the bigger it is, and DOUBLED by the two-sided shell.
+        //
+        // A Mutara-sized cloud is 2,400 units across with the entire battle
+        // inside it, so anything you could call a colour at that size is a
+        // wall between the player and the fight; a 500-unit plasma patch is a
+        // place on the board and has to look like one. The first version of
+        // this was `28 / (r / 40)`, which is above the ceiling for every
+        // radius in ARENA_KINDS — it clamped to 0.16 for the 2,400-unit
+        // nebula and the 420-unit patch alike, which is to say it was a
+        // constant wearing an expression.
+        //
+        // `cloudMesh` draws both windings so a cloud you are standing in does
+        // not vanish, so whatever is set here arrives on screen twice.
+        alpha: clamp(0.14 - f.r / 22000, 0.030, 0.080),
+        tint: arena.tint ?? [0.8, 0.7, 1.0],
+        fogFar: 1e9,
+      });
+    }
   }
 
   drawShip(ship, isTarget) {
@@ -23039,6 +23196,330 @@ __exports.chooseAction = chooseAction;
 
 });
 
+__define("src/sim/arena.js", function (__exports, __require) {
+// The place a fight happens in.
+//
+// Every engagement in this game was fought in the same empty box. The world
+// data has said otherwise for as long as it has existed: six systems declare a
+// `hazard` — a debris field at Wolf 359, a nebula at Mutara, a plasma storm in
+// the Badlands, metreon gas in the Briar Patch, a Tholian web, a temporal
+// anomaly at Devron — the map draws each of them as a red pill, and combat read
+// none of them. Fighting inside the Mutara Nebula was identical to fighting in
+// orbit of Earth.
+//
+// This is the terrain. It does two things and only two, because a fight that
+// cannot be reasoned about is not deeper than one that can:
+//
+//   SOLID features block line of fire. A shot whose path crosses one does not
+//   arrive. That makes position mean something beyond range and facing: there
+//   is somewhere to be that they cannot shoot you from.
+//
+//   CLOUD features blind. Inside one, sensors are noise and shields will not
+//   hold a charge — and a cloaking device is useless, because the thing that
+//   makes a nebula terrible for gunnery makes it terrible for hiding too. It
+//   is the Mutara Nebula, and it turns a duel into two ships groping for each
+//   other at knife range.
+//
+// Deterministic and STATELESS ONCE BUILT. Nothing here moves, nothing here has
+// a hit point, nothing here is written to during a fight. That is deliberate:
+// a fight is not resumed from a save (`Game.load` says so and means it), so an
+// arena that never changes needs no serialisation and can never come back
+// wrong.
+
+const { clamp } = __require("src/core/num.js");
+
+/**
+ * What each declared hazard is, as terrain.
+ *
+ * Keyed by the `hazard` field on a system in world/systems.data.js, so the
+ * table cannot drift from the data: a system whose hazard has no entry here
+ * fights in the open, which is what happened everywhere before.
+ *
+ * `solid` features are rock and hull fragments. `cloud` features are gas.
+ * A kind may have both; none does yet.
+ */
+const ARENA_KINDS = {
+  /**
+   * Wolf 359. A graveyard with coordinates.
+   *
+   * Big, slow-tumbling pieces of ship, far enough apart to fly between and
+   * large enough to hide a Constitution behind. The count and the sizes are
+   * what make it cover rather than confetti: forty small rocks are a texture,
+   * twelve large ones are a decision.
+   *
+   * `spread` was chosen by measurement, twenty fights a setting, a
+   * Constitution against two D7s, counting BLOCKED SHOTS OUT OF SHOTS FIRED
+   * through the `combat:fire` event rather than by sampling random lines:
+   *
+   *     spread   blocked   median fight   (open space: 0%, 51 s)
+   *     0.42      5.1%       59 s
+   *     0.36      9.4%       64 s
+   *     0.30     14.1%       79 s
+   *
+   * A random-line probe over the same field said 56% and was measuring
+   * something else entirely: real fights collapse to short range near the
+   * origin within seconds, and long lines drawn across the whole volume cross
+   * everything. 0.36 is cover you notice without gunnery that feels broken,
+   * and 0.30 costs half again as long a battle for it.
+   */
+  debris: {
+    id: 'debris',
+    name: 'debris field',
+    solid: { count: 16, radius: [110, 260], spread: 0.36 },
+    // Nothing to see through — a rock is not weather.
+    sensorNoise: 0,
+  },
+
+  /**
+   * Mutara. "The nebula will scramble our shields and sensors."
+   *
+   * The whole volume, not patches of it: a nebula you can steer out of is a
+   * hazard, and the one this is named after is a condition of the battle.
+   */
+  nebula: {
+    id: 'nebula',
+    name: 'nebula',
+    cloud: { count: 1, radius: [2400, 2400], centred: true },
+    sensorNoise: 0.35,
+    shieldSuppression: 1,
+    breaksCloak: true,
+    tint: [0.85, 0.55, 0.95],
+  },
+
+  /**
+   * The Badlands. Plasma fronts and a lot of very hot nothing.
+   *
+   * Patchy rather than total — the Badlands are navigable by someone who knows
+   * them, which is the entire reason anyone runs to them. Smaller clouds,
+   * several of them, with gaps you can fight in.
+   */
+  plasma_storm: {
+    id: 'plasma_storm',
+    name: 'plasma storm',
+    cloud: { count: 5, radius: [420, 780], spread: 0.34 },
+    sensorNoise: 0.3,
+    shieldSuppression: 0.5,
+    tint: [1.0, 0.6, 0.3],
+  },
+
+  /**
+   * The Briar Patch. Metreon gas, and no warp field will form in it.
+   *
+   * The signature of the place is that you cannot leave at speed, which the
+   * engagement already models — `canWarpOut` has existed since fights could be
+   * fled from and nothing has ever set it false outside the Kobayashi Maru.
+   */
+  metreon: {
+    id: 'metreon',
+    name: 'metreon gas',
+    cloud: { count: 4, radius: [500, 900], spread: 0.34 },
+    sensorNoise: 0.18,
+    noWarp: true,
+    tint: [0.95, 0.85, 0.45],
+  },
+};
+
+/** The hazards that do nothing to a fight, and why, so nobody adds them twice. */
+const OPEN_HAZARDS = {
+  // A Tholian web is a weapon somebody deploys during a fight, not scenery
+  // that is there when it starts. It has its own encounter.
+  tholian_web: 'the web is deployed, not terrain',
+  // Devron's anomaly is a story, not a gunnery problem.
+  temporal: 'nothing about it changes how a shot flies',
+};
+
+/**
+ * Nothing in the way and nothing in the air. The default, and most fights.
+ *
+ * DEEP frozen, and the array is the point. `Object.freeze` on the object alone
+ * freezes the property that HOLDS the list, not the list — so a single stray
+ * `arena.features.push(...)` anywhere would give every open-space fight for the
+ * life of the process the same permanent terrain, and there is exactly one of
+ * these objects shared by every battle that has no weather. Found by a test
+ * that asserted the push would throw and watched it succeed, and then watched
+ * the invariant checker report a hundred and fifty malformed features in a
+ * battle at Sol.
+ */
+const OPEN_ARENA = Object.freeze({
+  kind: null, name: 'open space', features: Object.freeze([]),
+});
+
+/**
+ * Build the terrain for one fight.
+ *
+ * @param {RNG} rng a DERIVED stream — see the note in Game.startCombat. Drawing
+ *   arena rolls from the fight's own stream would move every seeded outcome in
+ *   the game the moment terrain existed.
+ * @param {string|null} hazard the `hazard` field of the system, or null.
+ * @param {object} opts { radius, clear } — `clear` is a list of {x,y,z} that no
+ *   solid feature may sit on top of, which is where the combatants start.
+ */
+function buildArena(rng, hazard, { radius = 2600, clear = [] } = {}) {
+  const kind = ARENA_KINDS[hazard];
+  if (!kind || !rng) return OPEN_ARENA;
+
+  const features = [];
+  const place = (spec, type) => {
+    for (let i = 0; i < spec.count; i++) {
+      const r = rng.range(spec.radius[0], spec.radius[1]);
+      if (spec.centred) {
+        features.push({ type, kind: kind.id, x: 0, y: 0, z: 0, r });
+        continue;
+      }
+      // Rejection sampling with a hard cap.
+      //
+      // The cap matters more than the sampling: a placement loop that keeps
+      // trying until it succeeds is a hang whenever the constraints cannot be
+      // met, and "cannot be met" here is one bad `clear` list away. Twenty
+      // tries and then this rock simply does not exist.
+      for (let attempt = 0; attempt < 20; attempt++) {
+        // WITHIN REACH OF THE FIGHT, not spread through the whole arena.
+        //
+        // The first version scattered features across the full 2,600-unit
+        // volume, and measured over ninety-six battles not one shot was ever
+        // blocked and no ship ever entered a cloud: a fight collapses to
+        // inside a thousand units in the first few seconds and stays there,
+        // so terrain out at two thousand is scenery for a camera that never
+        // looks at it. `spread` is the share of the arena the features
+        // actually occupy — a debris field is a graveyard in one place, not a
+        // uniform haze filling a sphere twenty kilometres across.
+        const reach = radius * (spec.spread ?? 1);
+        const u = 0.3 + 0.7 * rng.float();
+        const theta = rng.float() * Math.PI * 2;
+        const phi = (rng.float() - 0.5) * 0.7;
+        const d = u * Math.max(r * 1.2, reach - r);
+        const x = Math.cos(theta) * Math.cos(phi) * d;
+        const y = Math.sin(theta) * Math.cos(phi) * d;
+        const z = Math.sin(phi) * d;
+        // Constraints apply to ROCK ONLY, and getting that wrong silently
+        // deleted the weather.
+        //
+        // "Never on top of a combatant" is a rule about solid objects: a ship
+        // that starts inside a rock cannot be shot from anywhere. Applied to
+        // gas it says the opposite of what is wanted — a cloud is meant to
+        // have ships in it — and since a plasma cloud is 780 units across and
+        // everybody starts within a thousand units of the origin, every one of
+        // the twenty placement attempts failed and the Badlands and the Briar
+        // Patch came out as open space. Two of the four weather systems in the
+        // game, built, measured as having no features, and reported by the
+        // probe rather than by anything that looked right.
+        //
+        // Overlap is the same: two rocks in the same place are one lumpy rock
+        // tested twice, but two overlapping clouds are just thicker gas.
+        if (type === 'solid') {
+          const tooClose = clear.some((c) => Math.hypot(x - c.x, y - c.y, z - (c.z ?? 0)) < r + 220)
+            || features.some((f) => f.type === 'solid'
+              && Math.hypot(x - f.x, y - f.y, z - f.z) < r + f.r);
+          if (tooClose) continue;
+        }
+        features.push({ type, kind: kind.id, x, y, z, r });
+        break;
+      }
+    }
+  };
+
+  if (kind.solid) place(kind.solid, 'solid');
+  if (kind.cloud) place(kind.cloud, 'cloud');
+
+  return {
+    kind: kind.id,
+    name: kind.name,
+    features,
+    sensorNoise: kind.sensorNoise ?? 0,
+    shieldSuppression: kind.shieldSuppression ?? 0,
+    breaksCloak: kind.breaksCloak === true,
+    noWarp: kind.noWarp === true,
+    tint: kind.tint ?? null,
+  };
+}
+
+/**
+ * Does a straight line from `a` to `b` pass through something solid?
+ *
+ * Standard segment-versus-sphere: project the sphere's centre onto the
+ * segment, clamp the projection to the segment's ends, and measure. The clamp
+ * is the part that is easy to leave out and it is what stops a rock BEHIND the
+ * shooter from blocking a shot fired the other way.
+ *
+ * @returns {object|null} the feature in the way, or null.
+ */
+function blockedBy(arena, a, b) {
+  if (!arena?.features?.length) return null;
+  const ax = a.x; const ay = a.y; const az = a.z ?? 0;
+  const dx = b.x - ax; const dy = b.y - ay; const dz = (b.z ?? 0) - az;
+  const len2 = dx * dx + dy * dy + dz * dz;
+  if (len2 <= 0) return null;
+
+  for (const f of arena.features) {
+    if (f.type !== 'solid') continue;
+    const t = clamp(((f.x - ax) * dx + (f.y - ay) * dy + (f.z - az) * dz) / len2, 0, 1);
+    const px = ax + dx * t; const py = ay + dy * t; const pz = az + dz * t;
+    if (Math.hypot(f.x - px, f.y - py, f.z - pz) < f.r) return f;
+  }
+  return null;
+}
+
+/** Is this point inside a rock? Used to keep ships from flying through one. */
+function insideSolid(arena, p) {
+  if (!arena?.features?.length) return null;
+  for (const f of arena.features) {
+    if (f.type !== 'solid') continue;
+    if (Math.hypot(f.x - p.x, f.y - p.y, f.z - (p.z ?? 0)) < f.r) return f;
+  }
+  return null;
+}
+
+/**
+ * How thoroughly this point is inside the gas: 0 outside, 1 at the core.
+ *
+ * A gradient rather than a boundary, because a hard edge means a ship sitting
+ * exactly on one has its shields flicker on and off every tick — and because
+ * the edge of a nebula is the interesting place to be, half-blind and able to
+ * get out.
+ */
+function cloudAt(arena, p) {
+  if (!arena?.features?.length) return 0;
+  let worst = 0;
+  for (const f of arena.features) {
+    if (f.type !== 'cloud') continue;
+    const d = Math.hypot(f.x - p.x, f.y - p.y, f.z - (p.z ?? 0));
+    if (d >= f.r) continue;
+    // Full strength through the inner two thirds, falling to nothing at the
+    // skin.
+    worst = Math.max(worst, clamp((1 - d / f.r) / 0.34, 0, 1));
+  }
+  return worst;
+}
+
+/**
+ * What the gas does to a ship standing in it.
+ *
+ * One function so the three consumers — accuracy, shields and cloaking —
+ * cannot disagree about how deep in it something is.
+ */
+function conditionsAt(arena, p) {
+  const depth = cloudAt(arena, p);
+  if (depth <= 0) return { depth: 0, sensorNoise: 0, shieldSuppression: 0, breaksCloak: false };
+  return {
+    depth,
+    sensorNoise: (arena.sensorNoise ?? 0) * depth,
+    shieldSuppression: (arena.shieldSuppression ?? 0) * depth,
+    // Half-way in is enough. A cloak is not a dimmer switch.
+    breaksCloak: arena.breaksCloak === true && depth > 0.5,
+  };
+}
+
+__exports.ARENA_KINDS = ARENA_KINDS;
+__exports.OPEN_HAZARDS = OPEN_HAZARDS;
+__exports.OPEN_ARENA = OPEN_ARENA;
+__exports.buildArena = buildArena;
+__exports.blockedBy = blockedBy;
+__exports.insideSolid = insideSolid;
+__exports.cloudAt = cloudAt;
+__exports.conditionsAt = conditionsAt;
+
+});
+
 __define("src/sim/combat.js", function (__exports, __require) {
 // Combat resolution.
 //
@@ -23054,6 +23535,7 @@ __define("src/sim/combat.js", function (__exports, __require) {
 const { emit } = __require("src/core/events.js");
 const { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } = __require("src/sim/ship.js");
 const { chooseAction } = __require("src/sim/ai.js");
+const { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } = __require("src/sim/arena.js");
 const { clamp, wrapDegrees, finite } = __require("src/core/num.js");
 const WEAPON_RANGE = {
   beam: 900,
@@ -23190,7 +23672,28 @@ class Engagement {
     this.separationTimer = 0;
     // Seconds of ion-pod decoy still confusing hostile targeting.
     this.decoyTimer = 0;
-    this.canWarpOut = opts.canWarpOut !== false;
+    /**
+     * The terrain this fight is fought in. See src/sim/arena.js.
+     *
+     * Never null. An open-space fight gets OPEN_ARENA, which is frozen and
+     * empty, so every call site below can ask it questions unconditionally.
+     * Filled in by `placeCombatants` below, which is the only place that knows
+     * where everyone starts — and a rock dropped on top of a starting position
+     * is a hostile that cannot be shot from anywhere, because every line to it
+     * crosses the rock it is standing in.
+     */
+    this.arena = opts.arena ?? OPEN_ARENA;
+    /**
+     * The stream the terrain is rolled from, and why it is not `rng`.
+     *
+     * Building an arena takes random draws. Taking them from the fight's own
+     * stream would have moved every seeded outcome in the game on the day
+     * terrain was added — the same battle would play out differently depending
+     * on whether the place it happened in had weather. `Game.startCombat`
+     * derives a separate stream keyed by the system.
+     */
+    this.arenaRng = opts.arenaRng ?? null;
+    this.hazard = opts.hazard ?? null;
     // Nobody in this fight breaks off. Set only by the Kobayashi Maru, where a
     // hostile that could be routed would make the no-win scenario winnable by
     // flying — which is the one thing it must never be.
@@ -23205,11 +23708,17 @@ class Engagement {
     // Whether the tactical officer has already remarked on a torpedo being
     // swatted down. Explicitly false rather than undefined, like `over`.
     this.saidPointDefence = false;
+    // Same, for a shot that broke against a rock and for the gas closing in.
+    this.saidBlocked = false;
+    this.saidMurk = false;
     // Ships whose destruction has already been announced. A death is a
     // one-time event and the sweep that finds it runs every tick.
     this.mourned = new Set();
 
     this.placeCombatants();
+    // Metreon gas will not let a warp field form. Read AFTER the arena is
+    // built, which placeCombatants does.
+    this.canWarpOut = opts.canWarpOut !== false && !this.arena.noWarp;
   }
 
   /**
@@ -23275,6 +23784,19 @@ class Engagement {
       s.pitch = 0; s.desiredPitch = 0;
       s.throttle = 0.4;
     });
+
+    // And the terrain, now that there are positions to keep clear of.
+    //
+    // Rebuilt rather than kept when reinforcements arrive, because
+    // `placeCombatants` runs again for those and the new arrivals need the
+    // same guarantee the first wave got. The stream is derived and rewound to
+    // the same seed each time, so the rocks do not move — see `arenaRng`.
+    if (this.arenaRng && this.hazard) {
+      this.arena = buildArena(this.arenaRng(), this.hazard, {
+        radius: ARENA_RADIUS,
+        clear: this.allShips.map((s) => ({ x: s.x, y: s.y, z: s.z ?? 0 })),
+      });
+    }
   }
 
   // ---------------- orders ----------------
@@ -23352,7 +23874,15 @@ class Engagement {
 
   /** Attempt to break off. Takes time, and the enemy gets those seconds. */
   beginWarpOut() {
-    if (!this.canWarpOut) { this.pushLog('Cannot disengage — we are pinned.', 'helm'); return false; }
+    if (!this.canWarpOut) {
+      // Say WHY. "We are pinned" is the Kobayashi Maru's answer and it is the
+      // wrong one in the Briar Patch, where the reason is a property of the
+      // place the captain chose to fly into and could choose to leave.
+      this.pushLog(this.arena.noWarp
+        ? `No warp field will form in ${this.arena.name}, Captain. We fight or we crawl.`
+        : 'Cannot disengage — we are pinned.', 'helm');
+      return false;
+    }
     if (this.player.subsystems.warpcore < 0.2 || this.player.coreEjected) {
       this.pushLog('Warp drive is offline. We cannot outrun them.', 'engineering');
       return false;
@@ -23429,13 +23959,27 @@ class Engagement {
     }
 
     // Beams and cannons resolve immediately, with a visible trace.
-    const result = this.resolveHit(attacker, target, weapon, distance,
-      attacker === this.player ? this.targetedSubsystem : null);
+    //
+    // Unless there is a rock in the way, in which case the trace stops at the
+    // rock and nothing arrives. The cooldown is spent either way: firing into
+    // cover costs you the shot, which is the entire reason cover is worth
+    // flying to.
+    const rock = blockedBy(this.arena, attacker, target);
+    const result = rock
+      ? { hit: false, reason: 'blocked' }
+      : this.resolveHit(attacker, target, weapon, distance,
+        attacker === this.player ? this.targetedSubsystem : null);
+    if (rock && attacker === this.player && !this.saidBlocked) {
+      this.saidBlocked = true;
+      this.pushLog('No firing solution — there is rock between us and them.', 'tactical');
+    }
     this.effects.push({
       kind: weapon.type,
       from: { x: attacker.x, y: attacker.y, z: attacker.z ?? 0 },
-      to: { x: target.x, y: target.y, z: target.z ?? 0 },
-      life: 0.35, hit: result.hit, faction: attacker.faction,
+      to: rock
+        ? this.stoppedAt(attacker, target, rock)
+        : { x: target.x, y: target.y, z: target.z ?? 0 },
+      life: 0.35, hit: result.hit, faction: attacker.faction, blocked: !!rock,
     });
     emit('combat:fire', { attacker, weapon, type: weapon.type, result });
     return true;
@@ -23446,8 +23990,16 @@ class Engagement {
     const falloff = rangeFactor(weapon.type, distance);
     if (falloff <= 0) return { hit: false, reason: 'out of range' };
 
+    // Gas at either end of the shot. Standing in it blinds you; standing in
+    // it also hides you, and the worse of the two is what the gunner has to
+    // work with. "The nebula will scramble our shields and sensors" — this is
+    // the sensors half.
+    const murk = Math.max(
+      conditionsAt(this.arena, attacker).sensorNoise,
+      conditionsAt(this.arena, target).sensorNoise,
+    );
     const accuracy = 0.92 * attacker.mod('accuracy')
-      * (0.7 + 0.3 * attacker.subsystems.sensors);
+      * (0.7 + 0.3 * attacker.subsystems.sensors) * (1 - murk);
     // A decoy in the water only troubles the people shooting at us.
     const decoy = (target === this.player && this.decoyTimer > 0) ? 0.22 : 0;
     const evade = target.defenseRating + (target.cloaked ? 0.5 : 0) + decoy;
@@ -23608,6 +24160,13 @@ class Engagement {
     // DAMAGE_CONTROL_OFF_ACTION in src/sim/ship.js.
     for (const s of this.allShips) s.update(dt, this.rng, { inAction: true });
 
+    // And then the weather, to everyone in it.
+    //
+    // AFTER the ships have updated, so the regeneration a hull just did inside
+    // a nebula is taken back off it rather than fighting the suppression for
+    // priority. Before it, the two alternate and the shields flicker.
+    this.weatherOn(dt);
+
     // Whatever died on that step gets its explosion before anything else acts.
     this.reportDeaths();
 
@@ -23644,6 +24203,7 @@ class Engagement {
     if (this.decoyTimer > 0) this.decoyTimer = Math.max(0, this.decoyTimer - dt);
 
     this.holdTheArena();
+    this.keepOutOfRocks();
     this.settleWithdrawals(dt);
 
     this.updateProjectiles(dt);
@@ -23772,6 +24332,29 @@ class Engagement {
       const dy = p.target.y - p.y;
       const dz = (p.target.z ?? 0) - (p.z ?? 0);
       const dist = Math.hypot(dx, dy, dz);
+
+      // A torpedo that flies into a rock detonates on the rock.
+      //
+      // Tested along the SEGMENT it is about to travel, not at the point it
+      // ends up. A projectile moves 420 units a second — fourteen a tick at
+      // 1/30 — and testing only the arrival point means anything thinner than
+      // that is tunnelled straight through. That is not a problem at today's
+      // rock sizes and is exactly the kind of thing that stops being true
+      // quietly.
+      if (dist > 0) {
+        const step = Math.min(dist, p.speed * dt);
+        const ahead = {
+          x: p.x + (dx / dist) * step,
+          y: p.y + (dy / dist) * step,
+          z: (p.z ?? 0) + (dz / dist) * step,
+        };
+        const struck = insideSolid(this.arena, p) ?? blockedBy(this.arena, p, ahead);
+        if (struck) {
+          this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.5 });
+          p.dead = true;
+          continue;
+        }
+      }
       if (dist < 26) {
         // A torpedo that has arrived has arrived.
         //
@@ -23865,6 +24448,94 @@ class Engagement {
    * Clamping alone would leave a ship grinding against the edge at full
    * throttle forever, which looks broken and pins the auto-framing camera.
    */
+  /**
+   * Where a shot that hit a rock actually stopped, for the trace.
+   *
+   * A beam drawn all the way to a target it never reached is a lie the player
+   * would reasonably act on — it looks exactly like a shot that connected and
+   * did nothing. The trace ends on the rock's near face.
+   */
+  stoppedAt(from, to, rock) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = (to.z ?? 0) - (from.z ?? 0);
+    const len = Math.hypot(dx, dy, dz) || 1;
+    // Distance along the shot to the rock's centre, pulled back by its radius.
+    const along = Math.max(0,
+      ((rock.x - from.x) * dx + (rock.y - from.y) * dy + (rock.z - (from.z ?? 0)) * dz) / len
+      - rock.r);
+    return {
+      x: from.x + (dx / len) * along,
+      y: from.y + (dy / len) * along,
+      z: (from.z ?? 0) + (dz / len) * along,
+    };
+  }
+
+  /**
+   * What standing in the gas does, every tick, to everyone standing in it.
+   *
+   * Shields will not hold a charge and a cloak will not hold at all. Both are
+   * the Mutara Nebula and both cut in the player's favour as often as against
+   * it — a Bird-of-Prey cannot hide in there either, which is the whole reason
+   * a Constitution would choose to fight in one.
+   */
+  weatherOn(dt) {
+    if (!this.arena.features.length) return;
+    for (const s of this.allShips) {
+      if (s.destroyed) continue;
+      const c = conditionsAt(this.arena, s);
+      if (c.depth <= 0) continue;
+
+      if (c.breaksCloak && s.cloaked) {
+        s.decloak();
+        this.pushLog(`${s === this.player ? 'Our' : `${s.name}'s`} cloak will not hold in this.`,
+          s === this.player ? 'engineering' : 'tactical');
+      }
+      if (c.shieldSuppression > 0 && s.shieldsUp) {
+        // A share of the ceiling a second, so it bites the same on a runabout
+        // as on a Galaxy rather than being decided by which has more to lose.
+        const bleed = s.maxShield * 0.12 * c.shieldSuppression * dt;
+        for (const f of FACINGS) s.shields[f] = Math.max(0, s.shields[f] - bleed);
+      }
+      if (s === this.player && !this.saidMurk && c.depth > 0.4) {
+        this.saidMurk = true;
+        this.pushLog(`We are in the ${this.arena.name}. Sensors and shields are both going to suffer.`,
+          'science');
+      }
+    }
+  }
+
+  /**
+   * Nobody flies through a rock.
+   *
+   * The alternative is not merely ugly: a ship parked inside a solid feature
+   * cannot be shot from anywhere — every line to it crosses the rock it is
+   * standing in — which is a hostile that cannot be killed and an end
+   * condition that never fires. Pushed out along the radius rather than
+   * stopped, because stopping it leaves it there.
+   */
+  keepOutOfRocks() {
+    if (!this.arena.features.length) return;
+    for (const s of this.allShips) {
+      if (s.destroyed) continue;
+      const rock = insideSolid(this.arena, s);
+      if (!rock) continue;
+      const dx = s.x - rock.x;
+      const dy = s.y - rock.y;
+      const dz = (s.z ?? 0) - rock.z;
+      // Dead centre has no outward direction, so pick one rather than divide
+      // by zero. It is a degenerate case and it does happen: a ship that
+      // starts a manoeuvre from inside gets pushed to the same face every
+      // tick, which is fine — what matters is that it leaves.
+      const d = Math.hypot(dx, dy, dz);
+      const [ux, uy, uz] = d > 1e-6 ? [dx / d, dy / d, dz / d] : [1, 0, 0];
+      const surface = rock.r + 12;
+      s.x = rock.x + ux * surface;
+      s.y = rock.y + uy * surface;
+      s.z = rock.z + uz * surface;
+    }
+  }
+
   holdTheArena() {
     for (const s of this.allShips) {
       const d = Math.hypot(s.x, s.y, s.z ?? 0);
@@ -24999,6 +25670,41 @@ function checkCombat(eng, { arenaRadius = 2600 } = {}) {
       r.must(seen.has(s.aiTarget), 'eng.aitarget.absent', 'error',
         `${s.name ?? 'a ship'} is locked on ${s.aiTarget.name ?? '?'}, which has left the fight`,
         s.name);
+    }
+
+    // ---- the terrain ----
+    //
+    // An arena is built once and never written to again, so everything here is
+    // about a fight that has quietly become unfightable rather than about
+    // drift. The one that matters is the last: a ship INSIDE a solid feature
+    // cannot be shot from any direction, because every line to it crosses the
+    // rock it is standing in. That is a hostile that cannot be killed, an end
+    // condition that never fires, and the soft-lock shape this file exists for.
+    const arena = eng.arena;
+    r.must(!!arena, 'eng.arena.missing', 'error', 'the engagement has no arena');
+    for (const f of arena?.features ?? []) {
+      const tag = `${f?.kind ?? '?'} feature`;
+      r.must(ok(f.x) && ok(f.y) && ok(f.z), 'arena.feature.finite', 'fatal',
+        `${tag} is at ${f.x},${f.y},${f.z}`, tag);
+      r.must(num(f.r) > 0, 'arena.feature.radius', 'error',
+        `${tag} has radius ${f.r}`, tag);
+      r.must(f.type === 'solid' || f.type === 'cloud', 'arena.feature.type', 'error',
+        `${tag} has type ${f.type}`, tag);
+      if (ok(f.x) && ok(f.y) && ok(f.z) && ok(f.r)) {
+        const d = Math.hypot(num(f.x), num(f.y), num(f.z)) + num(f.r);
+        r.must(d <= arenaRadius + ARENA_SLACK, 'arena.feature.outside', 'error',
+          `${tag} reaches ${Math.round(d)} units, outside the ${arenaRadius}-unit arena`, tag);
+      }
+      if (f.type !== 'solid') continue;
+      for (const s2 of ships) {
+        if (!s2 || s2.destroyed || s2.withdrawn) continue;
+        if (!ok(s2.x) || !ok(s2.y)) continue;
+        const inside = Math.hypot(num(s2.x) - num(f.x), num(s2.y) - num(f.y),
+          num(s2.z) - num(f.z)) < num(f.r);
+        r.must(!inside, 'eng.ship.inside-rock', 'error',
+          `${s2.name ?? 'a ship'} is inside a ${f.kind} — nothing can shoot it and nothing can be shot`,
+          s2.name);
+      }
     }
 
     // ---- projectiles ----
@@ -29814,6 +30520,7 @@ const { Crew, Officer, ABILITIES, ABILITY_LIST } = __require("src/sim/officers.j
 const { CaptainProgress, combatXP, SKILLS } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
 const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
+const { buildArena } = __require("src/sim/arena.js");
 const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
@@ -32246,11 +32953,32 @@ class Game {
       for (const s of fleet) for (const w of s.weapons) w.cooldown = w.cycle;
       this.pushLog('Their gunnery is slow off the mark, Captain. Empire doctrine.', 'tactical');
     }
+    // The terrain, from what the map has said about this system all along.
+    //
+    // Six systems carry a `hazard` — a debris field at Wolf 359, a nebula at
+    // Mutara, a plasma storm in the Badlands — and until now the only thing
+    // that read it was the red pill on the system panel and a slightly higher
+    // encounter chance. A battle in the Mutara Nebula was a battle in orbit of
+    // Earth with different words on the screen.
+    //
+    // From a DERIVED stream, for the same reason the escorts' names are: rolls
+    // taken from `this.rng` here would move every seeded outcome downstream of
+    // the fight, so the same battle would play out differently depending on
+    // whether the place it happened in had weather.
+    // A FACTORY, not a stream: the engagement rebuilds the arena whenever it
+    // re-places the combatants, and reinforcements do that mid-fight. Handing
+    // it a live stream would move the rocks when the second wave arrived.
+    const hazard = this.location?.hazard ?? null;
+    const arenaRng = () => this.derived(`arena:${this.locationId}`);
     // `onEnd` is how a fight settles itself the moment it ends, from wherever
     // it ends. See Engagement.end.
     this.engagement = new Engagement(this.ship, fleet, this.rng, {
-      ...opts, allies, onEnd: () => this.resolveCombat(),
+      ...opts, allies, hazard, arenaRng, onEnd: () => this.resolveCombat(),
     });
+    if (this.engagement.arena.features.length) {
+      this.engagement.pushLog(
+        `We are fighting in a ${this.engagement.arena.name}, Captain.`, 'science');
+    }
     if (allies.length > (opts.allies?.length ?? 0)) {
       this.pushLog(`${allies[allies.length - 1].name} is closing to support us, Captain.`, 'comms');
     }

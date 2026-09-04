@@ -312,6 +312,41 @@ export function checkCombat(eng, { arenaRadius = 2600 } = {}) {
         s.name);
     }
 
+    // ---- the terrain ----
+    //
+    // An arena is built once and never written to again, so everything here is
+    // about a fight that has quietly become unfightable rather than about
+    // drift. The one that matters is the last: a ship INSIDE a solid feature
+    // cannot be shot from any direction, because every line to it crosses the
+    // rock it is standing in. That is a hostile that cannot be killed, an end
+    // condition that never fires, and the soft-lock shape this file exists for.
+    const arena = eng.arena;
+    r.must(!!arena, 'eng.arena.missing', 'error', 'the engagement has no arena');
+    for (const f of arena?.features ?? []) {
+      const tag = `${f?.kind ?? '?'} feature`;
+      r.must(ok(f.x) && ok(f.y) && ok(f.z), 'arena.feature.finite', 'fatal',
+        `${tag} is at ${f.x},${f.y},${f.z}`, tag);
+      r.must(num(f.r) > 0, 'arena.feature.radius', 'error',
+        `${tag} has radius ${f.r}`, tag);
+      r.must(f.type === 'solid' || f.type === 'cloud', 'arena.feature.type', 'error',
+        `${tag} has type ${f.type}`, tag);
+      if (ok(f.x) && ok(f.y) && ok(f.z) && ok(f.r)) {
+        const d = Math.hypot(num(f.x), num(f.y), num(f.z)) + num(f.r);
+        r.must(d <= arenaRadius + ARENA_SLACK, 'arena.feature.outside', 'error',
+          `${tag} reaches ${Math.round(d)} units, outside the ${arenaRadius}-unit arena`, tag);
+      }
+      if (f.type !== 'solid') continue;
+      for (const s2 of ships) {
+        if (!s2 || s2.destroyed || s2.withdrawn) continue;
+        if (!ok(s2.x) || !ok(s2.y)) continue;
+        const inside = Math.hypot(num(s2.x) - num(f.x), num(s2.y) - num(f.y),
+          num(s2.z) - num(f.z)) < num(f.r);
+        r.must(!inside, 'eng.ship.inside-rock', 'error',
+          `${s2.name ?? 'a ship'} is inside a ${f.kind} — nothing can shoot it and nothing can be shot`,
+          s2.name);
+      }
+    }
+
     // ---- projectiles ----
     const shots = eng.projectiles ?? [];
     r.must(shots.length <= LIMITS.projectiles, 'eng.projectiles.leak', 'error',
