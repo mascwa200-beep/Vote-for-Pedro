@@ -2580,6 +2580,77 @@ export class Game {
     return out;
   }
 
+  /**
+   * What each faction remembers the captain doing to them.
+   *
+   * Every entry is a flag an episode already sets, with its sign taken from
+   * the label on the choice that sets it rather than from what the name
+   * sounds like. `kang_left_alone` is "let it end here and return to the
+   * ship" and costs sixteen points of Klingon standing on the spot, so it is
+   * negative; `paid_orions` is "pay him" and buys eight points of Orion
+   * standing, so it is positive. Reading the choice was the whole job here,
+   * and a table built from the names would have got at least two of them
+   * backwards.
+   *
+   * Deliberately NOT everything. `romulan_cloak_reported` is "let him go,
+   * report the weapon" — you spared their commander and told Starfleet about
+   * their cloak, which is a favour and a betrayal in one choice, and a sign
+   * cannot be put on that honestly. `dmz_favourable` is a treaty favourable
+   * to us, which is not obviously something the other side is pleased about.
+   * Both are left out. Twelve flags with a defensible sign beats fifty-seven
+   * with a guessed one.
+   *
+   * The Borg are absent on purpose: their doctrine is `assimilate` and
+   * `resolveHail` returns before any of this is reached, because nothing
+   * answers.
+   */
+  static FACTION_MEMORY = {
+    klingon: [
+      { flag: 'kang_respects_you', weight: 0.15, line: 'Kang has spoken for us before, Captain.' },
+      { flag: 'qonos_upheld', weight: 0.12, line: 'We kept our word at the council, Captain.' },
+      { flag: 'kang_left_alone', weight: -0.10, line: 'They remember that we walked away, Captain.' },
+      { flag: 'fired_first_archanis', weight: -0.12, line: 'They remember who fired first at Archanis.' },
+      { flag: 'archanis_massacre', weight: -0.30, line: 'They remember Archanis, Captain. All of it.' },
+    ],
+    romulan: [
+      { flag: 'spared_warbird', weight: 0.15, line: 'We let one of theirs go home once, Captain.' },
+      { flag: 'romulan_favour', weight: 0.15, line: 'The record was corrected in their favour, Captain.' },
+      { flag: 'fired_first_neutral_zone', weight: -0.20, line: 'We fired first inside the Zone, Captain. They logged it.' },
+    ],
+    cardassian: [
+      { flag: 'torvan_owes_you', weight: 0.18, line: 'Gul Torvan still owes us this one, Captain.' },
+      { flag: 'dmz_accord', weight: 0.12, line: 'We signed with them at Terok Nor, Captain.' },
+    ],
+    orion: [
+      { flag: 'paid_orions', weight: 0.20, line: 'We have paid these people before, Captain. They remember custom.' },
+    ],
+    tholian: [
+      { flag: 'tholian_protocol', weight: 0.15, line: 'We escorted one of theirs home, Captain.' },
+    ],
+  };
+
+  /**
+   * The weight of that memory, and the line the comms officer says about it.
+   *
+   * Clamped, so a captain who has done every good turn on the list cannot make
+   * a hail a formality — the strongest single memory is worth about as much as
+   * shooting first costs, and the whole record together is worth a little over
+   * one and a half of those.
+   */
+  factionMemory(factionId) {
+    const table = Game.FACTION_MEMORY[factionId] ?? [];
+    const held = table.filter((e) => this.ledger.has(e.flag));
+    if (!held.length) return { weight: 0, line: null, reasons: [] };
+    const weight = held.reduce((n, e) => n + e.weight, 0);
+    // The loudest one is the one worth saying out loud, in either direction.
+    const loudest = held.reduce((a, b) => (Math.abs(b.weight) > Math.abs(a.weight) ? b : a));
+    return {
+      weight: Math.max(-0.4, Math.min(0.4, weight)),
+      line: loudest.line,
+      reasons: held.map((e) => e.flag),
+    };
+  }
+
   /** Resolve a hail during an encounter or engagement. */
   hail(optionId) {
     const enc = this.encounter;
@@ -2591,6 +2662,7 @@ export class Game {
       ? eng.liveHostiles.reduce((n, s) => n + s.hullPct, 0) / Math.max(1, eng.liveHostiles.length)
       : 1;
 
+    const memory = this.factionMemory(factionId);
     const result = resolveHail(this.rng, optionId, {
       factionId,
       // The Diplomatic Corps signature forces a hearing from a faction whose
@@ -2602,9 +2674,13 @@ export class Game {
       playerHullPct: this.ship.hullPct,
       enemyHullPct: enemyHull,
       firstStrike: this.firstStrike,
+      memory: memory.weight,
     });
 
     this.parleyForced = false;
+    // Said before the reply, because it is the reason for the reply. A captain
+    // who is refused wants to know it was Archanis and not the weather.
+    if (memory.line) this.pushLog(memory.line, 'comms');
     this.pushLog(result.text, 'comms');
     if (result.standingDelta) {
       this.ledger.adjustStanding(factionId, result.standingDelta, 'Hail');

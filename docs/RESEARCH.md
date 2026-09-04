@@ -3048,6 +3048,87 @@ per-officer copy of it is a second source of truth that can only drift away from
 the first.
 
 
+## 45. Fifty-seven things the ship wrote down and never read again
+
+The campaign ledger records what the captain did, as flags: `archanis_massacre`,
+`torvan_owes_you`, `paid_orions`, `kang_respects_you`. **The episode book writes
+57 of them and reads 8**, all eight through `requiresFlag` and
+`requires: { flag }` inside other episodes. Nothing outside
+`src/missions/episodes/` reads a single mission flag — and that includes the one
+system in the game whose entire job is what the other side thinks of you.
+
+Measured at 120 seeds, a Klingon negotiation through `Game.hail`:
+
+| what they remember | they agree |
+| --- | --- |
+| nothing | 40.0% |
+| Kang has spoken for you, and you kept your word at the council | 40.0% |
+| you refused their surrender and killed forty-two of them | 40.0% |
+
+`resolveHail` did have one thing it called memory: `firstStrike`, carrying the
+comment *"you shot first; they remember"* — a single boolean about the last few
+minutes, sitting next to a five-year record nobody ever opened.
+
+After:
+
+| what they remember | they agree |
+| --- | --- |
+| nothing | 40.0% |
+| Kang has spoken for you | **70.0%** |
+| Archanis | **1.7%** |
+
+### The sign comes off the choice, not off the name
+
+Every entry's sign was read from the label of the choice that sets the flag, and
+a table built from the names would have got at least two of them backwards:
+
+- `kang_left_alone` sounds merciful. It is *"let it end here and return to the
+  ship"* and costs sixteen points of Klingon standing on the spot. **Negative.**
+- `paid_orions` sounds like a shakedown you lost. It is *"pay him"* and buys
+  eight points of Orion standing. **Positive**, with them.
+- `archanis_massacre` is *"finish them"*, `surrender_refused`, forty-two lives.
+  The heaviest entry in the table at -0.30, against -0.25 for shooting first.
+
+### What was deliberately left out
+
+Twelve flags with a defensible sign beats fifty-seven with a guessed one.
+
+`romulan_cloak_reported` is *"let him go. Report the weapon"* — you spared their
+commander and told Starfleet about their cloak. That is a favour and a betrayal
+in the same choice and a sign cannot honestly be put on it. `dmz_favourable` is
+a treaty favourable to us, which is not obviously a thing the other side is
+pleased about. Both are out.
+
+The **Borg** are out for a different and stricter reason: their doctrine is
+`assimilate`, and `resolveHail` returns before the memory term is reached
+because nothing answers. An entry for them would read as a feature and never be
+consulted once — which is precisely the defect this section is about, so a test
+asserts the table contains no faction whose doctrine refuses the channel.
+
+**8 of 57 read before; 16 after.** Counted programmatically, both times, by the
+rule stated here: a flag is read when something outside the file that writes it
+consults its value. (`inquiry_summoned` is also read, and is set by `main.js`
+rather than by any episode, which is why the raw ledger count is 9 and 17.)
+
+### The meta-test that accused the code, and was wrong
+
+The table is guarded by a test asserting that **every flag it names is one an
+episode actually writes** — because a memory table naming a typo would read as a
+feature and be exactly as dead as the thing it replaced.
+
+It failed on `romulan_favour`, and the first instinct was that the table had
+invented it. It had not. The flag is set by `romulus_debt`'s **ending**, in
+`endings.acquitted.effects.flag`, which is precisely where a flag about how
+Romulus feels afterwards belongs — and the inventory walked `stages[].choices[]`
+only. Seven of the fifty-seven are set by endings and nothing else:
+`inquiry_resolved`, `borg_hurt`, `command_reviewed`, `commended_command`,
+`censured_command`, `archanis_ratified`, `romulan_favour`.
+
+**An inventory that misses a whole shape of write is worse than no inventory,
+because it accuses the code.** Check the scanner before believing what it says
+about the thing being scanned.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

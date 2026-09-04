@@ -78,6 +78,10 @@ export function resolveHail(rng, optionId, {
   factionId, standing = 0, diplomacyBonus = 0,
   winning = false, playerHullPct = 1, enemyHullPct = 1, firstStrike = false,
   forced = false,
+  // What this faction remembers the captain doing, from `Game.factionMemory`.
+  // Already clamped by the caller; clamped again here because a pure function
+  // that trusts its caller for its bounds is a pure function with a hole in it.
+  memory = 0,
 } = {}) {
   const faction = FACTIONS[factionId];
   const option = HAIL_OPTIONS.find((o) => o.id === optionId);
@@ -125,6 +129,18 @@ export function resolveHail(rng, optionId, {
 
   if (winning) chance += 0.18;
   if (firstStrike) chance -= 0.25;      // you shot first; they remember
+
+  // And so is everything else they remember.
+  //
+  // `firstStrike` has carried that comment since it was written and was the
+  // only thing on the whole context that meant "they remember" — one boolean
+  // about the last few minutes. Meanwhile the campaign ledger held fifty-seven
+  // flags recording what the captain had actually done to these people across
+  // five years, and nothing outside the mission book read a single one of them.
+  // Measured at 120 seeds, a Klingon negotiation succeeded 40.0% of the time
+  // whether Kang respected you or you had refused a surrender and killed
+  // forty-two of them at Archanis.
+  chance += Math.max(-0.4, Math.min(0.4, memory));
   if (enemyHullPct < 0.35) chance += 0.22;
   if (option.id === 'demand_surrender') chance -= 0.2;
 
