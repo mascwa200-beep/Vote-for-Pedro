@@ -283,6 +283,16 @@ export class Ship {
     this.breaching = false;
     this.breachTimer = 0;
     this.coreEjected = false;
+    // Set from the character sheet by `Game.applyCharacter`; false on every
+    // hull that has nobody aboard who could put a core back in, which is all
+    // of them by default.
+    this.canRecoverCore = false;
+    this.coreRecoverable = false;
+    // "Once per commission": the allowance is recomputed from the sheet, and
+    // this is the half that must survive being recomputed. See
+    // `Game.applyCharacter`.
+    this.deathSaves = 0;
+    this.deathSavesSpent = 0;
     this.fires = 0;
     this.boarders = 0;
     this.adaptation = {};          // Borg: damage type -> resistance 0..0.9
@@ -850,6 +860,10 @@ export class Ship {
     this.subsystems.warpcore = 0;
     this.power.cap = Math.round(this.cls.powerCap * 0.45);
     this.power.normalize();
+    // A core thrown clear is out there, and whether anybody aboard could put
+    // one back in is decided now, at the moment it goes — not later, when it
+    // would be a question about who happens to be on the bridge.
+    this.coreRecoverable = this.canRecoverCore === true;
 
     // Ejecting the core stops the antimatter going up. It does not put a hull
     // back together.
@@ -863,8 +877,61 @@ export class Ship {
     return true;
   }
 
+  /**
+   * Go back for it.
+   *
+   * An ejected core does not evaporate; it is drifting a few thousand
+   * kilometres off the port quarter with its own transponder on it. Getting a
+   * tractor beam on a live antimatter assembly and walking it back into the
+   * housing is the part almost nobody can do, which is why this is a rank-two
+   * feat and not a button — `canRecoverCore` is set from the character sheet.
+   *
+   * It comes back cold. A third of a warp core is enough to leave the system
+   * and not enough to pretend nothing happened.
+   */
+  recoverCore() {
+    if (!this.coreEjected || !this.coreRecoverable || this.destroyed) return false;
+    this.coreEjected = false;
+    this.coreRecoverable = false;
+    this.subsystems.warpcore = 0.35;
+    this.power.cap = this.cls.powerCap;
+    this.power.normalize();
+    emit('ship:core-recovered', { ship: this });
+    return true;
+  }
+
   destroy(cause = 'destroyed') {
     if (this.destroyed) return;
+
+    // "Survivor — once per commission, survive what would destroy the ship at
+    // 1% hull." Here, in `destroy`, rather than at the one call site that
+    // seemed likeliest: the ship is destroyed by weapons fire, by a warp core
+    // breach, by a collision, by boarders taking the bridge and by a hull that
+    // fails while the core is clear, and a feat that only answered one of
+    // those would be a feat that worked when the game happened to kill you the
+    // expected way.
+    //
+    // Not with the crew gone. A hull miracle needs somebody alive to work it,
+    // and spending the one save of a commission on a ship nobody is standing
+    // in buys a single tick: `update` finds the crew at zero on the next pass
+    // and destroys it again, with the allowance now spent. Measured over sixty
+    // battles a Miranda could not win, the ship was lost 58 times to
+    // catastrophic hull failure and twice to total crew loss, so this costs
+    // the feat almost nothing and stops it being wasted on the one death it
+    // cannot prevent.
+    if (this.deathSaves > 0 && this.crew > 0) {
+      this.deathSaves--;
+      this.deathSavesSpent = (this.deathSavesSpent ?? 0) + 1;
+      this.hull = Math.max(1, this.maxHull * 0.01);
+      // Whatever was about to finish the ship is over. A save that left the
+      // breach counting down would buy the captain nine seconds.
+      this.breaching = false;
+      this.breachTimer = 0;
+      this.boarders = 0;
+      for (const f of FACINGS) this.shields[f] = 0;
+      emit('ship:deathsave', { ship: this, cause });
+      return;
+    }
     this.destroyed = true;
     this.destroyCause = cause;
     this.hull = 0;
@@ -961,6 +1028,10 @@ export class Ship {
     this.breaching = false;
     this.breachTimer = 0;
     this.coreEjected = false;
+    // A yard fits a new core. There is nothing left drifting to go back for,
+    // and leaving this set would let a captain "recover" a core they are
+    // already flying on.
+    this.coreRecoverable = false;
     this.power.cap = this.cls.powerCap;
     this.torpedoes = this.maxTorpedoes;
     this.antimatter = MAX_ANTIMATTER;
@@ -984,6 +1055,11 @@ export class Ship {
       // progress, and a save taken during one used to come back with the
       // intruders gone, the alert cleared and the crew no longer dying.
       fires: this.fires, boarders: this.boarders, coreEjected: this.coreEjected, mods: this.mods,
+      // Whether the core is still out there to go back for, and whether the
+      // one survival this commission gets has already been spent. Both are
+      // once-only allowances, and an allowance that comes back when the app is
+      // closed and reopened is not an allowance.
+      coreRecoverable: this.coreRecoverable, deathSavesSpent: this.deathSavesSpent,
       // A breach in progress is state, not decoration. Left out, a save taken
       // during the twenty seconds you have to eject the core came back as a
       // ship sitting at zero hull with no countdown running and no way to die
@@ -1032,6 +1108,8 @@ export class Ship {
         ? clamp(data.antimatter, 0, MAX_ANTIMATTER) : MAX_ANTIMATTER,
       fires: data.fires ?? 0, boarders: Math.max(0, Number(data.boarders) || 0),
       coreEjected: data.coreEjected ?? false,
+      coreRecoverable: data.coreRecoverable === true,
+      deathSavesSpent: Math.max(0, Number(data.deathSavesSpent) || 0),
       breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
       destroyed: data.destroyed === true,
       destroyCause: data.destroyCause ?? null,

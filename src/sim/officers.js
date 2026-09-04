@@ -64,6 +64,12 @@ export const ABILITIES = {
   eject_core: {
     id: 'eject_core', dept: 'engineering', rank: 3, name: 'Eject Warp Core',
     order: 'Eject the core', cooldown: 0, duration: 0, special: 'eject',
+    // What the bridge thinks of the order. `risk` and `ethicalWeight` are the
+    // two numbers `Officer.reactTo` has always read, and until now the only
+    // one supplied was a `a.id === 'eject_core' ? 0.9 : 0.2` written at the
+    // call site — so this was the single order in the game anybody could have
+    // an opinion about, and even that opinion was thrown away unspoken.
+    risk: 0.9,
     say: 'Ejecting the core!',
   },
 
@@ -145,12 +151,25 @@ export const ABILITIES = {
   stimulants: {
     id: 'stimulants', dept: 'medical', rank: 2, name: 'Stimulants',
     order: 'Break out the stimulants', cooldown: 60, duration: 20,
+    // A doctor is being asked to put the crew on drugs to get another hour out
+    // of them. A candid one says so first and then does it.
+    ethicalWeight: 0.35,
     mods: { repairRate: 1.4, accuracy: 1.08 },
     say: 'They will feel this tomorrow. Not today.',
   },
   back_to_duty: {
     id: 'back_to_duty', dept: 'medical', rank: 2, name: 'Back to Duty',
     order: 'Clear someone for duty', cooldown: 90, duration: 0,
+    // Signing an injured officer back onto a post they are not fit for.
+    //
+    // Deliberately UNDER 0.5, which is the line `reactTo` draws between an
+    // objection and a refusal. A chief medical officer refusing this is the
+    // most in-character thing in the franchise and it was tried at 0.55 — and
+    // the TOS doctor has the discipline and the candor for it, so a canon crew
+    // lost the use of a rank-two ability outright, every time, for the whole
+    // campaign. A doctor who says it is a bad idea and then does it is the
+    // right answer; a game feature one crew can never use is not.
+    ethicalWeight: 0.4,
     special: 'return_officer',
     say: 'I can give you one of them back. One.',
   },
@@ -177,6 +196,9 @@ export const ABILITIES = {
   false_signal: {
     id: 'false_signal', dept: 'operations', rank: 2, name: 'False Signal',
     order: 'Put a false signal out', cooldown: 55, duration: 12,
+    // Deception under a Federation transponder. Legal, and not everybody at
+    // operations is comfortable with it.
+    ethicalWeight: 0.35,
     special: 'false_signal',
     say: 'Broadcasting a ship that is not there.',
   },
@@ -269,11 +291,21 @@ export class Officer {
     return this.available && this.abilities.includes(abilityId) && (this.cooldowns[abilityId] ?? 0) <= 0;
   }
 
-  startCooldown(abilityId) {
+  /**
+   * @param {string} abilityId
+   * @param {number} haste  fraction FASTER the station recovers, not fraction
+   *   off the clock: 0.4 is "recover 40% faster", which is the same wait
+   *   divided by 1.4 rather than multiplied by 0.6. The difference matters at
+   *   the top end, where the two readings diverge sharply and only one of them
+   *   can ever reach zero.
+   */
+  startCooldown(abilityId, haste = 0) {
     const ability = ABILITIES[abilityId];
     if (!ability) return;
-    // Expertise shaves cooldowns.
-    this.cooldowns[abilityId] = ability.cooldown * (1 - (this.expertise - 50) * 0.003);
+    // Expertise shaves cooldowns; a captain the bridge would follow anywhere
+    // shaves them further.
+    this.cooldowns[abilityId] = ability.cooldown
+      * (1 - (this.expertise - 50) * 0.003) / (1 + Math.max(0, haste));
   }
 
   update(dt) {

@@ -305,6 +305,12 @@ const ORDERS = [
     build: () => ({ action: 'eject_core' }),
   },
   {
+    id: 'recover_core',
+    help: 'Recover the ejected warp core',
+    test: (t) => /\b(recover|retrieve|tractor|go back for|get)\b[^.]{0,20}\b(warp )?core\b/.test(t),
+    build: () => ({ action: 'recover_core' }),
+  },
+  {
     id: 'brace',
     help: 'All hands brace for impact',
     test: (t) => /\bbrace\b/.test(t),
