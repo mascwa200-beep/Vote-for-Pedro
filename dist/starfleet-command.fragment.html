@@ -30319,6 +30319,8 @@ class Game {
    * half as much again, and is refused in a fight for the obvious reason.
    */
   effectRepairs() {
+    const done = this.noLongerInCommand();
+    if (done) return { ok: false, reason: done.reason };
     const s = this.ship;
     if (s.hullPct >= 1) return { ok: false, reason: 'The hull is sound, Captain.' };
     const blue = this.alert === 'blue';
@@ -30709,6 +30711,8 @@ class Game {
    * came here to look at. Naming a world is how you pick a different one.
    */
   enterOrbit(bodyId = null) {
+    const done = this.noLongerInCommand();
+    if (done) return done;
     if (this.transit) return { ok: false, error: 'We are still at warp, Captain.' };
     const sys = this.location;
     if (!sys) return { ok: false, error: 'We are nowhere in particular.' };
@@ -30817,6 +30821,8 @@ class Game {
   }
 
   setCourse(destinationId, warpFactor = this.warpFactor ?? 6) {
+    const done = this.noLongerInCommand();
+    if (done) return done;
     if (this.mode === MODES.COMBAT) return { ok: false, error: 'We are under fire, Captain.' };
     // The same refusal `breakOrbit` gives, for the same reason: a course order
     // clears the orbit on its way out, so without this the ship would leave the
@@ -32060,6 +32066,8 @@ class Game {
    * game is about and a pass/fail is not.
    */
   awayMission(templateId, opts = {}) {
+    const done = this.noLongerInCommand();
+    if (done) return { ok: false, reason: done.reason };
     if (this.ashore) {
       return { ok: false, reason: 'You are already on the surface, Captain.' };
     }
@@ -32487,6 +32495,8 @@ class Game {
   }
 
   dock() {
+    const done = this.noLongerInCommand();
+    if (done) return done;
     // Not in the middle of a firefight. "Request docking" restores the hull,
     // the shields, every subsystem, the magazine and the whole crew — so given
     // during a battle it was a full repair, instantly, for nothing, and it
@@ -33100,6 +33110,30 @@ class Game {
   // -------------------------------------------------- the five-year mission
 
   /**
+   * The order line, after there is nobody to give orders.
+   *
+   * `over` is set by three endings — a career finished by a second ship lost, a
+   * ship stranded with no port in reach, and the five years served — and the
+   * app routes to the ending screen for all three. The MODEL did not: measured
+   * after "a second ship lost — no further command was offered", `setCourse`
+   * came back `{ ok: true }` and the ship went to warp. Docking and ordered
+   * repairs did too, and the commission clock ran on to day 1,848.
+   *
+   * That is the shape `endOfCommission`'s own comment was added to prevent —
+   * "Year six, day thirty-one, still steering" — and the fix that stopped the
+   * clock's ending being ignored did not stop the orders being taken. In this
+   * game the rule belongs in the model rather than in the screen, which is the
+   * stated reason `dropOutOfWarp` and `trainOfficer` were both hoisted out of
+   * one, so a captain who is no longer a captain is told so here.
+   *
+   * @returns {object|null} a refusal, or null if there is still a commission
+   */
+  noLongerInCommand() {
+    if (!this.over) return null;
+    return { ok: false, error: 'Your command has ended, Captain.', reason: 'Your command has ended, Captain.' };
+  }
+
+  /**
    * Spend a span of the commission on something the captain ordered.
    *
    * The one door for "this took a while". It moves the commission clock and
@@ -33439,6 +33473,8 @@ class Game {
    * abilities nobody held at commission.
    */
   trainOfficer(who, abilityId) {
+    const done = this.noLongerInCommand();
+    if (done) return { ok: false, reason: done.reason };
     const officer = (typeof who === 'object' && typeof who?.learn === 'function')
       ? who
       : this.crew.at(who);
@@ -33489,6 +33525,8 @@ class Game {
   }
 
   fabricate(recipeId) {
+    const done = this.noLongerInCommand();
+    if (done) return done;
     // The machine shop is not a combat action. Left unguarded, a hull patch
     // could be started and finished under fire — hours of work compressed into
     // a battle, repeatedly, which is a free repair with extra steps.
@@ -33503,6 +33541,8 @@ class Game {
    * than hours that merely passed. Costs the same time on the stardate.
    */
   workTheShop(hours = 1) {
+    const done = this.noLongerInCommand();
+    if (done) return done;
     if (this.engagement && !this.engagement.over) {
       return { ok: false, error: 'Not while we are under fire, Captain.' };
     }
