@@ -1445,6 +1445,86 @@ Sources: [Memory Alpha — B'rel-class](https://memory-alpha.fandom.com/wiki/B%2
 
 ---
 
+## 28. The other nine, and a fleet that was lopsided
+
+§27 rebuilt the Klingon hulls and left an explicit list behind: four more forms
+building eleven classes with no lit port on any of them. Two of those forms were
+worse than under-detailed. They were the wrong species.
+
+**Five classes shared `wedge`.** A Galor, a Keldon, a Jem'Hadar attack ship, a
+Jem'Hadar battleship and a Tholian web spinner were one armoured slab with a
+coloured ball floating off the nose, drawn five times in five colours. The
+Dominion did not build Cardassian hulls; it conquered the people who did. And a
+Tholian vessel is a mineral — the one design in the fleet where "faceted" is the
+correct answer rather than a compromise.
+
+**Two shared `warbird`.** A D'deridex is 1,041 metres of warship built around an
+artificial quantum singularity; a Ferengi D'Kora is a 366-metre merchant hull
+with guns bolted on. They shared a builder and nothing else.
+
+### Three defects the rebuild exposed, all measurable
+
+**The sensor ball floated.** `wedge` put a lit sphere at x = 0.55 on a hull whose
+own forward face is at 0.5 of its `length_`. Sliced into twenty horizontal
+bands, four of the five classes had a band with *nothing in it* — a hole through
+the ship, with the ball on the far side of it. `raptor` had the same defect
+before §27 for a different reason, and the same measurement finds both.
+
+**Eleven classes were not symmetrical.** `sweep` displaces a box's +z corners
+aft and leaves its -z corners where they are. Inside `mirrored` that is a swept
+wing and correct; on a **centreline** box it is a parallelogram seen from above,
+one bow corner reaching forward and the other raked back. Measured as the
+largest port/starboard disagreement in reach as a fraction of hull length:
+
+| class | form | lopsided by |
+|---|---|---|
+| galor, keldon | wedge | 15.7%, 15.9% |
+| tholian_web_spinner | wedge | 27.7% |
+| bird_of_prey | raptor | 10.9% |
+| orion_raider | raptor | 9.7% |
+| nebula | podded | 17.9% |
+| ktinga | kdf_cruiser | 9.3% |
+| scoutship | raptor | 6.2% |
+| constitution | tos_starfleet | 3.8% |
+
+The Borg are the exception and stay one: a cube's surface clutter walks a
+trigonometric path with no mirror, and a Borg vessel is accreted rather than
+laid down. Everything else goes through a `prow` helper that builds the
+starboard half and mirrors it, so a swept centreline section comes out as an
+arrowhead with the point on the axis.
+
+**A port is only a port if it can be seen.** §27 measured that sideways, which
+is right for a belt on a tube and wrong for a light on the top of a wing. The
+general form: a port must reach at least as far as the hull in **one** of the
+four directions it faces, and the comparison is only asked in a direction the
+port is actually on the outer side of. That found four more buried rows — the
+Cardassian head's rake carried its outboard face forty percent of the ship's
+length aft, over the spine's own shoulder; a Keldon's dorsal pods sat exactly
+where the row below them wanted to be; and a D'deridex encloses its own spine
+and command head from every direction at once, so the only surface on it a light
+can be seen from is the outer face of an arm — which a ring about the x axis
+cannot lie on at all.
+
+### What the build takes from this
+
+Five forms in `src/gfx/forms.hostile.js`, each reading the published beam and
+height rather than carrying its own copy in unit space (the copies were wrong: a
+Galor came out 28% too wide and 32% too tall). `prow` for any swept section on
+the centreline. `portRow` for a light on a surface a belt cannot reach. And an
+ellipsoid rather than a tube wherever a hull is broad and shallow, because a
+tube is round in y and z together and a Jem'Hadar attack ship built from one
+measured 4.2× its own published height.
+
+Sources: [Memory Alpha — Galor-class](https://memory-alpha.fandom.com/wiki/Galor-class),
+[Memory Alpha — Keldon-class](https://memory-alpha.fandom.com/wiki/Keldon-class),
+[Memory Alpha — Jem'Hadar attack ship](https://memory-alpha.fandom.com/wiki/Jem%27Hadar_attack_ship),
+[Memory Alpha — Jem'Hadar battleship](https://memory-alpha.fandom.com/wiki/Jem%27Hadar_battleship),
+[Memory Alpha — Tholian web spinner](https://memory-alpha.fandom.com/wiki/Tholian_starship),
+[Memory Alpha — D'deridex-class](https://memory-alpha.fandom.com/wiki/D%27deridex-class),
+[Memory Alpha — D'Kora-class](https://memory-alpha.fandom.com/wiki/D%27Kora-class)
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
