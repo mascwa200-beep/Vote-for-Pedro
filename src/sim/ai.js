@@ -7,6 +7,7 @@
 import { FACTIONS } from '../world/factions.data.js';
 import { WEAPON_RANGE, stillEngaged } from './combat.js';
 import { facingForDirection } from './ship.js';
+import { chooseTactic, tickTactics } from './tactics.js';
 
 const DECISION_INTERVAL = 0.5; // seconds between re-evaluations
 
@@ -154,6 +155,9 @@ function chooseElevation(ship, target, doctrine, rng) {
 }
 
 export function chooseAction(ship, engagement, dt, opts = {}) {
+  // Every frame, not only on a decision tick: a cooldown that only ran down
+  // twice a second would run at two thirds speed at 30fps.
+  tickTactics(ship, dt);
   if (ship.destroyed) return;
 
   ship.aiTimer = (ship.aiTimer ?? 0) - dt;
@@ -280,6 +284,14 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
       return;
     }
   }
+
+  // ---- The other captain's own orders ----
+  //
+  // Before the manoeuvre, because a captain decides what to do about his
+  // shields and then flies accordingly, not the other way round. Allies get
+  // them too: a ship detached to stand with you is crewed by people who went
+  // to the same academy.
+  if (decide) chooseTactic(ship, target, engagement, doctrine);
 
   // ---- Manoeuvre ----
   if (decide) {
