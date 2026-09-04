@@ -2408,16 +2408,33 @@ Seeing it coming is deliberately not the same as having been ready.
 
 ### The wider version of the same finding
 
-`character.mechanic(key)` is the accessor, and it is called for exactly **four**
-keys. Counting every `mechanic:` declared across the species, background and
-career tables: **57 of 61 are read by nothing.**
+Counting every `mechanic:` declared across the species, background and career
+tables: **61 keys, of which 12 are read and 49 are read by nothing.** Before
+this section's three, it was 9 and 52.
 
 ```
-READ (4):  casualtyReduction, repGain, startingRankBonus, startingReprimand
+READ (12):  advantageOn, alwaysFirst, ambushAdvantage, casualtyReduction,
+            critBonus, extraProficiencies, extraProficiency, repGain,
+            rerollPerMission, startingRankBonus, startingReprimand,
+            surpriseImmune
 ```
 
-That is far too large for one change and is recorded here as the seam it is.
-This section spends three of the fifty-seven.
+**A note on how that was counted, because the first attempt got it wrong.**
+Grepping for `mechanic('key')` call sites finds four, and four was the number
+first written down here. It is not the number: five more are read inside
+`character.js` by its own helpers — `advantageOn` through `hasAdvantageOn`,
+`critBonus` through `shipMods`, `rerollPerMission` through `refresh`, and
+`extraProficiency`/`extraProficiencies` through the proficiency and feat paths.
+A second pass grepping the key NAMES across `src/` overcorrected the other way:
+`critRange` is a parameter of `resolve()` in `dice.js`, and `xpRate` and
+`autoSave` belong to the difficulty table, none of which reads a character.
+
+The only reliable count is the list of actual consumers, which is short enough
+to enumerate: the seven `mechanic()` call sites outside this file, and the five
+helper reads inside it. Everything else is decoration.
+
+Forty-nine is far too large for one change and is recorded here as the seam it
+is. This section spends three of them.
 
 ### The freighter that was not in the fight
 
