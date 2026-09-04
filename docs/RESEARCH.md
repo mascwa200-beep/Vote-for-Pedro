@@ -1596,7 +1596,85 @@ Sources: [Memory Alpha — Species 8472 bioship](https://memory-alpha.fandom.com
 
 ---
 
-## Attribution
+## 30. Cover that nobody took
+
+§136's work put rocks in the engagement volume and gave them a consequence
+sharper than a to-hit modifier: **a shot with a rock in the way is not fired at
+all.** Getting one between you and somebody stops the incoming fire rather than
+making it miss, which is what makes cover cover.
+
+It was available to every ship in the fight and taken by none of them, because
+the manoeuvre layer in `ai.js` had never looked at the arena. Measured over a
+hundred and sixty fights in a debris field, through the real fight loop with the
+same simple pilot the balance suite flies:
+
+| | main | with the terrain layer |
+|---|---|---|
+| hostile-ticks behind cover | 19.3% | 21.6% |
+| **hostile-ticks behind cover WHEN HURT** | **14.0%** | **23.4%** |
+| blocked without meaning to be | 19.3% | 18.6% |
+| ticks spent running for or holding cover | 0% | 10.4% |
+| player destroyed | 52/160 | 53/160 |
+| median fight | 59 s | 59 s |
+
+A hostile below half hull was **less** likely to be behind a rock than a healthy
+one. Not because it was doing something else clever: a hurt ship stops circling
+and holds station to present its strongest shield, which is the one behaviour
+guaranteed to leave it in the open.
+
+The outcome columns are the point of the change as much as the cover column. A
+captain who uses the terrain is not a captain who wins more — the rock that
+stops their shot stops yours — and the battle is the same length with the same
+result. What changed is that something happens in it.
+
+### Four things the measurements said that reasoning did not
+
+**A sphere casts a shadow, and all of it is cover.** The obvious hiding place is
+the far pole of the rock, and aiming there means flying all the way round even
+when already three quarters of the way there. Ships committed to hiding were
+actually behind something only 33% of the time; the rest was transit. Clamping
+the ship's own position into the shadow instead — nearest point, not far pole —
+took it to 38%.
+
+**Holding cover means following it.** The player orbits, so a rock's shadow
+sweeps around it. A ship that reached cover and then turned to present its best
+shield had to come a hundred and eighty degrees round when the shadow moved:
+traced on one episode, five seconds behind the rock and then *fourteen seconds
+flying steadily away from it at full throttle* while a Galor's turn rate brought
+the nose back. Station-keeping on the moving spot instead took the share from
+38% to 44%, and the median shield recovered per hiding episode from 0.26 to
+0.34.
+
+**Offsetting the destination does not clear the obstacle.** To go around a rock
+the obvious move is to nudge the aim point sideways by the rock's radius. The
+line's closest approach is that offset scaled by how far along the run the rock
+sits, so a rock 300 units into a 700-unit run was still missed by 124 of the 200
+needed. The waypoint has to be *abreast* of the rock, not past it.
+
+**And the mean of six shield facings is still the trap.** Written with
+`shieldPct` as the come-out-again condition, the exit fired on the same decision
+tick as the entry on nearly every attempt: over forty-eight fights the hostiles
+ran for cover 371 times and came back out 357, spending 2.0% of their ticks
+hidden. A ship at 45% hull routinely has a mean shield above 0.55 and one facing
+at nothing — which is exactly the ship that should be behind a rock.
+
+### And no weather manoeuvre, which is a measurement rather than an oversight
+
+`resolveHit` takes the worse sensor noise at either end of a shot, so gas spoils
+a firing solution and a losing ship "should" run into a cloud. The share of
+hostile-ticks already spent inside one, with nobody trying:
+
+| arena | in the gas |
+|---|---|
+| nebula | 96.0% |
+| metreon (Briar Patch) | 77.7% |
+| plasma storm (Badlands) | 65.4% |
+
+The clouds are large and the fight collapses into the middle of them, so a ship
+steering for the murk would be steering for where it already is. Rock is
+different — small, sixteen pieces, and being behind one is a decision. That is
+the line between a manoeuvre and a condition, and it is why cover is in the AI
+and weather is in the arena.
 
 Star Trek and all associated marks are the property of Paramount. This dossier
 records publicly documented facts and measurements, restated in my own words,

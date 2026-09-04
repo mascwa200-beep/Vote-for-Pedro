@@ -24878,385 +24878,6 @@ __exports.tickTactics = tickTactics;
 
 });
 
-__define("src/sim/ai.js", function (__exports, __require) {
-// Enemy and allied captains.
-//
-// Each faction flies differently, and the differences are mechanical, not
-// cosmetic: a Bird-of-Prey really does cloak, close, and alpha-strike; a Galor
-// really does hold at beam range and grind; Jem'Hadar really do ram.
-
-const { FACTIONS } = __require("src/world/factions.data.js");
-const { WEAPON_RANGE, stillEngaged } = __require("src/sim/combat.js");
-const { facingForDirection } = __require("src/sim/ship.js");
-const { chooseTactic, tickTactics } = __require("src/sim/tactics.js");
-
-const DECISION_INTERVAL = 0.5; // seconds between re-evaluations
-
-/**
- * Doctrines that take a ship rather than only sink one.
- *
- * The Borg assimilate, which is boarding by definition. Klingons take a
- * bridge — the same act the player's own `boarding_action` models from the
- * other side. Pirates want the hull intact, so an opportunist would far
- * rather board than destroy. The Dominion does not weigh what it costs.
- *
- * Romulans are deliberately absent: their doctrine is to strike from cloak
- * and leave, and a ship that decloaks alongside to send people across has
- * given up the only advantage it was flying for. Tholians and the defensive
- * factions do not board at all.
- */
-const BOARDING_DOCTRINES = new Set(['assimilate', 'aggressive', 'opportunist', 'fanatic']);
-
-/**
- * And how readily each of them takes the chance when it comes.
- *
- * A boarding party is a commitment: a fifth of the complement, off the ship,
- * in somebody else's corridors. Not every captain who CAN will. Without this
- * the window opens in most engagements where the player drops under a third
- * of his hull, and something that happens every time is weather rather than
- * an event.
- *
- * The Borg do not weigh it. Pirates want the hull more than the kill, so an
- * opportunist takes it more often than a Klingon does — and the Dominion,
- * which is perfectly willing to die shooting, is the least interested in
- * taking anything alive.
- */
-const BOARDING_RESOLVE = {
-  assimilate: 1, opportunist: 0.6, aggressive: 0.5, fanatic: 0.35,
-};
-
-/**
- * Beaming range for a boarding party, and the state that allows it.
- *
- * The mirror of what the game already asks of the PLAYER before offering
- * `boarding_action` (`Game.availableAwayMissions`): shields flat, the ship
- * beaten or lamed, and close enough to beam across. Symmetric on purpose —
- * the rule a captain learns by boarding somebody is the rule that gets used
- * on him, and a rule you can learn is the difference between a mechanic and
- * an ambush.
- */
-const BOARDING_RANGE = 900;
-const BOARDING_SHIELD_MAX = 0.05;
-const BOARDING_HULL_MAX = 0.35;
-const BOARDING_ENGINES_MAX = 0.15;
-
-/** How much of her complement a ship will put aboard somebody else's. */
-const BOARDING_PARTY_SHARE = 0.18;
-
-/** Below this she has nobody to spare. */
-const BOARDING_MIN_CREW = 30;
-
-/**
- * And she has to be winning.
- *
- * A captain sends his security detail onto somebody else's ship when he can
- * afford to be without them, not when he is himself about to die. Without
- * this the condition is met in essentially every engagement — the player's
- * hull dips under a third at some point in almost all of them and a facing is
- * almost always flat — and a boarding party that comes every time is weather
- * rather than an event.
- */
-const BOARDING_ATTACKER_HEALTH = 0.5;
-
-/**
- * Is `ship` in a state `from` could board her?
- *
- * The shield test is on the facing TOWARD the boarder, not on the average of
- * all six — and that distinction is the whole of it. `shieldPct` is the mean
- * across the facings, and combat never drives that mean to five per cent
- * because fire lands on one facing while the other five regenerate: across
- * forty ordinary engagements the lowest mean a hostile ever reached was 0.497,
- * ten times what the condition asked for. So `boarding_action` — three steps,
- * extreme hazard, the alternative to killing a ship that the game is built
- * around — was never once offered in a fight. Every test that exercised it
- * zeroed all six facings by hand, which is a state the simulation does not
- * produce.
- *
- * The facing toward the boarder is also simply what beaming through somebody's
- * shields means. You go through the gap. On the same numbers it comes up in
- * eleven fights in forty.
- */
-function boardableState(ship, from) {
-  const facing = facingForDirection(ship.directionFrom(from));
-  return ship.shieldPctOf(facing) <= BOARDING_SHIELD_MAX
-    && (ship.hullPct <= BOARDING_HULL_MAX || ship.subsystems.engines <= BOARDING_ENGINES_MAX);
-}
-
-/** Preferred engagement distance for a ship's best weapon. */
-function preferredRange(ship) {
-  if (!ship.weapons.length) return 900;
-  const types = ship.weapons.map((w) => w.type);
-  if (types.includes('cannon')) return 300;
-  if (types.includes('beam')) return 620;
-  return 800;
-}
-
-/** Steer toward a point, in both axes. */
-function steerTo(ship, x, y, z = null) {
-  ship.desiredHeading = Math.atan2(y - ship.y, x - ship.x) * 180 / Math.PI;
-  if (z !== null) {
-    const flat = Math.hypot(x - ship.x, y - ship.y);
-    ship.desiredPitch = Math.atan2(z - (ship.z ?? 0), flat) * 180 / Math.PI;
-  }
-}
-
-/**
- * Present the healthiest shield facing toward the threat.
- *
- * Only the four lateral facings are candidates. Dorsal and ventral exist and
- * take fire, but rolling a starship onto its back to put its belly toward an
- * attacker is not a manoeuvre any captain here would order, and an AI that did
- * it would look broken rather than clever.
- */
-function presentStrongestShield(ship, threat) {
-  const strongest = ['fore', 'starboard', 'aft', 'port']
-    .reduce((best, f) => (ship.shieldPctOf(f) > ship.shieldPctOf(best) ? f : best), 'fore');
-  const toThreat = Math.atan2(threat.y - ship.y, threat.x - ship.x) * 180 / Math.PI;
-  const offset = { fore: 0, starboard: -90, aft: 180, port: 90 }[strongest];
-  ship.desiredHeading = toThreat + offset;
-  ship.desiredPitch = 0;
-}
-
-/**
- * Climb or dive to come at the target from a facing it is not presenting.
- *
- * The whole point of a third axis is that it is a way to get at a weak shield
- * without having to out-turn anybody. An aggressive captain uses it; a
- * defensive one levels off, because a ship that is climbing is a ship that is
- * not shooting straight.
- */
-function chooseElevation(ship, target, doctrine, rng) {
-  const dorsalWeak = target.shieldPctOf('dorsal') < target.shieldPctOf('ventral');
-  const bias = dorsalWeak ? 1 : -1;
-  const commitment = doctrine === 'aggressive' ? 1 : doctrine === 'ambush' ? 0.8 : 0.45;
-  const spread = ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1);
-  // Aim to sit above or below the target rather than level with it.
-  const wantOffset = bias * commitment * 220 * (0.7 + 0.3 * spread);
-  return (target.z ?? 0) + wantOffset;
-}
-function chooseAction(ship, engagement, dt, opts = {}) {
-  // Every frame, not only on a decision tick: a cooldown that only ran down
-  // twice a second would run at two thirds speed at 30fps.
-  tickTactics(ship, dt);
-  if (ship.destroyed) return;
-
-  ship.aiTimer = (ship.aiTimer ?? 0) - dt;
-  const decide = ship.aiTimer <= 0;
-  if (decide) ship.aiTimer = DECISION_INTERVAL;
-
-  const doctrine = FACTIONS[ship.faction]?.doctrine ?? 'balanced';
-  const rng = engagement.rng;
-
-  // Pick a target — anything that is no longer in the fight is not one.
-  if (!stillEngaged(ship.aiTarget)) {
-    if (opts.allyOf) {
-      ship.aiTarget = engagement.liveHostiles[0] ?? null;
-    } else {
-      const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
-      // Prefer whoever is hurting them most, otherwise the player.
-      ship.aiTarget = candidates.includes(engagement.player) ? engagement.player : candidates[0];
-    }
-  }
-  const target = ship.aiTarget;
-  if (!stillEngaged(target)) return;
-
-  const distance = ship.distanceTo(target);
-  const want = preferredRange(ship);
-  const hullPct = ship.hullPct;
-
-  // ---- Fleeing ----
-  if (!opts.allyOf && !ship.fleeing && !engagement.relentless) {
-    const breakPoint = doctrine === 'fanatic' ? 0.0
-      : doctrine === 'aggressive' ? 0.12
-      : doctrine === 'opportunist' ? 0.45
-      : doctrine === 'assimilate' ? 0.0
-      : 0.2;
-    if (hullPct < breakPoint && ship.crew > 0) {
-      ship.fleeing = true;
-      engagement.pushLog(`${ship.name} is breaking off.`, 'tactical');
-    }
-  }
-  if (ship.fleeing) {
-    steerTo(ship, ship.x + (ship.x - target.x), ship.y + (ship.y - target.y));
-    ship.throttle = 1;
-    if (ship.cloakCapable && !ship.cloaked && ship.cloakCooldown <= 0) ship.cloak();
-    return;
-  }
-
-  // ---- Jem'Hadar ram ----
-  if (ship.cls.ramsWhenDoomed && hullPct < 0.2) {
-    // In three dimensions, because `distance` is measured in three. Steering
-    // in the plane at a target twenty degrees above you closes the horizontal
-    // gap and nothing else, so the 40-unit contact test was never satisfied: a
-    // doomed attack ship flew past, under, and out of the fight instead of
-    // doing the one thing its whole doctrine exists to do.
-    steerTo(ship, target.x, target.y, target.z ?? 0);
-    ship.throttle = 1;
-    if (distance < 40) {
-      target.takeDamage(ship.maxHull * 0.35, { direction: target.directionFrom(ship), type: 'kinetic', rng });
-      ship.destroy('deliberate collision');
-      engagement.onDestroyed(ship, ship);
-      engagement.pushLog(`${ship.name} rammed us.`, 'tactical');
-    }
-    return;
-  }
-
-  // ---- Boarding ----
-  //
-  // `ship.boarders` was a counter the whole game could only decrement: the
-  // defence in `Ship.update` was written in full — defenders drawn from the
-  // crew, losses on both sides, a subsystem wrecked every second or so — and
-  // nothing anywhere had ever put a single intruder aboard anything. The
-  // `intruder_alert` cue was synthesised and reserved, and the `boarding_drill`
-  // duty detail rehearsed repelling people who could not arrive.
-  //
-  // Once per ship: a captain who has sent his security detail across has sent
-  // it, and cannot send it again.
-  if (decide && !opts.allyOf && !ship.boardingDecided && !ship.cloaked
-    && BOARDING_DOCTRINES.has(doctrine)
-    && ship.crew > BOARDING_MIN_CREW
-    && ship.hullPct > BOARDING_ATTACKER_HEALTH
-    && distance < BOARDING_RANGE
-    && boardableState(target, ship)) {
-    // Decided the first time the window opens and not revisited: a captain
-    // who let the moment go has let it go, and one who took it has his people
-    // on somebody else's ship and cannot send them twice.
-    ship.boardingDecided = true;
-    if (rng.chance(BOARDING_RESOLVE[doctrine] ?? 0)) {
-      const party = Math.round(ship.crew * BOARDING_PARTY_SHARE);
-      if (target.receiveBoarders(party, ship) > 0) {
-        engagement.pushLog(
-          `${ship.name} has beamed a boarding party aboard. Intruder alert.`,
-          'tactical',
-        );
-        return;
-      }
-    }
-  }
-
-  // ---- Cloak-and-strike ----
-  if (doctrine === 'ambush' && ship.cloakCapable) {
-    if (ship.cloaked) {
-      steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
-      ship.throttle = 0.9;
-      // Decloak inside knife range with everything charged.
-      if (distance < want * 0.8) {
-        ship.decloak();
-        engagement.pushLog(`${ship.name} is decloaking!`, 'tactical');
-        // `z` and `classId` for the same reason the impact flare carries them:
-        // the renderer places the effect in three dimensions and sizes it to
-        // the hull it belongs to. Without them the shell sat on the ecliptic
-        // at a stock size while the ship it was veiling was somewhere else.
-        engagement.effects.push({
-          kind: 'decloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
-          classId: ship.classId, life: 1.0,
-        });
-      }
-      return;
-    }
-    // Re-cloak to reset the engagement once shields are thin.
-    if (decide && ship.shieldPct < 0.35 && ship.cloakCooldown <= 0 && distance > 350) {
-      ship.cloak();
-      engagement.effects.push({
-        kind: 'cloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
-        classId: ship.classId, life: 1.0,
-      });
-      return;
-    }
-  }
-
-  // ---- The other captain's own orders ----
-  //
-  // Before the manoeuvre, because a captain decides what to do about his
-  // shields and then flies accordingly, not the other way round. Allies get
-  // them too: a ship detached to stand with you is crewed by people who went
-  // to the same academy.
-  if (decide) chooseTactic(ship, target, engagement, doctrine);
-
-  // ---- Manoeuvre ----
-  if (decide) {
-    if (distance > want * 1.15) {
-      steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
-      ship.throttle = doctrine === 'aggressive' ? 1 : 0.8;
-    } else if (distance < want * 0.55) {
-      // Too close for a cruiser's arcs — open the range.
-      if (doctrine === 'attrition' || doctrine === 'territorial') {
-        steerTo(ship,
-          ship.x - (target.x - ship.x),
-          ship.y - (target.y - ship.y),
-          (ship.z ?? 0) - ((target.z ?? 0) - (ship.z ?? 0)));
-        ship.throttle = 0.7;
-      } else {
-        steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
-        ship.throttle = 0.5;
-      }
-    } else {
-      // In the pocket: orbit, and turn a good shield to the enemy if hurt.
-      if (ship.shieldPct < 0.4) {
-        presentStrongestShield(ship, target);
-      } else {
-        const toTarget = Math.atan2(target.y - ship.y, target.x - ship.x) * 180 / Math.PI;
-        const lead = doctrine === 'aggressive' ? 0 : 25;
-        ship.desiredHeading = toTarget + (ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1)) * lead;
-        // Hold the elevation that keeps the target's weaker face toward us.
-        ship.desiredPitch = ship.elevationTo(target);
-      }
-      ship.throttle = 0.55;
-    }
-
-    // Power doctrine.
-    if (ship.shieldPct < 0.3) ship.power.applyPreset('defense');
-    else if (hullPct > 0.6 && distance < want * 1.2) ship.power.applyPreset('attack');
-    else ship.power.applyPreset('balanced');
-  }
-
-  // ---- Tholian web ----
-  // A web does not outlive the ship spinning it. Without this the engagement
-  // stays un-leaveable after the spinner is dead, which combined with a hostile
-  // that has run out of reach is a soft-lock with no way out at all.
-  if (engagement.webbed
-    && !engagement.liveHostiles.some((s) => s.cls.websAfter)) {
-    engagement.webbed = false;
-    // Back to what the PLACE allows, not unconditionally true.
-    //
-    // A flat `= true` here means a Tholian web collapsing inside the Briar
-    // Patch hands back a warp drive that metreon gas will not let form — one
-    // temporary reason to be pinned expiring and cancelling a permanent one.
-    engagement.canWarpOut = !engagement.arena?.noWarp;
-    engagement.pushLog(engagement.canWarpOut
-      ? 'The web is collapsing. Warp drive is ours again.'
-      : 'The web is collapsing — though the gas will still not let a field form.',
-    'science');
-  }
-
-  if (ship.cls.websAfter) {
-    ship.webProgress = (ship.webProgress ?? 0) + dt;
-    if (ship.webProgress > ship.cls.websAfter && !engagement.webbed) {
-      engagement.webbed = true;
-      engagement.canWarpOut = false;
-      engagement.pushLog('The web has closed. We cannot go to warp.', 'science');
-    }
-  }
-
-  // ---- Borg regeneration ----
-  if (ship.cls.regenerates) {
-    ship.hull = Math.min(ship.maxHull, ship.hull + ship.cls.regenerates * dt);
-  }
-
-  // ---- Fire ----
-  for (const w of ship.weapons) {
-    if (distance <= (WEAPON_RANGE[w.type] ?? 900)) {
-      engagement.fireWeapon(ship, w, target);
-    }
-  }
-}
-
-__exports.BOARDING_RANGE = BOARDING_RANGE;
-__exports.boardableState = boardableState;
-__exports.chooseAction = chooseAction;
-
-});
-
 __define("src/sim/arena.js", function (__exports, __require) {
 // The place a fight happens in.
 //
@@ -25578,6 +25199,777 @@ __exports.blockedBy = blockedBy;
 __exports.insideSolid = insideSolid;
 __exports.cloudAt = cloudAt;
 __exports.conditionsAt = conditionsAt;
+
+});
+
+__define("src/sim/cover.js", function (__exports, __require) {
+// Using the terrain, which nobody was.
+//
+// #136 put rocks in the engagement volume and gave them consequences: a shot
+// with a rock in the way is not fired at all, so getting one between you and
+// somebody stops the incoming fire rather than making it miss. That is the
+// definition of cover, and it was available to every ship in the fight.
+//
+// Measured over a hundred and sixty fights in a debris field, through the real
+// fight loop with the same simple pilot the balance suite flies:
+//
+//     hostile-ticks behind cover                19.3%
+//     hostile-ticks behind cover WHEN HURT      14.0%
+//
+// A hostile below half hull was LESS likely to be behind a rock than a healthy
+// one — because a hurt ship stops circling and holds station to present its
+// strongest shield, which is the one behaviour guaranteed to leave it in the
+// open.
+//
+// This module is the geometry and the decision. It reads the arena and answers
+// three questions a captain would ask, and nothing in it touches the
+// simulation's random stream or moves a ship: `ai.js` decides what to do with
+// the answers.
+
+const { blockedBy, insideSolid } = __require("src/sim/arena.js");
+
+/** How far off a rock's skin a ship tries to sit. */
+const STANDOFF = 90;
+
+/**
+ * Is there rock between these two right now?
+ *
+ * The same call `fireWeapon` makes, named for what it means at the AI layer.
+ * Cover is symmetric — a rock that stops their shot stops yours — and that
+ * symmetry is the whole tension: you go behind it to stop being hit and you
+ * come out again because you cannot win from there.
+ */
+const inCover = (arena, ship, threat) => !!blockedBy(arena, ship, threat);
+
+/**
+ * Somewhere to be that puts a rock between this ship and that one.
+ *
+ * The point is on the far side of the rock from the threat, one standoff clear
+ * of its skin: the line from there to the threat passes through the rock's
+ * centre, which is as blocked as a line can be. Rocks are scored on how far the
+ * ship has to fly to reach the spot, penalised by how far that spot is from the
+ * fight — a rock behind you at the arena's edge is cover you never come back
+ * from, and a captain who takes it has left the battle.
+ *
+ * @returns {{x,y,z,rock}|null} null when there is nothing worth hiding behind.
+ */
+function coverPoint(arena, ship, threat, { maxRun = 1500 } = {}) {
+  if (!arena?.features?.length) return null;
+  let best = null;
+  let bestScore = Infinity;
+  for (const f of arena.features) {
+    if (f.type !== 'solid') continue;
+    // Big enough to hide the ship rather than to scratch its paint.
+    if (f.r < 80) continue;
+    const dx = f.x - threat.x;
+    const dy = f.y - threat.y;
+    const dz = f.z - (threat.z ?? 0);
+    const d = Math.hypot(dx, dy, dz);
+    if (d < 1e-6) continue;
+    // The NEAREST point in the rock's shadow, not the far pole of it.
+    //
+    // A sphere lit from the threat casts a shadow behind it, and every point in
+    // that shadow is cover. Aiming at the far pole means flying all the way
+    // round even when already three quarters of the way there — measured, only
+    // 33% of the time a ship spent "hiding" was time it was actually behind
+    // anything; the rest was transit.
+    //
+    // `along` is how far behind the rock the ship already is and `q` how far
+    // off the shadow's axis. Clamping each to the nearest value that is inside
+    // the shadow gives the closest spot that works.
+    const ux = dx / d; const uy = dy / d; const uz = dz / d;
+    const sx = ship.x - f.x; const sy = ship.y - f.y; const sz = (ship.z ?? 0) - f.z;
+    const along = Math.max(sx * ux + sy * uy + sz * uz, f.r * 0.35 + STANDOFF * 0.5);
+    let qx = sx - (sx * ux + sy * uy + sz * uz) * ux;
+    let qy = sy - (sx * ux + sy * uy + sz * uz) * uy;
+    let qz = sz - (sx * ux + sy * uy + sz * uz) * uz;
+    const q = Math.hypot(qx, qy, qz);
+    // Well inside the shadow rather than on its edge: the threat is moving,
+    // and a spot on the rim stops being cover the moment it does.
+    const want = Math.min(q, f.r * 0.55);
+    if (q > 1e-6) { qx = (qx / q) * want; qy = (qy / q) * want; qz = (qz / q) * want; }
+    const spot = {
+      x: f.x + ux * along + qx,
+      y: f.y + uy * along + qy,
+      z: f.z + uz * along + qz,
+    };
+    const run = Math.hypot(spot.x - ship.x, spot.y - ship.y, spot.z - (ship.z ?? 0));
+    if (run > maxRun) continue;
+    // How far the hiding place is from the enemy, which is how far you have to
+    // come back. Weighted lightly: the run matters more, but of two rocks at
+    // the same distance the near one is the one you can fight from again.
+    const fromFight = Math.hypot(spot.x - threat.x, spot.y - threat.y, spot.z - (threat.z ?? 0));
+    const score = run + fromFight * 0.35;
+    if (score < bestScore) {
+      bestScore = score;
+      best = { ...spot, rock: f };
+    }
+  }
+  return best;
+}
+
+/**
+ * A heading that goes AROUND the rock in the way instead of into it.
+ *
+ * `Combat.keepOutOfRocks` shoves a ship that has ended up inside one out to the
+ * surface, every tick, which is a floor rather than a manoeuvre: a hostile that
+ * has decided to fly through a two-hundred-unit rock spends the crossing being
+ * teleported back onto its skin. Nothing ever steered.
+ *
+ * The deflection is the tangent: slide the aim point sideways, perpendicular to
+ * the run and away from the rock's centre, by enough to clear it. One step,
+ * recomputed every decision tick, which is what a helmsman does — not a path
+ * plan, which would be a lie about how much this AI knows.
+ *
+ * @returns {{x,y,z}} the point to steer at, unchanged when the way is clear.
+ */
+function steerAround(arena, ship, aim, { ignore = null } = {}) {
+  if (!arena?.features?.length) return aim;
+  const at = { x: ship.x, y: ship.y, z: ship.z ?? 0 };
+  // `ignore` is the rock being flown TO. Without it a ship running for cover
+  // deflects around the very rock it is trying to get behind, every tick, and
+  // never arrives — which is most of what "hiding but not in cover" was.
+  let rock = blockedBy(arena, at, aim) ?? insideSolid(arena, at);
+  if (rock && ignore && rock === ignore) rock = insideSolid(arena, at);
+  if (!rock) return aim;
+
+  const dx = aim.x - at.x;
+  const dy = aim.y - at.y;
+  const dz = (aim.z ?? 0) - at.z;
+  const len = Math.hypot(dx, dy, dz);
+  if (len < 1e-6) return aim;
+  const ux = dx / len; const uy = dy / len; const uz = dz / len;
+
+  // The rock's offset from the run, with the along-run part removed: what is
+  // left points from the line to the rock's centre.
+  const rx = rock.x - at.x;
+  const ry = rock.y - at.y;
+  const rz = rock.z - at.z;
+  const along = rx * ux + ry * uy + rz * uz;
+  let ox = rx - along * ux;
+  let oy = ry - along * uy;
+  let oz = rz - along * uz;
+  let off = Math.hypot(ox, oy, oz);
+  if (off < 1e-3) {
+    // Dead-on: any perpendicular will do, and one has to be chosen rather than
+    // divided by zero. Cross with whichever axis the run is least parallel to.
+    const ax = Math.abs(ux) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+    ox = uy * ax[2] - uz * ax[1];
+    oy = uz * ax[0] - ux * ax[2];
+    oz = ux * ax[1] - uy * ax[0];
+    off = Math.hypot(ox, oy, oz) || 1;
+  }
+  // A WAYPOINT ABREAST OF THE ROCK, not the destination nudged sideways.
+  //
+  // Offsetting the far end by the rock's radius does not clear the rock: the
+  // line's closest approach is that offset scaled by how far along the rock
+  // sits, so a rock 300 units into a 700-unit run was still missed by only 124
+  // of the 200 needed. Measured on exactly that case, which is why the test
+  // for it asserts the deflected run is clear rather than merely different.
+  //
+  // Steering at a point level with the rock and one standoff outside it makes
+  // the ship pass it at that distance, and the run recomputes clear once it is
+  // past — which is what going round something is.
+  const push = rock.r + STANDOFF;
+  const reach = Math.max(along, 1);
+  return {
+    x: at.x + ux * reach - (ox / off) * push,
+    y: at.y + uy * reach - (oy / off) * push,
+    z: at.z + uz * reach - (oz / off) * push,
+  };
+}
+
+// ---------------------------------------------------------------- the gas
+//
+// THERE IS NO `murkPoint`, AND THAT IS A MEASUREMENT RATHER THAN AN OVERSIGHT.
+//
+// The obvious next move is to have a losing ship run into a cloud: `resolveHit`
+// takes the WORSE sensor noise at either end of a shot, so gas spoils a firing
+// solution. Written and then measured over sixty-four fights per arena, the
+// share of hostile-ticks already spent inside a cloud without anybody trying:
+//
+//     nebula          96.0%      (one cloud, 2,400 units, centred on the fight)
+//     metreon         77.7%
+//     plasma storm    65.4%
+//
+// The clouds are big and the fight collapses to the middle of them, so a ship
+// steering for the murk would be steering for where it already is. Rock is
+// different — it is small, there are sixteen pieces, and being behind one is a
+// decision — which is why cover is a manoeuvre and weather is a condition.
+
+__exports.inCover = inCover;
+__exports.coverPoint = coverPoint;
+__exports.steerAround = steerAround;
+
+});
+
+__define("src/sim/ai.js", function (__exports, __require) {
+// Enemy and allied captains.
+//
+// Each faction flies differently, and the differences are mechanical, not
+// cosmetic: a Bird-of-Prey really does cloak, close, and alpha-strike; a Galor
+// really does hold at beam range and grind; Jem'Hadar really do ram.
+
+const { FACTIONS } = __require("src/world/factions.data.js");
+const { WEAPON_RANGE, stillEngaged } = __require("src/sim/combat.js");
+const { facingForDirection } = __require("src/sim/ship.js");
+const { chooseTactic, tickTactics } = __require("src/sim/tactics.js");
+const { inCover, coverPoint, steerAround } = __require("src/sim/cover.js");
+
+const DECISION_INTERVAL = 0.5; // seconds between re-evaluations
+
+/**
+ * Doctrines that take a ship rather than only sink one.
+ *
+ * The Borg assimilate, which is boarding by definition. Klingons take a
+ * bridge — the same act the player's own `boarding_action` models from the
+ * other side. Pirates want the hull intact, so an opportunist would far
+ * rather board than destroy. The Dominion does not weigh what it costs.
+ *
+ * Romulans are deliberately absent: their doctrine is to strike from cloak
+ * and leave, and a ship that decloaks alongside to send people across has
+ * given up the only advantage it was flying for. Tholians and the defensive
+ * factions do not board at all.
+ */
+const BOARDING_DOCTRINES = new Set(['assimilate', 'aggressive', 'opportunist', 'fanatic']);
+
+/**
+ * And how readily each of them takes the chance when it comes.
+ *
+ * A boarding party is a commitment: a fifth of the complement, off the ship,
+ * in somebody else's corridors. Not every captain who CAN will. Without this
+ * the window opens in most engagements where the player drops under a third
+ * of his hull, and something that happens every time is weather rather than
+ * an event.
+ *
+ * The Borg do not weigh it. Pirates want the hull more than the kill, so an
+ * opportunist takes it more often than a Klingon does — and the Dominion,
+ * which is perfectly willing to die shooting, is the least interested in
+ * taking anything alive.
+ */
+const BOARDING_RESOLVE = {
+  assimilate: 1, opportunist: 0.6, aggressive: 0.5, fanatic: 0.35,
+};
+
+/**
+ * Beaming range for a boarding party, and the state that allows it.
+ *
+ * The mirror of what the game already asks of the PLAYER before offering
+ * `boarding_action` (`Game.availableAwayMissions`): shields flat, the ship
+ * beaten or lamed, and close enough to beam across. Symmetric on purpose —
+ * the rule a captain learns by boarding somebody is the rule that gets used
+ * on him, and a rule you can learn is the difference between a mechanic and
+ * an ambush.
+ */
+const BOARDING_RANGE = 900;
+const BOARDING_SHIELD_MAX = 0.05;
+const BOARDING_HULL_MAX = 0.35;
+const BOARDING_ENGINES_MAX = 0.15;
+
+/** How much of her complement a ship will put aboard somebody else's. */
+const BOARDING_PARTY_SHARE = 0.18;
+
+/** Below this she has nobody to spare. */
+const BOARDING_MIN_CREW = 30;
+
+/**
+ * And she has to be winning.
+ *
+ * A captain sends his security detail onto somebody else's ship when he can
+ * afford to be without them, not when he is himself about to die. Without
+ * this the condition is met in essentially every engagement — the player's
+ * hull dips under a third at some point in almost all of them and a facing is
+ * almost always flat — and a boarding party that comes every time is weather
+ * rather than an event.
+ */
+const BOARDING_ATTACKER_HEALTH = 0.5;
+
+/**
+ * Is `ship` in a state `from` could board her?
+ *
+ * The shield test is on the facing TOWARD the boarder, not on the average of
+ * all six — and that distinction is the whole of it. `shieldPct` is the mean
+ * across the facings, and combat never drives that mean to five per cent
+ * because fire lands on one facing while the other five regenerate: across
+ * forty ordinary engagements the lowest mean a hostile ever reached was 0.497,
+ * ten times what the condition asked for. So `boarding_action` — three steps,
+ * extreme hazard, the alternative to killing a ship that the game is built
+ * around — was never once offered in a fight. Every test that exercised it
+ * zeroed all six facings by hand, which is a state the simulation does not
+ * produce.
+ *
+ * The facing toward the boarder is also simply what beaming through somebody's
+ * shields means. You go through the gap. On the same numbers it comes up in
+ * eleven fights in forty.
+ */
+function boardableState(ship, from) {
+  const facing = facingForDirection(ship.directionFrom(from));
+  return ship.shieldPctOf(facing) <= BOARDING_SHIELD_MAX
+    && (ship.hullPct <= BOARDING_HULL_MAX || ship.subsystems.engines <= BOARDING_ENGINES_MAX);
+}
+
+/** Preferred engagement distance for a ship's best weapon. */
+function preferredRange(ship) {
+  if (!ship.weapons.length) return 900;
+  const types = ship.weapons.map((w) => w.type);
+  if (types.includes('cannon')) return 300;
+  if (types.includes('beam')) return 620;
+  return 800;
+}
+
+/** Steer toward a point, in both axes. */
+function steerTo(ship, x, y, z = null) {
+  ship.desiredHeading = Math.atan2(y - ship.y, x - ship.x) * 180 / Math.PI;
+  if (z !== null) {
+    const flat = Math.hypot(x - ship.x, y - ship.y);
+    ship.desiredPitch = Math.atan2(z - (ship.z ?? 0), flat) * 180 / Math.PI;
+  }
+}
+
+/**
+ * Steer toward a point, going AROUND anything solid on the way.
+ *
+ * Every manoeuvre in this file used to aim straight through the terrain.
+ * `Combat.keepOutOfRocks` catches the result and shoves the ship back onto the
+ * rock's skin, every tick, which is a floor and not a helmsman: a hostile that
+ * decided to cross a two-hundred-unit rock spent the crossing being teleported.
+ *
+ * One deflection step, recomputed each decision tick, which is what a helmsman
+ * does. A path plan would be a lie about how much this AI knows.
+ */
+function flyTo(ship, arena, x, y, z = null, ignore = null) {
+  const aim = steerAround(arena, ship, { x, y, z: z ?? (ship.z ?? 0) }, { ignore });
+  steerTo(ship, aim.x, aim.y, z === null ? null : aim.z);
+}
+
+/**
+ * How badly hurt a ship has to be before it goes looking for a rock.
+ *
+ * Hull, not `shieldPct`: the mean of six facings is the trap this codebase has
+ * already fallen into once, and combat does not drive it low — over ninety-six
+ * fights the mean sat above 0.4 for most of the time a ship was visibly losing.
+ * Hull is what a captain actually watches.
+ */
+const COVER_DOCTRINE = {
+  // Never. The Borg do not take cover and neither do the Jem'Hadar.
+  assimilate: 0, fanatic: 0,
+  // Only when it is nearly over.
+  aggressive: 0.25,
+  // Readily: these are the captains whose whole method is not being hit.
+  ambush: 0.6, opportunist: 0.65, defensive: 0.6, attrition: 0.5,
+  territorial: 0.5, balanced: 0.45,
+};
+
+/**
+ * Shields back to here and they come out again — measured on the WEAKEST
+ * facing, not the mean of six.
+ *
+ * The mean is the trap this codebase has fallen into before. Written against
+ * `shipPct` the exit fired on the same decision tick as the entry on almost
+ * every attempt: over forty-eight fights the hostiles ran for cover 371 times
+ * and came back out 357, spending 2.0% of their ticks hidden. A ship at 45% hull
+ * routinely has a mean shield above 0.55 and one facing at nothing, which is
+ * exactly the ship that should be behind a rock.
+ */
+const COVER_LEAVE_SHIELDS = 0.6;
+const weakestShield = (ship) => Math.min(
+  ...['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'].map((f) => ship.shieldPctOf(f)),
+);
+
+/** Time actually behind the rock before coming out is even considered. */
+const COVER_MIN_SHELTER = 3;
+
+/**
+ * And how long before the same captain will do it again.
+ *
+ * Hull does not regenerate, so a ship that hides on a hull threshold will meet
+ * that threshold again the moment it leaves. Without a cooldown that is a
+ * stutter at the decision-tick rate; with one it is a peek cycle, which is what
+ * fighting from cover looks like.
+ */
+const COVER_COOLDOWN = 14;
+
+/**
+ * And a hard ceiling on how long anybody may sit behind a rock.
+ *
+ * Cover is symmetric — the rock that stops their shot stops yours — so a ship
+ * that hides indefinitely has left the battle, and a battle where both sides
+ * have left is one the player watches. Twenty-two seconds is long enough to
+ * get a facing back and short enough that a fight never stalls on it.
+ */
+const COVER_MAX = 22;
+
+/**
+ * Decide whether this captain is behind a rock, running for one, or fighting.
+ *
+ * Returns true when the ship's manoeuvre for this tick is settled and the
+ * caller should not fly it anywhere else.
+ */
+function useTerrain(ship, target, engagement, doctrine, decide) {
+  const arena = engagement.arena;
+  const threshold = COVER_DOCTRINE[doctrine] ?? 0.45;
+  if (!arena?.features?.length || threshold <= 0) {
+    // Clear rather than leave: an engagement can lose its terrain the moment
+    // reinforcements rebuild the arena, and a stale flag is a ship that never
+    // fights again.
+    ship.hiding = false;
+    return false;
+  }
+
+  if (ship.coverCooldown > 0 && decide) ship.coverCooldown -= DECISION_INTERVAL;
+
+  if (ship.hiding) {
+    if (decide) ship.hidingFor = (ship.hidingFor ?? 0) + DECISION_INTERVAL;
+    const sheltered = (ship.sheltered ?? 0) >= COVER_MIN_SHELTER;
+    const recovered = sheltered && weakestShield(ship) >= COVER_LEAVE_SHIELDS;
+    if (recovered || ship.hidingFor > COVER_MAX) {
+      ship.hiding = false;
+      ship.hidingFor = 0;
+      ship.sheltered = 0;
+      ship.coverCooldown = COVER_COOLDOWN;
+      // A captain who has got his shields back says so, once. Without it the
+      // ship simply reappears and the player has no idea anything happened.
+      if (recovered) {
+        engagement.pushLog(`${ship.name} is coming back out.`, 'tactical');
+      }
+      return false;
+    }
+  } else if (decide && ship.hullPct < threshold && !ship.cloaked
+    && !(ship.coverCooldown > 0)) {
+    const spot = coverPoint(arena, ship, target);
+    if (!spot) return false;
+    ship.hiding = true;
+    ship.hidingFor = 0;
+    ship.coverSpot = spot;
+    engagement.pushLog(`${ship.name} is running for cover.`, 'tactical');
+  }
+  if (!ship.hiding) return false;
+
+  // Already behind it: hold station on the shadow, and put everything into
+  // the shields.
+  //
+  // Station-keeping on the SPOT, not turning to present a shield. The shadow
+  // sweeps round the rock as the player orbits, so holding cover means
+  // following it — and a ship that spent the shelter pointing its best facing
+  // at the enemy then had to turn a hundred and eighty degrees to chase the
+  // shadow when it moved. Traced on one episode: five seconds behind the rock,
+  // then fourteen seconds flying steadily AWAY from cover at full throttle
+  // while a Galor's turn rate brought the nose round.
+  if (inCover(arena, ship, target)) {
+    ship.sheltered = (ship.sheltered ?? 0) + (decide ? DECISION_INTERVAL : 0);
+    ship.coverSpot = coverPoint(arena, ship, target) ?? ship.coverSpot;
+    if (ship.coverSpot) {
+      flyTo(ship, arena, ship.coverSpot.x, ship.coverSpot.y, ship.coverSpot.z, ship.coverSpot.rock);
+    }
+    ship.throttle = 0.35;
+    ship.power.applyPreset('defense');
+    return true;
+  }
+
+  // Still running, and re-aimed EVERY FRAME rather than every decision tick.
+  //
+  // Cover is not a place, it is a place relative to somebody who is moving: the
+  // player orbits, so a rock's shadow sweeps round it, and a hostile that
+  // re-aims twice a second is chasing a shadow that has already gone. Measured,
+  // re-aiming on the decision tick left a ship that had committed to hiding
+  // actually behind something only 38% of the time.
+  //
+  // It costs one pass over the rocks per hostile per frame, which is sixteen
+  // distance tests for a ship that has already decided it is hiding.
+  ship.coverSpot = coverPoint(arena, ship, target) ?? ship.coverSpot;
+  const spot = ship.coverSpot;
+  if (!spot) { ship.hiding = false; return false; }
+  flyTo(ship, arena, spot.x, spot.y, spot.z, spot.rock);
+  ship.throttle = 1;
+  ship.power.applyPreset('defense');
+  return true;
+}
+
+/**
+ * Present the healthiest shield facing toward the threat.
+ *
+ * Only the four lateral facings are candidates. Dorsal and ventral exist and
+ * take fire, but rolling a starship onto its back to put its belly toward an
+ * attacker is not a manoeuvre any captain here would order, and an AI that did
+ * it would look broken rather than clever.
+ */
+function presentStrongestShield(ship, threat) {
+  const strongest = ['fore', 'starboard', 'aft', 'port']
+    .reduce((best, f) => (ship.shieldPctOf(f) > ship.shieldPctOf(best) ? f : best), 'fore');
+  const toThreat = Math.atan2(threat.y - ship.y, threat.x - ship.x) * 180 / Math.PI;
+  const offset = { fore: 0, starboard: -90, aft: 180, port: 90 }[strongest];
+  ship.desiredHeading = toThreat + offset;
+  ship.desiredPitch = 0;
+}
+
+/**
+ * Climb or dive to come at the target from a facing it is not presenting.
+ *
+ * The whole point of a third axis is that it is a way to get at a weak shield
+ * without having to out-turn anybody. An aggressive captain uses it; a
+ * defensive one levels off, because a ship that is climbing is a ship that is
+ * not shooting straight.
+ */
+function chooseElevation(ship, target, doctrine, rng) {
+  const dorsalWeak = target.shieldPctOf('dorsal') < target.shieldPctOf('ventral');
+  const bias = dorsalWeak ? 1 : -1;
+  const commitment = doctrine === 'aggressive' ? 1 : doctrine === 'ambush' ? 0.8 : 0.45;
+  const spread = ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1);
+  // Aim to sit above or below the target rather than level with it.
+  const wantOffset = bias * commitment * 220 * (0.7 + 0.3 * spread);
+  return (target.z ?? 0) + wantOffset;
+}
+function chooseAction(ship, engagement, dt, opts = {}) {
+  // Every frame, not only on a decision tick: a cooldown that only ran down
+  // twice a second would run at two thirds speed at 30fps.
+  tickTactics(ship, dt);
+  if (ship.destroyed) return;
+
+  ship.aiTimer = (ship.aiTimer ?? 0) - dt;
+  const decide = ship.aiTimer <= 0;
+  if (decide) ship.aiTimer = DECISION_INTERVAL;
+
+  const doctrine = FACTIONS[ship.faction]?.doctrine ?? 'balanced';
+  const rng = engagement.rng;
+
+  // Pick a target — anything that is no longer in the fight is not one.
+  if (!stillEngaged(ship.aiTarget)) {
+    if (opts.allyOf) {
+      ship.aiTarget = engagement.liveHostiles[0] ?? null;
+    } else {
+      const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
+      // Prefer whoever is hurting them most, otherwise the player.
+      ship.aiTarget = candidates.includes(engagement.player) ? engagement.player : candidates[0];
+    }
+  }
+  const target = ship.aiTarget;
+  if (!stillEngaged(target)) return;
+
+  const distance = ship.distanceTo(target);
+  const want = preferredRange(ship);
+  const hullPct = ship.hullPct;
+
+  // ---- Fleeing ----
+  if (!opts.allyOf && !ship.fleeing && !engagement.relentless) {
+    const breakPoint = doctrine === 'fanatic' ? 0.0
+      : doctrine === 'aggressive' ? 0.12
+      : doctrine === 'opportunist' ? 0.45
+      : doctrine === 'assimilate' ? 0.0
+      : 0.2;
+    if (hullPct < breakPoint && ship.crew > 0) {
+      ship.fleeing = true;
+      engagement.pushLog(`${ship.name} is breaking off.`, 'tactical');
+    }
+  }
+  if (ship.fleeing) {
+    // Whatever it was doing behind a rock, it is running now. Left set, the
+    // flag outlives the behaviour: `useTerrain` is never reached from here, so
+    // a ship that started hiding and then broke off stayed "hiding" for the
+    // rest of the battle — measured at fifty-nine seconds against a
+    // twenty-two-second ceiling that was working perfectly.
+    ship.hiding = false;
+    ship.hidingFor = 0;
+    ship.sheltered = 0;
+    // Behind a rock on the way out, when there is one. A ship running in a
+    // straight line away from somebody is a ship being shot in the back for as
+    // long as the run lasts, and the terrain has been there the whole time.
+    const bolthole = coverPoint(engagement.arena, ship, target, { maxRun: 900 });
+    if (bolthole && !inCover(engagement.arena, ship, target)) {
+      flyTo(ship, engagement.arena, bolthole.x, bolthole.y, bolthole.z, bolthole.rock);
+    } else {
+      flyTo(ship, engagement.arena, ship.x + (ship.x - target.x), ship.y + (ship.y - target.y));
+    }
+    ship.throttle = 1;
+    if (ship.cloakCapable && !ship.cloaked && ship.cloakCooldown <= 0) ship.cloak();
+    return;
+  }
+
+  // ---- Jem'Hadar ram ----
+  if (ship.cls.ramsWhenDoomed && hullPct < 0.2) {
+    // In three dimensions, because `distance` is measured in three. Steering
+    // in the plane at a target twenty degrees above you closes the horizontal
+    // gap and nothing else, so the 40-unit contact test was never satisfied: a
+    // doomed attack ship flew past, under, and out of the fight instead of
+    // doing the one thing its whole doctrine exists to do.
+    // Straight at them, terrain and all: a ship that has decided to ram is
+    // not steering round anything, and `flyTo` here would have it swerve
+    // politely past the rock and the target both.
+    steerTo(ship, target.x, target.y, target.z ?? 0);
+    ship.throttle = 1;
+    if (distance < 40) {
+      target.takeDamage(ship.maxHull * 0.35, { direction: target.directionFrom(ship), type: 'kinetic', rng });
+      ship.destroy('deliberate collision');
+      engagement.onDestroyed(ship, ship);
+      engagement.pushLog(`${ship.name} rammed us.`, 'tactical');
+    }
+    return;
+  }
+
+  // ---- Boarding ----
+  //
+  // `ship.boarders` was a counter the whole game could only decrement: the
+  // defence in `Ship.update` was written in full — defenders drawn from the
+  // crew, losses on both sides, a subsystem wrecked every second or so — and
+  // nothing anywhere had ever put a single intruder aboard anything. The
+  // `intruder_alert` cue was synthesised and reserved, and the `boarding_drill`
+  // duty detail rehearsed repelling people who could not arrive.
+  //
+  // Once per ship: a captain who has sent his security detail across has sent
+  // it, and cannot send it again.
+  if (decide && !opts.allyOf && !ship.boardingDecided && !ship.cloaked
+    && BOARDING_DOCTRINES.has(doctrine)
+    && ship.crew > BOARDING_MIN_CREW
+    && ship.hullPct > BOARDING_ATTACKER_HEALTH
+    && distance < BOARDING_RANGE
+    && boardableState(target, ship)) {
+    // Decided the first time the window opens and not revisited: a captain
+    // who let the moment go has let it go, and one who took it has his people
+    // on somebody else's ship and cannot send them twice.
+    ship.boardingDecided = true;
+    if (rng.chance(BOARDING_RESOLVE[doctrine] ?? 0)) {
+      const party = Math.round(ship.crew * BOARDING_PARTY_SHARE);
+      if (target.receiveBoarders(party, ship) > 0) {
+        engagement.pushLog(
+          `${ship.name} has beamed a boarding party aboard. Intruder alert.`,
+          'tactical',
+        );
+        return;
+      }
+    }
+  }
+
+  // ---- Cloak-and-strike ----
+  if (doctrine === 'ambush' && ship.cloakCapable) {
+    if (ship.cloaked) {
+      flyTo(ship, engagement.arena, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
+      ship.throttle = 0.9;
+      // Decloak inside knife range with everything charged.
+      if (distance < want * 0.8) {
+        ship.decloak();
+        engagement.pushLog(`${ship.name} is decloaking!`, 'tactical');
+        // `z` and `classId` for the same reason the impact flare carries them:
+        // the renderer places the effect in three dimensions and sizes it to
+        // the hull it belongs to. Without them the shell sat on the ecliptic
+        // at a stock size while the ship it was veiling was somewhere else.
+        engagement.effects.push({
+          kind: 'decloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
+          classId: ship.classId, life: 1.0,
+        });
+      }
+      return;
+    }
+    // Re-cloak to reset the engagement once shields are thin.
+    if (decide && ship.shieldPct < 0.35 && ship.cloakCooldown <= 0 && distance > 350) {
+      ship.cloak();
+      engagement.effects.push({
+        kind: 'cloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
+        classId: ship.classId, life: 1.0,
+      });
+      return;
+    }
+  }
+
+  // ---- The other captain's own orders ----
+  //
+  // Before the manoeuvre, because a captain decides what to do about his
+  // shields and then flies accordingly, not the other way round. Allies get
+  // them too: a ship detached to stand with you is crewed by people who went
+  // to the same academy.
+  if (decide) chooseTactic(ship, target, engagement, doctrine);
+
+  // ---- Terrain ----
+  //
+  // Before the manoeuvre and after the tactic, because a captain who has
+  // decided to break off behind a rock still wants his evasive pattern
+  // running while he does it.
+  if (useTerrain(ship, target, engagement, doctrine, decide)) {
+    for (const w of ship.weapons) {
+      if (distance <= (WEAPON_RANGE[w.type] ?? 900)) engagement.fireWeapon(ship, w, target);
+    }
+    return;
+  }
+
+  // ---- Manoeuvre ----
+  if (decide) {
+    if (distance > want * 1.15) {
+      flyTo(ship, engagement.arena, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
+      ship.throttle = doctrine === 'aggressive' ? 1 : 0.8;
+    } else if (distance < want * 0.55) {
+      // Too close for a cruiser's arcs — open the range.
+      if (doctrine === 'attrition' || doctrine === 'territorial') {
+        flyTo(ship, engagement.arena,
+          ship.x - (target.x - ship.x),
+          ship.y - (target.y - ship.y),
+          (ship.z ?? 0) - ((target.z ?? 0) - (ship.z ?? 0)));
+        ship.throttle = 0.7;
+      } else {
+        flyTo(ship, engagement.arena, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
+        ship.throttle = 0.5;
+      }
+    } else {
+      // In the pocket: orbit, and turn a good shield to the enemy if hurt.
+      if (ship.shieldPct < 0.4) {
+        presentStrongestShield(ship, target);
+      } else {
+        const toTarget = Math.atan2(target.y - ship.y, target.x - ship.x) * 180 / Math.PI;
+        const lead = doctrine === 'aggressive' ? 0 : 25;
+        ship.desiredHeading = toTarget + (ship.orbitDir ?? (ship.orbitDir = rng.chance(0.5) ? 1 : -1)) * lead;
+        // Hold the elevation that keeps the target's weaker face toward us.
+        ship.desiredPitch = ship.elevationTo(target);
+      }
+      ship.throttle = 0.55;
+    }
+
+    // Power doctrine.
+    if (ship.shieldPct < 0.3) ship.power.applyPreset('defense');
+    else if (hullPct > 0.6 && distance < want * 1.2) ship.power.applyPreset('attack');
+    else ship.power.applyPreset('balanced');
+  }
+
+  // ---- Tholian web ----
+  // A web does not outlive the ship spinning it. Without this the engagement
+  // stays un-leaveable after the spinner is dead, which combined with a hostile
+  // that has run out of reach is a soft-lock with no way out at all.
+  if (engagement.webbed
+    && !engagement.liveHostiles.some((s) => s.cls.websAfter)) {
+    engagement.webbed = false;
+    // Back to what the PLACE allows, not unconditionally true.
+    //
+    // A flat `= true` here means a Tholian web collapsing inside the Briar
+    // Patch hands back a warp drive that metreon gas will not let form — one
+    // temporary reason to be pinned expiring and cancelling a permanent one.
+    engagement.canWarpOut = !engagement.arena?.noWarp;
+    engagement.pushLog(engagement.canWarpOut
+      ? 'The web is collapsing. Warp drive is ours again.'
+      : 'The web is collapsing — though the gas will still not let a field form.',
+    'science');
+  }
+
+  if (ship.cls.websAfter) {
+    ship.webProgress = (ship.webProgress ?? 0) + dt;
+    if (ship.webProgress > ship.cls.websAfter && !engagement.webbed) {
+      engagement.webbed = true;
+      engagement.canWarpOut = false;
+      engagement.pushLog('The web has closed. We cannot go to warp.', 'science');
+    }
+  }
+
+  // ---- Borg regeneration ----
+  if (ship.cls.regenerates) {
+    ship.hull = Math.min(ship.maxHull, ship.hull + ship.cls.regenerates * dt);
+  }
+
+  // ---- Fire ----
+  for (const w of ship.weapons) {
+    if (distance <= (WEAPON_RANGE[w.type] ?? 900)) {
+      engagement.fireWeapon(ship, w, target);
+    }
+  }
+}
+
+__exports.BOARDING_RANGE = BOARDING_RANGE;
+__exports.boardableState = boardableState;
+__exports.chooseAction = chooseAction;
 
 });
 

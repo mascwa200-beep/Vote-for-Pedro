@@ -8,6 +8,7 @@ import { FACTIONS } from '../world/factions.data.js';
 import { WEAPON_RANGE, stillEngaged } from './combat.js';
 import { facingForDirection } from './ship.js';
 import { chooseTactic, tickTactics } from './tactics.js';
+import { inCover, coverPoint, steerAround } from './cover.js';
 
 const DECISION_INTERVAL = 0.5; // seconds between re-evaluations
 
@@ -120,6 +121,165 @@ function steerTo(ship, x, y, z = null) {
 }
 
 /**
+ * Steer toward a point, going AROUND anything solid on the way.
+ *
+ * Every manoeuvre in this file used to aim straight through the terrain.
+ * `Combat.keepOutOfRocks` catches the result and shoves the ship back onto the
+ * rock's skin, every tick, which is a floor and not a helmsman: a hostile that
+ * decided to cross a two-hundred-unit rock spent the crossing being teleported.
+ *
+ * One deflection step, recomputed each decision tick, which is what a helmsman
+ * does. A path plan would be a lie about how much this AI knows.
+ */
+function flyTo(ship, arena, x, y, z = null, ignore = null) {
+  const aim = steerAround(arena, ship, { x, y, z: z ?? (ship.z ?? 0) }, { ignore });
+  steerTo(ship, aim.x, aim.y, z === null ? null : aim.z);
+}
+
+/**
+ * How badly hurt a ship has to be before it goes looking for a rock.
+ *
+ * Hull, not `shieldPct`: the mean of six facings is the trap this codebase has
+ * already fallen into once, and combat does not drive it low — over ninety-six
+ * fights the mean sat above 0.4 for most of the time a ship was visibly losing.
+ * Hull is what a captain actually watches.
+ */
+const COVER_DOCTRINE = {
+  // Never. The Borg do not take cover and neither do the Jem'Hadar.
+  assimilate: 0, fanatic: 0,
+  // Only when it is nearly over.
+  aggressive: 0.25,
+  // Readily: these are the captains whose whole method is not being hit.
+  ambush: 0.6, opportunist: 0.65, defensive: 0.6, attrition: 0.5,
+  territorial: 0.5, balanced: 0.45,
+};
+
+/**
+ * Shields back to here and they come out again — measured on the WEAKEST
+ * facing, not the mean of six.
+ *
+ * The mean is the trap this codebase has fallen into before. Written against
+ * `shipPct` the exit fired on the same decision tick as the entry on almost
+ * every attempt: over forty-eight fights the hostiles ran for cover 371 times
+ * and came back out 357, spending 2.0% of their ticks hidden. A ship at 45% hull
+ * routinely has a mean shield above 0.55 and one facing at nothing, which is
+ * exactly the ship that should be behind a rock.
+ */
+const COVER_LEAVE_SHIELDS = 0.6;
+const weakestShield = (ship) => Math.min(
+  ...['fore', 'aft', 'port', 'starboard', 'dorsal', 'ventral'].map((f) => ship.shieldPctOf(f)),
+);
+
+/** Time actually behind the rock before coming out is even considered. */
+const COVER_MIN_SHELTER = 3;
+
+/**
+ * And how long before the same captain will do it again.
+ *
+ * Hull does not regenerate, so a ship that hides on a hull threshold will meet
+ * that threshold again the moment it leaves. Without a cooldown that is a
+ * stutter at the decision-tick rate; with one it is a peek cycle, which is what
+ * fighting from cover looks like.
+ */
+const COVER_COOLDOWN = 14;
+
+/**
+ * And a hard ceiling on how long anybody may sit behind a rock.
+ *
+ * Cover is symmetric — the rock that stops their shot stops yours — so a ship
+ * that hides indefinitely has left the battle, and a battle where both sides
+ * have left is one the player watches. Twenty-two seconds is long enough to
+ * get a facing back and short enough that a fight never stalls on it.
+ */
+const COVER_MAX = 22;
+
+/**
+ * Decide whether this captain is behind a rock, running for one, or fighting.
+ *
+ * Returns true when the ship's manoeuvre for this tick is settled and the
+ * caller should not fly it anywhere else.
+ */
+function useTerrain(ship, target, engagement, doctrine, decide) {
+  const arena = engagement.arena;
+  const threshold = COVER_DOCTRINE[doctrine] ?? 0.45;
+  if (!arena?.features?.length || threshold <= 0) {
+    // Clear rather than leave: an engagement can lose its terrain the moment
+    // reinforcements rebuild the arena, and a stale flag is a ship that never
+    // fights again.
+    ship.hiding = false;
+    return false;
+  }
+
+  if (ship.coverCooldown > 0 && decide) ship.coverCooldown -= DECISION_INTERVAL;
+
+  if (ship.hiding) {
+    if (decide) ship.hidingFor = (ship.hidingFor ?? 0) + DECISION_INTERVAL;
+    const sheltered = (ship.sheltered ?? 0) >= COVER_MIN_SHELTER;
+    const recovered = sheltered && weakestShield(ship) >= COVER_LEAVE_SHIELDS;
+    if (recovered || ship.hidingFor > COVER_MAX) {
+      ship.hiding = false;
+      ship.hidingFor = 0;
+      ship.sheltered = 0;
+      ship.coverCooldown = COVER_COOLDOWN;
+      // A captain who has got his shields back says so, once. Without it the
+      // ship simply reappears and the player has no idea anything happened.
+      if (recovered) {
+        engagement.pushLog(`${ship.name} is coming back out.`, 'tactical');
+      }
+      return false;
+    }
+  } else if (decide && ship.hullPct < threshold && !ship.cloaked
+    && !(ship.coverCooldown > 0)) {
+    const spot = coverPoint(arena, ship, target);
+    if (!spot) return false;
+    ship.hiding = true;
+    ship.hidingFor = 0;
+    ship.coverSpot = spot;
+    engagement.pushLog(`${ship.name} is running for cover.`, 'tactical');
+  }
+  if (!ship.hiding) return false;
+
+  // Already behind it: hold station on the shadow, and put everything into
+  // the shields.
+  //
+  // Station-keeping on the SPOT, not turning to present a shield. The shadow
+  // sweeps round the rock as the player orbits, so holding cover means
+  // following it — and a ship that spent the shelter pointing its best facing
+  // at the enemy then had to turn a hundred and eighty degrees to chase the
+  // shadow when it moved. Traced on one episode: five seconds behind the rock,
+  // then fourteen seconds flying steadily AWAY from cover at full throttle
+  // while a Galor's turn rate brought the nose round.
+  if (inCover(arena, ship, target)) {
+    ship.sheltered = (ship.sheltered ?? 0) + (decide ? DECISION_INTERVAL : 0);
+    ship.coverSpot = coverPoint(arena, ship, target) ?? ship.coverSpot;
+    if (ship.coverSpot) {
+      flyTo(ship, arena, ship.coverSpot.x, ship.coverSpot.y, ship.coverSpot.z, ship.coverSpot.rock);
+    }
+    ship.throttle = 0.35;
+    ship.power.applyPreset('defense');
+    return true;
+  }
+
+  // Still running, and re-aimed EVERY FRAME rather than every decision tick.
+  //
+  // Cover is not a place, it is a place relative to somebody who is moving: the
+  // player orbits, so a rock's shadow sweeps round it, and a hostile that
+  // re-aims twice a second is chasing a shadow that has already gone. Measured,
+  // re-aiming on the decision tick left a ship that had committed to hiding
+  // actually behind something only 38% of the time.
+  //
+  // It costs one pass over the rocks per hostile per frame, which is sixteen
+  // distance tests for a ship that has already decided it is hiding.
+  ship.coverSpot = coverPoint(arena, ship, target) ?? ship.coverSpot;
+  const spot = ship.coverSpot;
+  if (!spot) { ship.hiding = false; return false; }
+  flyTo(ship, arena, spot.x, spot.y, spot.z, spot.rock);
+  ship.throttle = 1;
+  ship.power.applyPreset('defense');
+  return true;
+}
+
+/**
  * Present the healthiest shield facing toward the threat.
  *
  * Only the four lateral facings are candidates. Dorsal and ventral exist and
@@ -197,7 +357,23 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
     }
   }
   if (ship.fleeing) {
-    steerTo(ship, ship.x + (ship.x - target.x), ship.y + (ship.y - target.y));
+    // Whatever it was doing behind a rock, it is running now. Left set, the
+    // flag outlives the behaviour: `useTerrain` is never reached from here, so
+    // a ship that started hiding and then broke off stayed "hiding" for the
+    // rest of the battle — measured at fifty-nine seconds against a
+    // twenty-two-second ceiling that was working perfectly.
+    ship.hiding = false;
+    ship.hidingFor = 0;
+    ship.sheltered = 0;
+    // Behind a rock on the way out, when there is one. A ship running in a
+    // straight line away from somebody is a ship being shot in the back for as
+    // long as the run lasts, and the terrain has been there the whole time.
+    const bolthole = coverPoint(engagement.arena, ship, target, { maxRun: 900 });
+    if (bolthole && !inCover(engagement.arena, ship, target)) {
+      flyTo(ship, engagement.arena, bolthole.x, bolthole.y, bolthole.z, bolthole.rock);
+    } else {
+      flyTo(ship, engagement.arena, ship.x + (ship.x - target.x), ship.y + (ship.y - target.y));
+    }
     ship.throttle = 1;
     if (ship.cloakCapable && !ship.cloaked && ship.cloakCooldown <= 0) ship.cloak();
     return;
@@ -210,6 +386,9 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
     // gap and nothing else, so the 40-unit contact test was never satisfied: a
     // doomed attack ship flew past, under, and out of the fight instead of
     // doing the one thing its whole doctrine exists to do.
+    // Straight at them, terrain and all: a ship that has decided to ram is
+    // not steering round anything, and `flyTo` here would have it swerve
+    // politely past the rock and the target both.
     steerTo(ship, target.x, target.y, target.z ?? 0);
     ship.throttle = 1;
     if (distance < 40) {
@@ -257,7 +436,7 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   // ---- Cloak-and-strike ----
   if (doctrine === 'ambush' && ship.cloakCapable) {
     if (ship.cloaked) {
-      steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
+      flyTo(ship, engagement.arena, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
       ship.throttle = 0.9;
       // Decloak inside knife range with everything charged.
       if (distance < want * 0.8) {
@@ -293,21 +472,33 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   // to the same academy.
   if (decide) chooseTactic(ship, target, engagement, doctrine);
 
+  // ---- Terrain ----
+  //
+  // Before the manoeuvre and after the tactic, because a captain who has
+  // decided to break off behind a rock still wants his evasive pattern
+  // running while he does it.
+  if (useTerrain(ship, target, engagement, doctrine, decide)) {
+    for (const w of ship.weapons) {
+      if (distance <= (WEAPON_RANGE[w.type] ?? 900)) engagement.fireWeapon(ship, w, target);
+    }
+    return;
+  }
+
   // ---- Manoeuvre ----
   if (decide) {
     if (distance > want * 1.15) {
-      steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
+      flyTo(ship, engagement.arena, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
       ship.throttle = doctrine === 'aggressive' ? 1 : 0.8;
     } else if (distance < want * 0.55) {
       // Too close for a cruiser's arcs — open the range.
       if (doctrine === 'attrition' || doctrine === 'territorial') {
-        steerTo(ship,
+        flyTo(ship, engagement.arena,
           ship.x - (target.x - ship.x),
           ship.y - (target.y - ship.y),
           (ship.z ?? 0) - ((target.z ?? 0) - (ship.z ?? 0)));
         ship.throttle = 0.7;
       } else {
-        steerTo(ship, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
+        flyTo(ship, engagement.arena, target.x, target.y, chooseElevation(ship, target, doctrine, rng));
         ship.throttle = 0.5;
       }
     } else {
