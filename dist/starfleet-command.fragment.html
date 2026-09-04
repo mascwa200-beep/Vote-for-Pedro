@@ -6219,14 +6219,48 @@ const FORMS = {
     // ship's height — an Intrepid's is famously slight, a Galaxy's is most of
     // the vessel — and `hullReach` how far forward it runs under the saucer.
     const thick = b.hullThick ?? 1;
+    const hullLen = b.hullLength ?? 0.5 + sx * (b.hullReach ?? 0.85);
+    const hullR1 = b.hullR1 ?? high * 0.23 * thick;
     tube(mb, {
       origin: vec3(-0.5, hy, 0),
-      length: b.hullLength ?? 0.5 + sx * (b.hullReach ?? 0.85),
+      length: hullLen,
       r0: b.hullR0 ?? high * 0.17 * thick,
-      r1: b.hullR1 ?? high * 0.23 * thick,
+      r1: hullR1,
       segments: seg(12),
       color: p.hull,
     });
+
+    // The deflector dish, which this form did not have.
+    //
+    // `tos_starfleet` exists because the generic form "gets the four masses
+    // right and stops there, which reads as Federation ship and not as THIS
+    // one" — and the first of the four details it lists as missing is the dish,
+    // "probably the single most recognisable feature after the saucer". The TOS
+    // hull got one. The six classes that use this form — the refit, Excelsior,
+    // Ambassador, Galaxy, Intrepid and Sovereign — kept the bare capped tube.
+    //
+    // Same construction as the TOS hull's, because it is the same feature and
+    // two ways of drawing one thing is one way too many: a collar recessed into
+    // the bow with the dish set in it. `deflector: false` turns it off for a
+    // hull that genuinely has none rather than leaving it to be discovered.
+    if (b.deflector !== false) {
+      const dishX = -0.5 + hullLen;
+      tube(mb, {
+        origin: vec3(dishX - hullR1 * 0.2, hy, 0),
+        length: hullR1 * 0.3,
+        r0: hullR1,
+        r1: hullR1 * 0.88,
+        segments: seg(14),
+        color: p.trim,
+      });
+      sphere(mb, {
+        origin: vec3(dishX + hullR1 * 0.2, hy, 0),
+        radius: hullR1 * (b.deflectorSize ?? 0.72),
+        segments: seg(12),
+        rings: 6,
+        color: p.dish ?? p.glow,
+      });
+    }
 
     // Nacelles, one built and one mirrored.
     // Deviations are multipliers of the published figures, not absolutes: an
