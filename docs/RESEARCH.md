@@ -1857,7 +1857,91 @@ models.
 
 ---
 
-## Attribution
+## 33. A fight is either nothing or it is fatal
+
+Played through the encounter generator rather than a hand-picked matchup — a
+Constitution, thirty-three hostile encounters out of four hundred rolls, flown
+by the balance suite's own pilot — the distribution of outcomes was not a curve.
+It was two piles:
+
+| opponent | encounters | ship lost | mean lowest hull |
+|---|---|---|---|
+| Cardassian patrol | 10 | **10** | 0% |
+| Borg | 5 | **5** | 0% |
+| Klingon patrol | 7 | 4 | 31% |
+| Dominion | 3 | 1 | 42% |
+| Romulan patrol | 2 | 0 | 54% |
+| Ferengi | 4 | 0 | 94% |
+| Orion, independent | 2 | 0 | 99% |
+
+And the shape is a cliff rather than a slope. Against a Constitution:
+
+| | 1× | 2× | 3× | 4× |
+|---|---|---|---|---|
+| Orion raider | hull 100% | 94% | 85% | 78% |
+| Romulan scout | 100% | 99% | 98% | 95% |
+| Bird-of-Prey | 96% | 95% | 86% | 30% |
+| Galor | 70% | **lost 12/12** | 12/12 | 12/12 |
+| D7 | 63% | **lost 12/12** | 12/12 | 12/12 |
+
+One heavy cruiser is a bruising win. Two is certain death. And a Romulan scout —
+which is two thirds of what a Romulan patrol is made of — cannot take a
+Constitution below 95% of its hull four at a time.
+
+**The game already intends this.** `beginWarpOut` exists, the balance suite
+asserts that breaking off works at the top of the ladder, and the difficulty
+ladder's principal lever is enemy *count* rather than enemy hull. Outnumbered is
+meant to be a fight you leave. What was missing is that nothing ever told the
+captain which fights those were: you found out by having one.
+
+### Weighing it
+
+Lanchester's square law for aimed fire, which is the shape the measurements
+already have: two identical ships are not twice one ship but four times it,
+because they do twice the damage for twice as long. A side's power is what it
+can shoot with times what it can take —
+
+```
+power = (Σ damage per second) × (Σ hull + 4.8 × shield facing)
+```
+
+— and the ratio between the two sides lands the bands. Twenty-four matchups, ten
+battles each:
+
+| ratio | matchup | lost | lowest hull |
+|---|---|---|---|
+| 11.9 | Constitution v Orion raider | 0/10 | 100% |
+| 2.7 | Constitution v Bird-of-Prey | 0/10 | 98% |
+| 1.45 | Constitution v Galor | 0/10 | 83% |
+| 1.12 | Constitution v D7 | 0/10 | 74% |
+| 0.74 | Galaxy v three K't'ingas | 0/10 | 47% |
+| 0.67 | Constitution v D'deridex | 0/10 | 57% |
+| **0.37** | **Sovereign v Borg cube** | **10/10** | **0%** |
+| **0.36** | **Constitution v two Galors** | **10/10** | **0%** |
+| **0.28** | **Constitution v two D7s** | **10/10** | **0%** |
+
+Every fight that was always lost sits below 0.4 and every fight that was never
+lost sits above it — on both sides of a boundary nothing was tuned to. Grouped
+by band, over the same runs:
+
+| band | ship lost | mean lowest hull |
+|---|---|---|
+| no contest | 0% | 100% |
+| favourable | 0% | 98% |
+| even | 0% | 81% |
+| dangerous | 0% | 67% |
+| **outmatched** | **100%** | **0%** |
+
+A linear model cannot produce that cliff: it rates two Galors 'dangerous', which
+is a word for a fight you can have.
+
+### What the build takes from this
+
+`src/sim/assess.js` reads the ships and says what the bridge would say. Tactical
+announces the opening reading once, before anybody shoots, and the tactical
+display carries a live one — a battle that was outmatched three ships ago is not
+outmatched now, and the pill is the number a captain reads to decide whether to
+run. Nothing about a battle changes; the fight the captain chooses does.
 
 Star Trek and all associated marks are the property of Paramount. This dossier
 records publicly documented facts and measurements, restated in my own words,
