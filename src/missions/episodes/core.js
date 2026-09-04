@@ -43,7 +43,7 @@ export const CORE_EPISODES = [
         text: 'A plasma conduit lets go on deck eleven. Two injured, nothing worse, and a lecture from your chief engineer that you have earned.',
         speaker: 'Engineering',
         choices: [{ id: 'ok', label: 'Log it honestly', next: 'report',
-          effects: { damage: 0.06, record: { lives_lost: 0 }, xp: 80 } }],
+          effects: { damage: 0.06, xp: 80 } }],
       },
       report: {
         // A report is written wherever the ship is. `system: null` is a stage
@@ -56,6 +56,14 @@ export const CORE_EPISODES = [
             effects: { xp: 250, standing: { federation: 4 } } },
           { id: 'flatter', label: 'Round the numbers in the yard’s favour', outcome: 'flattered',
             effects: { xp: 120, flag: 'falsified_report' } },
+          // `requires.var` has been in the engine since it was written and no
+          // episode had ever used it, so `cautious` — set two stages ago by a
+          // captain who declined to push the core — was written into the save
+          // file and read by nothing. A recommendation about a class profile is
+          // worth something only from somebody who flew the profile.
+          { id: 'recommend', label: 'Recommend the yard’s profile for the whole class',
+            outcome: 'honest', requires: { var: { cautious: true } },
+            effects: { xp: 320, standing: { federation: 7 }, flag: 'trials_by_the_book' } },
         ],
       },
     },
@@ -427,6 +435,13 @@ export const CORE_EPISODES = [
             effects: { xp: 400 } },
           { id: 'refuse', label: 'Tell him the Federation does not negotiate under guns', next: 'battle',
             effects: { standing: { klingon: -14 } } },
+          // The other half of moving to a firing position before answering the
+          // hail. He can see exactly where your ships are; an offer made from
+          // there is a different offer, and both commands will read it that way.
+          { id: 'from_strength', label: 'Offer the withdrawal from where you are standing',
+            next: 'simul', requires: { var: { aggressive_posture: true } },
+            effects: { xp: 500, standing: { klingon: -8, federation: 10 },
+              flag: 'donatu_pressed' } },
         ],
       },
       joint: {

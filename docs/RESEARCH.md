@@ -2062,6 +2062,93 @@ fleet has distinct names, which cannot both be true past the length of the list.
 It wraps onto `II` now, and `stripSuffix` — which already matched `I{1,3}|IV|V|VI`
 for the difficulty setting's reinforcements — was already ready for it.
 
+## 35. Forty hours of observation that changed nothing
+
+The mission engine has always been able to read back what the captain did.
+`next` accepts a function — `(mission, applied) => stageId`, `engine.js:152` —
+and `requires.var` gates a choice on the episode's own variables,
+`engine.js:115-119`.
+
+Across **16 episodes, 72 stages and 137 choices, neither had ever been used.**
+So the nine `setVar` calls were writes into a bag that is carefully serialised
+into the save file and read by nothing at all.
+
+The sharpest is `has_window`. In *The Cube at Gamma Hydra* the captain can spend
+forty hours on passive observation, find a nine-second gap where the Borg shield
+harmonics rotate and briefly do not overlap, and choose **"Use it yourself"**.
+Measured through `Game.chooseMission`, the door the game actually uses:
+
+| | class | hull | fore | aft | port | stbd | dorsal | ventral |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| used the window | borg_cube | 42000 | 5000 | 5000 | 5000 | 5000 | 5000 | 5000 |
+| never looked | borg_cube | 42000 | 5000 | 5000 | 5000 | 5000 | 5000 | 5000 |
+
+Identical, facing for facing.
+
+### What a stage can now say about a fight
+
+`effects.combat` gains **`shieldsAt`** — the fraction of their shields the
+hostiles start with. It is the one thing a stage can say about the *shape* of a
+fight rather than who is in it, and it is the only new engine capability here;
+everything else was already implemented and unused.
+
+Applied at `startCombat`, next to the `first_strike` perk and for the same
+reason: `scaleHostileFleet` **clones** hulls to build the fleet a high
+difficulty asks for, and a clone built after the fact would arrive at full
+shields. After `enemyMods`, too — `recomputeDerived` scales the current shield
+with the maximum, so a value set beforehand would be scaled by the difficulty.
+
+It is not a different cube. Same hull, same guns, same forty-two thousand
+tonnes; the shields are not there when the spread lands. Flown over twenty
+seeds, a Sovereign that used the window:
+
+| | mean share of the cube's hull taken off |
+| --- | --- |
+| used the window | **6.0%** |
+| never looked | 1.0% |
+
+Twenty of twenty. The cube still wins — nothing stops a cube — but it arrives at
+Wolf 359 with a wound nobody had put in one before.
+
+### The other eight
+
+| variable | episode | what it records | what it now opens |
+| --- | --- | --- | --- |
+| `running_silent` | Outpost 4 | came in on passive sensors | you see the cloaked warbird first; it decloaks at 15% shields instead of ambushing you |
+| `cautious` | Shakedown | declined to push the core | you can recommend the yard's profile for the class |
+| `aggressive_posture` | Donatu | moved to firing position before answering | you can offer the withdrawal from where you are standing |
+| `entered` | Devron | flew in without a probe first | you can run the pulse off the ship's own readings |
+| `conceded` | Deep Space 9 | gave Torvan the clause | you can take the point back before signing |
+| `scanned_first` | Grid 9902 | knew it was a machine before speaking | you can tell it you know what it is |
+| `deflected` | Grid 9902 | answered a question about consent with procedure | you can answer the question nine hours late |
+| `escorting` | Badlands | — | **deleted.** It was set on the only choice that reaches the stage that would have read it, so it was true at every point it could ever be tested. A variable that distinguishes nothing gets removed, not a reader. |
+
+### The constraint
+
+`tests/wiring.test.js` walks every episode 30× with random legal choices and
+**no variables set**; `if (!open.length) break` strands it. So every gated
+choice is an *extra* route at a stage that already had one — remembering opens
+doors, it never closes the corridor. A test asserts it directly, over the
+shipped episodes rather than a list, so a new episode that forgets fails.
+
+### Keeping a dynamic route checkable
+
+A function is opaque, and the thing the episode graph is checked for is that no
+route points at a stage nobody wrote — the check that catches a rename. Rather
+than exempting dynamic routing from it, a route **declares** the stages it can
+reach (`route.targets`) and the graph tests walk them. `wiring.test.js` had
+`typeof c.next === 'string' ? c.next : null`, which would have dropped a
+dynamic route on the floor and passed in silence; it walks the targets now.
+
+### Two records of things that did not happen
+
+`record: { lives_lost: 0 }` (Shakedown, after a conduit failure whose own text
+says "two injured, nothing worse") and `record: { treaty_broken: 0 }` (Deep
+Space 9, after talks that merely collapsed). `Ledger.record` pushes an entry
+unconditionally and adds `count ?? 1`, so both wrote a permanent line into the
+service record for an event that never occurred. The score is computed from the
+counters and so was never wrong; the Final Record's entry count was.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

@@ -650,6 +650,12 @@ export class Game {
    * between the order and the fight arriving. One place, so the two cannot
    * drift about how a mission's hostiles are built or named.
    *
+   * `shieldsAt` is the one thing a stage can say about the SHAPE of the fight
+   * rather than who is in it: the fraction of their shields the hostiles start
+   * with. It exists because an episode could set a variable recording that the
+   * captain had found a way through an enemy's defences and then order a fight
+   * that knew nothing about it — see `the_cube`, and RESEARCH.md §35.
+   *
    * @param {object} spec  the stage's `effects.combat`
    * @param {number|null} fightId  reuse the id from a restored record, so the
    *   engagement still answers for the episode that is waiting on it
@@ -664,7 +670,9 @@ export class Game {
     if (!ships.length) return null;
     const id = fightId ?? ++this.missionFightSeq;
     if (fightId != null) this.missionFightSeq = Math.max(this.missionFightSeq, fightId);
-    this.pendingCombat = { ships, canWarpOut: spec.canWarpOut, fightId: id };
+    this.pendingCombat = {
+      ships, canWarpOut: spec.canWarpOut, shieldsAt: spec.shieldsAt, fightId: id,
+    };
     return id;
   }
 
@@ -2520,6 +2528,19 @@ export class Game {
       for (const s of fleet) for (const w of s.weapons) w.cooldown = w.cycle;
       this.pushLog('Their gunnery is slow off the mark, Captain. Empire doctrine.', 'tactical');
     }
+    // What an episode found out about them, spent.
+    //
+    // Applied HERE rather than where the ships are built, for the same reason
+    // `first_strike` is: `scaleHostileFleet` clones hulls to make the fleet the
+    // difficulty asks for, and a clone built after the fact would arrive at
+    // full shields. Applied after `enemyMods` too, because `recomputeDerived`
+    // scales the current value with the maximum — so a shield set to zero
+    // first would be scaled by the difficulty and stay zero, which is right,
+    // and a shield set to a FRACTION would not be.
+    if (opts.shieldsAt != null) {
+      const share = Math.max(0, Math.min(1, opts.shieldsAt));
+      for (const s of fleet) for (const f of FACINGS) s.shields[f] = s.maxShield * share;
+    }
     // The terrain, from what the map has said about this system all along.
     //
     // Six systems carry a `hazard` — a debris field at Wolf 359, a nebula at
@@ -3775,11 +3796,12 @@ export class Game {
 
     // A mission stage queued a fight; start it once the UI has caught up.
     if (this.pendingCombat && this.mode !== MODES.COMBAT) {
-      const { ships, canWarpOut, fightId } = this.pendingCombat;
+      const { ships, canWarpOut, shieldsAt, fightId } = this.pendingCombat;
       this.pendingCombat = null;
       const eng = this.startCombat(ships, {
         name: 'Engagement',
         ...(canWarpOut === false ? { canWarpOut: false } : {}),
+        ...(shieldsAt != null ? { shieldsAt } : {}),
       });
       // The fight now on the screen answers for the episode only if the
       // episode's enemies are actually in it. `startCombat` does not always
