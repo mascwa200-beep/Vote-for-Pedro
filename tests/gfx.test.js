@@ -328,9 +328,10 @@ describe('the fleet has hulls', () => {
     // Measured in the browser, Pixel viewport at DPR 3, SIXTY samples of the
     // renderer's own per-frame timer with the median reported:
     //
-    //     six Constitutions | 17,280 tris | median 0.40 ms | p95 0.80 | worst 1.50
-    //     six Galaxies      | 16,800 tris | median 0.40 ms | p95 0.70 | worst 1.30
-    //     six D7s           |  7,080 tris | median 0.40 ms | p95 0.60 | worst 0.80
+    //     six Constitutions | 19,170 tris/frame | 31 draws | median 0.40 ms | p95 0.80 | worst 1.20
+    //     six Negh'Vars     | 12,858 tris/frame | 31 draws | median 0.40 ms | p95 0.70 | worst 0.80
+    //     six K'tingas      | 12,498 tris/frame | 31 draws | median 0.40 ms | p95 0.70 | worst 0.80
+    //     six Birds-of-Prey | 11,166 tris/frame | 31 draws | median 0.40 ms | p95 0.70 | worst 1.10
     //
     // The median does not move with the triangle count at all; only the tail
     // does, and the worst frame of sixty is a tenth of a 16.7 ms budget.
@@ -341,9 +342,15 @@ describe('the fleet has hulls', () => {
     // a budget moved on noise.
     const total = Object.values(SHIP_CLASSES)
       .reduce((n, c) => n + hullMesh(c.id, c.faction).triangles, 0);
-    // 25,647 today across thirty-one classes. See the per-hull budget below
-    // for the browser measurement this ceiling comes from.
-    assert.ok(total < 30000, `${total} triangles across the fleet`);
+    // 30,240 today across thirty-one classes, up from 25,647 when the seven
+    // hulls on the Klingon forms were 241 triangles each and had no ports on
+    // them at all. This is a FLEET total and not a per-frame one: no more than
+    // seven hulls are ever on the board, and the measurements above are of six
+    // — the heaviest of them costs 12,858 triangles a frame against a
+    // Constitution's 19,170, at the same median. The ceiling that actually
+    // guards a frame is the per-hull one below; this one catches the fleet
+    // drifting up together.
+    assert.ok(total < 36000, `${total} triangles across the fleet`);
   });
 
   test('on-screen size is in the published ratio, for every pair of hulls', () => {
