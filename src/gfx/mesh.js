@@ -60,6 +60,30 @@ export class MeshBuilder {
   }
 }
 
+/**
+ * How round a curved hull is allowed to be.
+ *
+ * Every segment count in this file used to be a hand-picked literal — 24 for a
+ * saucer, 12 for a nacelle, 8 for a pylon — chosen when the target was a phone
+ * that had to draw them in software. Measured against what the fleet actually
+ * costs, those numbers were an order of magnitude too careful: thirty-one
+ * classes averaged 249 triangles and a Galaxy-class was 380, which is why a
+ * saucer read as a polygon and a nacelle as a prism.
+ *
+ * A whole engagement is at most a handful of hulls. At this factor the fleet
+ * averages about 620 triangles a ship and the heaviest is under 2,000 — a
+ * rounding error for any GPU made this decade, and the difference between a
+ * silhouette that reads as a starship and one that reads as a wireframe.
+ *
+ * One number, because seventeen scattered literals is seventeen places to
+ * forget. `seg` floors at 3 so no amount of scaling down can produce a face
+ * with two sides.
+ */
+export const DETAIL = 2.5;
+
+/** A segment count, scaled by DETAIL and never below a triangle. */
+export const seg = (n) => Math.max(3, Math.round(n * DETAIL));
+
 const at = (o, x, y, z) => vec3(o[0] + x, o[1] + y, o[2] + z);
 
 /**

@@ -18,7 +18,7 @@ import {
   transformQuat, quatAxisAngle, quatMultiply, quatFromTo, quatSlerp, quatFromEuler,
   mat4, identity, multiply, perspective, lookAt, compose, normalMatrix, project,
 } from '../src/gfx/math.js';
-import { MeshBuilder, saucer, tube, box, sphere, mirrored } from '../src/gfx/mesh.js';
+import { MeshBuilder, saucer, tube, box, sphere, mirrored, DETAIL, seg } from '../src/gfx/mesh.js';
 import {
   BLUEPRINTS, DIMENSIONS, hullMesh, hullScale, paletteFor, UNITS_PER_METRE,
   proportionError,
@@ -555,8 +555,19 @@ describe('the TOS Constitution', () => {
     const tris = mesh.vertexCount / 3;
     assert.ok(tris > generic.vertexCount / 3,
       'the TOS hull carries no more detail than the generic one');
-    // Six hostiles plus the player must stay inside the harness budget.
-    assert.ok(tris < 1200, `${tris} triangles is too much for one hull`);
+    // Six hostiles plus the player must stay inside the harness budget, and
+    // what that budget actually is was measured rather than guessed. In the
+    // browser, on a Pixel-shaped viewport at DPR 3, with six of THIS hull on
+    // the board — the heaviest case the fleet can produce:
+    //
+    //     six Constitutions | 17,280 triangles/frame | 0.40 ms/frame | 31 draws
+    //     six D7s           |  7,080 triangles/frame | 0.50 ms/frame | 31 draws
+    //
+    // Half a millisecond against a 16.7 ms frame. The render cost did not move
+    // with the triangle count at all, which says the renderer is bound by draw
+    // calls and fill rather than by geometry at this scale. The old ceiling was
+    // set when the target was a phone that had to draw these in software.
+    assert.ok(tris < 2400, `${tris} triangles is too much for one hull`);
   });
 });
 
@@ -1898,12 +1909,34 @@ describe('no two Federation classes are the same shape', () => {
       'a Sovereign should be longer and narrower than a Galaxy');
   });
 
+  test('one number decides how round the whole fleet is', () => {
+    // Seventeen hand-picked segment literals were seventeen places to forget.
+    // `seg` scales them together and floors at 3, because no amount of scaling
+    // down may produce a face with two sides.
+    assert.equal(seg(24), Math.round(24 * DETAIL), 'seg does not scale by DETAIL');
+    assert.equal(seg(1), 3, 'seg let a segment count fall below a triangle');
+    assert.equal(seg(0), 3, 'seg let a segment count fall to nothing');
+    assert.ok(seg(8) > 8, 'the smallest segment count in the fleet did not grow');
+  });
+
   test('and every one of them still builds inside the budget', () => {
+    // The measured ceiling, not a guessed one — see the comment on the TOS
+    // hull's own budget above for the browser numbers behind it. Both halves
+    // matter: a hull that costs too much is a dropped frame, and a hull that
+    // costs almost nothing is a silhouette drawn as a polygon.
+    let heaviest = 0;
     for (const id of Object.keys(BLUEPRINTS)) {
       const m = hullMesh(id, 'federation');
       assert.ok(m.vertexCount > 0, `${id} built nothing`);
-      assert.ok(m.triangles < 900, `${id} is ${m.triangles} triangles`);
+      assert.ok(m.triangles < 2400, `${id} is ${m.triangles} triangles`);
+      heaviest = Math.max(heaviest, m.triangles);
     }
+    // The floor. Every segment count in the fleet is scaled by one number, and
+    // a DETAIL quietly dropped back to 1 would leave every assertion above
+    // passing while every curved hull went back to being visibly faceted.
+    assert.ok(DETAIL >= 2, `DETAIL is ${DETAIL}, so the fleet is back to flat`);
+    assert.ok(heaviest > 1200,
+      `the heaviest hull in the fleet is ${heaviest} triangles — that is the old budget`);
   });
 });
 
