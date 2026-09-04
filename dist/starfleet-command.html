@@ -17812,6 +17812,8 @@ function bearingToDirection(bearing) {
 }
 
 /** Modifiers that add rather than multiply. */
+/** Seconds for a grudge to halve. See `Ship.update`. */
+const THREAT_HALF_LIFE = 8;
 const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
 const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
@@ -18033,6 +18035,14 @@ class Ship {
     this.fires = 0;
     this.boarders = 0;
     this.adaptation = {};          // Borg: damage type -> resistance 0..0.9
+    // Who is hurting us, and how much, lately.
+    //
+    // A hostile picked its target with `candidates.includes(player) ? player :
+    // candidates[0]` under a comment that read "Prefer whoever is hurting them
+    // most, otherwise the player" — so the first half of the rule had nothing
+    // to read and never ran. Transient combat state: a fight is not resumed
+    // from a save, so this is not serialised.
+    this.threat = new Map();
     this.evasive = false;
 
     // ---- modifiers from skills, consoles, officer abilities ----
@@ -18230,7 +18240,37 @@ class Ship {
    * @param {{inAction?: boolean}} [opts] `inAction` is true while the ship is
    *   being fought — see DAMAGE_CONTROL_OFF_ACTION.
    */
+  /**
+   * How much a given ship has hurt us lately.
+   *
+   * Lately, not ever: a ship that shot at you two minutes ago and has been
+   * running since is not the one to come about for. The decay is in `update`.
+   */
+  threatFrom(other) { return this.threat.get(other) ?? 0; }
+
+  /** Whoever has hurt us most lately, or null if nobody has. */
+  worstThreat(among) {
+    let best = null;
+    let most = 0;
+    for (const s of among ?? []) {
+      const t = this.threatFrom(s);
+      if (t > most) { most = t; best = s; }
+    }
+    return best;
+  }
+
   update(dt, rng, { inAction = false } = {}) {
+    // Threat fades by half every eight seconds, so a target chosen for hurting
+    // you is a target that is still hurting you. Dropped outright once it is
+    // small enough that keeping it only costs a map entry.
+    if (this.threat.size) {
+      const keep = 0.5 ** (dt / THREAT_HALF_LIFE);
+      for (const [who, value] of this.threat) {
+        const next = value * keep;
+        if (next < 1) this.threat.delete(who);
+        else this.threat.set(who, next);
+      }
+    }
     if (this.destroyed) return;
 
     this.power.update(dt);
@@ -18417,7 +18457,7 @@ class Ship {
    */
   takeDamage(amount, {
     bearing = 0, direction = null, type = 'energy',
-    shieldPiercing = 0, rng = null, subsystem = null,
+    shieldPiercing = 0, rng = null, subsystem = null, from = null,
   } = {}) {
     if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
 
@@ -18430,6 +18470,10 @@ class Ship {
     // is still accepted, because plenty of damage in this game — boarding,
     // hazards, collisions — has no meaningful elevation.
     const facing = direction ? facingForDirection(direction) : facingForBearing(bearing);
+    // Who did it, if anybody. Hazards, collisions and boarding have no `from`.
+    if (from && from !== this) {
+      this.threat.set(from, (this.threat.get(from) ?? 0) + amount);
+    }
     let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist')));
 
     // Borg-style adaptation: repeated damage of one type stops working.
@@ -18652,6 +18696,11 @@ class Ship {
 
   /** Full starbase overhaul. */
   restore() {
+    // Including who we were angry at. A ship out of the yard is not still
+    // holding a grudge from a battle two systems ago; the decay in `update`
+    // would clear it eventually anyway, but a full overhaul is exactly the
+    // moment to say so.
+    this.threat.clear();
     this.hull = this.maxHull;
     for (const f of FACINGS) this.shields[f] = this.maxShield;
     for (const k of SUBSYSTEM_KEYS) this.subsystems[k] = 1;
@@ -18778,6 +18827,7 @@ __exports.SHIELD_OVERCHARGE = SHIELD_OVERCHARGE;
 __exports.FACING_LABEL = FACING_LABEL;
 __exports.FACING_AXIS = FACING_AXIS;
 __exports.bearingToDirection = bearingToDirection;
+__exports.THREAT_HALF_LIFE = THREAT_HALF_LIFE;
 __exports.ADDITIVE_MODS = ADDITIVE_MODS;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
 __exports.CALLED_SHOT_HULL = CALLED_SHOT_HULL;
@@ -26347,6 +26397,64 @@ function presentStrongestShield(ship, threat) {
 }
 
 /**
+ * What a hostile comes about for.
+ *
+ * The rule was written down and never run. The code read
+ *
+ *     ship.aiTarget = candidates.includes(player) ? player : candidates[0];
+ *
+ * under a comment that said "Prefer whoever is hurting them most, otherwise the
+ * player" — and nothing anywhere recorded who was hurting whom, so the first
+ * half had nothing to read. The player was the target while the player lived,
+ * which made every ally in the game unshootable: the escorts three reputation
+ * perks buy, and the freighter in "a civilian freighter is under attack", which
+ * over twenty battles was hit exactly zero times.
+ *
+ * Three rules, in order:
+ *
+ *  1. Whoever has hurt us most lately. `Ship.threat` records it and halves it
+ *     every eight seconds, so this means still hurting us, not ever did.
+ *  2. Failing that, anything here that cannot shoot back. Raiders were already
+ *     shooting the freighter when the captain arrived; they go on shooting it
+ *     until somebody gives them a reason not to. This is what makes rule 1
+ *     matter — the reason is that you started shooting.
+ *  3. Failing that, the player.
+ */
+/**
+ * Whether somebody else has become the bigger problem.
+ *
+ * With hysteresis, and a wide one: a ship that came about every time the
+ * damage numbers crossed would spend the battle turning instead of shooting,
+ * and two ships trading fire would flip targets every few seconds. It takes
+ * being hurt half again as much to be worth breaking a firing solution for.
+ */
+const RETARGET_MARGIN = 1.5;
+
+function reconsider(ship, engagement) {
+  const current = ship.aiTarget;
+  if (!stillEngaged(current)) return pickTarget(ship, engagement);
+  const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
+  const worst = ship.worstThreat(candidates);
+  if (!worst || worst === current) return null;
+  return ship.threatFrom(worst) > ship.threatFrom(current) * RETARGET_MARGIN ? worst : null;
+}
+
+function pickTarget(ship, engagement) {
+  const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
+  if (!candidates.length) return null;
+
+  const hurting = ship.worstThreat(candidates);
+  if (hurting) return hurting;
+
+  // A ship with no working weapons is not a threat, it is an errand.
+  const defenceless = candidates.find((s) =>
+    s !== engagement.player && !(s.weapons ?? []).some((w) => w.enabled !== false && w.damage > 0));
+  if (defenceless) return defenceless;
+
+  return candidates.includes(engagement.player) ? engagement.player : candidates[0];
+}
+
+/**
  * Climb or dive to come at the target from a facing it is not presenting.
  *
  * The whole point of a third axis is that it is a way to get at a weak shield
@@ -26466,10 +26574,18 @@ function chooseAction(ship, engagement, dt, opts = {}) {
     if (opts.allyOf) {
       ship.aiTarget = engagement.liveHostiles[0] ?? null;
     } else {
-      const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
-      // Prefer whoever is hurting them most, otherwise the player.
-      ship.aiTarget = candidates.includes(engagement.player) ? engagement.player : candidates[0];
+      ship.aiTarget = pickTarget(ship, engagement);
     }
+  } else if (decide && !opts.allyOf) {
+    // And think again, on the decision tick.
+    //
+    // The target was chosen ONCE and kept until it died or ran, so a rule that
+    // reads who is hurting us could only ever have fired on the opening tick,
+    // when nobody had hurt anybody yet. Measured with the re-pick missing: a
+    // Galaxy-class ally shooting alongside a Miranda drew fire in 3 of 20
+    // battles, because the hostiles had locked onto the Miranda before the
+    // Galaxy fired a shot and never looked up again.
+    ship.aiTarget = reconsider(ship, engagement) ?? ship.aiTarget;
   }
   const target = ship.aiTarget;
   if (!stillEngaged(target)) return;
@@ -27485,6 +27601,10 @@ class Engagement {
 
     const result = target.takeDamage(damage, {
       direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
+      // Who fired. The one place in the game where a ship is hurt BY somebody
+      // rather than by a hazard, and the fact the AI's target selection has
+      // always claimed to use.
+      from: attacker,
     });
 
     // Where on the hull it landed, and how big the hull is.

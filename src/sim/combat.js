@@ -554,6 +554,10 @@ export class Engagement {
 
     const result = target.takeDamage(damage, {
       direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
+      // Who fired. The one place in the game where a ship is hurt BY somebody
+      // rather than by a hazard, and the fact the AI's target selection has
+      // always claimed to use.
+      from: attacker,
     });
 
     // Where on the hull it landed, and how big the hull is.

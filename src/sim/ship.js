@@ -60,6 +60,9 @@ export function bearingToDirection(bearing) {
 }
 
 /** Modifiers that add rather than multiply. */
+/** Seconds for a grudge to halve. See `Ship.update`. */
+export const THREAT_HALF_LIFE = 8;
+
 export const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
 
 export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
@@ -283,6 +286,14 @@ export class Ship {
     this.fires = 0;
     this.boarders = 0;
     this.adaptation = {};          // Borg: damage type -> resistance 0..0.9
+    // Who is hurting us, and how much, lately.
+    //
+    // A hostile picked its target with `candidates.includes(player) ? player :
+    // candidates[0]` under a comment that read "Prefer whoever is hurting them
+    // most, otherwise the player" — so the first half of the rule had nothing
+    // to read and never ran. Transient combat state: a fight is not resumed
+    // from a save, so this is not serialised.
+    this.threat = new Map();
     this.evasive = false;
 
     // ---- modifiers from skills, consoles, officer abilities ----
@@ -480,7 +491,37 @@ export class Ship {
    * @param {{inAction?: boolean}} [opts] `inAction` is true while the ship is
    *   being fought — see DAMAGE_CONTROL_OFF_ACTION.
    */
+  /**
+   * How much a given ship has hurt us lately.
+   *
+   * Lately, not ever: a ship that shot at you two minutes ago and has been
+   * running since is not the one to come about for. The decay is in `update`.
+   */
+  threatFrom(other) { return this.threat.get(other) ?? 0; }
+
+  /** Whoever has hurt us most lately, or null if nobody has. */
+  worstThreat(among) {
+    let best = null;
+    let most = 0;
+    for (const s of among ?? []) {
+      const t = this.threatFrom(s);
+      if (t > most) { most = t; best = s; }
+    }
+    return best;
+  }
+
   update(dt, rng, { inAction = false } = {}) {
+    // Threat fades by half every eight seconds, so a target chosen for hurting
+    // you is a target that is still hurting you. Dropped outright once it is
+    // small enough that keeping it only costs a map entry.
+    if (this.threat.size) {
+      const keep = 0.5 ** (dt / THREAT_HALF_LIFE);
+      for (const [who, value] of this.threat) {
+        const next = value * keep;
+        if (next < 1) this.threat.delete(who);
+        else this.threat.set(who, next);
+      }
+    }
     if (this.destroyed) return;
 
     this.power.update(dt);
@@ -667,7 +708,7 @@ export class Ship {
    */
   takeDamage(amount, {
     bearing = 0, direction = null, type = 'energy',
-    shieldPiercing = 0, rng = null, subsystem = null,
+    shieldPiercing = 0, rng = null, subsystem = null, from = null,
   } = {}) {
     if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
 
@@ -680,6 +721,10 @@ export class Ship {
     // is still accepted, because plenty of damage in this game — boarding,
     // hazards, collisions — has no meaningful elevation.
     const facing = direction ? facingForDirection(direction) : facingForBearing(bearing);
+    // Who did it, if anybody. Hazards, collisions and boarding have no `from`.
+    if (from && from !== this) {
+      this.threat.set(from, (this.threat.get(from) ?? 0) + amount);
+    }
     let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist')));
 
     // Borg-style adaptation: repeated damage of one type stops working.
@@ -902,6 +947,11 @@ export class Ship {
 
   /** Full starbase overhaul. */
   restore() {
+    // Including who we were angry at. A ship out of the yard is not still
+    // holding a grudge from a battle two systems ago; the decay in `update`
+    // would clear it eventually anyway, but a full overhaul is exactly the
+    // moment to say so.
+    this.threat.clear();
     this.hull = this.maxHull;
     for (const f of FACINGS) this.shields[f] = this.maxShield;
     for (const k of SUBSYSTEM_KEYS) this.subsystems[k] = 1;
