@@ -1909,6 +1909,47 @@ describe('no two Federation classes are the same shape', () => {
       'a Sovereign should be longer and narrower than a Galaxy');
   });
 
+  test('every Federation hull with a secondary hull has a deflector on it', () => {
+    // `tos_starfleet` exists because the generic form "gets the four masses
+    // right and stops there", and the first detail it lists as missing is the
+    // dish — "probably the single most recognisable feature after the saucer".
+    // The TOS hull got one; the six classes on the generic form kept a bare
+    // capped tube where it should be.
+    const P = paletteFor('federation');
+    const near = (a2, b2) => Math.abs(a2[0] - b2[0]) < 0.02
+      && Math.abs(a2[1] - b2[1]) < 0.02 && Math.abs(a2[2] - b2[2]) < 0.02;
+    const dishOf = (id) => {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      const pts = [];
+      let bow = -Infinity; let stern = Infinity;
+      for (let i = 0; i < m.vertexCount; i++) {
+        const x = m.data[i * f];
+        bow = Math.max(bow, x); stern = Math.min(stern, x);
+        if (near([m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]], P.dish)) {
+          pts.push([x, m.data[i * f + 1]]);
+        }
+      }
+      return { pts, mid: (bow + stern) / 2 };
+    };
+
+    for (const id of ['constitution', 'constitution_refit', 'excelsior',
+      'ambassador', 'galaxy', 'intrepid', 'sovereign']) {
+      const { pts, mid } = dishOf(id);
+      assert.ok(pts.length > 100, `${id} has ${pts.length} deflector vertices`);
+      const mx = pts.reduce((n, v) => n + v[0], 0) / pts.length;
+      const my = pts.reduce((n, v) => n + v[1], 0) / pts.length;
+      assert.ok(mx > mid, `${id}'s dish is at x=${mx.toFixed(2)}, aft of midships`);
+      assert.ok(my < 0, `${id}'s dish is at y=${my.toFixed(2)}, up on the saucer`);
+    }
+
+    // The control, and the reason this is not simply "every hull has one": a
+    // Miranda has no secondary hull to put a deflector on, and a form that
+    // painted one anyway would satisfy every assertion above.
+    assert.equal(dishOf('miranda').pts.length, 0,
+      'a Miranda has no secondary hull, so it cannot have a dish on one');
+  });
+
   test('one number decides how round the whole fleet is', () => {
     // Seventeen hand-picked segment literals were seventeen places to forget.
     // `seg` scales them together and floors at 3, because no amount of scaling
