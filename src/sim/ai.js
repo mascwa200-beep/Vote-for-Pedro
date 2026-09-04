@@ -314,6 +314,52 @@ function chooseElevation(ship, target, doctrine, rng) {
   return (target.z ?? 0) + wantOffset;
 }
 
+/**
+ * What this captain shoots at when he has a choice.
+ *
+ * The player has been able to call a shot at a named system since the order
+ * line existed, and it is worth about three times the subsystem damage of
+ * untargeted fire — `takeDamage` applies 3.2x the hull fraction to a named
+ * system against 1.8x, and then only on a roll it usually loses. No hostile has
+ * ever done it: `fireWeapon` reads `this.targetedSubsystem` for the player and
+ * passes null for everybody else, so a Klingon captain who has been fighting
+ * for two minutes has never once tried for the engines.
+ *
+ * One system per doctrine, and each is the one that doctrine's whole method
+ * depends on:
+ *
+ *   A Romulan strikes and leaves, so he wants you unable to follow.
+ *   A pirate wants the hull intact and you unable to leave with it.
+ *   The Borg want the shields down, which is the boarding precondition their
+ *     own `boardableState` names.
+ *   The Dominion do not weigh what it costs, so they shoot at the warp core.
+ *   Cardassians grind, which means taking the guns away first.
+ *   Starfleet disables rather than destroys — the one allied entry, and the
+ *     reason allies get a doctrine at all.
+ */
+const CALLED_SHOT = {
+  ambush: 'engines',
+  opportunist: 'engines',
+  territorial: 'engines',
+  assimilate: 'shields',
+  fanatic: 'warpcore',
+  attrition: 'weapons',
+  aggressive: 'shields',
+  defensive: 'weapons',
+  balanced: 'weapons',
+};
+
+/**
+ * And they only start calling shots once there is something to call one at.
+ *
+ * Subsystem damage needs a hit that reached the hull, so aiming at a system
+ * through a full shield is not wrong, it is simply nothing — which makes the
+ * threshold a matter of what the player is told rather than of arithmetic. A
+ * captain announcing "they are firing on our engines" while the shields are at
+ * full is announcing weather.
+ */
+const CALLED_SHOT_SHIELDS = 0.45;
+
 export function chooseAction(ship, engagement, dt, opts = {}) {
   // Every frame, not only on a decision tick: a cooldown that only ran down
   // twice a second would run at two thirds speed at 30fps.
@@ -471,6 +517,27 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   // them too: a ship detached to stand with you is crewed by people who went
   // to the same academy.
   if (decide) chooseTactic(ship, target, engagement, doctrine);
+
+  // ---- Called shots ----
+  //
+  // Decided here rather than at the trigger so it survives every branch below:
+  // a ship holding station behind a rock is still shooting at the same system
+  // it was shooting at before it went there.
+  if (decide) {
+    const want = CALLED_SHOT[doctrine] ?? null;
+    // The facing THEY are shooting at, which is the one their shots have to
+    // get through — not the mean of six, and not the target's own bow.
+    const facing = facingForDirection(target.directionFrom(ship));
+    const through = target.shieldPctOf(facing) <= CALLED_SHOT_SHIELDS;
+    ship.calledShot = want && through ? want : null;
+    // Said once per ship, not on every change. The threshold is a shield
+    // facing and a shield facing crosses it repeatedly, so announcing each
+    // crossing is a line every few seconds from every hostile on the board.
+    if (ship.calledShot && !ship.calledShotSaid && !opts.allyOf) {
+      ship.calledShotSaid = true;
+      engagement.pushLog(`${ship.name} is firing on our ${ship.calledShot}.`, 'tactical');
+    }
+  }
 
   // ---- Terrain ----
   //

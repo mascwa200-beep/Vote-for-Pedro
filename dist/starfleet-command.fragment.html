@@ -17215,6 +17215,30 @@ const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'cr
 const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /**
+ * What a called shot costs in hull damage, as a share of what it would have
+ * done aimed at the ship generally. See `takeDamage`.
+ *
+ * Measured across a hundred and twenty fights against five factions, with the
+ * simple pilot the balance suite flies, once every enemy captain could call one:
+ *
+ *     share of hull damage kept    player destroyed    median battle
+ *     1.00  (free, as it was)         53 / 120             40 s
+ *     0.85                            48                   45 s
+ *     0.70                            48                   50 s
+ *     0.55                            37                   65 s
+ *     0.40                            15                   80 s
+ *     (nobody but the player calls)   38                   46 s
+ *
+ * 0.55 restores the old death rate and stretches the battle by forty percent,
+ * because the PLAYER'S called shots get weaker with everyone else's. 0.70 keeps
+ * the battle the length it was and the player dies more — which is the right
+ * trade: a longer fight is a worse fight, and the extra deaths come from the
+ * enemy doing something the player has always been able to do, announced in
+ * the log, with a whole repair and power system to answer it.
+ */
+const CALLED_SHOT_HULL = 0.7;
+
+/**
  * How much better the crew fight a fire when nobody is shooting at them.
  *
  * During an action the damage-control parties are whoever can be spared while
@@ -17814,6 +17838,18 @@ class Ship {
       this.adaptation[type] = Math.min(0.9, adapt + 0.012);
     }
 
+    // A CALLED SHOT PUTS THE SAME ENERGY SOMEWHERE SMALLER.
+    //
+    // Naming a system was strictly better than not naming one: the hull took
+    // exactly as much and the system took 3.2 times the hull fraction instead
+    // of 1.8 on a roll it usually lost. A choice with no cost is not a choice,
+    // and it stayed one only because nothing but the player could make it.
+    //
+    // Three tenths of the hull damage buys the precision, for both sides — see
+    // the measurements on CALLED_SHOT_HULL. A captain who calls a shot is
+    // trading the kill for the cripple, which is what calling a shot is.
+    if (subsystem) incoming *= CALLED_SHOT_HULL;
+
     let shieldDamage = 0;
     let hullDamage = 0;
 
@@ -18143,6 +18179,7 @@ __exports.FACING_AXIS = FACING_AXIS;
 __exports.bearingToDirection = bearingToDirection;
 __exports.ADDITIVE_MODS = ADDITIVE_MODS;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
+__exports.CALLED_SHOT_HULL = CALLED_SHOT_HULL;
 __exports.DAMAGE_CONTROL_OFF_ACTION = DAMAGE_CONTROL_OFF_ACTION;
 __exports.REPEL_DEFENDER_SHARE = REPEL_DEFENDER_SHARE;
 __exports.BOARDERS_REPELLED_AT = BOARDERS_REPELLED_AT;
@@ -25719,6 +25756,52 @@ function chooseElevation(ship, target, doctrine, rng) {
   const wantOffset = bias * commitment * 220 * (0.7 + 0.3 * spread);
   return (target.z ?? 0) + wantOffset;
 }
+
+/**
+ * What this captain shoots at when he has a choice.
+ *
+ * The player has been able to call a shot at a named system since the order
+ * line existed, and it is worth about three times the subsystem damage of
+ * untargeted fire — `takeDamage` applies 3.2x the hull fraction to a named
+ * system against 1.8x, and then only on a roll it usually loses. No hostile has
+ * ever done it: `fireWeapon` reads `this.targetedSubsystem` for the player and
+ * passes null for everybody else, so a Klingon captain who has been fighting
+ * for two minutes has never once tried for the engines.
+ *
+ * One system per doctrine, and each is the one that doctrine's whole method
+ * depends on:
+ *
+ *   A Romulan strikes and leaves, so he wants you unable to follow.
+ *   A pirate wants the hull intact and you unable to leave with it.
+ *   The Borg want the shields down, which is the boarding precondition their
+ *     own `boardableState` names.
+ *   The Dominion do not weigh what it costs, so they shoot at the warp core.
+ *   Cardassians grind, which means taking the guns away first.
+ *   Starfleet disables rather than destroys — the one allied entry, and the
+ *     reason allies get a doctrine at all.
+ */
+const CALLED_SHOT = {
+  ambush: 'engines',
+  opportunist: 'engines',
+  territorial: 'engines',
+  assimilate: 'shields',
+  fanatic: 'warpcore',
+  attrition: 'weapons',
+  aggressive: 'shields',
+  defensive: 'weapons',
+  balanced: 'weapons',
+};
+
+/**
+ * And they only start calling shots once there is something to call one at.
+ *
+ * Subsystem damage needs a hit that reached the hull, so aiming at a system
+ * through a full shield is not wrong, it is simply nothing — which makes the
+ * threshold a matter of what the player is told rather than of arithmetic. A
+ * captain announcing "they are firing on our engines" while the shields are at
+ * full is announcing weather.
+ */
+const CALLED_SHOT_SHIELDS = 0.45;
 function chooseAction(ship, engagement, dt, opts = {}) {
   // Every frame, not only on a decision tick: a cooldown that only ran down
   // twice a second would run at two thirds speed at 30fps.
@@ -25876,6 +25959,27 @@ function chooseAction(ship, engagement, dt, opts = {}) {
   // them too: a ship detached to stand with you is crewed by people who went
   // to the same academy.
   if (decide) chooseTactic(ship, target, engagement, doctrine);
+
+  // ---- Called shots ----
+  //
+  // Decided here rather than at the trigger so it survives every branch below:
+  // a ship holding station behind a rock is still shooting at the same system
+  // it was shooting at before it went there.
+  if (decide) {
+    const want = CALLED_SHOT[doctrine] ?? null;
+    // The facing THEY are shooting at, which is the one their shots have to
+    // get through — not the mean of six, and not the target's own bow.
+    const facing = facingForDirection(target.directionFrom(ship));
+    const through = target.shieldPctOf(facing) <= CALLED_SHOT_SHIELDS;
+    ship.calledShot = want && through ? want : null;
+    // Said once per ship, not on every change. The threshold is a shield
+    // facing and a shield facing crosses it repeatedly, so announcing each
+    // crossing is a line every few seconds from every hostile on the board.
+    if (ship.calledShot && !ship.calledShotSaid && !opts.allyOf) {
+      ship.calledShotSaid = true;
+      engagement.pushLog(`${ship.name} is firing on our ${ship.calledShot}.`, 'tactical');
+    }
+  }
 
   // ---- Terrain ----
   //
@@ -26425,7 +26529,7 @@ class Engagement {
         kind: 'torpedo', attacker, target, weapon,
         x: attacker.x, y: attacker.y, z: attacker.z ?? 0,
         speed: 420, life: 6,
-        subsystem: attacker === this.player ? this.targetedSubsystem : null,
+        subsystem: attacker === this.player ? this.targetedSubsystem : (attacker.calledShot ?? null),
       });
       emit('combat:fire', { attacker, weapon, type: 'torpedo' });
       return true;
@@ -26433,8 +26537,14 @@ class Engagement {
 
     // Beams and cannons resolve immediately, with a visible trace.
     //
+    // A called shot, from either side.
+    //
+    // This read `null` for everybody who was not the player, so the order the
+    // player has had since the order line existed — worth about three times the
+    // subsystem damage of untargeted fire — was one no enemy captain had ever
+    // given. `ai.js` decides what each doctrine goes for and sets it.
     const result = this.resolveHit(attacker, target, weapon, distance,
-      attacker === this.player ? this.targetedSubsystem : null);
+      attacker === this.player ? this.targetedSubsystem : (attacker.calledShot ?? null));
     this.effects.push({
       kind: weapon.type,
       from: { x: attacker.x, y: attacker.y, z: attacker.z ?? 0 },
