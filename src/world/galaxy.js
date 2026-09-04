@@ -184,27 +184,60 @@ export class Galaxy {
 }
 
 /**
- * An in-progress warp transit. Ticks down in real time; can be interrupted.
+ * Read a pre-hours save's position along its voyage.
+ *
+ * Records written before this carried `elapsedReal` against a `realSeconds`
+ * budget of `clamp(log10(hours + 10) * 9, 4, 26)`. The number itself is
+ * meaningless now, but the FRACTION it stood for is not: a captain who was
+ * three quarters of the way to Vulcan should still be three quarters of the
+ * way to Vulcan. Reading the raw value as hours instead would put a ship
+ * eleven seconds into a two-hundred-and-ninety-hour run.
+ */
+function oldScaleToHours(elapsedReal, totalHours) {
+  const seconds = Number(elapsedReal) || 0;
+  if (seconds <= 0 || !(totalHours > 0)) return 0;
+  const budget = Math.max(4, Math.min(26, Math.log10(totalHours + 10) * 9));
+  return Math.min(1, seconds / budget) * totalHours;
+}
+
+/**
+ * An in-progress warp transit, measured in the hours it actually takes.
+ *
+ * It used to be measured in seconds of play. `realSeconds` was
+ * `clamp(log10(hours + 10) * 9, 4, 26)` and progress was `elapsedReal /
+ * realSeconds`, so EVERY voyage took between four and twenty-six seconds
+ * whatever its length: four light years and forty came out within twenty
+ * seconds of each other, and the twelve-day run from Sol to Vulcan was over
+ * before a cup of tea. Distance was a number on a panel and nothing else.
+ *
+ * Now the voyage is spent in commission hours, from the same clock that runs
+ * the machine shop and the duty details — from ticks while the app is open,
+ * and from `syncCampaign` while it is closed. A course laid in is a course
+ * that is still being flown when you come back to it, which is the whole of
+ * what a five-year mission is made of.
  */
 export class Transit {
   constructor({ route, warpFactor, hours, fuel, from, to }) {
     this.route = route;
     this.warpFactor = warpFactor;
     this.totalHours = hours;
-    this.remainingHours = hours;
+    this.spentHours = 0;
     this.fuel = fuel;
     this.from = from;
     this.to = to;
     this.interrupted = false;
     this.legIndex = 0;
-    // Real seconds the transit takes to play out. Long hauls compress, but
-    // never to zero — distance has to be felt.
-    this.realSeconds = Math.max(4, Math.min(26, Math.log10(hours + 10) * 9));
-    this.elapsedReal = 0;
+  }
+
+  /** Hours of the voyage still to fly. */
+  get remainingHours() {
+    return Math.max(0, this.totalHours - this.spentHours);
   }
 
   get progress() {
-    return Math.max(0, Math.min(1, this.elapsedReal / this.realSeconds));
+    // A voyage of no hours is one that has already happened.
+    if (!(this.totalHours > 0)) return 1;
+    return Math.max(0, Math.min(1, this.spentHours / this.totalHours));
   }
 
   /**
@@ -229,7 +262,7 @@ export class Transit {
       fuel: this.fuel,
       fromId: this.from?.id ?? null,
       toId: this.to?.id ?? null,
-      elapsedReal: this.elapsedReal,
+      spentHours: this.spentHours,
       interrupted: this.interrupted,
     };
   }
@@ -254,8 +287,15 @@ export class Transit {
     });
     // How far along it was. Clamped, because a hand-edited save should drop the
     // ship out at the far end rather than into a transit that never completes.
-    t.elapsedReal = Math.max(0, Math.min(t.realSeconds, Number(data.elapsedReal) || 0));
-    t.remainingHours = t.totalHours * (1 - t.progress);
+    //
+    // A record written before the voyage was measured in hours carries
+    // `elapsedReal` out of the old four-to-twenty-six-second scale. Reading it
+    // as hours would strand a ship a few minutes into a twelve-day run, so it
+    // is converted through the fraction it actually meant.
+    const spent = data.spentHours != null
+      ? Number(data.spentHours) || 0
+      : oldScaleToHours(data.elapsedReal, t.totalHours);
+    t.spentHours = Math.max(0, Math.min(t.totalHours, spent));
     t.interrupted = data.interrupted === true;
     return t;
   }
@@ -290,11 +330,15 @@ export class Transit {
     };
   }
 
-  /** @returns {'travelling'|'arrived'} */
-  update(dt) {
+  /**
+   * Fly for a span of the commission.
+   *
+   * @param {number} hours commission hours, not seconds of play
+   * @returns {'travelling'|'arrived'}
+   */
+  update(hours) {
     if (this.interrupted) return 'travelling';
-    this.elapsedReal += dt;
-    this.remainingHours = this.totalHours * (1 - this.progress);
+    if (hours > 0) this.spentHours += hours;
     return this.progress >= 1 ? 'arrived' : 'travelling';
   }
 

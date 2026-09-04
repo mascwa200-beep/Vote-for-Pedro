@@ -38,6 +38,18 @@ import { Ledger, assessmentOf } from '../src/core/ledger.js';
 import { RANKS } from '../src/sim/skills.js';
 import { Game } from '../src/core/state.js';
 
+/**
+ * Compression at which one tick is one commission hour.
+ *
+ * A voyage is flown in commission hours now, not in the four to twenty-six
+ * seconds of play every voyage used to take whatever its length. So a test
+ * that ticks its way to a destination compresses the commission — the same
+ * accommodation `campaign.test.js` uses to run five years in a few
+ * milliseconds. One tick is 1/30 s, so 108,000 makes it exactly one hour.
+ */
+const HOUR_PER_TICK = 108000;
+
+
 // ================================================================ dice
 
 test('ability modifiers follow the standard table', () => {
@@ -1403,7 +1415,7 @@ describe('a reputation project that grants nothing', () => {
     // the system and compares.
     let checked = 0;
     for (let seed = 900; seed < 940 && checked < 8; seed++) {
-      const g = new Game({ seed: BigInt(seed), crewMode: 'canon', crew: 'tos' });
+      const g = new Game({ seed: BigInt(seed), crewMode: 'canon', crew: 'tos', compression: HOUR_PER_TICK });
       g.reputation.perks.add('see_all_encounters');
       g.ship.antimatter = 100;
       const dest = g.galaxy.systems.find((s) => s.id !== g.locationId
@@ -1900,7 +1912,7 @@ describe('the demilitarised zone is a different kind of line', () => {
   // world backwards. §25 built the place; the ledger is empty now.
 
   const voyage = ({ perk = null, from = 'setlik', to = 'dmz_volnar', seed = 9n } = {}) => {
-    const g = new Game({ seed, crewMode: 'original' });
+    const g = new Game({ seed, crewMode: 'original', compression: HOUR_PER_TICK });
     if (perk) g.reputation.perks.add(perk);
     g.locationId = from;
     const warning = g.crossingWarningFor(g.galaxy.get(to));
@@ -2009,7 +2021,7 @@ describe('an ambush belongs to the place the ship stops, not the place it was ai
 
   /** Fly a leg until it ends, and report any mid-course ambush it produced. */
   function fly(seed, from, to) {
-    const g = new Game({ seed: `lane-${seed}`, startAt: from });
+    const g = new Game({ seed: `lane-${seed}`, startAt: from, compression: HOUR_PER_TICK });
     g.ship.antimatter = 100;
     if (!g.setCourse(to, 6).ok) return null;
     let ticks = 0;

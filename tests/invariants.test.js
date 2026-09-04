@@ -50,6 +50,18 @@ import { PRESETS, SUBSYSTEMS } from '../src/sim/power.js';
 import { RECIPE_BY_ID } from '../src/sim/fabrication.js';
 import { AWAY_TEMPLATES } from '../src/sim/away.js';
 
+/**
+ * Compression at which one tick is one commission hour.
+ *
+ * A voyage is flown in commission hours now, not in the four to twenty-six
+ * seconds of play every voyage used to take whatever its length. So a test
+ * that ticks its way to a destination compresses the commission — the same
+ * accommodation `campaign.test.js` uses to run five years in a few
+ * milliseconds. One tick is 1/30 s, so 108,000 makes it exactly one hour.
+ */
+const HOUR_PER_TICK = 108000;
+
+
 const HERE_ROOT = dirname(fileURLToPath(import.meta.url));
 const readSrc = (...parts) => readFileSync(join(HERE_ROOT, '..', 'src', ...parts), 'utf8');
 
@@ -284,7 +296,7 @@ test('a tour of duty: fight after fight, on one commission', () => {
     [91004, 'captain', 'canon', 'galaxy', TNG],
     [91005, 'fleet_admiral', 'original', 'sovereign', LATE],
   ]) {
-    const g = new Game({ seed: BigInt(seed), crewMode, difficulty, shipClass });
+    const g = new Game({ seed: BigInt(seed), crewMode, difficulty, shipClass, compression: HOUR_PER_TICK });
     const rand = (() => {
       let s = seed >>> 0;
       return () => { s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0; return s / 0x100000000; };
@@ -1831,7 +1843,7 @@ test('a fight that drops you out of warp leaves nothing behind at the old system
   // panel only draws in ENCOUNTER mode — but `hail` reads the encounter's
   // faction before the engagement's, so hailing after the battle opened a
   // channel to people in another star system.
-  const g = new Game({ seed: 3n, crewMode: 'original' });
+  const g = new Game({ seed: 3n, crewMode: 'original', compression: HOUR_PER_TICK });
   g.locationId = 'alpha_centauri';
   g.beginEncounter({
     kind: 'patrol', system: g.location, hostile: false,
@@ -1840,7 +1852,12 @@ test('a fight that drops you out of warp leaves nothing behind at the old system
   assert.equal(g.encounter.system.id, 'alpha_centauri');
 
   g.setCourse('sol');
-  for (let i = 0; i < 30 * 20; i++) g.update(STEP);
+  // Genuinely under way, and past the midpoint, so the system the ship is
+  // dropped into is the one it was heading for rather than the one it left.
+  // Ticked to a fraction of the VOYAGE rather than for a count of seconds: a
+  // voyage is measured in commission hours now, and twenty seconds of play is
+  // no longer most of one.
+  while (g.transit && g.transit.progress < 0.6) g.update(STEP);
   assert.ok(g.transit, 'the ship never got under way');
 
   g.startCombat([new Ship('d7', { name: 'Ambusher' })]);
@@ -3067,7 +3084,7 @@ describe('a border is a fact about where you are, not about how you got there', 
    */
   const flightJumpedInto = (from, target, prep = () => {}) => {
     for (let s = 1n; s <= 400n; s++) {
-      const g = new Game({ seed: s });
+      const g = new Game({ seed: s, compression: HOUR_PER_TICK });
       g.locationId = from;
       g.ship.antimatter = g.ship.maxAntimatter;
       prep(g);
@@ -3082,7 +3099,7 @@ describe('a border is a fact about where you are, not about how you got there', 
   /** The same flight, flown to its end without being interrupted. */
   const flightInto = (from, target, prep = () => {}) => {
     for (let s = 1n; s <= 400n; s++) {
-      const g = new Game({ seed: s });
+      const g = new Game({ seed: s, compression: HOUR_PER_TICK });
       g.locationId = from;
       g.ship.antimatter = g.ship.maxAntimatter;
       prep(g);
@@ -3136,7 +3153,7 @@ describe('a border is a fact about where you are, not about how you got there', 
 
   test('breaking off a course inside the Zone is a crossing too', () => {
     // `dropOutOfWarp` is the order, not the ambush: same position, same treaty.
-    const g = new Game({ seed: 31n });
+    const g = new Game({ seed: 31n, compression: HOUR_PER_TICK });
     g.locationId = 'neutral_zone_1';
     g.ship.antimatter = g.ship.maxAntimatter;
     assert.ok(g.setCourse('devron').ok, 'could not lay in the course at all');
@@ -3668,7 +3685,7 @@ describe('an encounter is over when the ship leaves', () => {
 
   /** Fly one hop and stop wherever something is waiting. */
   const flyUntilSomethingIsWaiting = (seed) => {
-    const g = new Game({ seed: BigInt(seed) });
+    const g = new Game({ seed: BigInt(seed), compression: HOUR_PER_TICK });
     g.ship.antimatter = g.ship.maxAntimatter;
     const near = g.galaxy.neighbors(g.locationId);
     const to = near[seed % near.length];
@@ -3765,7 +3782,7 @@ describe('a wreck is lost when the ship leaves, whichever way it leaves', () => 
 
   /** A fight that actually leaves a hulk behind. */
   const aWreckAtSol = (seed = 4n) => {
-    const g = new Game({ seed });
+    const g = new Game({ seed, compression: HOUR_PER_TICK });
     g.ship.antimatter = g.ship.maxAntimatter;
     // `relentless`, because an ordinary hostile breaks off before it dies and
     // a routed ship leaves nothing. Without this the probe measures an empty

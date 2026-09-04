@@ -59,6 +59,19 @@ const STEP = 1 / 30;
 const OPTS = { arenaRadius: ARENA_RADIUS };
 
 /**
+ * Compression at which one tick is one commission hour.
+ *
+ * A voyage is flown in commission hours, not in the four to twenty-six seconds
+ * of play every voyage used to take whatever its length. Sol to Vulcan at warp
+ * 8 is 291 hours, so a commission has to be played compressed — the same
+ * accommodation `campaign.test.js` uses to run five years in a few
+ * milliseconds, and the one the Options screen offers with "this is not the
+ * five-year mission" written under it. One tick is 1/30 s, so 108,000 makes it
+ * exactly one hour, and every tick budget below reads as a number of hours.
+ */
+const HOUR_PER_TICK = 108000;
+
+/**
  * The commissions this file flies.
  *
  * One row per commission, and the only thing anyone edits to add coverage. The
@@ -109,7 +122,15 @@ const ENCOUNTER_POLICY = {
  */
 function playCommission(spec) {
   const { seed, difficulty, crewMode, shipClass, legs } = spec;
-  const g = new Game({ seed: BigInt(seed), difficulty, crewMode, shipClass });
+  // A voyage is flown in commission hours, and Sol to Vulcan at warp 8 is 291
+  // of them. So a commission is played compressed — the accommodation the game
+  // itself offers, with "this is not the five-year mission" written under it on
+  // the Options screen. At this factor one tick is one commission hour, which
+  // makes a twelve-day run about three hundred ticks and a whole commission
+  // something that fits in the seconds this file is allowed.
+  const g = new Game({
+    seed: BigInt(seed), difficulty, crewMode, shipClass, compression: HOUR_PER_TICK,
+  });
   const rand = captainsLuck(seed);
   const pick = (list) => list[Math.floor(rand() * list.length)];
   const dog = new Watchdog();
@@ -133,6 +154,7 @@ function playCommission(spec) {
     missionFights: 0,
     leftEncounterBehind: 0,
     hullRecoveries: 0,
+    lastHullPct: 1,
     minHullPct: 1,
     resources: {},
     endedEarly: false,
@@ -152,6 +174,16 @@ function playCommission(spec) {
       j.modes.add(g.mode);
       const pct = g.ship.hullPct;
       if (pct < j.minHullPct) j.minHullPct = pct;
+      // Measured directly, tick by tick, rather than as "below 0.6 at the start
+      // of a leg and above 0.9 at the end of it". That pattern only ever
+      // appeared because the only thing that repaired a ship was a starbase;
+      // now that damage control works the whole time she is under way, a hull
+      // beaten down in one fight is largely back before the leg is out and the
+      // old shape stopped occurring — while the ship was recovering more than
+      // it ever had. A measurement that a fix makes stop reporting is measuring
+      // its own assumptions.
+      if (pct > j.lastHullPct + 1e-9) j.hullRecoveries++;
+      j.lastHullPct = pct;
       for (const k of ['antimatter', 'torpedoes']) {
         const v = g.ship[k];
         const r = (j.resources[k] ??= { min: v, max: v });
@@ -249,7 +281,6 @@ function playCommission(spec) {
   for (let leg = 0; leg < legs && !g.over; leg++) {
     j.legs = leg + 1;
     j.systems.add(g.locationId);
-    const hullBefore = g.ship.hullPct;
 
     // Where to. In priority order, first match wins.
     const m = g.missions.active;
@@ -280,9 +311,11 @@ function playCommission(spec) {
         else if (w === 1) refused('course', r.error ?? 'refused');
       }
       if (laid) {
-        for (let i = 0; i < 30 * 24 * 60 && g.transit && !g.over; i++) pump(1);
+        // One tick is one commission hour here, so this is a bound in hours:
+        // no charted course in the galaxy is a year long.
+        for (let i = 0; i < 24 * 365 && g.transit && !g.over; i++) pump(1);
         assert.ok(!g.transit || g.over,
-          `a transit ran a simulated month without arriving — seed ${seed}, leg ${j.legs}`);
+          `a transit ran a simulated year without arriving — seed ${seed}, leg ${j.legs}`);
       }
     }
 
@@ -339,7 +372,6 @@ function playCommission(spec) {
       pump(60);
     }
 
-    if (g.ship.hullPct > 0.9 && hullBefore < 0.6) j.hullRecoveries++;
   }
 
   j.over = g.over ? (g.overReason ?? 'over') : null;
@@ -368,7 +400,7 @@ describe('a commission, played from the first order to the last', () => {
       assert.ok(j.legs >= 20, `seed ${j.seed} only flew ${j.legs} legs`);
       assert.ok(j.systems.size >= 12,
         `seed ${j.seed} saw ${j.systems.size} systems in ${j.legs} legs`);
-      assert.ok(j.ticks > 20000, `seed ${j.seed} ran only ${j.ticks} ticks`);
+      assert.ok(j.ticks > 9000, `seed ${j.seed} ran only ${j.ticks} ticks`);
     }
     assert.ok(FLOWN.reduce((n, j) => n + j.fights, 0) >= 10,
       `only ${FLOWN.reduce((n, j) => n + j.fights, 0)} fights across three commissions`);
@@ -441,8 +473,8 @@ describe('and what it met on the way', () => {
     const worst = Math.min(...FLOWN.map((j) => j.minHullPct));
     assert.ok(worst < 0.25, `the worst any hull got was ${Math.round(worst * 100)}%`);
     const recoveries = FLOWN.reduce((n, j) => n + j.hullRecoveries, 0);
-    assert.ok(recoveries >= 2,
-      `hulls fell to ${Math.round(worst * 100)}% and never came back up`);
+    assert.ok(recoveries >= 200,
+      `hulls fell to ${Math.round(worst * 100)}% and came back up on only ${recoveries} ticks`);
   });
 
   test('and resources moved in both directions', () => {
@@ -543,12 +575,19 @@ describe('and it plays the same way twice', () => {
 // that has quietly become a formality, and so a large swing shows up as a
 // difference from a written number rather than as nothing at all.
 //
-//   seed  legs ticks fights systems kinds choices away outcomes eps/stages
-//   77001  26  22655   4      19      5      6      5     2       7/19
-//   77002  26  22013   5      21      5      6      4     2       4/12
-//   77003  26  29809   9      22      5      6      5     4       5/13
+//   seed  legs ticks fights systems away outcomes eps/stages left days   SD
+//   77001  26  11326   3      17      3     2       5/13       4  471.9 5016.5
+//   77002  24  16219   3      16      3     3       3/8        2  675.8 5216.5
+//   77003  26  15677   6      22      4     3       6/16       7  653.2 5207.1
 //
 //   union: 6 encounter kinds, 6 choices, all 5 away templates,
-//          4 outcomes (victory, routed, escaped, destroyed)
-//   worst hull 0.00 | recoveries 3 | mission fights 6 | encounters left 18
-//   ships lost 1 | commissions ended early 0 | refusals 4 (all with reasons)
+//          3 outcomes (routed, escaped, destroyed)
+//   worst hull 0.00 | ticks the hull rose on 876 | mission fights 5
+//   ships lost 1 | commissions ended early 1 (77002, stranded) | refusals 2
+//   watchdog violations 0 in 43,222 ticks
+//
+// The days and the stardate are the columns to watch. Before the commission
+// clock ran while the app was open, all three sat on day one of 1,826 with the
+// stardate wandering off on its own; they now spend one to two years of a
+// five-year commission and the two numbers move together, because they are the
+// same number read two ways.
