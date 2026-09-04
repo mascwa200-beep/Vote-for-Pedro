@@ -4148,7 +4148,21 @@ export class Game {
     // The ship flies on the calendar, not on the work allowance. Done before
     // the early return below, because a voyage completing is the whole reason
     // an absence with nothing to repair is still worth something.
-    this.flyOn(elapsed);
+    //
+    // What it did is carried into the report. The crossing is the main thing
+    // that happens across an absence now, and it was the one thing the report
+    // did not mention: come back to a ship that crossed sixteen light years
+    // and the watch officer talked about hull plating.
+    const arrived = this.flyOn(elapsed);
+    const voyage = arrived
+      ? { arrivedAt: this.location?.name ?? this.locationId }
+      : this.transit
+        ? {
+          to: this.transit.to?.name ?? this.transit.to?.id,
+          progress: this.transit.progress,
+          hoursLeft: this.transit.remainingHours,
+        }
+        : null;
     const pending = this.campaign.drainPending();
     if (pending <= 0) {
       // The clock going backwards is worth a line in the log: it is the kind of
@@ -4177,7 +4191,7 @@ export class Game {
 
     const lines = fighting
       ? [`${pending < 24 ? `${Math.round(pending)} hours` : `${(pending / 24).toFixed(1)} days`} have passed, and we are still under fire. Nothing has been repaired.`]
-      : absenceReport(pending, { ship, forfeited });
+      : absenceReport(pending, { ship, forfeited, voyage });
     if (before.fires > 0 && ship.fires === 0) {
       lines.push('All fires are out. Damage control has secured the affected decks.');
     }

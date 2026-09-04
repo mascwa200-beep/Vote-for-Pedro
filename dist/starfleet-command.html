@@ -29040,7 +29040,7 @@ class CampaignClock {
  * and it is the difference between "time passed" as a number and time passing
  * as something that happened to a crew.
  */
-function absenceReport(hours, { ship = null, forfeited = 0 } = {}) {
+function absenceReport(hours, { ship = null, forfeited = 0, voyage = null } = {}) {
   const lines = [];
   if (hours < 0.5) return lines;
 
@@ -29048,6 +29048,23 @@ function absenceReport(hours, { ship = null, forfeited = 0 } = {}) {
     ? `${Math.round(hours)} hours`
     : `${(hours / 24).toFixed(1)} days`;
   lines.push(`${span} have passed since you last took the conn.`);
+
+  // The voyage, which is the main thing that happens across an absence now
+  // that a course is flown in commission hours rather than in fourteen seconds
+  // of play. A captain who laid in a twelve-day course for Vulcan, closed the
+  // app and came back to find the ship AT Vulcan was told four things about
+  // the con and the calendar and nothing about the crossing. It was in the
+  // ship's log — "Arrived at Vulcan." — and not in the one report a returning
+  // player actually reads.
+  if (voyage?.arrivedAt) {
+    lines.push(`We came out of warp at ${voyage.arrivedAt} while you were off the bridge.`);
+  } else if (voyage?.to) {
+    const left = voyage.hoursLeft ?? 0;
+    const eta = left < 24
+      ? `${Math.max(1, Math.round(left))} hours out`
+      : `${(left / 24).toFixed(1)} days out`;
+    lines.push(`Still under way for ${voyage.to}, ${Math.round(voyage.progress * 100)} percent of the way, ${eta}.`);
+  }
 
   if (ship) {
     if (ship.hullPct < 1) {
@@ -33223,7 +33240,21 @@ class Game {
     // The ship flies on the calendar, not on the work allowance. Done before
     // the early return below, because a voyage completing is the whole reason
     // an absence with nothing to repair is still worth something.
-    this.flyOn(elapsed);
+    //
+    // What it did is carried into the report. The crossing is the main thing
+    // that happens across an absence now, and it was the one thing the report
+    // did not mention: come back to a ship that crossed sixteen light years
+    // and the watch officer talked about hull plating.
+    const arrived = this.flyOn(elapsed);
+    const voyage = arrived
+      ? { arrivedAt: this.location?.name ?? this.locationId }
+      : this.transit
+        ? {
+          to: this.transit.to?.name ?? this.transit.to?.id,
+          progress: this.transit.progress,
+          hoursLeft: this.transit.remainingHours,
+        }
+        : null;
     const pending = this.campaign.drainPending();
     if (pending <= 0) {
       // The clock going backwards is worth a line in the log: it is the kind of
@@ -33252,7 +33283,7 @@ class Game {
 
     const lines = fighting
       ? [`${pending < 24 ? `${Math.round(pending)} hours` : `${(pending / 24).toFixed(1)} days`} have passed, and we are still under fire. Nothing has been repaired.`]
-      : absenceReport(pending, { ship, forfeited });
+      : absenceReport(pending, { ship, forfeited, voyage });
     if (before.fires > 0 && ship.fires === 0) {
       lines.push('All fires are out. Damage control has secured the affected decks.');
     }

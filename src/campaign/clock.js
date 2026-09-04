@@ -259,7 +259,7 @@ export class CampaignClock {
  * and it is the difference between "time passed" as a number and time passing
  * as something that happened to a crew.
  */
-export function absenceReport(hours, { ship = null, forfeited = 0 } = {}) {
+export function absenceReport(hours, { ship = null, forfeited = 0, voyage = null } = {}) {
   const lines = [];
   if (hours < 0.5) return lines;
 
@@ -267,6 +267,23 @@ export function absenceReport(hours, { ship = null, forfeited = 0 } = {}) {
     ? `${Math.round(hours)} hours`
     : `${(hours / 24).toFixed(1)} days`;
   lines.push(`${span} have passed since you last took the conn.`);
+
+  // The voyage, which is the main thing that happens across an absence now
+  // that a course is flown in commission hours rather than in fourteen seconds
+  // of play. A captain who laid in a twelve-day course for Vulcan, closed the
+  // app and came back to find the ship AT Vulcan was told four things about
+  // the con and the calendar and nothing about the crossing. It was in the
+  // ship's log — "Arrived at Vulcan." — and not in the one report a returning
+  // player actually reads.
+  if (voyage?.arrivedAt) {
+    lines.push(`We came out of warp at ${voyage.arrivedAt} while you were off the bridge.`);
+  } else if (voyage?.to) {
+    const left = voyage.hoursLeft ?? 0;
+    const eta = left < 24
+      ? `${Math.max(1, Math.round(left))} hours out`
+      : `${(left / 24).toFixed(1)} days out`;
+    lines.push(`Still under way for ${voyage.to}, ${Math.round(voyage.progress * 100)} percent of the way, ${eta}.`);
+  }
 
   if (ship) {
     if (ship.hullPct < 1) {

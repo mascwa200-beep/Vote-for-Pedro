@@ -907,3 +907,69 @@ describe('one clock', () => {
       `the shop announced its own job as well as reporting it: ${said.map((l) => l.text).join(' | ')}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Coming back to a ship that has been somewhere.
+//
+// Now that a course is flown in commission hours rather than in fourteen
+// seconds of play, the crossing is the main thing that happens across an
+// absence — and it was the one thing the report did not mention. Lay in a
+// twelve-day course for Vulcan, close the app, come back to a ship AT Vulcan,
+// and the watch officer talked about hull plating. It was in the ship's log
+// ("Arrived at Vulcan.") and not in the one report a returning player reads.
+
+describe('coming back to a ship that has been somewhere', () => {
+  const bound = (now, opts = {}) => {
+    const g = new Game({ seed: 55n, crewMode: 'original', now, ...opts });
+    g.ship.antimatter = g.ship.maxAntimatter;
+    assert.equal(g.setCourse('vulcan', 8).ok, true);
+    return g;
+  };
+
+  test('an arrival that happened while you were away is reported', () => {
+    const now = fakeClock();
+    const g = bound(now);
+    const total = g.transit.totalHours;
+    now.advance(Math.ceil(total + 5) * HOUR);
+    const r = g.syncCampaign();
+
+    assert.equal(g.locationId, 'vulcan', 'never arrived at all');
+    const said = r.lines.filter((l) => /vulcan/i.test(l));
+    assert.ok(said.length,
+      `came back to a ship at Vulcan and was told: ${r.lines.join(' | ')}`);
+    assert.match(said[0], /out of warp/i, said[0]);
+  });
+
+  test('and a voyage still running is reported, with how far is left', () => {
+    const now = fakeClock();
+    const g = bound(now);
+    const total = g.transit.totalHours;
+    now.advance(24 * HOUR);
+    const r = g.syncCampaign();
+
+    assert.ok(g.transit, 'the voyage finished when it should not have');
+    const said = r.lines.find((l) => /under way for vulcan/i.test(l));
+    assert.ok(said, `told nothing about the crossing: ${r.lines.join(' | ')}`);
+    // The number has to be the real one, not a placeholder.
+    assert.match(said, /\d+ percent of the way/, said);
+    assert.match(said, /days out|hours out/, said);
+    const pct = Number(said.match(/(\d+) percent/)[1]);
+    assert.ok(Math.abs(pct - g.transit.progress * 100) < 1,
+      `report says ${pct}% and the transit is at ${(g.transit.progress * 100).toFixed(1)}%`);
+    assert.ok(pct > 0 && pct < 100, `a whole voyage or none of it: ${pct}%`);
+    void total;
+  });
+
+  test('and a ship sitting in orbit is not told about a voyage', () => {
+    // The control. A report that always mentions a crossing is not reporting
+    // the crossing, it is printing a line.
+    const now = fakeClock();
+    const g = new Game({ seed: 55n, crewMode: 'original', now });
+    g.ship.hull = g.ship.maxHull * 0.5;
+    now.advance(24 * HOUR);
+    const r = g.syncCampaign();
+    assert.ok(r.lines.length, 'no report at all');
+    assert.deepEqual(r.lines.filter((l) => /under way|out of warp/i.test(l)), [],
+      'a ship that never left Sol was told about a voyage');
+  });
+});
