@@ -2371,6 +2371,117 @@ has existed since the interiors were written and that no episode had ever used.
 `README.md` carries the episode count and `tests/docs.test.js` asserts it
 against `EPISODES.length`, so the number in the prose moved with the content.
 
+## 39. An ambush was a patrol with different words
+
+`buildAmbush` has set `surprise: true` on every ambush since encounters were
+written, and **nothing had ever read it**. So *"Sensors read nothing — then
+everything. Ships decloaking off both bows"* opened exactly like a routine
+patrol. Measured through `resolveEncounter('engage')`, the door the encounter
+panel uses:
+
+| kind | `surprise` | my guns ready | their guns ready |
+| --- | --- | --- | --- |
+| patrol | false | yes | yes |
+| ambush | **true** | yes | yes |
+
+An ambush is now what the word means: the ship that was jumped opens a cycle
+behind. That is the exact mirror of the `first_strike` perk — *"Battle Doctrine
+Exchange, you always fire first"* — which has always put the **enemy** a cycle
+behind, in the same place and by the same arithmetic.
+
+### Two species sold a defence against a thing that did not exist
+
+| species | trait | mechanic | read anywhere? |
+| --- | --- | --- | --- |
+| Caitian | *"Predator's Instinct — You always act first in an engagement, and can never be surprised."* | `alwaysFirst`, `surpriseImmune` | **no** |
+| Saurian | *"Wide Spectrum Vision — … Advantage against ambushes."* | `cloakDetect`, `ambushAdvantage` | **no** |
+
+Now:
+
+| | cycles behind on an ambush |
+| --- | --- |
+| Human, Vulcan, everyone else | 1.0 |
+| Saurian — sees it coming | 0.5 |
+| Caitian — never surprised | 0.0 |
+
+Seeing it coming is deliberately not the same as having been ready.
+
+### The wider version of the same finding
+
+`character.mechanic(key)` is the accessor, and it is called for exactly **four**
+keys. Counting every `mechanic:` declared across the species, background and
+career tables: **57 of 61 are read by nothing.**
+
+```
+READ (4):  casualtyReduction, repGain, startingRankBonus, startingReprimand
+```
+
+That is far too large for one change and is recorded here as the seam it is.
+This section spends three of the fifty-seven.
+
+### The freighter that was not in the fight
+
+`buildDistress` constructs `victims: [new Ship('freighter', {name: 'SS
+Kobayashi'})]` for *"A civilian freighter is under attack and losing
+containment"* — and it was never passed to the battle. `Engagement` has
+accepted `opts.allies` all along. It is on the board now.
+
+**It is not yet a ship that can be lost, and that is worth saying plainly.**
+Measured over twenty battles with three raiders and a Miranda, the freighter
+was destroyed 0 times, damaged 0 times, untouched 20 times. The cause is in
+`ai.js`, where the code and its own comment disagree:
+
+```js
+const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
+// Prefer whoever is hurting them most, otherwise the player.
+ship.aiTarget = candidates.includes(engagement.player) ? engagement.player : candidates[0];
+```
+
+It never looks at who is hurting them. The player is the target while the
+player is alive, so allies — the freighter, and the escorts three reputation
+perks buy — are only ever shot at once the player is gone. Making the comment
+true needs damage attribution, which `Ship.takeDamage` does not currently
+carry; that is its own change and is not attempted here.
+
+### An encounter with one button is a notification
+
+Measured over twenty thousand encounters: **109 offered a single choice**
+reading "Continue" — every non-hostile patrol from the Dominion, the Tholians
+or the Borg, none of whom answer hails.
+
+And `subtype` has carried a real errand since the errand table was written — a
+tender servicing navigation buoys, a destroyer screening something you cannot
+see, a squadron quartering the system for something it will not name — and
+nothing had ever read it back. Watching them is a choice now, and what you see
+depends on what they are doing. A test reads the errands the generator actually
+produces rather than a list, so an errand added with no answer fails it.
+
+### And one the order monkey found on the way past
+
+Adding four phrasings to the lexicon moved the order monkey's random walk onto
+a path nothing had taken, and it landed on this, in the intercom:
+
+```js
+helm: () => (this.transit
+  ? `Underway for ${this.transit.to.name}, warp ${this.transit.factor.toFixed(1)}.`
+  : ...
+```
+
+`Transit` has never had a `factor`. The constructor takes `warpFactor` and
+stores it under that name, so **"helm report" threw on every ship that was
+actually going somewhere**, for the whole life of the intercom. Confirmed
+pre-existing on `origin/main` and untouched by this change.
+
+The existing test called all seven stations — on a ship in spacedock, which
+takes the other branch, so it could never see it. There is now a second test
+that asks the same seven questions with a course laid in.
+
+That is the second defect of this exact shape this run: a field read under one
+name and written under another, invisible until something took the one path
+that reads it. `tools/verify-app.mjs` gives every phrasing the parser knows to a
+running game at whatever moment it happens to be in, and it is the only thing
+in the project that would ever have asked.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

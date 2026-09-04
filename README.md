@@ -91,7 +91,7 @@ read that as X — confirm?"*; when it is lost it says so and offers the nearest
 readings, rather than doing something you did not ask for.
 
 It is not a language model and it does not understand English — it recognises
-orders, from a lexicon of 1489 phrasings and 310 weighted keywords across
+orders, from a lexicon of 1494 phrasings and 311 weighted keywords across
 69 intents. The honest
 measure is `tests/corpus/orders.txt`: 610 hand-written paraphrases, deliberately
 hostile — typos, phonetic spelling, panic, politeness — with CI failing below
@@ -281,7 +281,7 @@ android/      WebView shell, manifest, resources for the APK
 
 **Content:** 43 star systems, 31 ship classes, 18 authored episodes, 12
 species, 12 difficulties, 6 reputation tracks, 38 synthesized sound cues, and
-a command lexicon of 1489 phrasings tested against a 610-order corpus,
+a command lexicon of 1494 phrasings tested against a 610-order corpus,
 and 31 procedurally generated hulls averaging 1058 triangles each.
 
 ## Development
