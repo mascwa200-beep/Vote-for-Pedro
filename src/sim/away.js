@@ -8,12 +8,41 @@
 import { emit } from '../core/events.js';
 import { resolve, formatResolution, describeDifficulty, DIFFICULTY as DC } from '../rules/resolve.js';
 
+/**
+ * What a landing party costs, including the hours.
+ *
+ * `hours` is how long the party is down, and it is what a landing party cost
+ * for the first time. Thirty-two diplomatic landings at Vulcan back to back
+ * moved the stardate from 4523.3 to 4523.3 and paid 190 experience — the only
+ * free action in a game where a repair costs most of a day, docking costs two,
+ * and `surveyFeature` twenty lines away says in its own comment that each
+ * feature resolves once.
+ *
+ * Scaled by hazard, because how dangerous a place is and how long you are
+ * exposed to it are the same question asked twice. A routine landing is an
+ * afternoon; an evacuation is a long day; boarding a derelict with something
+ * still aboard is two watches.
+ */
 export const HAZARD_LEVEL = {
-  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy },
-  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate },
-  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06, dc: DC.hard },
-  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14, dc: DC.formidable },
+  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy, hours: 5 },
+  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate, hours: 11 },
+  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06, dc: DC.hard, hours: 19 },
+  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14, dc: DC.formidable, hours: 30 },
 };
+
+/**
+ * How long a template's party is away, in commission hours.
+ *
+ * The hazard level decides it, except where the fiction will not have it. A
+ * boarding action is `extreme` and happens inside a battle, at weapons range,
+ * against a ship that is still under way — a day and a quarter cannot pass
+ * while it does. It is minutes, and it says so here rather than quietly
+ * inheriting a number that would put the enemy in another sector.
+ */
+export function awayHours(template) {
+  if (template?.hours != null) return template.hours;
+  return HAZARD_LEVEL[template?.hazard]?.hours ?? HAZARD_LEVEL.elevated.hours;
+}
 
 /**
  * Check types map to a captain ability and to the bridge stations whose
@@ -289,7 +318,9 @@ export const AWAY_TEMPLATES = {
     ],
   },
   boarding_action: {
-    id: 'boarding_action', title: 'Board the hostile', hazard: 'extreme',
+    // Minutes, not the day and a quarter `extreme` would otherwise buy: this
+    // one happens at weapons range in the middle of a fight.
+    id: 'boarding_action', title: 'Board the hostile', hazard: 'extreme', hours: 0.6,
     steps: [
       { check: 'engineering', dc: DC.hard, text: 'Beam through their shields.' },
       { check: 'combat', dc: DC.very_hard, text: 'Take the bridge.' },

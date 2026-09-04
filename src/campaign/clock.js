@@ -163,6 +163,23 @@ export class CampaignClock {
     return hours;
   }
 
+  /**
+   * Spend commission hours on an order that took them.
+   *
+   * `advanceOpen` is time going by while the captain sits there; this is time
+   * an order cost — a landing party down for a watch, a ship in dock for two
+   * days. It moves the commission and nothing else: `lastSeen` stays where it
+   * is, because no wall-clock time has passed and pushing it forward would
+   * make the ship's next absence shorter than it was.
+   *
+   * @param {number} hours commission hours
+   */
+  spend(hours) {
+    if (!(hours > 0)) return 0;
+    this.commissionHours += hours;
+    return hours;
+  }
+
   /** Take the accrued time, leaving the counter empty. */
   drainPending() {
     const hours = this.pendingHours;
