@@ -11685,7 +11685,7 @@ function occupantsOf(game, roomId) {
   // scattering them uniformly through seventeen rooms would make a raid look
   // like a crowd.
   const boarders = game.ship?.boarders ?? 0;
-  if (boarders > 0 && BOARDED_ROOMS.has(roomId)) {
+  if (boarders > 0 && boardedRooms(boarders).includes(roomId)) {
     const here = Math.max(1, Math.min(3, Math.round(boarders / 12)));
     for (let i = 0; i < here; i++) {
       const at = place(room, roomId, i, 'intruder');
@@ -11702,10 +11702,26 @@ function occupantsOf(game, roomId) {
   return out;
 }
 
-/** Where a boarding party goes: the corridors, and what is worth taking. */
-const BOARDED_ROOMS = new Set([
-  'corridor_a', 'corridor_rec', 'corridor_sec', 'engineering', 'armoury', 'bridge',
-]);
+/**
+ * Where a boarding party has got to, in the order it gets there.
+ *
+ * They beam into a corridor and work toward what is worth taking. A party is
+ * NOT in every one of these at once — that was the first version, and it made
+ * the security board on the bridge useless: thirty intruders reported contacts
+ * on all six locations, which tells a captain nothing and leaves nowhere on
+ * the ship that is clear. How far down the list they have got is how many of
+ * them there are.
+ */
+const BOARDING_PRIORITY = [
+  'corridor_sec', 'corridor_a', 'engineering', 'armoury', 'corridor_rec', 'bridge',
+];
+
+/** The rooms a party of this size has reached. */
+function boardedRooms(boarders) {
+  if (!(boarders > 0)) return [];
+  const reach = Math.max(1, Math.min(BOARDING_PRIORITY.length, Math.round(boarders / 8)));
+  return BOARDING_PRIORITY.slice(0, reach);
+}
 
 /**
  * How many people are aboard this room, for a caption.
@@ -11724,6 +11740,7 @@ function headcountOf(game, roomId) {
 }
 
 __exports.occupantsOf = occupantsOf;
+__exports.boardedRooms = boardedRooms;
 __exports.headcountOf = headcountOf;
 
 });
@@ -12745,6 +12762,184 @@ __exports.SEATED_HEIGHT = SEATED_HEIGHT;
 __exports.JOLT_SECONDS = JOLT_SECONDS;
 __exports.PITCH_LIMIT = PITCH_LIMIT;
 __exports.FirstPersonView = FirstPersonView;
+
+});
+
+__define("src/sim/consoles.js", function (__exports, __require) {
+// The stations that had nothing behind them.
+//
+// Thirty-six stations aboard, and four of them opened no panel at all:
+// environmental control, gravity control and the security board on the bridge,
+// and the chief medical officer's desk in sickbay. A captain could cross the
+// bridge, stand at a console, operate it, and be told "That station is not
+// mine to work, Captain" — by the officer standing at it, which is the one
+// person it certainly IS.
+//
+// They do not need panels. Three of them are not places you give orders from,
+// they are places you ASK something, and the answer is a page of readings the
+// ship already has. This file is those readings: what each station knows,
+// computed from live state.
+//
+// Same division of labour as src/sim/powers.js, and for the same reason —
+// "what is here is everything a power DOES; what stays in main.js is what a
+// power SOUNDS like". A report is data. The modal that shows it is not.
+
+const { occupantsOf, boardedRooms } = __require("src/sim/occupancy.js");
+
+/** A percentage, said the way a bridge officer says one. */
+const pc = (v) => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
+
+/** "nominal" / "degraded" / "failing", from a subsystem's health. */
+const condition = (v) => (v > 0.85 ? 'nominal' : v > 0.55 ? 'degraded' : v > 0.2 ? 'impaired' : 'failing');
+
+/**
+ * What each station reports.
+ *
+ * Keyed by the station id in world/interiors.data.js, so a station that gains
+ * a panel later simply stops being listed here and the two can never both
+ * claim it — `stationReport` returns null for anything absent.
+ */
+const REPORTS = {
+  /**
+   * Life support. The one system aboard whose failure kills everybody slowly
+   * rather than quickly, and the only reading in the game that is about the
+   * air rather than the ship.
+   */
+  environmental: (g) => {
+    const s = g.ship;
+    const air = s.subsystems?.lifesupport ?? 1;
+    const lines = [
+      `Atmosphere and scrubbers: ${condition(air)}, ${pc(air)} of rated capacity.`,
+      `Complement aboard: ${s.crew} of ${s.maxCrew}.`,
+    ];
+    if (s.fires > 0) {
+      lines.push(`${s.fires} fire${s.fires === 1 ? '' : 's'} burning. `
+        + 'Those compartments are being vented as they are reached.');
+    }
+    // The number that matters, and only when it does: at full health the
+    // margin is meaningless and printing it every time teaches the captain to
+    // stop reading the panel.
+    if (air < 0.85) {
+      const hours = Math.round(96 * air * (s.maxCrew / Math.max(1, s.crew)));
+      lines.push(`At this capacity we have about ${hours} hours of breathable `
+        + 'air for the complement aboard.');
+    } else {
+      lines.push('No compartment is showing a loss. We are comfortable.');
+    }
+    return { title: 'Environmental Control', lines };
+  },
+
+  /**
+   * Gravity plating and structural integrity. Not a system with its own
+   * subsystem entry — it hangs off auxiliary power, which is exactly the sort
+   * of thing standing at the console is for finding out.
+   */
+  gravity: (g) => {
+    const s = g.ship;
+    const aux = s.subsystems?.auxiliary ?? 1;
+    const power = s.power?.factor?.('auxiliary') ?? 1;
+    const held = Math.max(0, Math.min(1, aux * power));
+    const lines = [
+      `Deck plating: ${condition(held)} at ${pc(held)}.`,
+      `Structural integrity field is drawing from auxiliary, currently ${pc(power)} of nominal.`,
+    ];
+    lines.push(held > 0.85
+      ? 'One gravity throughout. Nobody has noticed a thing.'
+      : held > 0.4
+        ? 'There is a flutter on the lower decks. Engineering knows.'
+        : 'Plating is failing on several decks. Anyone moving about should be told.');
+    return { title: 'Gravity Control', lines };
+  },
+
+  /**
+   * The internal security board: who is aboard who should not be, where the
+   * security detail is, and what the brig holds.
+   *
+   * `ship.boarders` has been in the simulation since a hostile could send a
+   * party across and there has never been a console that showed it.
+   */
+  security: (g) => {
+    const s = g.ship;
+    const lines = [`Condition ${g.alert ?? 'normal'}. Internal sensors are sweeping.`];
+    if ((s.boarders ?? 0) > 0) {
+      lines.push(`INTRUDER ALERT. Approximately ${s.boarders} hostile personnel aboard.`);
+      // Where, from the same layer that draws them — one answer, so the board
+      // and the corridor cannot disagree about where the fight is.
+      const where = boardedRooms(s.boarders)
+        .filter((id) => occupantsOf(g, id).some((o) => o.intruder));
+      if (where.length) {
+        lines.push(`Contacts on: ${where.map((id) => LOCATION_NAME[id] ?? id).join(', ')}.`);
+      }
+      lines.push('Security teams are engaging. Recommend the captain stay off those decks.');
+    } else {
+      lines.push('No unauthorised personnel aboard.');
+    }
+    const detail = occupantsOf(g, 'corridor_sec').filter((o) => !o.intruder).length;
+    lines.push(`${detail} of the security detail on watch on deck seven.`);
+    lines.push(g.alert === 'red'
+      ? 'The armoury is issuing sidearms.'
+      : 'The armoury is secured.');
+    return { title: 'Security', lines };
+  },
+
+  /**
+   * The chief medical officer's desk. Who is in sickbay, by name, and what
+   * the commission has cost so far.
+   */
+  cmo_desk: (g) => {
+    const s = g.ship;
+    const officers = g.crew?.officers ?? [];
+    const hurt = officers.filter((o) => o.alive && o.injured);
+    const lost = officers.filter((o) => !o.alive);
+    const lines = [];
+    if (hurt.length) {
+      for (const o of hurt) {
+        lines.push(`${o.name} — ${severity(o.injurySeverity)}, off duty.`);
+      }
+    } else {
+      lines.push('No officer is on the sick list.');
+    }
+    const dead = Math.max(0, (s.maxCrew ?? 0) - (s.crew ?? 0));
+    lines.push(dead > 0
+      ? `${dead} of the complement lost since we sailed. `
+        + `${s.crew} aboard, ${occupantsOf(g, 'sickbay').length} of them in here.`
+      : `${s.crew} aboard and none of them lost. Long may it last.`);
+    if (lost.length) {
+      lines.push(`We are without ${lost.map((o) => o.name).join(', ')}.`);
+    }
+    return { title: "Chief Medical Officer's Desk", lines };
+  },
+};
+
+/** What a first-person room is called, for the security board. */
+const LOCATION_NAME = {
+  corridor_a: 'deck five', corridor_rec: 'deck three', corridor_sec: 'deck seven',
+  engineering: 'main engineering', armoury: 'the armoury', bridge: 'the bridge',
+};
+
+/** How bad an injury is, in words a doctor would use. */
+const severity = (v) => (v >= 0.66 ? 'serious' : v >= 0.33 ? 'stable but not fit' : 'light injuries');
+
+/**
+ * The readings at this station, or null if it is not one of these.
+ *
+ * Null rather than an empty report, so the caller can tell "this station has
+ * nothing behind it" from "this station has nothing to say", which are
+ * different things and used to be the same one.
+ */
+function stationReport(game, stationId) {
+  if (!game?.ship || !stationId) return null;
+  const build = REPORTS[stationId];
+  if (!build) return null;
+  const r = build(game);
+  return r?.lines?.length ? r : null;
+}
+
+/** Which stations answer. Exported so a test can hold the data to it. */
+const REPORTING_STATIONS = Object.keys(REPORTS);
+
+__exports.stationReport = stationReport;
+__exports.REPORTING_STATIONS = REPORTING_STATIONS;
 
 });
 
@@ -39116,6 +39311,7 @@ const { TacticalView } = __require("src/ui/tactical.js");
 const { TacticalView3D } = __require("src/ui/tactical3d.js");
 const { Renderer } = __require("src/gfx/gl.js");
 const { FirstPersonView } = __require("src/ui/firstperson.js");
+const { stationReport } = __require("src/sim/consoles.js");
 const { GalaxyMap } = __require("src/ui/galaxymap.js");
 const screens = __require("src/ui/screens.js");
 const { warpSwitches } = __require("src/ui/chair.js");
@@ -39852,8 +40048,24 @@ class App {
     if (w.atStation) {
       const key = STATION_PANEL[w.atStation.panel] ?? w.atStation.panel;
       if (!key) {
+        // Four stations open no panel — environmental, gravity and the
+        // security board on the bridge, and the CMO's desk in sickbay — and
+        // they are not places you give orders from. They are places you ASK
+        // something, and the answer is a page of readings the ship already
+        // has. See src/sim/consoles.js.
+        //
+        // What was here before said "That station is not mine to work,
+        // Captain", spoken by the officer standing at it — which is the one
+        // person it certainly is.
+        const report = stationReport(g, w.atStation.id);
+        if (report) {
+          audio.play('computer_query');
+          haptic('tap');
+          this.showMessage(report.title, report.lines);
+          return;
+        }
         audio.play('ui_deny');
-        g.officerSays(w.atStation.crew ?? 'ops', 'That station is not mine to work, Captain.', 'object');
+        g.officerSays(w.atStation.crew ?? 'ops', 'There is nothing on this board for you, Captain.', 'object');
         this.render();
         return;
       }
