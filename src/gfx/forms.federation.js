@@ -28,7 +28,9 @@
 // reflects it, so everything below is written for one side only.
 
 import { vec3 } from './math.js';
-import { saucer, tube, box, sphere, mirrored, seg } from './mesh.js';
+import {
+  saucer, tube, box, sphere, mirrored, seg, windowRing, windowDeck,
+} from './mesh.js';
 
 /**
  * One nacelle and its glowing cap, at a point. Every form here ends with a
@@ -39,11 +41,57 @@ function nacelle(m, p, { x, y, z, length: len, radius: r }) {
     origin: vec3(x, y, z), length: len, r0: r, r1: r * 0.84,
     segments: seg(10), color: p.hull,
   });
-  // The bussard cap: the one emissive detail on a Federation hull.
+  // The bussard cap. Amber rather than warp blue, and genuinely emissive
+  // rather than merely pale: the glow channel is per vertex now, so a lit cap
+  // costs a float and not a second draw call.
   sphere(m, {
     origin: vec3(x + len, y, z), radius: r * 1.05,
-    segments: seg(8), rings: 5, color: p.glow,
+    segments: seg(8), rings: 5, color: p.bussard ?? p.glow, glow: 1,
   });
+}
+
+/**
+ * A band of lit ports around a primary hull's rim, and the impulse deck across
+ * its trailing edge.
+ *
+ * Four of the five forms here have a saucer, and a saucer without windows is a
+ * grey plate. Same treatment and same reasoning as the generic `starfleet`
+ * form in blueprint.js — shared as a function rather than copied four times.
+ */
+function primaryLights(mb, p, b, {
+  x, y = 0, radius, stretch = 1, high, thickness, domeRatio = 0.3,
+}) {
+  if (b.windows !== false) {
+    windowRing(mb, {
+      origin: vec3(x, y, 0),
+      radius,
+      stretch,
+      count: seg(b.windowCount ?? 13),
+      height: high * (b.windowHeight ?? 0.03),
+    });
+    // And rows on the plate, for the camera that looks down at it.
+    const half = thickness / 2;
+    const domeR = radius * domeRatio;
+    for (const frac of [0.82, 0.62]) {
+      const r = radius * frac;
+      windowDeck(mb, {
+        origin: vec3(x, y, 0),
+        radius: r,
+        stretch,
+        y: half * ((radius - r) / (radius - domeR)) + half * 0.25,
+        count: seg(b.windowCount ?? 13),
+        depth: radius * 0.02,
+      });
+    }
+  }
+  if (b.impulse !== false) {
+    box(mb, {
+      center: vec3(x - radius * stretch * 0.96, y + high * 0.02, 0),
+      size: vec3(radius * 0.1, high * 0.05, radius * (b.impulseWide ?? 0.5)),
+      color: p.impulse ?? p.glow,
+      glow: 1,
+    });
+  }
 }
 
 export const FEDERATION_FORMS = {
@@ -76,6 +124,10 @@ export const FEDERATION_FORMS = {
       segments: seg(b.segments ?? 22),
       color: p.hull,
       rimColor: p.trim,
+    });
+    primaryLights(mb, p, b, {
+      x: sx, radius: sr, stretch: b.saucerStretch ?? 0.86, high,
+      thickness: b.saucerThickness ?? high * 0.34, domeRatio: b.domeRatio ?? 0.3,
     });
 
     // The rollbar itself, which is what this form is named for.
@@ -140,6 +192,10 @@ export const FEDERATION_FORMS = {
       segments: seg(b.segments ?? 20),
       color: p.hull, rimColor: p.trim,
     });
+    primaryLights(mb, p, b, {
+      x: sx, y: sy, radius: sr, stretch: b.saucerStretch ?? 0.94, high,
+      thickness: b.saucerThickness ?? high * 0.26, domeRatio: 0.3,
+    });
 
     const ly = b.lowerY ?? -high * 0.28;
     tube(mb, {
@@ -188,6 +244,10 @@ export const FEDERATION_FORMS = {
       domeRatio: 0.32, domeHeight: high * 0.18,
       segments: seg(b.segments ?? 20),
       color: p.hull, rimColor: p.trim,
+    });
+    primaryLights(mb, p, b, {
+      x: sx, radius: sr, high,
+      thickness: b.saucerThickness ?? high * 0.24, domeRatio: 0.32,
     });
     box(mb, {
       center: vec3(sx - sr * 0.55, hy / 2, 0),
@@ -248,6 +308,10 @@ export const FEDERATION_FORMS = {
       stretch: b.saucerStretch ?? 1.2,
       segments: seg(b.segments ?? 22),
       color: p.hull, rimColor: p.trim,
+    });
+    primaryLights(mb, p, b, {
+      x: sx, radius: sr, stretch: b.saucerStretch ?? 1.2, high,
+      thickness: b.saucerThickness ?? high * 0.2, domeRatio: 0.3,
     });
     tube(mb, {
       origin: vec3(-0.5, hy, 0),
@@ -318,7 +382,7 @@ export const FEDERATION_FORMS = {
     sphere(mb, {
       origin: vec3(bl * 0.46, -high * 0.06, 0),
       radius: high * 0.24, segments: seg(8), rings: 5,
-      color: p.dish ?? p.glow,
+      color: p.dish ?? p.glow, glow: 0.55,
     });
 
     // Part of the body rather than hung off it, which is the whole point of

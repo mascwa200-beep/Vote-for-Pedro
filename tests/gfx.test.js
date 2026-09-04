@@ -221,13 +221,17 @@ describe('mesh construction', () => {
     })) {
       const mb = new MeshBuilder();
       build(mb);
-      const { data, vertexCount } = mb.build();
+      const { data, vertexCount, stride } = mb.build();
       assert.ok(vertexCount > 0, `${name} produced nothing`);
       assert.equal(vertexCount % 3, 0, `${name} produced a partial triangle`);
       assert.ok([...data].every(Number.isFinite), `${name} produced NaN`);
-      // Every normal must be unit length, or lighting is wrong.
+      // Every normal must be unit length, or lighting is wrong. Indexed off
+      // the reported stride, not a literal 9: hardcoding the vertex width
+      // here meant adding the glow channel made this read colour as normal
+      // and report a perfectly good saucer as having a 1.03-long normal.
+      const f = stride / 4;
       for (let i = 0; i < vertexCount; i++) {
-        const n = Math.hypot(data[i * 9 + 3], data[i * 9 + 4], data[i * 9 + 5]);
+        const n = Math.hypot(data[i * f + 3], data[i * f + 4], data[i * f + 5]);
         assert.ok(close(n, 1, 1e-5), `${name} normal ${i} has length ${n}`);
       }
     }
@@ -254,9 +258,41 @@ describe('mesh construction', () => {
     const mb = new MeshBuilder();
     mb.tri(vec3(1, 2, 3), vec3(4, 5, 6), vec3(7, 8, 9), [0.1, 0.2, 0.3]);
     const { data, stride } = mb.build();
-    assert.equal(stride, 36);                       // 9 floats
+    assert.equal(stride, 40);                       // 10 floats
     assert.ok(close(data[0], 1, 1e-6));             // position
     assert.ok(close(data[6], 0.1, 1e-6));           // colour at offset 24 bytes
+    assert.ok(close(data[9], 0, 1e-6));             // glow at offset 36 bytes
+  });
+
+  test('the glow channel is per vertex and survives mirroring', () => {
+    // The whole point of the tenth float: one buffer can hold hull that takes
+    // the light AND windows that ignore it. If it were per draw — which is
+    // what `uEmissive` is — a hull with windows would cost two draw calls,
+    // and #134 measured this renderer as draw-call bound.
+    const mb = new MeshBuilder();
+    mb.tri(vec3(0, 0, 0), vec3(1, 0, 0), vec3(0, 0, 1), [1, 1, 1]);           // hull
+    mb.tri(vec3(0, 0, 0), vec3(1, 0, 0), vec3(0, 1, 0), [1, 1, 1], 1);        // window
+    const { data, stride, vertexCount } = mb.build();
+    const f = stride / 4;
+    const glows = [];
+    for (let i = 0; i < vertexCount; i++) glows.push(data[i * f + 9]);
+    assert.deepEqual(glows, [0, 0, 0, 1, 1, 1]);
+
+    // Mirroring copies three floats a vertex for position, normal and colour
+    // and ONE for glow. Indexing it like the others gives the port nacelle a
+    // dark bussard dome while the starboard one glows.
+    const mm = new MeshBuilder();
+    mirrored(mm, (m) => {
+      m.tri(vec3(0, 0, 1), vec3(1, 0, 1), vec3(0, 1, 1), [1, 1, 1], 0);
+      m.tri(vec3(0, 0, 2), vec3(1, 0, 2), vec3(0, 1, 2), [1, 1, 1], 1);
+    });
+    const built = mm.build();
+    const g = [];
+    for (let i = 0; i < built.vertexCount; i++) g.push(built.data[i * (built.stride / 4) + 9]);
+    // The copies come in source order, not reversed: `mirrored` walks the new
+    // triangles forwards and only flips the winding WITHIN each one.
+    assert.deepEqual(g, [0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1],
+      'the mirrored copy did not carry the same glow as its original');
   });
 });
 
@@ -305,6 +341,8 @@ describe('the fleet has hulls', () => {
     // a budget moved on noise.
     const total = Object.values(SHIP_CLASSES)
       .reduce((n, c) => n + hullMesh(c.id, c.faction).triangles, 0);
+    // 25,647 today across thirty-one classes. See the per-hull budget below
+    // for the browser measurement this ceiling comes from.
     assert.ok(total < 30000, `${total} triangles across the fleet`);
   });
 
@@ -576,13 +614,17 @@ describe('the TOS Constitution', () => {
     // browser, on a Pixel-shaped viewport at DPR 3, with six of THIS hull on
     // the board — the heaviest case the fleet can produce:
     //
-    //     six Constitutions | 17,280 triangles/frame | 0.40 ms/frame | 31 draws
-    //     six D7s           |  7,080 triangles/frame | 0.50 ms/frame | 31 draws
+    //     six Constitutions | 12,852 triangles/frame | 0.30 ms median | 6 draws
+    //     six Galaxies      | 12,372 triangles/frame | 0.90 ms median | 6 draws
+    //     six D7s           |  1,446 triangles/frame | 0.10 ms median | 6 draws
     //
-    // Half a millisecond against a 16.7 ms frame. The render cost did not move
-    // with the triangle count at all, which says the renderer is bound by draw
-    // calls and fill rather than by geometry at this scale. The old ceiling was
-    // set when the target was a phone that had to draw these in software.
+    // Under a millisecond against a 16.7 ms frame, and measured as the median
+    // of sixty frames because a single sample of the SAME scene reads 0.30 ms
+    // one run and 0.90 the next. Run against the previous revision's geometry
+    // in the same browser on the same machine, the difference detail makes is
+    // smaller than that spread: the renderer is bound by draw calls and fill,
+    // not by geometry, at this scale. The old ceiling was set when the target
+    // was a phone that had to draw these in software.
     assert.ok(tris < 2400, `${tris} triangles is too much for one hull`);
   });
 });
@@ -1823,6 +1865,13 @@ describe('no two Federation classes are the same shape', () => {
     // two read completely differently here, and that is the point.
     const slices = new Array(12).fill(0);
     for (let i = 0; i < m.vertexCount; i++) {
+      // HULL ONLY. Lit geometry — window bands, bussards, impulse decks — is
+      // decoration applied by the same rules to every class, so counting it
+      // here measures what the classes have in COMMON and drowns out what
+      // separates them: adding rim ports pulled the Constitution and its refit
+      // from 0.239 apart to 0.122, while their bare hulls are 0.330 apart. A
+      // band 0.6% outside the rim is not a silhouette.
+      if (m.data[i * f + 9] > 0) continue;
       const x = m.data[i * f];
       const y = m.data[i * f + 1];
       const z = m.data[i * f + 2];
@@ -1875,11 +1924,17 @@ describe('no two Federation classes are the same shape', () => {
   test('a Constellation really does have four nacelles', () => {
     // The count is the silhouette. Counting the emissive bussard caps counts
     // the nacelles, because nothing else on a Federation hull is drawn in the
-    // glow colour.
+    // BUSSARD colour.
+    //
+    // It used to key off `glow`, and that stopped being unique the moment the
+    // intercooler grille started carrying the warp colour: a grille is a long
+    // box and spans three cluster radii, so a Constitution counted four
+    // nacelles. A bussard cap has its own amber now, which is both what the
+    // ship actually looks like and what makes this countable.
     function glowClusters(id) {
       const m = hullMesh(id, 'federation');
       const f = m.stride / 4;
-      const glow = paletteFor('federation').glow;
+      const glow = paletteFor('federation').bussard;
       const seen = [];
       for (let i = 0; i < m.vertexCount; i++) {
         const r = m.data[i * f + 6];
@@ -1990,7 +2045,7 @@ describe('no two Federation classes are the same shape', () => {
         const x = m.data[i * f];
         const z = m.data[i * f + 2];
         const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
-        if (near(c, P.glow)) glow.push([x, m.data[i * f + 1], z]);
+        if (near(c, P.bussard)) glow.push([x, m.data[i * f + 1], z]);
         if (near(c, P.trim) && x > -0.53 && x < -0.46 && Math.abs(z) < 0.12) trimAtStern++;
       }
       // Bussards: two clusters, one either side, both up on the nacelles.
@@ -2022,6 +2077,231 @@ describe('no two Federation classes are the same shape', () => {
       }
 
       assert.ok(trimAtStern > 20, `${id} has ${trimAtStern} vertices at the transom`);
+    }
+  });
+
+  test('the lights on a hull are lights, and the hull is not', () => {
+    // The glow channel says which FACES ignore the lighting. Two ways to get
+    // this wrong and both look plausible in a still: nothing lit at all (the
+    // channel is written but never read), and everything lit (a stray default
+    // makes the whole ship self-illuminated and it renders as a paper
+    // cut-out). Both ends are asserted, on every class in the fleet.
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      let lit = 0;
+      let litHull = 0;
+      const P = paletteFor('federation');
+      for (let i = 0; i < m.vertexCount; i++) {
+        const g = m.data[i * f + 9];
+        assert.ok(g >= 0 && g <= 1, `${id} has a glow of ${g}, outside 0..1`);
+        if (g > 0) lit++;
+        const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
+        const isHull = Math.abs(c[0] - P.hull[0]) < 0.02
+          && Math.abs(c[1] - P.hull[1]) < 0.02 && Math.abs(c[2] - P.hull[2]) < 0.02;
+        if (isHull && g > 0) litHull++;
+      }
+      assert.ok(lit > 0, `${id} has nothing lit on it at all`);
+      assert.ok(lit < m.vertexCount, `${id} is lit all over — it will render flat`);
+      assert.equal(litHull, 0, `${id} has ${litHull} self-illuminated HULL vertices`);
+    }
+  });
+
+  test('a primary hull has a band of lit ports round its rim', () => {
+    // Windows are what turn a grey plate into somewhere with people in it, and
+    // they are the one detail that survives the distance at which nothing else
+    // does.
+    //
+    // Found structurally rather than by colour constant: a port is a fully lit
+    // vertex whose colour is none of the hull's ACCENTS — a bussard cap, an
+    // impulse deck, a warp grille, a deflector. That is exactly what a window
+    // is and it needs nothing private from mesh.js.
+    const P = paletteFor('federation');
+    const near = (a2, b2) => Math.abs(a2[0] - b2[0]) < 0.02
+      && Math.abs(a2[1] - b2[1]) < 0.02 && Math.abs(a2[2] - b2[2]) < 0.02;
+    const accents = [P.glow, P.bussard, P.impulse, P.dish];
+    const portsOf = (id) => {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      const pts = [];
+      for (let i = 0; i < m.vertexCount; i++) {
+        if (m.data[i * f + 9] !== 1) continue;
+        const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
+        if (accents.some((a2) => near(c, a2))) continue;
+        pts.push([m.data[i * f], m.data[i * f + 1], m.data[i * f + 2]]);
+      }
+      return pts;
+    };
+    // How many distinct heights the ports sit at: a saucer rim is one band,
+    // and a secondary hull's flank ports are a second, well below it.
+    const decks = (pts) => {
+      const ys = [...pts.map((v) => v[1])].sort((a2, b2) => a2 - b2);
+      let n = ys.length ? 1 : 0;
+      for (let i = 1; i < ys.length; i++) if (ys[i] - ys[i - 1] > 0.02) n++;
+      return n;
+    };
+
+    for (const id of ['constitution', 'constitution_refit', 'excelsior',
+      'ambassador', 'galaxy', 'intrepid', 'sovereign']) {
+      const pts = portsOf(id);
+      assert.ok(pts.length > 100, `${id} has ${pts.length} lit ports`);
+      assert.equal(decks(pts), 2,
+        `${id} has ports at ${decks(pts)} heights — expected a saucer rim and a hull flank`);
+      // A band goes all the way round, and it is the same band both sides.
+      const port = pts.filter((v) => v[2] < 0).length;
+      const stbd = pts.filter((v) => v[2] > 0).length;
+      assert.ok(Math.abs(port - stbd) <= pts.length * 0.05,
+        `${id}'s ports are lopsided: ${port} port, ${stbd} starboard`);
+    }
+
+    // Two controls, because "every hull has windows" would pass on a form that
+    // sprayed them anywhere.
+    //
+    // A Miranda's primary hull is the WHOLE ship — there is no secondary hull
+    // under it to put a second row of ports on, so it must have exactly one
+    // band and not the two every cruiser above has.
+    assert.equal(decks(portsOf('miranda')), 1,
+      'a Miranda has no secondary hull, so it cannot have flank ports on one');
+    // And a Defiant has no saucer at all.
+    assert.equal(portsOf('defiant').length, 0,
+      'a Defiant is a wedge with no primary hull to put a rim band on');
+  });
+
+  test('a hull is lit with trim, not upholstered in light', () => {
+    // Counting lit VERTICES cannot see this: a single quad the size of a wing
+    // is four vertices, and a band of forty windows is two hundred and forty.
+    // The warbird shipped for one revision with a glowing panel lying across
+    // the whole top face of each arm — geometrically a strip, by area a third
+    // of the ship — and every vertex-counting assertion here was happy with
+    // it. Area is what the eye actually sees, so area is what is bounded.
+    //
+    // Measured, not guessed: across all thirty-one classes the lit share runs
+    // 3.8% (a transport) to 10.3% (an Orion raider). Twenty per cent is twice
+    // the busiest hull in the fleet — room for a class that is mostly engine,
+    // and nowhere near enough for a panel pretending to be a seam.
+    const areaOf = (m, onlyLit) => {
+      const f = m.stride / 4;
+      let sum = 0;
+      for (let t = 0; t < m.vertexCount; t += 3) {
+        if (onlyLit && m.data[t * f + 9] === 0) continue;
+        const P = (k) => [m.data[(t + k) * f], m.data[(t + k) * f + 1], m.data[(t + k) * f + 2]];
+        const a2 = P(0); const b2 = P(1); const c2 = P(2);
+        const u = [b2[0] - a2[0], b2[1] - a2[1], b2[2] - a2[2]];
+        const v = [c2[0] - a2[0], c2[1] - a2[1], c2[2] - a2[2]];
+        const cr = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        sum += 0.5 * Math.hypot(cr[0], cr[1], cr[2]);
+      }
+      return sum;
+    };
+    let busiest = 0;
+    for (const id of Object.keys(BLUEPRINTS)) {
+      const m = hullMesh(id, 'federation');
+      const share = areaOf(m, true) / areaOf(m, false);
+      busiest = Math.max(busiest, share);
+      assert.ok(share < 0.2,
+        `${id} is ${(share * 100).toFixed(1)}% lit surface — that is a lightbox, not a ship`);
+    }
+    // The other end, so the bar cannot be met by a fleet with no lights on it.
+    assert.ok(busiest > 0.05,
+      `the busiest hull in the fleet is only ${(busiest * 100).toFixed(1)}% lit`);
+  });
+
+  test('the ports on a saucer deck face the camera that looks down at them', () => {
+    // Every deck port was invisible when this was first written, and nothing
+    // said so: they were built, they were counted, they were in the buffer,
+    // and back-face culling threw all of them away because the quad was wound
+    // pairing each corner with its RADIAL neighbour instead of its angular
+    // one. A normal is the only thing that distinguishes the two, so it is the
+    // only thing that can catch it.
+    const P = paletteFor('federation');
+    const near = (a2, b2) => Math.abs(a2[0] - b2[0]) < 0.02
+      && Math.abs(a2[1] - b2[1]) < 0.02 && Math.abs(a2[2] - b2[2]) < 0.02;
+    const accents = [P.glow, P.bussard, P.impulse, P.dish];
+
+    for (const id of ['constitution', 'galaxy', 'miranda', 'intrepid']) {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      let deck = 0;
+      let facingDown = 0;
+      for (let i = 0; i < m.vertexCount; i++) {
+        if (m.data[i * f + 9] !== 1) continue;
+        const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
+        if (accents.some((a2) => near(c, a2))) continue;
+        // A DECK port lies flat: its normal is dominated by y. A rim port and
+        // a flank port both stand up, so |ny| is small on those and this
+        // selects the ones being asserted about without needing to know where
+        // on the hull they were placed.
+        const ny = m.data[i * f + 4];
+        if (Math.abs(ny) < 0.7) continue;
+        deck++;
+        if (ny < 0) facingDown++;
+      }
+      assert.ok(deck > 30, `${id} has ${deck} flat-lying deck ports`);
+      assert.equal(facingDown, 0,
+        `${id} has ${facingDown} of ${deck} deck ports facing down into the plate`);
+    }
+  });
+
+  test('the intercooler grille is on the outside of the nacelle', () => {
+    // #134 added this feature at 0.68 of a nacelle radius from the axis — that
+    // is to say ENTIRELY INSIDE the tube it was decorating. Twelve triangles a
+    // side, on every generic-form hull, that could not be seen from any angle.
+    //
+    // Measured by SLICING. A tube has vertices only at its two ends, so asking
+    // whether any hull vertex sits near the grille answers "none" for a
+    // perfectly buried box and for a perfectly proud one alike — the first
+    // version of this check did exactly that and reported a pass with a
+    // denominator of zero. Cutting both surfaces with the plane x = the
+    // grille's own station gives the two z's that can actually be compared.
+    const P = paletteFor('federation');
+    const near = (a2, b2) => Math.abs(a2[0] - b2[0]) < 0.02
+      && Math.abs(a2[1] - b2[1]) < 0.02 && Math.abs(a2[2] - b2[2]) < 0.02;
+    const isGrille = (c, g) => near(c, P.glow) && g > 0.4 && g < 0.5;
+
+    /** The furthest to starboard a chosen surface reaches on the plane x = X. */
+    const sliceMaxZ = (m, X, pick, yMin) => {
+      const f = m.stride / 4;
+      let best = -Infinity;
+      for (let t = 0; t < m.vertexCount; t += 3) {
+        const i = t * f;
+        if (!pick([m.data[i + 6], m.data[i + 7], m.data[i + 8]], m.data[i + 9])) continue;
+        const v = [0, 1, 2].map((k) => [
+          m.data[(t + k) * f], m.data[(t + k) * f + 1], m.data[(t + k) * f + 2]]);
+        for (let k = 0; k < 3; k++) {
+          const a2 = v[k]; const b2 = v[(k + 1) % 3];
+          if ((a2[0] - X) * (b2[0] - X) > 0 || a2[0] === b2[0]) continue;
+          const u = (X - a2[0]) / (b2[0] - a2[0]);
+          const y = a2[1] + u * (b2[1] - a2[1]);
+          const z = a2[2] + u * (b2[2] - a2[2]);
+          if (z > 0 && y > yMin) best = Math.max(best, z);
+        }
+      }
+      return best;
+    };
+
+    for (const id of ['constitution', 'constitution_refit', 'excelsior',
+      'ambassador', 'galaxy', 'intrepid', 'sovereign']) {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      const grille = [];
+      for (let i = 0; i < m.vertexCount; i++) {
+        const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
+        if (isGrille(c, m.data[i * f + 9]) && m.data[i * f + 2] > 0) {
+          grille.push([m.data[i * f], m.data[i * f + 1], m.data[i * f + 2]]);
+        }
+      }
+      assert.ok(grille.length > 10, `${id} has no starboard grille at all`);
+      const X = grille.reduce((n, v) => n + v[0], 0) / grille.length;
+      const yMin = Math.min(...grille.map((v) => v[1])) - 0.02;
+
+      const g = sliceMaxZ(m, X, isGrille, yMin);
+      const hull = sliceMaxZ(m, X, (c) => near(c, P.hull), yMin);
+      // Both halves have to be finite, or the comparison is vacuous — which is
+      // precisely the failure this test was written after.
+      assert.ok(Number.isFinite(g) && Number.isFinite(hull),
+        `${id}: nothing to compare at x=${X.toFixed(3)} (grille ${g}, hull ${hull})`);
+      assert.ok(g > hull,
+        `${id}'s grille reaches z=${g.toFixed(4)} and its nacelle z=${hull.toFixed(4)} — buried`);
     }
   });
 
