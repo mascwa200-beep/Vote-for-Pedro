@@ -80,10 +80,25 @@ const HOUR_PER_TICK = 108000;
  * no repair discipline on a hard rung dies in the fourth fight, and a file about
  * what happens between engagements cannot be a study of losing.
  */
+// Five, not three.
+//
+// The coverage assertions below ask whether a captain can REACH a thing, and
+// three commissions turned out to be too few to answer that honestly: measured
+// on the code before the away-team traits landed, `derelict_search` was reached
+// by exactly ONE of the three (seed 77001) and `escaped` was one commission's
+// only sighting of that outcome. A wreck worth boarding needs a fight that ends
+// a particular way and then a captain with no engagement running, which is a
+// thin path — so any change that moves the random stream at all could take it
+// away, and one did.
+//
+// The bar is not lowered; the evidence is widened. Two more commissions is more
+// play, not a weaker question.
 const COMMISSIONS = [
   { seed: 77001, difficulty: 'lieutenant', crewMode: 'canon', shipClass: 'constitution', legs: 26 },
   { seed: 77002, difficulty: 'commander', crewMode: 'original', shipClass: 'constitution_refit', legs: 26 },
   { seed: 77003, difficulty: 'captain', crewMode: 'original', shipClass: 'excelsior', legs: 26 },
+  { seed: 77004, difficulty: 'lieutenant', crewMode: 'original', shipClass: 'miranda', legs: 26 },
+  { seed: 77005, difficulty: 'commander', crewMode: 'canon', shipClass: 'constitution', legs: 26 },
 ];
 
 /** The captain's own random source. Never `game.rng`. */

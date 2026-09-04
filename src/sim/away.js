@@ -74,6 +74,8 @@ export class AwayTeam {
     // alongside is a different party. Set by the caller, which is the only
     // place that knows whether there are any locals to turn out.
     this.locals = opts.locals ?? 0;
+    // What the ship behind them is doing, for the one trait that asks.
+    this.hullPct = opts.hullPct ?? 1;
     this.casualties = [];
     this.rolls = [];                      // full audit trail for the UI
   }
@@ -158,7 +160,20 @@ export class AwayTeam {
     let targetDC = dc ?? level.dc;
     if (this.difficulty) targetDC = this.difficulty.dc(targetDC);
 
-    const advantage = this.character?.hasAdvantageOn(spec.ability) ?? false;
+    // Three ways to have the better of a check, and only the first of them
+    // had ever been asked. See RESEARCH.md §40.
+    //
+    //   advantageOn          Vulcan, Andorian, Tellarite, Betazoid — read
+    //                        through `hasAdvantageOn` since it was written.
+    //   desperateAdvantage   Bajoran, "Resistance Veteran — advantage on checks
+    //                        made while your ship is below half hull". The team
+    //                        had no idea what the ship's hull was.
+    //   switchableAdvantage  Human/Vulcan, "Two Disciplines — choose Logic or
+    //                        Instinct before any check". Nothing stored a
+    //                        choice, so neither discipline was ever live.
+    const advantage = (this.character?.hasAdvantageOn(spec.ability) ?? false)
+      || this.desperate()
+      || this.disciplineCovers(spec.ability);
     // Training damps the swing rather than only shifting it. A veteran is not
     // merely better on average; they are more *consistent*, which is the thing
     // a flat die could never express and the reason this is not a d20 any more.
@@ -240,9 +255,66 @@ export class AwayTeam {
     return result;
   }
 
+  /**
+   * Is the ship in trouble behind us?
+   *
+   * "Resistance Veteran — Advantage on checks made while your ship is below
+   * half hull." The away team is the only thing that resolves a check and it
+   * had no reference to the ship at all, so the one fact the trait depends on
+   * was not in the room. `hullPct` is passed by `Game.buildAwayTeam`, which is
+   * the only caller that knows it.
+   */
+  desperate() {
+    if (!this.character?.mechanic('desperateAdvantage')) return false;
+    return (this.hullPct ?? 1) < 0.5;
+  }
+
+  /**
+   * "Two Disciplines — choose Logic or Instinct before any check."
+   *
+   * The choice is a real one and it is stored on the character, so it survives
+   * a save and can be changed between checks. It covers exactly one of the
+   * abilities the mechanic lists; a captain who has not chosen gets the first.
+   */
+  disciplineCovers(abilityId) {
+    const list = this.character?.mechanic('switchableAdvantage');
+    if (!Array.isArray(list) || !list.length) return false;
+    const chosen = list.includes(this.character.discipline)
+      ? this.character.discipline : list[0];
+    return chosen === abilityId;
+  }
+
   /** Spend the species reroll, if the character has one left. */
   canReroll() {
     return (this.character?.rerollsRemaining ?? 0) > 0;
+  }
+
+  /**
+   * "Once per away mission, reroll a failed check."
+   *
+   * `canReroll` has existed since the away team did and was called from
+   * nowhere; `rerollsRemaining` was set by `Character.refresh` — which combat
+   * calls, not the away system — and decremented by nothing. So the Human
+   * trait, on the species most captains are, did nothing at all.
+   *
+   * Spent automatically, because an away mission resolves as one batch: there
+   * is no moment between two checks at which the game could ask. The trait
+   * says once per mission and takes the first failure, which is the only
+   * reading available to code that cannot stop and ask.
+   */
+  rerollIfPossible(rng, checkType, opts, result) {
+    if (result.success || !this.canReroll()) return result;
+    this.character.rerollsRemaining -= 1;
+    const again = this.check(rng, checkType, opts);
+    again.rerolled = true;
+    return again;
+  }
+
+  /** A new landing party. The trait says per MISSION, so it refreshes here. */
+  beginMission() {
+    if (this.character) {
+      this.character.rerollsRemaining = this.character.mechanic('rerollPerMission') ?? 0;
+    }
   }
 
   save() {

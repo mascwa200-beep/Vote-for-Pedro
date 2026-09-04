@@ -2499,6 +2499,83 @@ that reads it. `tools/verify-app.mjs` gives every phrasing the parser knows to a
 running game at whatever moment it happens to be in, and it is the only thing
 in the project that would ever have asked.
 
+## 40. Three traits that were words on the character sheet
+
+§39 counted 49 species, background and career mechanics that nothing reads.
+This spends three of them, and — more usefully — finds out **why** the rest are
+unread, which is not one reason.
+
+A check resolves through `AwayTeam.check`, and it asked exactly one question
+about the captain: `hasAdvantageOn(ability)`, which reads `advantageOn` and
+nothing else. Measured through `Game.buildAwayTeam` and that same check, 300
+runs at DC 14:
+
+| species | healthy | ship below half hull | what the card promises |
+| --- | --- | --- | --- |
+| human | 61.0% | 61.0% | *"Once per away mission, reroll a failed check."* |
+| bajoran | 56.0% | 56.0% | *"Advantage on checks made while your ship is below half hull."* |
+| half_vulcan | 61.0% | 61.0% | *"Choose Logic or Instinct before any check: advantage on Science, or on Command."* |
+| **vulcan** | **85.3%** | **85.3%** | `advantageOn` — read since it was written |
+
+The Vulcan row is the control: advantage is worth about 24 points here, so the
+measurement can plainly see one. The other three promised it and never got it.
+
+### What each needed
+
+- **Bajoran.** The away team had no reference to the ship at all, so the one
+  fact the trait depends on was not in the room. `Game.buildAwayTeam` is the
+  only caller that knows it, and passes `hullPct` now. **56.0% → 80.3%** with
+  the ship under half.
+- **Half-Vulcan.** Nothing stored a choice, so neither discipline was ever
+  live. It is a real choice now, on the character, and it survives a save —
+  a setting that cannot be set is the same defect one level down. Unchosen
+  falls to the first, so a captain who never picks still has one, and it is
+  strictly **one at a time**: granting both would make it better than the
+  Vulcan's, which grants one.
+- **Human**, the species most captains are. `AwayTeam.canReroll()` has existed
+  since the away team did and was **called from nowhere**; `rerollsRemaining`
+  was set by `Character.refresh`, which `startCombat` calls and the away system
+  does not, and was decremented by nothing. It refreshes per mission now, which
+  is what the card says, and is spent on the first failed check — an away
+  mission resolves as one batch, so there is no moment at which the game could
+  stop and ask.
+
+### Why the others are unread, which is the useful part
+
+Not all forty-nine are the same kind of gap:
+
+| kind | example | what it would take |
+| --- | --- | --- |
+| the fact was not in the room | `desperateAdvantage` | pass it in — done here |
+| the effect exists but is unreachable | `rerollPerMission` | give it a caller — done here |
+| **it modifies a mechanic that does not exist** | `saveDisadvantage` | `dice.js` exports `save()` and **nothing calls it** |
+| | `noUntrainedPenalty` | there is no untrained penalty; being unproficient costs nothing |
+| | `ignorePressure` | there is no pressure penalty |
+| | `ignoreOutnumbered`, `outnumberedAdvantage` | a check has no notion of being outnumbered at all |
+
+The third row is the important one. Those traits are not unread because someone
+forgot to wire them up — they are unread because **the thing they modify was
+never built**. Making them true is a design change, not a fix, and each needs
+its own decision about what "a saving throw" or "being outnumbered" should mean
+here. That is why they are written down rather than guessed at.
+
+### The commission driver was flying on one lucky seed
+
+Adding a reroll draws from the world stream — correctly, because a reroll is an
+outcome and not a cosmetic like an arena rock or a ship's name — and every
+seeded result downstream moved. Two coverage assertions in
+`tests/commission.test.js` then failed.
+
+They were fragile, not wrong. Measured on the code before this change,
+`derelict_search` was reached by **exactly one of the three** commissions
+(seed 77001), and `escaped` was a single commission's only sighting of that
+outcome. A wreck worth boarding needs a fight that ends a particular way and
+then a captain with no engagement running — a thin path, and any change that
+moves the stream at all could take it away. One did.
+
+The bar is unchanged; the evidence is wider. Five commissions instead of three,
+which costs 10.5 seconds and asks the same question of more play.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
