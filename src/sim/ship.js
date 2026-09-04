@@ -171,6 +171,26 @@ export function inArc(dirOrBearing, weapon) {
   return cos >= Math.cos(half * DEG) - 1e-9;
 }
 
+/**
+ * A full tank, as a number the ship can be asked for.
+ *
+ * Antimatter is a percentage: a hundred is full and the checker calls anything
+ * outside 0..100 an error. That hundred was a literal in four places and had no
+ * name anywhere, so `ship.maxAntimatter` — the obvious thing to reach for, and
+ * the counterpart of `maxHull`, `maxShield` and `maxTorpedoes`, which all exist
+ * — was `undefined`.
+ *
+ * FOURTEEN sites across three test files and the browser harness reached for it
+ * anyway. Thirteen wrote `undefined` into the tank meaning to fill it, which
+ * becomes NaN on the first sum; the fourteenth compared against `undefined *
+ * 0.25`, and `x < NaN` is false forever, so the commission harness's rule to
+ * put in for fuel when the tank fell below a quarter had never once fired. That
+ * is why one of its three commissions ended stranded.
+ *
+ * The sites were not wrong to expect it. The ship was wrong not to have it.
+ */
+export const MAX_ANTIMATTER = 100;
+
 export class Ship {
   /**
    * @param {string} classId key into SHIP_CLASSES
@@ -226,7 +246,7 @@ export class Ship {
     this.weapons = (cls.weapons ?? []).map((w) => ({ ...w, cooldown: 0, enabled: true }));
     this.torpedoes = cls.weapons?.some((w) => w.type === 'torpedo') ? 60 : 0;
     this.maxTorpedoes = this.torpedoes;
-    this.antimatter = 100;
+    this.antimatter = MAX_ANTIMATTER;
 
     // ---- states ----
     this.cloakCapable = !!cls.cloak;
@@ -847,13 +867,16 @@ export class Ship {
     this.coreEjected = false;
     this.power.cap = this.cls.powerCap;
     this.torpedoes = this.maxTorpedoes;
-    this.antimatter = 100;
+    this.antimatter = MAX_ANTIMATTER;
     this.injured = 0;
     this.adaptation = {};
     this.destroyed = false;
   }
 
   // ---------------- persistence ----------------
+
+  /** A full tank. The counterpart of `maxHull` and `maxTorpedoes`. */
+  get maxAntimatter() { return MAX_ANTIMATTER; }
 
   save() {
     return {
@@ -909,7 +932,8 @@ export class Ship {
       // never recovers; and the NaN is written back on the next save. Measured:
       // a Constitution loaded from such a record flew Sol to Qo'noS at warp
       // nine, a 63.2% burn, on a tank the game could not read.
-      antimatter: Number.isFinite(data.antimatter) ? clamp(data.antimatter, 0, 100) : 100,
+      antimatter: Number.isFinite(data.antimatter)
+        ? clamp(data.antimatter, 0, MAX_ANTIMATTER) : MAX_ANTIMATTER,
       fires: data.fires ?? 0, boarders: Math.max(0, Number(data.boarders) || 0),
       coreEjected: data.coreEjected ?? false,
       breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
