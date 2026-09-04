@@ -2306,6 +2306,71 @@ same file. The first draft of `tests/rooms.test.js` did exactly that and then
 failed three tests later, claiming the tutorial sends a new captain to the
 planet surface. Probes copy the stage now.
 
+## 38. The capitals, and the first episode that follows from another
+
+Ten of the map's twenty sectors hosted **no episode at all**, and among them was
+every great power's home space:
+
+| sector | systems | with an episode |
+| --- | --- | --- |
+| Qo'noS, Romulus, Cardassia, Gamma, Ferenginar, the DMZ, Vulcan, Andor, Risa, Betazed | 14 | **0** |
+| everywhere else | 29 | 15 |
+
+Fifteen of forty-three systems had anything authored in them. And the endgame
+was thinnest of all — **Act 4 had two episodes and Act 5 had one**, against six
+in Act 3.
+
+**Nothing chained.** Sixteen episodes, forty-three flags, and the only
+cross-content dependency in the whole book was `court_martial` waiting on
+`inquiry_summoned` — a flag the *ledger* raises, not an episode.
+
+### The chain was already latent in the map
+
+`systems.data.js` refuses a berth at Qo'noS below Klingon standing 10, and at
+Romulus below Romulan 25. And:
+
+- *The Archanis Claim* pays **25 Klingon standing** and sets
+  `kang_respects_you` for taking Kang's hand over the mining claim;
+- *The Silence at Outpost 4* pays **20 Romulan standing** and sets
+  `spared_warbird` for letting a crippled warbird go — and its ending text
+  already promised *"Some years later, that decision comes back in your
+  favour."*
+
+So the ship that can dock at either capital is, in practice, the ship that
+earned it years earlier. Nothing on either world knew that.
+
+| episode | act | follows | opens where |
+| --- | --- | --- | --- |
+| *The Second Rite* | 4 | `kang_respects_you` (Archanis, act 2) | Qo'noS |
+| *The Debt at Romulus* | 4 | `spared_warbird` (Outpost 4, act 2) | Romulus |
+
+Both use `requiresFlag`, which `MissionBook.availableAt` has always checked and
+which one episode had ever set. A test asserts the flag a capital waits on is
+paid by an episode from an **earlier act** — a chain, not a lock.
+
+### What they read back
+
+| flag | was | now |
+| --- | --- | --- |
+| `archanis_massacre` | write-only | you can read the rest of the casualty list yourself, from memory |
+| `captured_cloak` | write-only | you can tell Telek the device is aboard your ship |
+| a living tactical officer | `requires.officer`, unused | somebody stands second for you at the rite |
+
+The Second Rite also sends the captain to the **armoury** — a compartment that
+has existed since the interiors were written and that no episode had ever used.
+
+### Counts
+
+| | before | after |
+| --- | --- | --- |
+| episodes | 16 | **18** |
+| act 4 | 2 | **4** |
+| sectors with an episode | 10 | **12** |
+| episodes that follow from another episode | 0 | **2** |
+
+`README.md` carries the episode count and `tests/docs.test.js` asserts it
+against `EPISODES.length`, so the number in the prose moved with the content.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
