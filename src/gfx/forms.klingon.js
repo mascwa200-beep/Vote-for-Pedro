@@ -30,7 +30,7 @@
 // reflects it, so everything below is written for one side only.
 
 import { vec3 } from './math.js';
-import { tube, box, sphere, mirrored, seg, greebles, windowBelt } from './mesh.js';
+import { tube, box, prow, sphere, mirrored, seg, greebles, windowBelt } from './mesh.js';
 
 /**
  * A Klingon warp nacelle: a housing with a lit grille down its inboard face and
@@ -132,14 +132,17 @@ export const KLINGON_FORMS = {
 
     // The head: a flat wide plate with a beak in front of it, not a cube. The
     // beak is the class's whole forward silhouette.
+    // `prow`, not `box`: a swept box on the CENTRELINE is a parallelogram seen
+    // from above, with one bow corner reaching forward and the other raked
+    // back. Measured, that left a Bird-of-Prey eleven percent lopsided.
     const hw = (b.headWide ?? 1) * r0;
-    box(mb, {
+    prow(mb, {
       center: vec3(headX, headY, 0),
       size: vec3(hw * 1.5, r0 * 0.52, hw * 1.7),
       sweep: hw * 0.5,
       color: p.hull,
     });
-    box(mb, {
+    prow(mb, {
       center: vec3(headX + hw * 1.1, headY - r0 * 0.06, 0),
       size: vec3(hw * 0.9, r0 * 0.24, hw * 0.66),
       sweep: hw * 0.34,
@@ -320,7 +323,7 @@ export const KLINGON_FORMS = {
       color: p.hull,
     });
     // A raised aft deckhouse, so the boom is not one slab from above.
-    box(mb, {
+    prow(mb, {
       center: vec3(boomX - boomLen * 0.14, high * 0.34, 0),
       size: vec3(boomLen * 0.54, high * 0.24, boomZ * 0.9),
       sweep: 0.04,

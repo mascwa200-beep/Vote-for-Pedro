@@ -232,11 +232,50 @@ export function box(mb, {
   return mb;
 }
 
+/**
+ * A box on the centreline whose plan-form is a symmetric point.
+ *
+ * `sweep` displaces a box's +z corners aft and leaves its -z corners alone,
+ * which is correct for a wing — it is called from inside `mirrored`, so the
+ * port wing gets the same treatment reflected. On a CENTRELINE box there is no
+ * reflection, and the result is a hull that is a parallelogram seen from above:
+ * one bow corner reaching forward and the other swept back.
+ *
+ * Measured across the fleet, eleven classes were lopsided this way, the worst
+ * of them by sixteen percent of its own length — and on a Galor it put the
+ * hull's nose, at the centreline, a fifth of the ship behind where the sensor
+ * dome was mounted, so the dome floated in clear space ahead of the ship.
+ *
+ * This builds the starboard half and mirrors it, so a swept centreline section
+ * comes out as an arrowhead: both sides raked, the point on the axis.
+ */
+export function prow(mb, { center = vec3(), size = vec3(1, 0.1, 0.4), ...rest } = {}) {
+  const half = size[2] / 2;
+  return mirrored(mb, (m) => box(m, {
+    ...rest,
+    center: vec3(center[0], center[1], center[2] + half / 2),
+    size: vec3(size[0], size[1], half),
+  }));
+}
+
 /** A low-poly sphere, for planets, sensor pods and command modules. */
+/**
+ * `scale` makes it an ellipsoid, which is most of what a sphere is used for.
+ *
+ * A ship is never a ball. Every hull in the fleet is between a tenth and a
+ * third as tall as it is long, so a sphere built round and then squashed by the
+ * normaliser is squashed along with everything else on the hull — and a form
+ * whose one round part forces the whole ship through a 2.6x squash is a form
+ * that is not built right. Flat shading takes the face normal from the vertices
+ * it is given, so a non-uniform scale here needs no normal correction.
+ */
 export function sphere(mb, {
-  origin = vec3(), radius = 1, segments = 16, rings = 10,
+  origin = vec3(), radius = 1, segments = 16, rings = 10, scale = null,
   color = [0.6, 0.6, 0.7], banding = 0, glow = 0,
 } = {}) {
+  const kx = scale ? scale[0] : 1;
+  const ky = scale ? scale[1] : 1;
+  const kz = scale ? scale[2] : 1;
   for (let r = 0; r < rings; r++) {
     const t0 = (r / rings) * Math.PI;
     const t1 = ((r + 1) / rings) * Math.PI;
@@ -253,10 +292,10 @@ export function sphere(mb, {
     for (let i = 0; i < segments; i++) {
       const a0 = (i / segments) * Math.PI * 2;
       const a1 = ((i + 1) / segments) * Math.PI * 2;
-      const A = at(origin, Math.cos(a0) * rad0, y0, Math.sin(a0) * rad0);
-      const B = at(origin, Math.cos(a1) * rad0, y0, Math.sin(a1) * rad0);
-      const C = at(origin, Math.cos(a1) * rad1, y1, Math.sin(a1) * rad1);
-      const D = at(origin, Math.cos(a0) * rad1, y1, Math.sin(a0) * rad1);
+      const A = at(origin, Math.cos(a0) * rad0 * kx, y0 * ky, Math.sin(a0) * rad0 * kz);
+      const B = at(origin, Math.cos(a1) * rad0 * kx, y0 * ky, Math.sin(a1) * rad0 * kz);
+      const C = at(origin, Math.cos(a1) * rad1 * kx, y1 * ky, Math.sin(a1) * rad1 * kz);
+      const D = at(origin, Math.cos(a0) * rad1 * kx, y1 * ky, Math.sin(a0) * rad1 * kz);
       if (r === 0) mb.tri(A, C, D, c, glow);
       else if (r === rings - 1) mb.tri(A, B, C, c, glow);
       else mb.quad(A, B, C, D, c, glow);
@@ -265,10 +304,18 @@ export function sphere(mb, {
   return mb;
 }
 
-// The colour of a lit window: warm interior light, not hull. Not exported —
-// it is the default of both helpers below and nothing outside this file has
-// any business picking a different one.
-const WINDOW = [1.0, 0.93, 0.72];
+/**
+ * The colour of a lit window: warm interior light, not hull.
+ *
+ * Exported so a form that cannot use a belt can still lay a port that is the
+ * SAME port — a D'deridex's habitable volume is inside two arms that enclose
+ * the hull from every direction, so the only surface a light can be seen from
+ * is the outboard face of an arm, and a ring around the x axis cannot lie on
+ * one. Nothing should be picking a different colour; this is here so that the
+ * one thing everything else keys off stays one thing.
+ */
+export const PORT_LIGHT = [1.0, 0.93, 0.72];
+const WINDOW = PORT_LIGHT;
 
 /**
  * A band of lit windows around a horizontal circle — a saucer rim.
@@ -434,6 +481,34 @@ export function greebles(mb, {
       size: vec3(size[0] * k, size[1] * (2 - k), size[2] * k),
       color: on ? (lit ?? color) : color,
       glow: on ? 1 : glow,
+    });
+  }
+  return mb;
+}
+
+/**
+ * A straight run of lit ports along a line, as small solid boxes.
+ *
+ * `windowBelt` lays ports on a circle about the x axis, which is right for a
+ * tube and impossible for a flat panel that is neither horizontal nor vertical
+ * — a swept, drooping wing, say. A box is closed, so it is visible from every
+ * side and cannot be culled by facing the wrong way, which is the failure both
+ * of the belt helpers were written to avoid.
+ */
+export function portRow(mb, {
+  from = vec3(), to = vec3(1, 0, 0), count = 4, size = 0.02, color = WINDOW, glow = 1,
+} = {}) {
+  for (let i = 0; i < count; i++) {
+    const t = count === 1 ? 0.5 : (i + 0.5) / count;
+    box(mb, {
+      center: vec3(
+        from[0] + (to[0] - from[0]) * t,
+        from[1] + (to[1] - from[1]) * t,
+        from[2] + (to[2] - from[2]) * t,
+      ),
+      size: vec3(size * 1.6, size, size),
+      color,
+      glow,
     });
   }
   return mb;

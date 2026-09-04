@@ -23,7 +23,7 @@ import {
   hullMesh, BLUEPRINTS, DIMENSIONS, paletteFor, proportionError,
 } from '../src/gfx/blueprint.js';
 import { SHIP_LIST } from '../src/world/ships.data.js';
-import { MeshBuilder, box, greebles } from '../src/gfx/mesh.js';
+import { MeshBuilder, box, prow, greebles, PORT_LIGHT } from '../src/gfx/mesh.js';
 import { vec3 } from '../src/gfx/math.js';
 
 const FACTION = Object.fromEntries(SHIP_LIST.map((s) => [s.id, s.faction]));
@@ -32,8 +32,15 @@ const classesOf = (faction) => SHIP_LIST
   .filter((s) => s.faction === faction && BLUEPRINTS[s.id] && DIMENSIONS[s.id])
   .map((s) => s.id);
 
-/** The colour mesh.js gives a lit port. Private there, so it is written out. */
-const WINDOW = [1.0, 0.93, 0.72];
+/**
+ * The colour mesh.js gives a lit port — imported, not copied.
+ *
+ * A written-out copy is a second source of truth for the one value every
+ * assertion in this file keys off, and a form that drifted a hundredth away
+ * from it would leave every port on the ship invisible to these tests while
+ * looking perfectly correct on screen.
+ */
+const WINDOW = PORT_LIGHT;
 const near = (a, b, eps = 2e-3) => a.every((v, i) => Math.abs(v - b[i]) < eps);
 
 const vertex = (m, i) => {
@@ -47,9 +54,12 @@ const vertex = (m, i) => {
 
 const isPort = (v) => near(v.color, WINDOW) && v.glow > 0.5;
 
-/** Every class built by one of the two new forms. */
-const KLINGON_FORMED = Object.entries(BLUEPRINTS)
-  .filter(([, b]) => b.form === 'raptor' || b.form === 'kdf_cruiser')
+/** The forms that build a hull somebody shoots at, and the classes on them. */
+const HOSTILE_FORMS = [
+  'raptor', 'kdf_cruiser', 'wedge', 'dominion', 'tholian', 'warbird', 'marauder',
+];
+const HOSTILE = Object.entries(BLUEPRINTS)
+  .filter(([, b]) => HOSTILE_FORMS.includes(b.form))
   .map(([id]) => id);
 
 // ======================================================= one shape per class
@@ -152,27 +162,24 @@ describe('no two classes of a faction are the same shape', () => {
 
 describe('a ship with a crew has lights on', () => {
   test('every hull the new forms build has lit ports', () => {
-    for (const id of KLINGON_FORMED) {
+    for (const id of HOSTILE) {
       const m = mesh(id);
       let ports = 0;
       for (let i = 0; i < m.vertexCount; i++) if (isPort(vertex(m, i))) ports++;
       assert.ok(ports >= 12, `${id} has ${ports} port vertices — nobody is aboard`);
     }
-    assert.ok(KLINGON_FORMED.length >= 7,
-      `only ${KLINGON_FORMED.length} classes were checked`);
+    assert.ok(HOSTILE.length >= 14,
+      `only ${HOSTILE.length} classes were checked`);
   });
 
   test('and the hulls that still have none are named, not forgotten', () => {
-    // The omission, asserted. `wedge`, `warbird`, `cube` and `compact` build
-    // eleven more classes and not one of them has a port on it either — the
-    // same finding as the Klingon fleet's, left for its own change rather than
-    // folded into this one. When those forms gain ports this list shrinks and
-    // this test says so, which is the point of writing it down.
-    //
-    // `compact` is a Defiant and a runabout, and it is the one entry here with
-    // an argument for staying: a Defiant is famously a warship with almost no
-    // habitable hull. `hauler`, which is not on this list, is a civilian
-    // freighter and already has them.
+    // The omission, asserted. Two forms still build a ship with nobody
+    // aboard, and both have an argument: `compact` is a Defiant and a runabout,
+    // a warship with almost no habitable hull and a four-berth shuttle, and
+    // `cube` is the Borg, who do not fit windows. When either gains ports this
+    // list shrinks and this test says so, which is the point of writing it
+    // down. `hauler`, which is not on this list, is a civilian freighter and
+    // has had them all along.
     const dark = [];
     for (const id of Object.keys(BLUEPRINTS)) {
       const m = mesh(id);
@@ -181,7 +188,7 @@ describe('a ship with a crew has lights on', () => {
       if (ports === 0) dark.push(BLUEPRINTS[id].form);
     }
     assert.deepEqual([...new Set(dark)].sort(),
-      ['compact', 'cube', 'warbird', 'wedge'],
+      ['compact', 'cube'],
       'the set of forms that build a ship with nobody aboard has changed');
   });
 
@@ -214,21 +221,31 @@ describe('a ship with a crew has lights on', () => {
     }
   });
 
-  test('the ports on a Klingon hull are proud of the hull they are set in', () => {
+  test('the ports are proud of the hull they are set in', () => {
     // #134's failure, which this change could repeat in a new place: geometry
     // placed INSIDE the shape it decorates, paid for and invisible from every
-    // angle. Measured by slicing, for the reason that test gives — a tube has
-    // vertices only at its ends, so asking whether any hull vertex is near a
-    // port answers "none" for a buried port and a proud one alike.
+    // angle. Measured by SLICING, for the reason that test gives — a tube has
+    // vertices only at its two ends, so asking whether any hull vertex sits
+    // near a port answers "none" for a buried port and a proud one alike.
+    //
+    // A port has to be outermost in ONE direction, not in all four. A row of
+    // lights on the top of a wing is behind that wing measured sideways and in
+    // plain view from above, and an earlier version of this test only looked
+    // sideways — which would have forced every port in the fleet onto a flank
+    // whether or not that is where a light can be seen from.
     let checked = 0;
-    for (const id of KLINGON_FORMED) {
+    for (const id of HOSTILE) {
       const m = mesh(id);
       const f = m.stride / 4;
       const tri = (t) => [0, 1, 2].map((k) =>
         [0, 1, 2].map((j) => m.data[(t + k) * f + j]));
 
-      /** How far to starboard a chosen surface reaches on the plane x = X. */
-      const sliceMaxZ = (X, yLo, yHi, pick) => {
+      /**
+       * How far a chosen surface reaches along `axis` on the plane x = X,
+       * within a band of the other cross-axis.
+       */
+      const reach = (X, axis, sign, lo, hi, pick) => {
+        const other = axis === 1 ? 2 : 1;
         let best = -Infinity;
         for (let t = 0; t < m.vertexCount; t += 3) {
           if (!pick(vertex(m, t))) continue;
@@ -238,42 +255,77 @@ describe('a ship with a crew has lights on', () => {
             const b = v[(k + 1) % 3];
             if ((a[0] - X) * (b[0] - X) > 0 || a[0] === b[0]) continue;
             const u = (X - a[0]) / (b[0] - a[0]);
-            const y = a[1] + u * (b[1] - a[1]);
-            const z = a[2] + u * (b[2] - a[2]);
-            if (z > 0 && y >= yLo && y <= yHi) best = Math.max(best, z);
+            const p1 = a[axis] + u * (b[axis] - a[axis]);
+            const p2 = a[other] + u * (b[other] - a[other]);
+            if (p2 >= lo && p2 <= hi) best = Math.max(best, p1 * sign);
           }
         }
         return best;
       };
 
-      // Each port triangle against the hull at ITS OWN station and its own y
-      // band. A first version sliced once, at the mean x of every starboard
-      // port on the ship — and a Bird-of-Prey has ports on the head and on the
-      // body, so the mean landed between the two groups where no port crosses
-      // the plane at all and the comparison had nothing on one side of it.
+      // The hull's own centre in y and z, so "outermost to starboard" is only
+      // asked of a port that is ON the starboard side. Without it a port at
+      // z = +0.166 was compared against the hull's reach to PORT, found less
+      // negative, and reported as buried — a comparison with no meaning that
+      // happened to be the only one that ran.
+      let midY = 0;
+      let midZ = 0;
+      {
+        let loY = Infinity; let hiY = -Infinity;
+        let loZ = Infinity; let hiZ = -Infinity;
+        for (let i = 0; i < m.vertexCount; i++) {
+          loY = Math.min(loY, m.data[i * f + 1]); hiY = Math.max(hiY, m.data[i * f + 1]);
+          loZ = Math.min(loZ, m.data[i * f + 2]); hiZ = Math.max(hiZ, m.data[i * f + 2]);
+        }
+        midY = (loY + hiY) / 2;
+        midZ = (loZ + hiZ) / 2;
+      }
+      const mid = [0, midY, midZ];
+
       let ports = 0;
       let here = 0;
+      let against = 0;
       for (let t = 0; t < m.vertexCount; t += 3) {
         if (!isPort(vertex(m, t))) continue;
         const v = tri(t);
-        if (v.every((q) => q[2] <= 0)) continue;
         ports++;
         const X = (v[0][0] + v[1][0] + v[2][0]) / 3;
-        const yLo = Math.min(...v.map((q) => q[1])) - 0.004;
-        const yHi = Math.max(...v.map((q) => q[1])) + 0.004;
-        const port = sliceMaxZ(X, yLo, yHi, isPort);
-        const hull = sliceMaxZ(X, yLo, yHi, (q) => !isPort(q) && q.glow < 0.5);
-        // A port over a station with no hull at all is not buried; skip it
-        // rather than counting it, and let the tally below catch a filter that
-        // has quietly stopped matching anything.
-        if (!Number.isFinite(hull) || !Number.isFinite(port)) continue;
-        checked++;
+        const band = (axis) => {
+          const lo = Math.min(...v.map((q) => q[axis])) - 0.004;
+          const hi = Math.max(...v.map((q) => q[axis])) + 0.004;
+          return [lo, hi];
+        };
+        let compared = false;
+        let outside = false;
+        const why = [];
+        for (const [axis, sign] of [[2, 1], [2, -1], [1, 1], [1, -1]]) {
+          const own = v.reduce((n, q) => n + q[axis], 0) / 3;
+          if (sign * (own - mid[axis]) <= 0) continue;
+          const [lo, hi] = band(axis === 1 ? 2 : 1);
+          const port = reach(X, axis, sign, lo, hi, isPort);
+          const hull = reach(X, axis, sign, lo, hi, (q) => !isPort(q) && q.glow < 0.5);
+          why.push(`${axis === 1 ? 'y' : 'z'}${sign > 0 ? '+' : '-'} `
+            + `port ${port.toFixed(4)} hull ${hull.toFixed(4)}`);
+          if (!Number.isFinite(port)) continue;
+          compared = true;
+          // No hull beyond the port in a direction it faces is the clearest
+          // possible pass: there is nothing there to hide behind. Treating it
+          // as "nothing to compare" instead — which the first version did —
+          // threw away exactly the ports that are most obviously visible.
+          if (!Number.isFinite(hull)) { outside = true; break; }
+          against++;
+          if (port >= hull - 1e-4) { outside = true; break; }
+        }
+        if (!compared) continue;
         here++;
-        assert.ok(port >= hull - 1e-4,
-          `${id}'s port at x=${X.toFixed(3)} reaches z=${port.toFixed(4)} `
-          + `inside a hull that reaches ${hull.toFixed(4)}`);
+        checked++;
+        // The REASON, not just the refusal: which directions were tried, how
+        // far the port reached in each, and how far the hull reached past it.
+        assert.ok(outside,
+          `${id}'s port at x=${X.toFixed(3)} is inside the hull from every `
+          + `direction — ${why.join('; ')}`);
       }
-      assert.ok(ports >= 6, `${id} has ${ports} starboard port faces`);
+      assert.ok(ports >= 6, `${id} has ${ports} port faces`);
       // The denominator, PER CLASS. Without it a filter that had quietly
       // stopped matching would pass this by making no comparison at all —
       // which is the failure the original grille measurement shipped with —
@@ -281,8 +333,12 @@ describe('a ship with a crew has lights on', () => {
       // while the others carried it.
       assert.ok(here >= 4,
         `${id} had ${here} of its ${ports} ports over any hull at all`);
+      // And at least some of them were held against real hull rather than
+      // passing on an empty sky, or the class contributes nothing.
+      assert.ok(against >= 2,
+        `${id} never once compared a port against the hull it is set in`);
     }
-    assert.ok(checked > 40, `only ${checked} ports were actually compared`);
+    assert.ok(checked > 100, `only ${checked} ports were actually compared`);
   });
 });
 
@@ -296,8 +352,7 @@ describe('a hull is one object, not several near each other', () => {
    * a band has no vertex inside it, and counting vertices alone reports a hole
    * through the middle of every box in the fleet.
    */
-  function emptyBands(id, n = 20) {
-    const m = mesh(id);
+  function bandsOf(m, n = 20) {
     const f = m.stride / 4;
     let lo = Infinity;
     let hi = -Infinity;
@@ -311,8 +366,8 @@ describe('a hull is one object, not several near each other', () => {
       for (let k = 0; k < 3; k++) {
         const a = y(k);
         const b = y((k + 1) % 3);
-        for (let s = 0; s <= 8; s++) {
-          const v = a + ((b - a) * s) / 8;
+        for (let s = 0; s <= 48; s++) {
+          const v = a + ((b - a) * s) / 48;
           bands[Math.min(n - 1, Math.floor(((v - lo) / (hi - lo)) * n))]++;
         }
       }
@@ -320,32 +375,133 @@ describe('a hull is one object, not several near each other', () => {
     return bands.map((v, i) => (v === 0 ? i : -1)).filter((i) => i >= 0);
   }
 
-  test('a wing is attached to the ship it is on', () => {
-    // The defect the `dip` shear was added for. `wingDroop` used to be an
-    // offset applied to the wing, the nacelle and the wingtip cannon
-    // separately, each by a different fraction of it — so a Bird-of-Prey,
-    // which has the deepest droop in the fleet, had a wing root 0.29 units
-    // BELOW the body it grows out of, a nacelle another 0.29 below the wing,
-    // and a cannon below that. From the side it was four objects in a diagonal
-    // line with clear space between them.
-    for (const id of KLINGON_FORMED) {
-      assert.deepEqual(emptyBands(id), [],
-        `${id} has a horizontal slice with no ship in it`);
+  const emptyBands = (id, n = 20) => bandsOf(mesh(id), n);
+
+  test('no hull anywhere in the fleet has one', () => {
+    // The `wedge` classes used to. It hung a lit sensor sphere at x = 0.55 on
+    // a hull whose forward face is at 0.5 of its own `length_`, so four of the
+    // five had a ball floating in clear space ahead of the ship — a hole
+    // through the hull that this measurement reported and nothing else would
+    // have. `raptor` had one too: `wingDroop` was an offset applied to the
+    // wing, the nacelle and the cannon each by a different fraction, so a
+    // Bird-of-Prey was four objects in a diagonal line.
+    const gapped = Object.keys(BLUEPRINTS).filter((id) => emptyBands(id).length > 0);
+    assert.deepEqual(gapped, [], 'these hulls have a horizontal slice with no ship in it');
+  });
+
+  test('and the measurement can see one that does', () => {
+    // The control, built rather than borrowed: with the fleet clean there is
+    // nothing left in it to prove this can fail, and an assertion with nothing
+    // that fails it is an assertion that measures nothing.
+    const apart = new MeshBuilder();
+    box(apart, { center: vec3(0, 0, 0), size: vec3(1, 0.2, 0.4) });
+    box(apart, { center: vec3(0, 1, 0), size: vec3(0.2, 0.2, 0.2) });
+    assert.ok(bandsOf(apart.build()).length > 0,
+      'a ball floating a whole hull-length above the ship reads as one object');
+
+    // And the same two boxes touching do not.
+    const joined = new MeshBuilder();
+    box(joined, { center: vec3(0, 0, 0), size: vec3(1, 0.2, 0.4) });
+    box(joined, { center: vec3(0, 0.15, 0), size: vec3(0.2, 0.2, 0.2) });
+    assert.deepEqual(bandsOf(joined.build()), [],
+      'two boxes that touch are reported as two objects');
+  });
+});
+
+// ================================================ a ship has two of everything
+
+
+describe('every hull is the same ship on both sides of its own centreline', () => {
+  /**
+   * The largest disagreement between port and starboard reach, as a fraction
+   * of the hull's own length.
+   *
+   * Sliced along x, because that is where the failure lives: `sweep` displaces
+   * a box's +z corners aft and leaves its -z corners where they are. Inside
+   * `mirrored` that is a swept wing and correct. On a CENTRELINE box it is a
+   * parallelogram — one bow corner forward, the other raked back.
+   */
+  function lopsided(id, n = 24) {
+    const m = mesh(id);
+    const f = m.stride / 4;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < m.vertexCount; i++) {
+      lo = Math.min(lo, m.data[i * f]);
+      hi = Math.max(hi, m.data[i * f]);
+    }
+    const port = new Array(n).fill(0);
+    const star = new Array(n).fill(0);
+    for (let i = 0; i < m.vertexCount; i++) {
+      const x = m.data[i * f];
+      const z = m.data[i * f + 2];
+      const k = Math.min(n - 1, Math.floor(((x - lo) / (hi - lo)) * n));
+      if (z > 0) star[k] = Math.max(star[k], z);
+      else port[k] = Math.max(port[k], -z);
+    }
+    let worst = 0;
+    for (let k = 0; k < n; k++) worst = Math.max(worst, Math.abs(star[k] - port[k]) / (hi - lo));
+    return worst;
+  }
+
+  test('nothing built by a shipyard is lopsided', () => {
+    // Eleven classes were, across six different forms, the worst of them by
+    // sixteen percent of its own length — and on a Galor that put the hull's
+    // nose, at the centreline, a fifth of the ship behind the sensor dome
+    // mounted on it.
+    const bad = [];
+    for (const id of Object.keys(BLUEPRINTS)) {
+      if (BLUEPRINTS[id].form === 'cube') continue;
+      const off = lopsided(id);
+      if (off > 0.02) bad.push(`${id} ${(off * 100).toFixed(1)}% (${BLUEPRINTS[id].form})`);
+    }
+    assert.deepEqual(bad, [], 'these hulls are not the same ship on both sides');
+  });
+
+  test('except the Borg, who did not build theirs in one', () => {
+    // The exception, asserted rather than skipped. `cube` scatters surface
+    // clutter round a trigonometric walk with no mirror, which is the one
+    // place in the fleet where an irregular hull is the right answer: a Borg
+    // vessel is accreted, not laid down. Holding it to the rule above would
+    // mean making the Borg tidy.
+    for (const id of ['borg_cube', 'bioship']) {
+      assert.ok(lopsided(id) > 0.1,
+        `${id} has become symmetrical, so the exception above is now dead code`);
     }
   });
 
-  test('and the measurement can see a hull that is not', () => {
-    // The control, in the same test file: four of the `wedge` classes DO have
-    // a gap, at the join between the slab and the superstructure above it.
-    // Left for the change that rebuilds those forms — recorded here so the
-    // measurement above is known to be able to fail.
-    const gapped = Object.keys(BLUEPRINTS).filter((id) => emptyBands(id).length > 0);
-    assert.ok(gapped.length > 0,
-      'nothing in the fleet has a gap, so the measurement above proves nothing');
-    for (const id of gapped) {
-      assert.equal(BLUEPRINTS[id].form, 'wedge',
-        `${id} has a gap and is not one of the known ones`);
+  test('and the measurement can tell the two apart', () => {
+    // A control the fleet cannot supply now that it is clean: a swept box on
+    // the centreline against the same box built through `prow`.
+    const skew = new MeshBuilder();
+    box(skew, { center: vec3(), size: vec3(1, 0.1, 0.6), sweep: 0.3 });
+    const even = new MeshBuilder();
+    prow(even, { center: vec3(), size: vec3(1, 0.1, 0.6), sweep: 0.3 });
+    const reach = (mb) => {
+      let s = 0;
+      let p2 = 0;
+      for (let i = 0; i < mb.positions.length; i += 3) {
+        const x = mb.positions[i];
+        const z = mb.positions[i + 2];
+        // A vertex ON the centreline is on neither side, and counting it as
+        // one made `prow` look lopsided by exactly its own sweep.
+        if (z > 1e-9) s = Math.max(s, x);
+        else if (z < -1e-9) p2 = Math.max(p2, x);
+      }
+      return Math.abs(s - p2);
+    };
+    assert.ok(reach(skew) > 0.25, `a swept box reaches the same on both sides (${reach(skew)})`);
+    assert.ok(reach(even) < 1e-9, `prow is still lopsided by ${reach(even)}`);
+    // And it is still a point rather than a blunt end: the axis reaches
+    // further forward than the outboard corners do.
+    let axis = -Infinity;
+    let tip = -Infinity;
+    for (let i = 0; i < even.positions.length; i += 3) {
+      const x = even.positions[i];
+      if (Math.abs(even.positions[i + 2]) < 1e-9) axis = Math.max(axis, x);
+      else tip = Math.max(tip, x);
     }
+    assert.ok(axis > tip + 0.1, `the prow is blunt: axis ${axis}, corner ${tip}`);
   });
 });
 
@@ -422,9 +578,13 @@ describe('the shears and the machinery', () => {
 describe('the new hulls are ships, and still affordable', () => {
   test('every Klingon class is more ship than the wedge it was', () => {
     // 241 triangles each, for all six, before this change.
-    for (const id of KLINGON_FORMED) {
+    for (const id of HOSTILE) {
       const m = mesh(id);
-      assert.ok(m.triangles > 400, `${id} is ${m.triangles} triangles`);
+      // 241 was the number every one of them carried, whatever it was.
+      // The floor is above it by a clear margin rather than by a hair: the
+      // lightest hull in the fleet now is the 130-metre Tholian web spinner,
+      // which is a crystal and is meant to be the simplest thing here.
+      assert.ok(m.triangles > 300, `${id} is ${m.triangles} triangles`);
       assert.ok(m.triangles < 2400, `${id} is ${m.triangles} triangles — too much for one hull`);
     }
   });
@@ -436,7 +596,7 @@ describe('the new hulls are ships, and still affordable', () => {
     // overridden with a raw number, so a Negh'Var's nacelles were slung 0.44 of
     // its LENGTH below the centreline — two and a half times the height of the
     // whole ship.
-    for (const id of KLINGON_FORMED) {
+    for (const id of HOSTILE) {
       const e = proportionError(id);
       const off = Math.max(e.beam, 1 / e.beam, e.height, 1 / e.height);
       assert.ok(off < 1.25,

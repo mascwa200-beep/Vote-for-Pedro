@@ -5774,11 +5774,50 @@ function box(mb, {
   return mb;
 }
 
+/**
+ * A box on the centreline whose plan-form is a symmetric point.
+ *
+ * `sweep` displaces a box's +z corners aft and leaves its -z corners alone,
+ * which is correct for a wing — it is called from inside `mirrored`, so the
+ * port wing gets the same treatment reflected. On a CENTRELINE box there is no
+ * reflection, and the result is a hull that is a parallelogram seen from above:
+ * one bow corner reaching forward and the other swept back.
+ *
+ * Measured across the fleet, eleven classes were lopsided this way, the worst
+ * of them by sixteen percent of its own length — and on a Galor it put the
+ * hull's nose, at the centreline, a fifth of the ship behind where the sensor
+ * dome was mounted, so the dome floated in clear space ahead of the ship.
+ *
+ * This builds the starboard half and mirrors it, so a swept centreline section
+ * comes out as an arrowhead: both sides raked, the point on the axis.
+ */
+function prow(mb, { center = vec3(), size = vec3(1, 0.1, 0.4), ...rest } = {}) {
+  const half = size[2] / 2;
+  return mirrored(mb, (m) => box(m, {
+    ...rest,
+    center: vec3(center[0], center[1], center[2] + half / 2),
+    size: vec3(size[0], size[1], half),
+  }));
+}
+
 /** A low-poly sphere, for planets, sensor pods and command modules. */
+/**
+ * `scale` makes it an ellipsoid, which is most of what a sphere is used for.
+ *
+ * A ship is never a ball. Every hull in the fleet is between a tenth and a
+ * third as tall as it is long, so a sphere built round and then squashed by the
+ * normaliser is squashed along with everything else on the hull — and a form
+ * whose one round part forces the whole ship through a 2.6x squash is a form
+ * that is not built right. Flat shading takes the face normal from the vertices
+ * it is given, so a non-uniform scale here needs no normal correction.
+ */
 function sphere(mb, {
-  origin = vec3(), radius = 1, segments = 16, rings = 10,
+  origin = vec3(), radius = 1, segments = 16, rings = 10, scale = null,
   color = [0.6, 0.6, 0.7], banding = 0, glow = 0,
 } = {}) {
+  const kx = scale ? scale[0] : 1;
+  const ky = scale ? scale[1] : 1;
+  const kz = scale ? scale[2] : 1;
   for (let r = 0; r < rings; r++) {
     const t0 = (r / rings) * Math.PI;
     const t1 = ((r + 1) / rings) * Math.PI;
@@ -5795,10 +5834,10 @@ function sphere(mb, {
     for (let i = 0; i < segments; i++) {
       const a0 = (i / segments) * Math.PI * 2;
       const a1 = ((i + 1) / segments) * Math.PI * 2;
-      const A = at(origin, Math.cos(a0) * rad0, y0, Math.sin(a0) * rad0);
-      const B = at(origin, Math.cos(a1) * rad0, y0, Math.sin(a1) * rad0);
-      const C = at(origin, Math.cos(a1) * rad1, y1, Math.sin(a1) * rad1);
-      const D = at(origin, Math.cos(a0) * rad1, y1, Math.sin(a0) * rad1);
+      const A = at(origin, Math.cos(a0) * rad0 * kx, y0 * ky, Math.sin(a0) * rad0 * kz);
+      const B = at(origin, Math.cos(a1) * rad0 * kx, y0 * ky, Math.sin(a1) * rad0 * kz);
+      const C = at(origin, Math.cos(a1) * rad1 * kx, y1 * ky, Math.sin(a1) * rad1 * kz);
+      const D = at(origin, Math.cos(a0) * rad1 * kx, y1 * ky, Math.sin(a0) * rad1 * kz);
       if (r === 0) mb.tri(A, C, D, c, glow);
       else if (r === rings - 1) mb.tri(A, B, C, c, glow);
       else mb.quad(A, B, C, D, c, glow);
@@ -5807,10 +5846,18 @@ function sphere(mb, {
   return mb;
 }
 
-// The colour of a lit window: warm interior light, not hull. Not exported —
-// it is the default of both helpers below and nothing outside this file has
-// any business picking a different one.
-const WINDOW = [1.0, 0.93, 0.72];
+/**
+ * The colour of a lit window: warm interior light, not hull.
+ *
+ * Exported so a form that cannot use a belt can still lay a port that is the
+ * SAME port — a D'deridex's habitable volume is inside two arms that enclose
+ * the hull from every direction, so the only surface a light can be seen from
+ * is the outboard face of an arm, and a ring around the x axis cannot lie on
+ * one. Nothing should be picking a different colour; this is here so that the
+ * one thing everything else keys off stays one thing.
+ */
+const PORT_LIGHT = [1.0, 0.93, 0.72];
+const WINDOW = PORT_LIGHT;
 
 /**
  * A band of lit windows around a horizontal circle — a saucer rim.
@@ -5981,6 +6028,34 @@ function greebles(mb, {
   return mb;
 }
 
+/**
+ * A straight run of lit ports along a line, as small solid boxes.
+ *
+ * `windowBelt` lays ports on a circle about the x axis, which is right for a
+ * tube and impossible for a flat panel that is neither horizontal nor vertical
+ * — a swept, drooping wing, say. A box is closed, so it is visible from every
+ * side and cannot be culled by facing the wrong way, which is the failure both
+ * of the belt helpers were written to avoid.
+ */
+function portRow(mb, {
+  from = vec3(), to = vec3(1, 0, 0), count = 4, size = 0.02, color = WINDOW, glow = 1,
+} = {}) {
+  for (let i = 0; i < count; i++) {
+    const t = count === 1 ? 0.5 : (i + 0.5) / count;
+    box(mb, {
+      center: vec3(
+        from[0] + (to[0] - from[0]) * t,
+        from[1] + (to[1] - from[1]) * t,
+        from[2] + (to[2] - from[2]) * t,
+      ),
+      size: vec3(size * 1.6, size, size),
+      color,
+      glow,
+    });
+  }
+  return mb;
+}
+
 /** Mirror everything added by `fn` across the z axis, for port/starboard pairs. */
 function mirrored(mb, fn) {
   const start = mb.positions.length;
@@ -6011,11 +6086,14 @@ __exports.seg = seg;
 __exports.saucer = saucer;
 __exports.tube = tube;
 __exports.box = box;
+__exports.prow = prow;
 __exports.sphere = sphere;
+__exports.PORT_LIGHT = PORT_LIGHT;
 __exports.windowRing = windowRing;
 __exports.windowDeck = windowDeck;
 __exports.windowBelt = windowBelt;
 __exports.greebles = greebles;
+__exports.portRow = portRow;
 __exports.mirrored = mirrored;
 
 });
@@ -6051,7 +6129,7 @@ __define("src/gfx/forms.federation.js", function (__exports, __require) {
 // reflects it, so everything below is written for one side only.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { saucer, tube, box, sphere, mirrored, seg, windowRing, windowDeck } = __require("src/gfx/mesh.js");
+const { saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck } = __require("src/gfx/mesh.js");
 
 /**
  * One nacelle and its glowing cap, at a point. Every form here ends with a
@@ -6342,7 +6420,11 @@ const FEDERATION_FORMS = {
 
     const spine = sx - sr * 0.45;
     box(mb, { center: vec3(spine, high * 0.2, 0), size: vec3(sr * 0.3, high * 0.4, wide * 0.16), color: p.trim });
-    box(mb, {
+    // `prow`, not `box`: `sweep` displaces only the +z corners, so a swept box
+    // on the CENTRELINE is a parallelogram seen from above. The Nebula's
+    // mission pod is the widest thing on the ship after the saucer, and it was
+    // eighteen percent of the hull's length longer to port than to starboard.
+    prow(mb, {
       center: vec3(spine, b.podY ?? high * 0.4, 0),
       size: vec3(b.podLength ?? sr * 0.95, high * 0.2, b.podWidth ?? wide * 0.5),
       sweep: 0.06, color: p.hull,
@@ -6458,7 +6540,7 @@ __define("src/gfx/forms.klingon.js", function (__exports, __require) {
 // reflects it, so everything below is written for one side only.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { tube, box, sphere, mirrored, seg, greebles, windowBelt } = __require("src/gfx/mesh.js");
+const { tube, box, prow, sphere, mirrored, seg, greebles, windowBelt } = __require("src/gfx/mesh.js");
 
 /**
  * A Klingon warp nacelle: a housing with a lit grille down its inboard face and
@@ -6559,14 +6641,17 @@ const KLINGON_FORMS = {
 
     // The head: a flat wide plate with a beak in front of it, not a cube. The
     // beak is the class's whole forward silhouette.
+    // `prow`, not `box`: a swept box on the CENTRELINE is a parallelogram seen
+    // from above, with one bow corner reaching forward and the other raked
+    // back. Measured, that left a Bird-of-Prey eleven percent lopsided.
     const hw = (b.headWide ?? 1) * r0;
-    box(mb, {
+    prow(mb, {
       center: vec3(headX, headY, 0),
       size: vec3(hw * 1.5, r0 * 0.52, hw * 1.7),
       sweep: hw * 0.5,
       color: p.hull,
     });
-    box(mb, {
+    prow(mb, {
       center: vec3(headX + hw * 1.1, headY - r0 * 0.06, 0),
       size: vec3(hw * 0.9, r0 * 0.24, hw * 0.66),
       sweep: hw * 0.34,
@@ -6747,7 +6832,7 @@ const KLINGON_FORMS = {
       color: p.hull,
     });
     // A raised aft deckhouse, so the boom is not one slab from above.
-    box(mb, {
+    prow(mb, {
       center: vec3(boomX - boomLen * 0.14, high * 0.34, 0),
       size: vec3(boomLen * 0.54, high * 0.24, boomZ * 0.9),
       sweep: 0.04,
@@ -6940,6 +7025,667 @@ __exports.KLINGON_FORMS = KLINGON_FORMS;
 
 });
 
+__define("src/gfx/forms.hostile.js", function (__exports, __require) {
+// The other nine hulls the player fights.
+//
+// The Klingon fleet's finding, repeated for everybody else. Five classes were
+// built by `wedge` — a Galor, a Keldon, two Jem'Hadar ships and a Tholian web
+// spinner — which is one armoured slab with a coloured ball floating off the
+// nose, drawn five times in five colours. Two more were built by `warbird`: a
+// D'deridex and a Ferengi D'Kora, which have nothing whatever in common.
+//
+// A Jem'Hadar attack ship drawn as a Cardassian cruiser is not a detail gap.
+// It is the wrong species. The Dominion did not build Cardassian hulls; it
+// conquered the people who did.
+//
+// Three things were wrong with all seven and are fixed here:
+//
+//   THE SENSOR BALL FLOATED. `wedge` put a lit sphere at x = 0.55 on a hull
+//   whose own forward face is at 0.5 of `length_` — measured on the built
+//   mesh, four of the five had a horizontal slice with nothing in it at all,
+//   which is a hole through the ship. A bow sensor is set INTO the hull.
+//
+//   NOBODY WAS ABOARD. Not one lit port on any of the seven, against thirteen
+//   Federation classes that all have them. A Galor carries three hundred.
+//
+//   THEY WERE FLAT. A slab has one silhouette. Ventral wings, a raised
+//   deckhouse and a run of machinery along the spine give it five, which is
+//   what the eye reads at tactical range where nothing else survives.
+//
+// Coordinate convention, matching mesh.js and the simulation: +x is the bow,
+// +y is dorsal, +z is starboard. `mirrored` builds the starboard half and
+// reflects it, so everything below is written for one side only.
+//
+// `length_`, not `length`. `length` is METRES and is read by `hullScale`; this
+// is the hull's proportion in unit space. Reading the wrong one once built a
+// Galor 372 units long inside a 2,600-unit engagement volume.
+
+const { vec3 } = __require("src/gfx/math.js");
+const { tube, box, prow, sphere, mirrored, seg, greebles, windowBelt, portRow } = __require("src/gfx/mesh.js");
+
+/** A bank of lit ports across a stern. What says a ship is under power. */
+function engineBank(mb, p, { x, y = 0, spread, size, count = 3 }) {
+  for (let i = 0; i < count; i++) {
+    const t = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
+    box(mb, {
+      center: vec3(x, y, t * spread),
+      size: vec3(size * 0.5, size, size * 1.1),
+      color: p.glow,
+      glow: 1,
+    });
+  }
+  return mb;
+}
+
+/**
+ * A row of lit ports down one flank, at a radius the caller has measured
+ * against the thing they sit on.
+ *
+ * Every port placement that went wrong on the Klingon hulls went wrong the same
+ * way — a belt at a fraction of the surface's half-width is a row of lights
+ * inside it. `r` is the distance from the centreline the ports actually sit at
+ * and the caller is expected to have taken it from the geometry, not guessed.
+ */
+function flankPorts(mb, { x, length: len, r, y = 0, count = 2, arc = Math.PI * 0.18 }) {
+  for (const centre of [Math.PI * 0.5, Math.PI * 1.5]) {
+    windowBelt(mb, {
+      origin: vec3(0, y, 0),
+      x,
+      r0: r,
+      r1: r,
+      count: seg(count),
+      arc,
+      phase: centre - arc / 2,
+      length: len,
+      fill: 0.5,
+    });
+  }
+  return mb;
+}
+const HOSTILE_FORMS = {
+  /**
+   * A Cardassian cruiser: the Galor and the Keldon.
+   *
+   * Broad raked head forward, a narrower spine, ventral wings swept down and
+   * back, and the engine across the stern. What made the old form read as a
+   * doorstop was that all of it was in one plane — the wings were the same slab
+   * as the hull, so from any angle there was one shape.
+   */
+  wedge(mb, p, b) {
+    // The published beam and height, as fractions of a hull built to span one
+    // unit fore and aft — the same convention as every other form in the game.
+    // This form used to carry its own `width` and `height` in unit space,
+    // duplicating figures DIMENSIONS already holds, and both copies were wrong:
+    // a Galor came out 1.28x too wide and 1.32x too tall.
+    const len = b.length_ ?? 1.3;
+    const high = (b.ratioHeight ?? 0.16) * len;
+    const wide = (b.ratioBeam ?? 0.52) * len * 0.5;
+
+    // The spine: the long central mass, tapering aft.
+    //
+    // `prow`, not `box`. A swept centreline box is a parallelogram seen from
+    // above — see the note on the primitive; a Galor measured sixteen percent
+    // lopsided and its nose was a fifth of the ship behind its own sensor dome.
+    prow(mb, {
+      center: vec3(-len * 0.06, 0, 0),
+      size: vec3(len * 0.78, high * 0.9, wide * 0.9),
+      sweep: b.sweep ?? 0.3,
+      color: p.hull,
+    });
+    // The head: broad, flat and raked, and the reason a Galor is recognisable
+    // head-on. Wider than the spine, not narrower.
+    // The rake is 0.9 of `sweep`, not 1.5. At 1.5 the head's outboard face was
+    // carried forty percent of the ship's length aft, so it lay OVER the spine
+    // amidships and any port on the spine's shoulder was a light behind the
+    // bow section: measured, ports reaching z=0.171 under a head reaching
+    // z=0.244 at the same station.
+    prow(mb, {
+      center: vec3(len * 0.36, -high * 0.06, 0),
+      size: vec3(len * 0.3, high * 0.44, wide * 1.5),
+      sweep: (b.sweep ?? 0.3) * 0.9,
+      color: p.hull,
+    });
+    // The Keldon's forward hull extension: the class is a Galor with a longer
+    // bow section and dorsal pods, and without it the two measured 0.183 apart
+    // on the shape fingerprint against a bar of 0.2. Proportion cannot separate
+    // them — 372 by 192 by 59 against 400 by 208 by 64 is the same ship eight
+    // percent bigger — so the difference has to be built.
+    if (b.nose) {
+      prow(mb, {
+        center: vec3(len * 0.56, -high * 0.1, 0),
+        size: vec3(len * 0.22, high * 0.34, wide * 0.8),
+        sweep: (b.sweep ?? 0.3) * 1.8,
+        color: p.trim,
+      });
+      greebles(mb, {
+        from: vec3(len * 0.46, high * 0.06, 0),
+        to: vec3(len * 0.64, high * 0.02, 0),
+        count: 3,
+        size: vec3(len * 0.05, high * 0.16, wide * 0.24),
+        color: p.hull,
+        lit: p.glow,
+        litEvery: 3,
+      });
+    }
+
+    // The bow sensor, SET INTO the head rather than hung off the front of it.
+    // At x = 0.55 on a hull whose forward face is at 0.5·length_ this was a ball
+    // in clear space ahead of the ship, and the hull measured as two objects.
+    const bowX = b.nose ? len * 0.67 : len * 0.51;
+    sphere(mb, {
+      origin: vec3(bowX - high * 0.45, -high * 0.06, 0),
+      radius: high * 0.52,
+      segments: seg(8),
+      rings: 5,
+      color: p.glow,
+      glow: 1,
+    });
+
+    // The raised aft deckhouse and the machinery along it.
+    prow(mb, {
+      center: vec3(-len * 0.26, high * 0.48, 0),
+      size: vec3(len * 0.34, high * 0.34, wide * 0.62),
+      sweep: 0.04,
+      color: p.trim,
+    });
+    greebles(mb, {
+      from: vec3(-len * 0.42, high * 0.6, 0),
+      to: vec3(len * 0.08, high * 0.4, 0),
+      count: b.spineCount ?? 6,
+      size: vec3(len * 0.07, high * 0.16, wide * 0.34),
+      color: p.trim,
+      lit: p.glow,
+      litEvery: 3,
+    });
+
+    mirrored(mb, (m) => {
+      // The ventral wings, hanging BELOW the hull rather than lying in it.
+      box(m, {
+        center: vec3(-len * 0.04, -high * 0.22, wide * 0.78),
+        size: vec3(len * 0.62, high * 0.2, wide * 0.9),
+        sweep: (b.sweep ?? 0.3) * 1.2,
+        dip: high * 0.22,
+        color: p.hull,
+      });
+      // A lit seam along the top of each wing, where it meets the hull. On the
+      // OUTSIDE of the spine, so it is a light and not a light behind a wall.
+      box(m, {
+        center: vec3(len * 0.02, high * 0.06, wide * 0.47),
+        size: vec3(len * 0.5, high * 0.14, wide * 0.03),
+        sweep: (b.sweep ?? 0.3) * 0.4,
+        color: p.glow,
+        glow: 0.75,
+      });
+      // Dorsal pods: the one structural thing that separates a Keldon from a
+      // Galor, which are otherwise the same ship eight percent apart.
+      if (b.pods) {
+        tube(m, {
+          origin: vec3(-len * 0.4, high * 0.85, wide * 0.42),
+          length: len * 0.56,
+          r0: high * 0.26,
+          r1: high * 0.2,
+          segments: seg(8),
+          color: p.trim,
+        });
+        box(m, {
+          center: vec3(-len * 0.42, high * 0.85, wide * 0.42),
+          size: vec3(len * 0.04, high * 0.26, high * 0.44),
+          color: p.glow,
+          glow: 1,
+        });
+      }
+    });
+
+    // Ports along the spine's shoulder, clear of the wings below them.
+    if (b.windows !== false) {
+      // Aft of the head's rake and above the wings: the one band on a
+      // Cardassian hull with a clear line to the outside.
+      flankPorts(mb, {
+        x: -len * 0.36,
+        length: len * 0.22,
+        r: wide * 0.52,
+        y: high * 0.32,
+        count: 3,
+        // A narrow arc, because the band a port can occupy on this hull is
+        // narrow: the head's raked outboard face reaches up to 0.16 of the
+        // height and the dorsal pods start at 0.59 of it, and a wider arc puts
+        // the ends of the row behind one or the other.
+        arc: Math.PI * 0.1,
+      });
+    }
+
+    engineBank(mb, p, {
+      x: -len * 0.46,
+      spread: wide * 0.5,
+      size: high * 0.34,
+      count: b.engines ?? 3,
+    });
+  },
+
+  /**
+   * A Dominion warship: the Jem'Hadar attack ship and the battleship.
+   *
+   * Both were Cardassian slabs. They are beetles — a body broad and blunt
+   * astern, tapering to a point forward, with two prongs reaching ahead of it
+   * and nothing on them but the ship's own colour. The published beam is 0.73
+   * of the length on the attack ship, which is the widest ratio outside a
+   * Bird-of-Prey and is the whole silhouette.
+   */
+  dominion(mb, p, b) {
+    const len = b.length_ ?? 1.0;
+    const high = (b.ratioHeight ?? 0.15) * len;
+    const wide = (b.ratioBeam ?? 0.7) * len * 0.5;
+
+    // The carapace: widest and deepest astern, drawn to a point forward.
+    //
+    // An ellipsoid, not a tube. A tube is round in y and z together, so a
+    // carapace wide enough to be a Jem'Hadar ship was also as tall as it was
+    // wide — which measured 4.2x the published height and left the normaliser
+    // flattening the whole hull, prongs and all, to a quarter of what it built.
+    sphere(mb, {
+      origin: vec3(-len * 0.06, 0, 0),
+      // Unit radius with the three half-axes given outright, which is the
+      // legible way to write an ellipsoid and the way that cannot be off by a
+      // factor of the beam.
+      radius: 1,
+      segments: seg(9),
+      rings: 6,
+      scale: vec3(len * 0.46, high * 0.42, wide * 0.92),
+      color: p.hull,
+    });
+    // A raised dorsal ridge along its back.
+    greebles(mb, {
+      from: vec3(-len * 0.3, high * 0.34, 0),
+      to: vec3(len * 0.24, high * 0.22, 0),
+      count: b.ridgeCount ?? 5,
+      size: vec3(len * 0.1, high * 0.4, wide * 0.3),
+      color: p.trim,
+      lit: p.glow,
+      litEvery: 3,
+    });
+
+    mirrored(mb, (m) => {
+      // The prongs, reaching forward of the body and angled inward, which is
+      // what a Jem'Hadar ship is: a pair of jaws with an engine behind them.
+      box(m, {
+        center: vec3(len * 0.34, -high * 0.05, wide * 1.0),
+        size: vec3(len * 0.46, high * 0.5, wide * 0.32),
+        sweep: -(b.prongSweep ?? 0.14),
+        color: p.hull,
+      });
+      // The weapon at each prong tip.
+      box(m, {
+        center: vec3(len * 0.54, -high * 0.05, wide * 0.94),
+        size: vec3(len * 0.06, high * 0.24, wide * 0.12),
+        color: p.glow,
+        glow: 1,
+      });
+      // A second, shorter pair on the battleship, and turrets along its back.
+      if (b.heavy) {
+        box(m, {
+          center: vec3(len * 0.06, high * 0.28, wide * 1.16),
+          size: vec3(len * 0.5, high * 0.34, wide * 0.24),
+          sweep: -(b.prongSweep ?? 0.14) * 0.5,
+          color: p.trim,
+        });
+      }
+    });
+
+    if (b.windows !== false) {
+      // On the shoulder of the carapace, above the prongs. The prongs run
+      // alongside the body at the same height for two thirds of its length,
+      // and ports on the beam would be ports behind them.
+      flankPorts(mb, {
+        x: -len * 0.24,
+        length: len * 0.28,
+        r: wide * 0.96,
+        count: 3,
+        arc: Math.PI * 0.16,
+      });
+    }
+
+    engineBank(mb, p, {
+      x: -len * 0.44,
+      spread: wide * 0.34,
+      size: high * 0.26,
+      count: b.engines ?? 3,
+    });
+  },
+
+  /**
+   * A Tholian vessel: a crystal, not a hull.
+   *
+   * The one design in the game where "faceted" is the correct answer rather
+   * than a compromise — a Tholian ship is a mineral, and a low-poly sphere with
+   * five segments and three rings IS a crystal. It was drawn as a Cardassian
+   * cruiser in pink.
+   */
+  tholian(mb, p, b) {
+    const len = b.length_ ?? 0.9;
+    const high = (b.ratioHeight ?? 0.2) * len;
+    const r = (b.ratioBeam ?? 0.74) * len * 0.5;
+
+    // The body: deliberately under-tessellated, so the facets are the look,
+    // and FLAT — a crystal built round forced the whole ship through a 2.6x
+    // squash to reach its published 26 metres of height on 130 of length.
+    sphere(mb, {
+      origin: vec3(-len * 0.1, 0, 0),
+      radius: 1,
+      segments: 5,
+      rings: 3,
+      scale: vec3(len * 0.4, high * 0.4, r),
+      color: p.hull,
+      banding: 0.3,
+    });
+    // A forward point, so it has a bow.
+    prow(mb, {
+      center: vec3(len * 0.36, 0, 0),
+      size: vec3(len * 0.42, high * 0.5, r * 0.9),
+      sweep: r * 0.5,
+      color: p.trim,
+    });
+
+    // Secondary facets, above and below the main body. A crystal is a cluster,
+    // and one lozenge with four spars on it is a lozenge with four spars on it.
+    for (const [dx, sy, k] of [[0, 1, 1], [0, -1, 1], [-0.26, 1, 0.7], [0.2, -1, 0.7]]) {
+      sphere(mb, {
+        origin: vec3(len * (dx - 0.02), sy * high * 0.3, 0),
+        radius: 1,
+        segments: 5,
+        rings: 3,
+        scale: vec3(len * 0.26 * k, high * 0.24, r * 0.56 * k),
+        color: p.trim,
+        banding: 0.25,
+      });
+    }
+    greebles(mb, {
+      from: vec3(-len * 0.3, high * 0.44, 0),
+      to: vec3(len * 0.18, high * 0.34, 0),
+      count: 4,
+      size: vec3(len * 0.08, high * 0.2, r * 0.3),
+      color: p.hull,
+      lit: p.glow,
+      litEvery: 4,
+    });
+
+    // The spinners: four arms carrying the emitters that make the web. Angled
+    // out of the body's own plane, because a flat cross reads as a decal.
+    mirrored(mb, (m) => {
+      for (const sy of [1, -1]) {
+        box(m, {
+          center: vec3(-len * 0.24, sy * high * 0.24, r * 0.72),
+          size: vec3(len * 0.4, high * 0.22, r * 0.18),
+          sweep: r * 0.5,
+          color: p.trim,
+        });
+        box(m, {
+          center: vec3(-len * 0.42, sy * high * 0.34, r * 0.98),
+          size: vec3(r * 0.16, high * 0.28, r * 0.2),
+          color: p.glow,
+          glow: 1,
+        });
+      }
+    });
+
+    // Lit seams along the crystal's own edges. A Tholian ship glows from
+    // inside; that is the only light there is on it.
+    if (b.windows !== false) {
+      flankPorts(mb, {
+        x: -len * 0.16,
+        length: len * 0.2,
+        r: r * 1.02,
+        count: 3,
+        arc: Math.PI * 0.22,
+      });
+    }
+    engineBank(mb, p, {
+      x: -len * 0.5,
+      spread: r * 0.26,
+      size: high * 0.36,
+      count: b.engines ?? 2,
+    });
+  },
+
+  /**
+   * A D'deridex warbird: two great arms meeting fore and aft around an open
+   * centre, with the command head slung between them.
+   *
+   * The shape was right and the execution was two flat slabs. An arm that
+   * SWEEPS is three segments stepping outward and back, which is the difference
+   * between a curve and a plank, and the open space between them is the whole
+   * point of the class.
+   */
+  warbird(mb, p, b) {
+    const span = b.wingSpan ?? 0.58;
+    const high = b.ratioHeight ?? 0.3;
+
+    // The central spine, between the arms.
+    tube(mb, {
+      origin: vec3(-0.18, 0, 0),
+      length: 0.46,
+      r0: high * 0.42,
+      r1: high * 0.32,
+      segments: seg(10),
+      color: p.trim,
+    });
+    // The command head, forward and low, with a lit sensor set into its nose.
+    box(mb, {
+      center: vec3(0.42, -high * 0.12, 0),
+      size: vec3(0.3, high * 0.5, span * 0.34),
+      sweep: 0.1,
+      color: p.hull,
+    });
+    sphere(mb, {
+      origin: vec3(0.54, -high * 0.12, 0),
+      radius: high * 0.3,
+      segments: seg(9),
+      rings: 5,
+      color: p.glow,
+      glow: 1,
+    });
+
+    // Where the arm's own surfaces are at a given fraction of the span, so
+    // everything mounted on one is placed AGAINST it rather than guessed. The
+    // arm runs from 0.22 of the span to 0.9 of it, and `dip` carries its
+    // outboard end back toward the centreline as it goes — so its top is
+    // twenty percent of the ship's height lower at the tip than at the root,
+    // and a fitting at a constant y is on the surface at one end and inside it
+    // at the other.
+    const ARM_IN = 0.22;
+    const ARM_OUT = 0.9;
+    const drop = (u) => ((u - ARM_IN) / (ARM_OUT - ARM_IN)) * high * 0.34;
+    const armTop = (u) => high * 0.625 - drop(u);
+    const armBottom = (u) => high * 0.375 - drop(u);
+
+    mirrored(mb, (m) => {
+      for (const sy of [1, -1]) {
+        // One arm each side, above and below, CONVERGING outboard: `dip`
+        // brings the upper arm's tip down and the lower arm's tip up, which is
+        // what closes the class's outline into a bird and is the thing a pair
+        // of flat planks could never do.
+        box(m, {
+          center: vec3(0.0, sy * high * 0.5, span * 0.56),
+          size: vec3(0.9, high * 0.25, span * 0.68),
+          sweep: 0.26,
+          dip: sy * high * 0.34,
+          color: p.hull,
+        });
+        // The arm's leading edge, raked the other way, which is what gives the
+        // class its wing shape from above.
+        box(m, {
+          center: vec3(0.34, sy * high * 0.5, span * 0.5),
+          size: vec3(0.3, high * 0.22, span * 0.56),
+          sweep: -0.24,
+          dip: sy * high * 0.3,
+          color: p.hull,
+        });
+        // Machinery ON the arm's outer surface, following it down.
+        greebles(m, {
+          from: vec3(-0.24, sy * (armTop(0.3) - high * 0.04), span * 0.3),
+          to: vec3(0.28, sy * (armTop(0.44) - high * 0.04), span * 0.44),
+          count: 4,
+          size: vec3(0.1, high * 0.14, span * 0.1),
+          color: p.trim,
+          lit: p.glow,
+          litEvery: 3,
+        });
+        // A lit seam just under the arm's INBOARD face, which is the surface a
+        // ship being fought from ahead looks straight at through the gap.
+        box(m, {
+          center: vec3(0.0, sy * (armBottom(0.36) - high * 0.05), span * 0.36),
+          size: vec3(0.9, high * 0.06, span * 0.03),
+          color: p.glow,
+          glow: 0.7,
+        });
+      }
+      // The outboard edge where the two arms meet, closing the loop.
+      box(m, {
+        center: vec3(-0.02, 0, span * 0.94),
+        size: vec3(0.62, high * 0.72, span * 0.14),
+        color: p.trim,
+      });
+    });
+
+    // Ports ON THE ARMS, and as boxes rather than a belt.
+    //
+    // The arms enclose the spine and the head from every direction — measured,
+    // ports on the spine reached z=0.144 inside arms reaching z=0.393, and
+    // moving them to the head only put them behind the arms' leading edge
+    // instead. The one surface on a D'deridex a light can be seen from is the
+    // outer face of an arm, and a ring about the x axis cannot lie on one.
+    if (b.windows !== false) {
+      mirrored(mb, (m) => {
+        for (const sy of [1, -1]) {
+          portRow(m, {
+            from: vec3(-0.2, sy * (armTop(0.4) + high * 0.09), span * 0.4),
+            to: vec3(0.24, sy * (armTop(0.75) + high * 0.09), span * 0.75),
+            count: 4,
+            size: high * 0.1,
+          });
+        }
+      });
+    }
+
+    engineBank(mb, p, {
+      x: -0.22,
+      spread: span * 0.24,
+      size: high * 0.26,
+      count: b.engines ?? 3,
+    });
+  },
+
+  /**
+   * A Ferengi D'Kora: a flat crescent with two forward horns and the drive
+   * astern.
+   *
+   * It was a D'deridex. The two share a faction slot in the encounter tables
+   * and nothing else — a Marauder is 366 metres to a warbird's 1,041, and it is
+   * a merchant hull with guns bolted on rather than a warship built round an
+   * artificial quantum singularity.
+   */
+  marauder(mb, p, b) {
+    const wide = b.ratioBeam ?? 0.64;
+    const high = b.ratioHeight ?? 0.28;
+
+    // The body: a broad flat disc-section, deepest amidships.
+    tube(mb, {
+      origin: vec3(-0.34, 0, 0),
+      length: 0.6,
+      r0: high * 0.5,
+      r1: high * 0.7,
+      segments: seg(10),
+      color: p.hull,
+    });
+    // The bridge module on top, and the cargo bay under it — this is a trading
+    // ship, and the hold is most of it.
+    box(mb, {
+      center: vec3(0.06, high * 0.58, 0),
+      size: vec3(0.34, high * 0.3, wide * 0.3),
+      color: p.trim,
+    });
+    box(mb, {
+      center: vec3(-0.12, -high * 0.46, 0),
+      size: vec3(0.5, high * 0.3, wide * 0.44),
+      color: p.trim,
+    });
+
+    mirrored(mb, (m) => {
+      // The horns: two great forward-swept arms that make the crescent.
+      box(m, {
+        center: vec3(0.18, 0, wide * 0.34),
+        size: vec3(0.5, high * 0.44, wide * 0.4),
+        sweep: -0.24,
+        color: p.hull,
+      });
+      box(m, {
+        center: vec3(0.44, 0, wide * 0.56),
+        size: vec3(0.42, high * 0.36, wide * 0.22),
+        sweep: -0.3,
+        color: p.hull,
+      });
+      // The gun at each horn's tip, which is what the class is feared for.
+      box(m, {
+        center: vec3(0.68, 0, wide * 0.6),
+        size: vec3(0.08, high * 0.2, wide * 0.12),
+        color: p.glow,
+        glow: 1,
+      });
+      // Machinery down the outboard face of the hull.
+      greebles(m, {
+        from: vec3(-0.28, high * 0.1, wide * 0.2),
+        to: vec3(0.12, high * 0.1, wide * 0.26),
+        count: 4,
+        size: vec3(0.09, high * 0.22, wide * 0.1),
+        color: p.trim,
+        lit: p.glow,
+        litEvery: 3,
+      });
+    });
+
+    // Cargo modules along the spine. A D'Kora is a merchant hull first, and
+    // the containers are most of what is on it.
+    greebles(mb, {
+      from: vec3(-0.3, high * 0.5, 0),
+      to: vec3(0.2, high * 0.42, 0),
+      count: 5,
+      size: vec3(0.1, high * 0.26, wide * 0.22),
+      color: p.hull,
+      lit: p.glow,
+      litEvery: 4,
+    });
+    mirrored(mb, (m) => {
+      greebles(m, {
+        from: vec3(-0.3, -high * 0.36, wide * 0.16),
+        to: vec3(0.1, -high * 0.34, wide * 0.2),
+        count: 3,
+        size: vec3(0.11, high * 0.22, wide * 0.14),
+        vary: 0.25,
+        color: p.trim,
+      });
+    });
+
+    if (b.windows !== false) {
+      flankPorts(mb, {
+        x: -0.02,
+        length: 0.22,
+        r: high * 0.78,
+        count: 3,
+        arc: Math.PI * 0.2,
+      });
+    }
+    engineBank(mb, p, {
+      x: -0.36,
+      spread: wide * 0.2,
+      size: high * 0.3,
+      count: b.engines ?? 2,
+    });
+  },
+};
+
+__exports.HOSTILE_FORMS = HOSTILE_FORMS;
+
+});
+
 __define("src/gfx/blueprint.js", function (__exports, __require) {
 // Ship geometry, as data.
 //
@@ -6963,9 +7709,10 @@ __define("src/gfx/blueprint.js", function (__exports, __require) {
 // renderer normalises so the largest live hull frames sensibly.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { MeshBuilder, saucer, tube, box, sphere, mirrored, seg, windowRing, windowBelt, windowDeck } = __require("src/gfx/mesh.js");
+const { MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowBelt, windowDeck } = __require("src/gfx/mesh.js");
 const { FEDERATION_FORMS } = __require("src/gfx/forms.federation.js");
 const { KLINGON_FORMS } = __require("src/gfx/forms.klingon.js");
+const { HOSTILE_FORMS } = __require("src/gfx/forms.hostile.js");
 
 /**
  * Hull plating by faction. Flat shading means these are the whole look.
@@ -7014,11 +7761,11 @@ const FORMS = {
   // src/gfx/forms.federation.js and docs/RESEARCH.md §14.
   ...FEDERATION_FORMS,
 
-  // The hulls the player fights. `raptor` and `kdf_cruiser` live in
-  // src/gfx/forms.klingon.js for the same reason the Federation ones moved out
-  // of this file: it was 1,144 lines before either of them had any detail on
-  // it at all.
+  // The hulls the player fights. They live in their own files for the same
+  // reason the Federation ones moved out of this one: it was 1,144 lines
+  // before any of them had a lit port on it at all.
   ...KLINGON_FORMS,
+  ...HOSTILE_FORMS,
 
   /**
    * Saucer, secondary hull, and two nacelles on pylons. The Federation
@@ -7391,8 +8138,10 @@ const FORMS = {
       });
     }
 
-    // The dorsal neck, raked rather than vertical.
-    box(mb, {
+    // The dorsal neck, raked rather than vertical. `prow`, not `box`: `sweep`
+    // displaces only the +z corners, so a swept centreline box is a
+    // parallelogram seen from above rather than a rake.
+    prow(mb, {
       center: vec3(sx - sr * 0.6, hullY / 2, 0),
       size: vec3(sr * 0.42, Math.abs(hullY) + high * 0.24, high * 0.3),
       sweep: 0.08,
@@ -7543,123 +8292,6 @@ const FORMS = {
         color: p.glow,
         glow: 0.45,
       });
-    });
-  },
-
-  /** Two great curved arms meeting fore and aft around an open centre. */
-  warbird(mb, p, b) {
-    const span = b.wingSpan ?? 0.58;
-    tube(mb, {
-      origin: vec3(-0.15, 0, 0),
-      length: 0.42,
-      r0: 0.13,
-      r1: 0.1,
-      segments: seg(10),
-      color: p.trim,
-    });
-    mirrored(mb, (m) => {
-      // Upper and lower arms, sweeping out and back in.
-      box(m, {
-        center: vec3(0.22, 0.16, span * 0.55),
-        size: vec3(0.9, 0.09, span * 0.5),
-        sweep: 0.3,
-        color: p.hull,
-      });
-      box(m, {
-        center: vec3(-0.32, -0.16, span * 0.55),
-        size: vec3(0.9, 0.09, span * 0.5),
-        sweep: -0.3,
-        color: p.hull,
-      });
-      box(m, {
-        center: vec3(0.5, 0, span * 0.86),
-        size: vec3(0.34, 0.4, 0.1),
-        color: p.trim,
-      });
-    });
-    // The forward sensor, genuinely lit, and a lit strip down the inboard
-    // face of each arm — the arms are the whole silhouette and they were two
-    // unbroken grey slabs.
-    sphere(mb, {
-      origin: vec3(0.62, 0, 0), radius: 0.11,
-      segments: seg(10), rings: 6, color: p.glow, glow: 1,
-    });
-    // On the INBOARD EDGE of each arm, not across its face.
-    //
-    // Sized (0.72, 0.02, span * 0.46) this was a horizontal PANEL the size of
-    // a wing, lying flat on top of the arm — the arm's own area in glowing
-    // green rather than a light along its edge. Thin in y and in z, long in x,
-    // and placed at the arm's inboard face: a seam, which is what it is.
-    const armIn = span * 0.3;
-    mirrored(mb, (m) => {
-      for (const [cx, cy] of [[0.22, 0.11], [-0.32, -0.11]]) {
-        box(m, {
-          center: vec3(cx, cy, armIn),
-          size: vec3(0.72, 0.03, 0.02),
-          color: p.glow,
-          glow: 0.7,
-        });
-      }
-    });
-  },
-
-  /**
-   * A blunt armoured wedge — Cardassian and Dominion hulls.
-   *
-   * `length_`, not `length`. `length` is METRES and is read by `hullScale`;
-   * this is the hull's proportion in unit space, where everything else in this
-   * file lives between about 0.8 and 1.9. Reading the wrong one built a Galor
-   * 372 units long instead of 1.25, and then multiplied it by the on-screen
-   * scale on top: 31,836 units of Cardassian cruiser inside a 2,600-unit
-   * engagement volume. Somebody hit this before and invented the `length_`
-   * name for it, and four blueprints have carried the correct value ever
-   * since. This comment used to end "and no builder has ever read it", which
-   * was wrong when it was written: `wedge` reads it on the next line but one,
-   * and `hauler` reads it too. A docblock saying a value is ignored is an
-   * invitation to delete the value.
-   */
-  wedge(mb, p, b) {
-    box(mb, {
-      center: vec3(0, 0, 0),
-      size: vec3(b.length_ ?? 1.3, b.height ?? 0.16, b.width ?? 0.34),
-      sweep: b.sweep ?? 0.3,
-      color: p.hull,
-    });
-    box(mb, {
-      center: vec3(-0.28, 0.1, 0),
-      size: vec3(0.5, 0.16, 0.5),
-      sweep: 0.24,
-      color: p.trim,
-    });
-    mirrored(mb, (m) => {
-      box(m, {
-        center: vec3(-0.1, -0.02, (b.width ?? 0.34) * 0.9),
-        size: vec3(0.7, 0.07, 0.24),
-        sweep: 0.34,
-        color: p.hull,
-      });
-    });
-    sphere(mb, {
-      origin: vec3(0.55, 0.02, 0), radius: 0.1,
-      segments: seg(8), rings: 5, color: p.glow, glow: 1,
-    });
-    // Lit stripes down the flanks and an engine bank across the stern. A
-    // Cardassian hull is an armoured slab with light bleeding out of the seams
-    // in it, and without them it is just the slab.
-    mirrored(mb, (m) => {
-      box(m, {
-        center: vec3(0.05, 0.02, (b.width ?? 0.34) * 0.5),
-        size: vec3((b.length_ ?? 1.3) * 0.5, (b.height ?? 0.16) * 0.16, 0.02),
-        sweep: (b.sweep ?? 0.3) * 0.4,
-        color: p.glow,
-        glow: 0.7,
-      });
-    });
-    box(mb, {
-      center: vec3(-(b.length_ ?? 1.3) * 0.5, 0, 0),
-      size: vec3(0.03, (b.height ?? 0.16) * 0.55, (b.width ?? 0.34) * 0.62),
-      color: p.glow,
-      glow: 1,
     });
   },
 
@@ -7855,19 +8487,19 @@ const BLUEPRINTS = {
   neghvar: { form: 'kdf_cruiser', length: 682, spine: true, plates: true, prow: true, neckThick: 0.46, bulbSize: 0.5, bulbX: 0.5, boomX: -0.32, boomWide: 0.34, boomLength: 0.6, nacelleY: -0.45, nacelleLength: 0.9, nacelleR: 0.2, wingSweep: 0.26, prowSweep: 0.32, engines: 5 },
 
   // ---- Romulan ----
-  warbird: { form: 'warbird', length: 1041, wingSpan: 0.62 },
+  warbird: { form: 'warbird', length: 1041, wingSpan: 0.54 },
   scoutship: { form: 'raptor', length: 68, wingSpan: 0.48, wingSweep: 0.2, wingDroop: -0.1, bodyLength: 0.42, bodyR0: 0.14, headWide: 0.8, spineCount: 4, engines: 2 },
 
   // ---- Cardassian ----
-  galor: { form: 'wedge', length: 372, length_: 1.25, width: 0.36, sweep: 0.34 },
-  keldon: { form: 'wedge', length: 400, length_: 1.3, width: 0.4, height: 0.18, sweep: 0.36 },
+  galor: { form: 'wedge', length: 372, length_: 1.25, sweep: 0.34 },
+  keldon: { form: 'wedge', length: 400, pods: true, nose: true, length_: 1.3, sweep: 0.36, engines: 4 },
 
   // ---- Everyone else ----
-  marauder: { form: 'warbird', length: 366, wingSpan: 0.5 },
+  marauder: { form: 'marauder', length: 366 },
   orion_raider: { form: 'raptor', length: 110, wingSpan: 0.44, wingSweep: 0.24, bodyLength: 0.5, headWide: 0.9, spineCount: 5, wingNacelle: 0.26 },
-  tholian_web_spinner: { form: 'wedge', length: 130, length_: 0.8, width: 0.44, height: 0.1, sweep: 0.1 },
-  jem_hadar_attack: { form: 'wedge', length: 178, length_: 0.9, width: 0.46, height: 0.1, sweep: 0.4 },
-  jem_hadar_battleship: { form: 'wedge', length: 800, length_: 1.4, width: 0.44, height: 0.24, sweep: 0.44 },
+  tholian_web_spinner: { form: 'tholian', length: 130, length_: 0.95 },
+  jem_hadar_attack: { form: 'dominion', length: 178, length_: 0.86, prongSweep: 0.12 },
+  jem_hadar_battleship: { form: 'dominion', length: 800, heavy: true, length_: 1.1, prongSweep: 0.2, ridgeCount: 7, engines: 5 },
   borg_cube: { form: 'cube', length: 3040, size: 1.15 },
   bioship: { form: 'cube', length: 600, size: 0.85 },
   transport: { form: 'hauler', length: 120, length_: 1.0, r0: 0.13, r1: 0.11 },

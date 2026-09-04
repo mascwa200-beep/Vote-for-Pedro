@@ -21,11 +21,12 @@
 
 import { vec3 } from './math.js';
 import {
-  MeshBuilder, saucer, tube, box, sphere, mirrored, seg,
+  MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg,
   windowRing, windowBelt, windowDeck,
 } from './mesh.js';
 import { FEDERATION_FORMS } from './forms.federation.js';
 import { KLINGON_FORMS } from './forms.klingon.js';
+import { HOSTILE_FORMS } from './forms.hostile.js';
 
 /**
  * Hull plating by faction. Flat shading means these are the whole look.
@@ -75,11 +76,11 @@ const FORMS = {
   // src/gfx/forms.federation.js and docs/RESEARCH.md §14.
   ...FEDERATION_FORMS,
 
-  // The hulls the player fights. `raptor` and `kdf_cruiser` live in
-  // src/gfx/forms.klingon.js for the same reason the Federation ones moved out
-  // of this file: it was 1,144 lines before either of them had any detail on
-  // it at all.
+  // The hulls the player fights. They live in their own files for the same
+  // reason the Federation ones moved out of this one: it was 1,144 lines
+  // before any of them had a lit port on it at all.
   ...KLINGON_FORMS,
+  ...HOSTILE_FORMS,
 
   /**
    * Saucer, secondary hull, and two nacelles on pylons. The Federation
@@ -452,8 +453,10 @@ const FORMS = {
       });
     }
 
-    // The dorsal neck, raked rather than vertical.
-    box(mb, {
+    // The dorsal neck, raked rather than vertical. `prow`, not `box`: `sweep`
+    // displaces only the +z corners, so a swept centreline box is a
+    // parallelogram seen from above rather than a rake.
+    prow(mb, {
       center: vec3(sx - sr * 0.6, hullY / 2, 0),
       size: vec3(sr * 0.42, Math.abs(hullY) + high * 0.24, high * 0.3),
       sweep: 0.08,
@@ -604,123 +607,6 @@ const FORMS = {
         color: p.glow,
         glow: 0.45,
       });
-    });
-  },
-
-  /** Two great curved arms meeting fore and aft around an open centre. */
-  warbird(mb, p, b) {
-    const span = b.wingSpan ?? 0.58;
-    tube(mb, {
-      origin: vec3(-0.15, 0, 0),
-      length: 0.42,
-      r0: 0.13,
-      r1: 0.1,
-      segments: seg(10),
-      color: p.trim,
-    });
-    mirrored(mb, (m) => {
-      // Upper and lower arms, sweeping out and back in.
-      box(m, {
-        center: vec3(0.22, 0.16, span * 0.55),
-        size: vec3(0.9, 0.09, span * 0.5),
-        sweep: 0.3,
-        color: p.hull,
-      });
-      box(m, {
-        center: vec3(-0.32, -0.16, span * 0.55),
-        size: vec3(0.9, 0.09, span * 0.5),
-        sweep: -0.3,
-        color: p.hull,
-      });
-      box(m, {
-        center: vec3(0.5, 0, span * 0.86),
-        size: vec3(0.34, 0.4, 0.1),
-        color: p.trim,
-      });
-    });
-    // The forward sensor, genuinely lit, and a lit strip down the inboard
-    // face of each arm — the arms are the whole silhouette and they were two
-    // unbroken grey slabs.
-    sphere(mb, {
-      origin: vec3(0.62, 0, 0), radius: 0.11,
-      segments: seg(10), rings: 6, color: p.glow, glow: 1,
-    });
-    // On the INBOARD EDGE of each arm, not across its face.
-    //
-    // Sized (0.72, 0.02, span * 0.46) this was a horizontal PANEL the size of
-    // a wing, lying flat on top of the arm — the arm's own area in glowing
-    // green rather than a light along its edge. Thin in y and in z, long in x,
-    // and placed at the arm's inboard face: a seam, which is what it is.
-    const armIn = span * 0.3;
-    mirrored(mb, (m) => {
-      for (const [cx, cy] of [[0.22, 0.11], [-0.32, -0.11]]) {
-        box(m, {
-          center: vec3(cx, cy, armIn),
-          size: vec3(0.72, 0.03, 0.02),
-          color: p.glow,
-          glow: 0.7,
-        });
-      }
-    });
-  },
-
-  /**
-   * A blunt armoured wedge — Cardassian and Dominion hulls.
-   *
-   * `length_`, not `length`. `length` is METRES and is read by `hullScale`;
-   * this is the hull's proportion in unit space, where everything else in this
-   * file lives between about 0.8 and 1.9. Reading the wrong one built a Galor
-   * 372 units long instead of 1.25, and then multiplied it by the on-screen
-   * scale on top: 31,836 units of Cardassian cruiser inside a 2,600-unit
-   * engagement volume. Somebody hit this before and invented the `length_`
-   * name for it, and four blueprints have carried the correct value ever
-   * since. This comment used to end "and no builder has ever read it", which
-   * was wrong when it was written: `wedge` reads it on the next line but one,
-   * and `hauler` reads it too. A docblock saying a value is ignored is an
-   * invitation to delete the value.
-   */
-  wedge(mb, p, b) {
-    box(mb, {
-      center: vec3(0, 0, 0),
-      size: vec3(b.length_ ?? 1.3, b.height ?? 0.16, b.width ?? 0.34),
-      sweep: b.sweep ?? 0.3,
-      color: p.hull,
-    });
-    box(mb, {
-      center: vec3(-0.28, 0.1, 0),
-      size: vec3(0.5, 0.16, 0.5),
-      sweep: 0.24,
-      color: p.trim,
-    });
-    mirrored(mb, (m) => {
-      box(m, {
-        center: vec3(-0.1, -0.02, (b.width ?? 0.34) * 0.9),
-        size: vec3(0.7, 0.07, 0.24),
-        sweep: 0.34,
-        color: p.hull,
-      });
-    });
-    sphere(mb, {
-      origin: vec3(0.55, 0.02, 0), radius: 0.1,
-      segments: seg(8), rings: 5, color: p.glow, glow: 1,
-    });
-    // Lit stripes down the flanks and an engine bank across the stern. A
-    // Cardassian hull is an armoured slab with light bleeding out of the seams
-    // in it, and without them it is just the slab.
-    mirrored(mb, (m) => {
-      box(m, {
-        center: vec3(0.05, 0.02, (b.width ?? 0.34) * 0.5),
-        size: vec3((b.length_ ?? 1.3) * 0.5, (b.height ?? 0.16) * 0.16, 0.02),
-        sweep: (b.sweep ?? 0.3) * 0.4,
-        color: p.glow,
-        glow: 0.7,
-      });
-    });
-    box(mb, {
-      center: vec3(-(b.length_ ?? 1.3) * 0.5, 0, 0),
-      size: vec3(0.03, (b.height ?? 0.16) * 0.55, (b.width ?? 0.34) * 0.62),
-      color: p.glow,
-      glow: 1,
     });
   },
 
@@ -916,19 +802,19 @@ export const BLUEPRINTS = {
   neghvar: { form: 'kdf_cruiser', length: 682, spine: true, plates: true, prow: true, neckThick: 0.46, bulbSize: 0.5, bulbX: 0.5, boomX: -0.32, boomWide: 0.34, boomLength: 0.6, nacelleY: -0.45, nacelleLength: 0.9, nacelleR: 0.2, wingSweep: 0.26, prowSweep: 0.32, engines: 5 },
 
   // ---- Romulan ----
-  warbird: { form: 'warbird', length: 1041, wingSpan: 0.62 },
+  warbird: { form: 'warbird', length: 1041, wingSpan: 0.54 },
   scoutship: { form: 'raptor', length: 68, wingSpan: 0.48, wingSweep: 0.2, wingDroop: -0.1, bodyLength: 0.42, bodyR0: 0.14, headWide: 0.8, spineCount: 4, engines: 2 },
 
   // ---- Cardassian ----
-  galor: { form: 'wedge', length: 372, length_: 1.25, width: 0.36, sweep: 0.34 },
-  keldon: { form: 'wedge', length: 400, length_: 1.3, width: 0.4, height: 0.18, sweep: 0.36 },
+  galor: { form: 'wedge', length: 372, length_: 1.25, sweep: 0.34 },
+  keldon: { form: 'wedge', length: 400, pods: true, nose: true, length_: 1.3, sweep: 0.36, engines: 4 },
 
   // ---- Everyone else ----
-  marauder: { form: 'warbird', length: 366, wingSpan: 0.5 },
+  marauder: { form: 'marauder', length: 366 },
   orion_raider: { form: 'raptor', length: 110, wingSpan: 0.44, wingSweep: 0.24, bodyLength: 0.5, headWide: 0.9, spineCount: 5, wingNacelle: 0.26 },
-  tholian_web_spinner: { form: 'wedge', length: 130, length_: 0.8, width: 0.44, height: 0.1, sweep: 0.1 },
-  jem_hadar_attack: { form: 'wedge', length: 178, length_: 0.9, width: 0.46, height: 0.1, sweep: 0.4 },
-  jem_hadar_battleship: { form: 'wedge', length: 800, length_: 1.4, width: 0.44, height: 0.24, sweep: 0.44 },
+  tholian_web_spinner: { form: 'tholian', length: 130, length_: 0.95 },
+  jem_hadar_attack: { form: 'dominion', length: 178, length_: 0.86, prongSweep: 0.12 },
+  jem_hadar_battleship: { form: 'dominion', length: 800, heavy: true, length_: 1.1, prongSweep: 0.2, ridgeCount: 7, engines: 5 },
   borg_cube: { form: 'cube', length: 3040, size: 1.15 },
   bioship: { form: 'cube', length: 600, size: 0.85 },
   transport: { form: 'hauler', length: 120, length_: 1.0, r0: 0.13, r1: 0.11 },

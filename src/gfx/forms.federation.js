@@ -29,7 +29,7 @@
 
 import { vec3 } from './math.js';
 import {
-  saucer, tube, box, sphere, mirrored, seg, windowRing, windowDeck,
+  saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck,
 } from './mesh.js';
 
 /**
@@ -322,7 +322,11 @@ export const FEDERATION_FORMS = {
 
     const spine = sx - sr * 0.45;
     box(mb, { center: vec3(spine, high * 0.2, 0), size: vec3(sr * 0.3, high * 0.4, wide * 0.16), color: p.trim });
-    box(mb, {
+    // `prow`, not `box`: `sweep` displaces only the +z corners, so a swept box
+    // on the CENTRELINE is a parallelogram seen from above. The Nebula's
+    // mission pod is the widest thing on the ship after the saucer, and it was
+    // eighteen percent of the hull's length longer to port than to starboard.
+    prow(mb, {
       center: vec3(spine, b.podY ?? high * 0.4, 0),
       size: vec3(b.podLength ?? sr * 0.95, high * 0.2, b.podWidth ?? wide * 0.5),
       sweep: 0.06, color: p.hull,
