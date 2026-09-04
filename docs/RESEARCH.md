@@ -2149,6 +2149,75 @@ unconditionally and adds `count ?? 1`, so both wrote a permanent line into the
 service record for an event that never occurred. The score is computed from the
 counters and so was never wrong; the Final Record's entry count was.
 
+## 36. "The board has read all of it before you walked in"
+
+It had not. `homecoming` is the Act-5 review of a five-year command and it was
+**one stage, one choice**, +1000 experience. The only thing it knew about that
+command was that it had reached flag rank.
+
+Counted across the sixteen shipped episodes: **43 flags are set and 42 are read
+by nothing at all.** The one exception, `inquiry_summoned`, is not set by an
+episode either — `main.js` raises it from the ledger's own inquiry event. So
+`requires.flag` (`engine.js:105`), `requires.notFlag` (`:108`) and
+`requires.officer` (`:111`) had zero uses across seventy-two stages.
+
+A captain who falsified a shakedown report, started a shooting war at Archanis,
+or handed Starfleet the Borg shield harmonics walked into the same room and
+heard the same sentence.
+
+The clearest of them is in *Outpost 4*. Spare the crippled warbird rather than
+board it, and the ending reads:
+
+> He does not thank you. **Some years later, that decision comes back in your
+> favour.**
+
+It never did. `spared_warbird` was written into the ledger and read by nothing
+for the rest of the commission.
+
+### What the board reads now
+
+| it reads | and | source |
+| --- | --- | --- |
+| the service assessment | sits in one of three rooms | `Ledger.assessment()` |
+| `spared_warbird` | a Romulan deposition is entered | Outpost 4 |
+| `falsified_report` | you can correct the trials report before they ask | Shakedown |
+| `borg_weakness` | what the fleet did with the harmonics | The Cube |
+| `kang_respects_you` | a Klingon letter, at a Starfleet board | Archanis |
+| `dmz_accord`, `inquiry_resolved` | read into a finding already decided | DS9, the inquiry |
+| a living first officer | somebody who served the whole commission speaks | `requires.officer` |
+
+The three rooms are the ledger's own six bands, not a seventh set of numbers:
+`rules/inquiry.js` already decides its finding on them, deliberately, so that
+the screen and the board cannot disagree about one record.
+
+| record | room | how it opens |
+| --- | --- | --- |
+| exemplary, distinguished | commended | the summary is read aloud because the board wants it aloud |
+| satisfactory, unremarkable | questioned | passed along the table; nobody looks up |
+| concerning, censure, under inquiry | censured | nobody offers you a chair; the finding comes before the evidence |
+
+### `requiresCompleted: []`
+
+Removed rather than filled in. `[].every()` is `true`, so it gated nothing — an
+unfinished thought rather than a rule. Gating the finale on a list of episodes
+would strand a captain who took a different route through the galaxy, and a
+review of a thin career should **say so**, not fail to convene.
+
+### The constraint, again
+
+Every gated choice is an extra one in a room that already had an ungated way
+out. `tests/wiring.test.js` plays every episode thirty times with random legal
+choices and no flags at all, and strands on a stage where nothing is open.
+
+### One thing found on the way
+
+`CaptainProgress.addXP` promotes **at most one rank per call** — `rankIndex++`,
+once, however large the award. So `addXP(200000)` on a fresh captain yields a
+Fleet Captain, not an Admiral. That reads as deliberate (a promotion is an
+event, not an arithmetic result) and is left alone; it is recorded because a
+test that wants a flag officer has to promote them one step at a time, and the
+first one written did not.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
