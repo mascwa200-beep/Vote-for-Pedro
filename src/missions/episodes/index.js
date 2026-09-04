@@ -1,8 +1,11 @@
 import { CORE_EPISODES } from './core.js';
 import { FRONTIER_EPISODES } from './frontier.js';
 import { CAPITAL_EPISODES } from './capitals.js';
+import { ACCORD_EPISODES } from './accords.js';
 
-export const EPISODES = [...CORE_EPISODES, ...FRONTIER_EPISODES, ...CAPITAL_EPISODES];
+export const EPISODES = [
+  ...CORE_EPISODES, ...FRONTIER_EPISODES, ...CAPITAL_EPISODES, ...ACCORD_EPISODES,
+];
 
 export const EPISODE_BY_ID = Object.fromEntries(EPISODES.map((e) => [e.id, e]));
 
