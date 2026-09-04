@@ -601,9 +601,19 @@ export class Ship {
     }
 
     // Warp core breach countdown.
+    //
+    // Clamped at zero when it runs out. `destroy` returns early on anything
+    // already destroyed and `update` returns early too, so whatever the timer
+    // holds on the tick the ship dies is what it holds for ever — and that
+    // was one frame BELOW zero, which is a standing `ship.breachTimer`
+    // violation on every hull ever lost to a breach. A countdown that has
+    // finished is at zero.
     if (this.breaching) {
       this.breachTimer -= dt;
-      if (this.breachTimer <= 0) this.destroy('warp core breach');
+      if (this.breachTimer <= 0) {
+        this.breachTimer = 0;
+        this.destroy('warp core breach');
+      }
     }
 
     if (this.crew <= 0 && !this.destroyed) this.destroy('total crew loss');
