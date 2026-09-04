@@ -22,6 +22,7 @@ precision mediump float;
 attribute vec3 aPosition;
 attribute vec3 aNormal;
 attribute vec3 aColor;
+attribute float aGlow;
 
 uniform mat4 uModel;
 uniform mat4 uViewProj;
@@ -31,6 +32,7 @@ varying vec3 vNormal;
 varying vec3 vColor;
 varying float vDepth;
 varying vec3 vWorld;
+varying float vGlow;
 
 void main() {
   vec3 n = normalize(uNormalMatrix * aNormal);
@@ -38,6 +40,7 @@ void main() {
   gl_Position = uViewProj * world;
   vNormal = n;
   vColor = aColor;
+  vGlow = aGlow;
   vDepth = gl_Position.w;
   vWorld = world.xyz;
 }
@@ -53,12 +56,13 @@ varying vec3 vNormal;
 varying vec3 vColor;
 varying float vDepth;
 varying vec3 vWorld;
+varying float vGlow;
 
 uniform vec3 uKey;        // key light direction
 uniform vec3 uFill;       // fill light direction
 uniform vec3 uTint;       // faction/status tint multiplied into the hull
 uniform float uAlpha;
-uniform float uEmissive;  // 1.0 makes the surface ignore lighting entirely
+uniform float uEmissive;  // 1.0 makes the WHOLE draw ignore lighting
 uniform float uFogFar;    // distance at which the haze reaches its floor
 uniform float uAmbient;   // how much light a surface facing away still gets
 uniform float uKeyPower;  // strength of the key
@@ -92,7 +96,14 @@ void main() {
     float spec = pow(max(dot(n, halfway), 0.0), 24.0) * uGloss;
     lit += vec3(spec);
   }
-  lit = mix(lit, vColor * uTint, uEmissive);
+  // Per-vertex glow, or the whole-draw uniform, whichever is higher.
+  //
+  // The uniform is still how a phaser bolt or a warp field says "all of me is
+  // self-lit". The attribute is how a HULL says "these particular faces are" —
+  // windows, bussard domes, the deflector, an impulse deck — without paying a
+  // second draw call for them. A hull with no lit faces carries zeroes here and
+  // renders exactly as it did before.
+  lit = mix(lit, vColor * uTint, clamp(max(uEmissive, vGlow), 0.0, 1.0));
 
   // Fog toward the far plane, so a distant hull recedes rather than hanging
   // at full contrast against the starfield.
@@ -191,6 +202,7 @@ export class Renderer {
       position: gl.getAttribLocation(this.program, 'aPosition'),
       normal: gl.getAttribLocation(this.program, 'aNormal'),
       color: gl.getAttribLocation(this.program, 'aColor'),
+      glow: gl.getAttribLocation(this.program, 'aGlow'),
     };
     this.uniform = {
       model: gl.getUniformLocation(this.program, 'uModel'),
@@ -243,6 +255,7 @@ export class Renderer {
         position: this.gl.getAttribLocation(this.program, 'aPosition'),
         normal: this.gl.getAttribLocation(this.program, 'aNormal'),
         color: this.gl.getAttribLocation(this.program, 'aColor'),
+        glow: this.gl.getAttribLocation(this.program, 'aGlow'),
       };
       for (const [k, v] of Object.entries(this.uniform)) {
         this.uniform[k] = this.gl.getUniformLocation(this.program, `u${k[0].toUpperCase()}${k.slice(1)}`);
@@ -421,13 +434,17 @@ export class Renderer {
     const { gl } = this;
 
     gl.bindBuffer(gl.ARRAY_BUFFER, entry.buffer);
-    const { position, normal, color } = this.attrib;
+    const { position, normal, color, glow } = this.attrib;
     gl.enableVertexAttribArray(position);
     gl.vertexAttribPointer(position, 3, gl.FLOAT, false, entry.stride, 0);
     gl.enableVertexAttribArray(normal);
     gl.vertexAttribPointer(normal, 3, gl.FLOAT, false, entry.stride, 12);
     gl.enableVertexAttribArray(color);
     gl.vertexAttribPointer(color, 3, gl.FLOAT, false, entry.stride, 24);
+    if (glow >= 0) {
+      gl.enableVertexAttribArray(glow);
+      gl.vertexAttribPointer(glow, 1, gl.FLOAT, false, entry.stride, 36);
+    }
 
     this._m4b.set(model);
     gl.uniformMatrix4fv(this.uniform.model, false, this._m4b);

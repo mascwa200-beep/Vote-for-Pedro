@@ -5072,6 +5072,7 @@ precision mediump float;
 attribute vec3 aPosition;
 attribute vec3 aNormal;
 attribute vec3 aColor;
+attribute float aGlow;
 
 uniform mat4 uModel;
 uniform mat4 uViewProj;
@@ -5081,6 +5082,7 @@ varying vec3 vNormal;
 varying vec3 vColor;
 varying float vDepth;
 varying vec3 vWorld;
+varying float vGlow;
 
 void main() {
   vec3 n = normalize(uNormalMatrix * aNormal);
@@ -5088,6 +5090,7 @@ void main() {
   gl_Position = uViewProj * world;
   vNormal = n;
   vColor = aColor;
+  vGlow = aGlow;
   vDepth = gl_Position.w;
   vWorld = world.xyz;
 }
@@ -5103,12 +5106,13 @@ varying vec3 vNormal;
 varying vec3 vColor;
 varying float vDepth;
 varying vec3 vWorld;
+varying float vGlow;
 
 uniform vec3 uKey;        // key light direction
 uniform vec3 uFill;       // fill light direction
 uniform vec3 uTint;       // faction/status tint multiplied into the hull
 uniform float uAlpha;
-uniform float uEmissive;  // 1.0 makes the surface ignore lighting entirely
+uniform float uEmissive;  // 1.0 makes the WHOLE draw ignore lighting
 uniform float uFogFar;    // distance at which the haze reaches its floor
 uniform float uAmbient;   // how much light a surface facing away still gets
 uniform float uKeyPower;  // strength of the key
@@ -5142,7 +5146,14 @@ void main() {
     float spec = pow(max(dot(n, halfway), 0.0), 24.0) * uGloss;
     lit += vec3(spec);
   }
-  lit = mix(lit, vColor * uTint, uEmissive);
+  // Per-vertex glow, or the whole-draw uniform, whichever is higher.
+  //
+  // The uniform is still how a phaser bolt or a warp field says "all of me is
+  // self-lit". The attribute is how a HULL says "these particular faces are" —
+  // windows, bussard domes, the deflector, an impulse deck — without paying a
+  // second draw call for them. A hull with no lit faces carries zeroes here and
+  // renders exactly as it did before.
+  lit = mix(lit, vColor * uTint, clamp(max(uEmissive, vGlow), 0.0, 1.0));
 
   // Fog toward the far plane, so a distant hull recedes rather than hanging
   // at full contrast against the starfield.
@@ -5240,6 +5251,7 @@ class Renderer {
       position: gl.getAttribLocation(this.program, 'aPosition'),
       normal: gl.getAttribLocation(this.program, 'aNormal'),
       color: gl.getAttribLocation(this.program, 'aColor'),
+      glow: gl.getAttribLocation(this.program, 'aGlow'),
     };
     this.uniform = {
       model: gl.getUniformLocation(this.program, 'uModel'),
@@ -5292,6 +5304,7 @@ class Renderer {
         position: this.gl.getAttribLocation(this.program, 'aPosition'),
         normal: this.gl.getAttribLocation(this.program, 'aNormal'),
         color: this.gl.getAttribLocation(this.program, 'aColor'),
+        glow: this.gl.getAttribLocation(this.program, 'aGlow'),
       };
       for (const [k, v] of Object.entries(this.uniform)) {
         this.uniform[k] = this.gl.getUniformLocation(this.program, `u${k[0].toUpperCase()}${k.slice(1)}`);
@@ -5470,13 +5483,17 @@ class Renderer {
     const { gl } = this;
 
     gl.bindBuffer(gl.ARRAY_BUFFER, entry.buffer);
-    const { position, normal, color } = this.attrib;
+    const { position, normal, color, glow } = this.attrib;
     gl.enableVertexAttribArray(position);
     gl.vertexAttribPointer(position, 3, gl.FLOAT, false, entry.stride, 0);
     gl.enableVertexAttribArray(normal);
     gl.vertexAttribPointer(normal, 3, gl.FLOAT, false, entry.stride, 12);
     gl.enableVertexAttribArray(color);
     gl.vertexAttribPointer(color, 3, gl.FLOAT, false, entry.stride, 24);
+    if (glow >= 0) {
+      gl.enableVertexAttribArray(glow);
+      gl.vertexAttribPointer(glow, 1, gl.FLOAT, false, entry.stride, 36);
+    }
 
     this._m4b.set(model);
     gl.uniformMatrix4fv(this.uniform.model, false, this._m4b);
@@ -5531,42 +5548,55 @@ class MeshBuilder {
     this.positions = [];
     this.normals = [];
     this.colors = [];
+    this.glows = [];
   }
 
-  /** One triangle, wound counter-clockwise when seen from outside. */
-  tri(a, b, c, color) {
+  /**
+   * One triangle, wound counter-clockwise when seen from outside.
+   *
+   * `glow` is how much this face ignores the lighting: 0 is hull that takes
+   * the key and the fill, 1 is a surface that renders at its own colour no
+   * matter which way it faces. It is PER VERTEX rather than per draw, which is
+   * the whole reason a window exists — see the note on `windowRing` below.
+   */
+  tri(a, b, c, color, glow = 0) {
     const n = normalize(cross(sub(b, a), sub(c, a)));
     for (const v of [a, b, c]) {
       this.positions.push(v[0], v[1], v[2]);
       this.normals.push(n[0], n[1], n[2]);
       this.colors.push(color[0], color[1], color[2]);
+      this.glows.push(glow);
     }
     return this;
   }
 
   /** A quad, as two triangles. */
-  quad(a, b, c, d, color) {
-    return this.tri(a, b, c, color).tri(a, c, d, color);
+  quad(a, b, c, d, color, glow = 0) {
+    return this.tri(a, b, c, color, glow).tri(a, c, d, color, glow);
   }
 
   get triangleCount() { return this.positions.length / 9; }
 
-  /** Interleaved position/normal/colour, ready for one buffer and one draw call. */
+  /**
+   * Interleaved position/normal/colour/glow, ready for one buffer and one draw
+   * call. Ten floats a vertex; the tenth is what makes a window a window.
+   */
   build() {
     const count = this.positions.length / 3;
-    const data = new Float32Array(count * 9);
+    const data = new Float32Array(count * 10);
     for (let i = 0; i < count; i++) {
-      data[i * 9 + 0] = this.positions[i * 3 + 0];
-      data[i * 9 + 1] = this.positions[i * 3 + 1];
-      data[i * 9 + 2] = this.positions[i * 3 + 2];
-      data[i * 9 + 3] = this.normals[i * 3 + 0];
-      data[i * 9 + 4] = this.normals[i * 3 + 1];
-      data[i * 9 + 5] = this.normals[i * 3 + 2];
-      data[i * 9 + 6] = this.colors[i * 3 + 0];
-      data[i * 9 + 7] = this.colors[i * 3 + 1];
-      data[i * 9 + 8] = this.colors[i * 3 + 2];
+      data[i * 10 + 0] = this.positions[i * 3 + 0];
+      data[i * 10 + 1] = this.positions[i * 3 + 1];
+      data[i * 10 + 2] = this.positions[i * 3 + 2];
+      data[i * 10 + 3] = this.normals[i * 3 + 0];
+      data[i * 10 + 4] = this.normals[i * 3 + 1];
+      data[i * 10 + 5] = this.normals[i * 3 + 2];
+      data[i * 10 + 6] = this.colors[i * 3 + 0];
+      data[i * 10 + 7] = this.colors[i * 3 + 1];
+      data[i * 10 + 8] = this.colors[i * 3 + 2];
+      data[i * 10 + 9] = this.glows[i] ?? 0;
     }
-    return { data, vertexCount: count, stride: 9 * 4 };
+    return { data, vertexCount: count, stride: 10 * 4 };
   }
 }
 
@@ -5581,9 +5611,12 @@ class MeshBuilder {
  * saucer read as a polygon and a nacelle as a prism.
  *
  * A whole engagement is at most a handful of hulls. At this factor the fleet
- * averages about 620 triangles a ship and the heaviest is under 2,000 — a
- * rounding error for any GPU made this decade, and the difference between a
- * silhouette that reads as a starship and one that reads as a wireframe.
+ * averages about 830 triangles a ship and the heaviest is 2,142 — a rounding
+ * error for any GPU made this decade, and the difference between a silhouette
+ * that reads as a starship and one that reads as a wireframe. Six hulls at
+ * 1800x1800 measure under a millisecond a frame either way; the run-to-run
+ * spread on one unchanged scene is wider than the difference detail makes,
+ * which says the cost here is draw calls and fill, not geometry.
  *
  * One number, because seventeen scattered literals is seventeen places to
  * forget. `seg` floors at 3 so no amount of scaling down can produce a face
@@ -5607,7 +5640,7 @@ const at = (o, x, y, z) => vec3(o[0] + x, o[1] + y, o[2] + z);
 function saucer(mb, {
   origin = vec3(), radius = 1, thickness = 0.18, segments = 24,
   domeRatio = 0.35, domeHeight = 0.12, color = [0.72, 0.76, 0.82],
-  rimColor = [0.5, 0.55, 0.62], stretch = 1,
+  rimColor = [0.5, 0.55, 0.62], stretch = 1, glow = 0,
 } = {}) {
   const half = thickness / 2;
   const domeR = radius * domeRatio;
@@ -5635,9 +5668,9 @@ function saucer(mb, {
     const domB = at(origin, c1 * domeR, half, s1 * domeR);
 
     // Upper plate, dome cap, and the underside.
-    mb.quad(rimA, rimB, domB, domA, color);
-    mb.tri(domA, domB, top, color);
-    mb.tri(rimB, rimA, bottom, rimColor);
+    mb.quad(rimA, rimB, domB, domA, color, glow);
+    mb.tri(domA, domB, top, color, glow);
+    mb.tri(rimB, rimA, bottom, rimColor, glow);
   }
   return mb;
 }
@@ -5649,7 +5682,7 @@ function saucer(mb, {
  */
 function tube(mb, {
   origin = vec3(), length: len = 1, r0 = 0.2, r1 = 0.2, segments = 12,
-  color = [0.66, 0.7, 0.76], capFore = true, capAft = true,
+  color = [0.66, 0.7, 0.76], capFore = true, capAft = true, glow = 0,
 } = {}) {
   const foreC = at(origin, len, 0, 0);
   for (let i = 0; i < segments; i++) {
@@ -5663,9 +5696,9 @@ function tube(mb, {
     const forA = at(origin, len, c0 * r1, s0 * r1);
     const forB = at(origin, len, c1 * r1, s1 * r1);
 
-    mb.quad(aftA, aftB, forB, forA, color);
-    if (capFore) mb.tri(forA, forB, foreC, color);
-    if (capAft) mb.tri(aftB, aftA, origin, color);
+    mb.quad(aftA, aftB, forB, forA, color, glow);
+    if (capFore) mb.tri(forA, forB, foreC, color, glow);
+    if (capAft) mb.tri(aftB, aftA, origin, color, glow);
   }
   return mb;
 }
@@ -5684,7 +5717,7 @@ function tube(mb, {
  */
 function box(mb, {
   center = vec3(), size = vec3(1, 0.1, 0.4), sweep = 0, rake = 0, flare = 0,
-  color = [0.6, 0.64, 0.7],
+  color = [0.6, 0.64, 0.7], glow = 0,
 } = {}) {
   const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
   const [cx, cy, cz] = center;
@@ -5709,19 +5742,19 @@ function box(mb, {
   const v001 = p(-1, -1, 1); const v101 = p(1, -1, 1);
   const v111 = p(1, 1, 1); const v011 = p(-1, 1, 1);
 
-  mb.quad(v001, v101, v111, v011, color);   // +z
-  mb.quad(v100, v000, v010, v110, color);   // -z
-  mb.quad(v010, v011, v111, v110, color);   // +y
-  mb.quad(v000, v100, v101, v001, color);   // -y
-  mb.quad(v101, v100, v110, v111, color);   // +x
-  mb.quad(v000, v001, v011, v010, color);   // -x
+  mb.quad(v001, v101, v111, v011, color, glow);   // +z
+  mb.quad(v100, v000, v010, v110, color, glow);   // -z
+  mb.quad(v010, v011, v111, v110, color, glow);   // +y
+  mb.quad(v000, v100, v101, v001, color, glow);   // -y
+  mb.quad(v101, v100, v110, v111, color, glow);   // +x
+  mb.quad(v000, v001, v011, v010, color, glow);   // -x
   return mb;
 }
 
 /** A low-poly sphere, for planets, sensor pods and command modules. */
 function sphere(mb, {
   origin = vec3(), radius = 1, segments = 16, rings = 10,
-  color = [0.6, 0.6, 0.7], banding = 0,
+  color = [0.6, 0.6, 0.7], banding = 0, glow = 0,
 } = {}) {
   for (let r = 0; r < rings; r++) {
     const t0 = (r / rings) * Math.PI;
@@ -5743,10 +5776,137 @@ function sphere(mb, {
       const B = at(origin, Math.cos(a1) * rad0, y0, Math.sin(a1) * rad0);
       const C = at(origin, Math.cos(a1) * rad1, y1, Math.sin(a1) * rad1);
       const D = at(origin, Math.cos(a0) * rad1, y1, Math.sin(a0) * rad1);
-      if (r === 0) mb.tri(A, C, D, c);
-      else if (r === rings - 1) mb.tri(A, B, C, c);
-      else mb.quad(A, B, C, D, c);
+      if (r === 0) mb.tri(A, C, D, c, glow);
+      else if (r === rings - 1) mb.tri(A, B, C, c, glow);
+      else mb.quad(A, B, C, D, c, glow);
     }
+  }
+  return mb;
+}
+
+// The colour of a lit window: warm interior light, not hull. Not exported —
+// it is the default of both helpers below and nothing outside this file has
+// any business picking a different one.
+const WINDOW = [1.0, 0.93, 0.72];
+
+/**
+ * A band of lit windows around a horizontal circle — a saucer rim.
+ *
+ * WHY THIS IS GEOMETRY AND NOT A BRIGHTER COLOUR.
+ *
+ * A window is not a pale patch of hull. It is a hole with a lit room behind
+ * it, and the thing that says so is that it stays lit on the side of the ship
+ * the key light does not reach. Before the glow channel existed the only way
+ * to say that was `uEmissive`, which is per DRAW — so a hull with windows had
+ * to be two draw calls, and the measurement in #134 says this renderer is
+ * draw-call bound and not geometry bound. Per-vertex glow puts the windows in
+ * the same buffer as the hull they are set into, for the cost of one float a
+ * vertex.
+ *
+ * Discrete windows rather than a continuous lit stripe, because that is what a
+ * hull has: at tactical range the gaps blur into a dashed line, which is the
+ * read, and up close in the vista and first-person views they are windows.
+ *
+ * `fill` is the share of each window's pitch that is glass, so 0.5 is a window
+ * and a gap of equal width. `out` lifts the band clear of the hull it sits on
+ * — without it the band and the rim are coplanar and z-fighting decides which
+ * one you see, per pixel, per frame.
+ */
+function windowRing(mb, {
+  origin = vec3(), radius = 1, y = 0, count = 24, fill = 0.45, height = 0.008,
+  stretch = 1, color = WINDOW, glow = 1, out = 1.006, phase = 0,
+} = {}) {
+  const pitch = (Math.PI * 2) / count;
+  const half = (pitch * fill) / 2;
+  const R = radius * out;
+  for (let i = 0; i < count; i++) {
+    const mid = phase + i * pitch;
+    const a0 = mid - half; const a1 = mid + half;
+    const c0 = Math.cos(a0) * stretch; const s0 = Math.sin(a0);
+    const c1 = Math.cos(a1) * stretch; const s1 = Math.sin(a1);
+    const A = at(origin, c0 * R, y - height, s0 * R);
+    const B = at(origin, c1 * R, y - height, s1 * R);
+    const C = at(origin, c1 * R, y + height, s1 * R);
+    const D = at(origin, c0 * R, y + height, s0 * R);
+    // Wound A-D-C-B so the face normal points radially outward. The obvious
+    // A-B-C-D order points it back into the hull and back-face culling eats
+    // the entire band.
+    mb.quad(A, D, C, B, color, glow);
+  }
+  return mb;
+}
+
+/**
+ * Lit ports lying FLAT on a saucer's upper plate, in a concentric ring.
+ *
+ * `windowRing` puts them on the rim, where they face outward — and the
+ * tactical camera looks DOWN, so from the angle the game is actually played
+ * at, a rim band is edge-on and contributes almost nothing. A Constitution
+ * photographed from above is a grey plate with rows of lit rectangles on it,
+ * and that is the view this exists for.
+ *
+ * `y` is the plate's own height at this radius, passed in rather than guessed:
+ * the plate slopes, and a flat ring at a constant height either floats above
+ * it or sinks into it depending which side of the slope you are on.
+ */
+function windowDeck(mb, {
+  origin = vec3(), radius = 1, y = 0, count = 24, fill = 0.4, depth = 0.012,
+  stretch = 1, color = WINDOW, glow = 1, phase = 0,
+} = {}) {
+  const pitch = (Math.PI * 2) / count;
+  const half = (pitch * fill) / 2;
+  const rIn = radius - depth; const rOut = radius + depth;
+  for (let i = 0; i < count; i++) {
+    const mid = phase + i * pitch;
+    const a0 = mid - half; const a1 = mid + half;
+    const c0 = Math.cos(a0) * stretch; const s0 = Math.sin(a0);
+    const c1 = Math.cos(a1) * stretch; const s1 = Math.sin(a1);
+    const A = at(origin, c0 * rIn, y, s0 * rIn);
+    const B = at(origin, c1 * rIn, y, s1 * rIn);
+    const C = at(origin, c1 * rOut, y, s1 * rOut);
+    const D = at(origin, c0 * rOut, y, s0 * rOut);
+    // A-B-C-D: A and B are the same radius a slice apart, C and D the outer
+    // pair. Winding it A-D-C-B instead — pairing each point with its RADIAL
+    // neighbour rather than its angular one — points the normal down into the
+    // plate, and back-face culling then makes the whole deck invisible from
+    // exactly the angle it exists for.
+    mb.quad(A, B, C, D, color, glow);
+  }
+  return mb;
+}
+
+/**
+ * The same thing around a tube's circumference: a row of ports down the flank
+ * of a secondary hull, running fore-and-aft along +x.
+ *
+ * `arc` and `phase` exist because most of a hull's circumference is not where
+ * windows go — a habitable deck is a band along the side, not a sleeve.
+ */
+function windowBelt(mb, {
+  origin = vec3(), radius = 0.2, r0 = radius, r1 = radius, x = 0,
+  count = 8, fill = 0.45, length = 0.02,
+  color = WINDOW, glow = 1, out = 1.01, arc = Math.PI * 2, phase = 0,
+} = {}) {
+  const pitch = arc / count;
+  const half = (pitch * fill) / 2;
+  // `r0` and `r1` follow the taper of the tube this sits on.
+  //
+  // A single radius on a tapering hull has to be the widest station's or the
+  // narrow end swallows the ports — which is exactly the failure the
+  // intercooler grille shipped with in #134: geometry placed inside the shape
+  // it was decorating, invisible from every angle and paid for anyway. Taking
+  // both radii means a belt lies ON the hull for its whole run instead.
+  const R0 = r0 * out; const R1 = r1 * out;
+  for (let i = 0; i < count; i++) {
+    const mid = phase + (i + 0.5) * pitch;
+    const a0 = mid - half; const a1 = mid + half;
+    const c0 = Math.cos(a0); const s0 = Math.sin(a0);
+    const c1 = Math.cos(a1); const s1 = Math.sin(a1);
+    const aftA = at(origin, x, c0 * R0, s0 * R0);
+    const aftB = at(origin, x, c1 * R0, s1 * R0);
+    const forA = at(origin, x + length, c0 * R1, s0 * R1);
+    const forB = at(origin, x + length, c1 * R1, s1 * R1);
+    mb.quad(aftA, aftB, forB, forA, color, glow);
   }
   return mb;
 }
@@ -5765,6 +5925,10 @@ function mirrored(mb, fn) {
       mb.positions.push(mb.positions[i + b], mb.positions[i + b + 1], -mb.positions[i + b + 2]);
       mb.normals.push(mb.normals[i + b], mb.normals[i + b + 1], -mb.normals[i + b + 2]);
       mb.colors.push(mb.colors[i + b], mb.colors[i + b + 1], mb.colors[i + b + 2]);
+      // The glow channel is one float a vertex, not three, so it indexes by
+      // vertex rather than by float. Forgetting this is how a mirrored nacelle
+      // gets a dark bussard dome while its twin glows.
+      mb.glows.push(mb.glows[(i + b) / 3]);
       void a;
     }
   }
@@ -5778,6 +5942,9 @@ __exports.saucer = saucer;
 __exports.tube = tube;
 __exports.box = box;
 __exports.sphere = sphere;
+__exports.windowRing = windowRing;
+__exports.windowDeck = windowDeck;
+__exports.windowBelt = windowBelt;
 __exports.mirrored = mirrored;
 
 });
@@ -5813,7 +5980,7 @@ __define("src/gfx/forms.federation.js", function (__exports, __require) {
 // reflects it, so everything below is written for one side only.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { saucer, tube, box, sphere, mirrored, seg } = __require("src/gfx/mesh.js");
+const { saucer, tube, box, sphere, mirrored, seg, windowRing, windowDeck } = __require("src/gfx/mesh.js");
 
 /**
  * One nacelle and its glowing cap, at a point. Every form here ends with a
@@ -5824,11 +5991,57 @@ function nacelle(m, p, { x, y, z, length: len, radius: r }) {
     origin: vec3(x, y, z), length: len, r0: r, r1: r * 0.84,
     segments: seg(10), color: p.hull,
   });
-  // The bussard cap: the one emissive detail on a Federation hull.
+  // The bussard cap. Amber rather than warp blue, and genuinely emissive
+  // rather than merely pale: the glow channel is per vertex now, so a lit cap
+  // costs a float and not a second draw call.
   sphere(m, {
     origin: vec3(x + len, y, z), radius: r * 1.05,
-    segments: seg(8), rings: 5, color: p.glow,
+    segments: seg(8), rings: 5, color: p.bussard ?? p.glow, glow: 1,
   });
+}
+
+/**
+ * A band of lit ports around a primary hull's rim, and the impulse deck across
+ * its trailing edge.
+ *
+ * Four of the five forms here have a saucer, and a saucer without windows is a
+ * grey plate. Same treatment and same reasoning as the generic `starfleet`
+ * form in blueprint.js — shared as a function rather than copied four times.
+ */
+function primaryLights(mb, p, b, {
+  x, y = 0, radius, stretch = 1, high, thickness, domeRatio = 0.3,
+}) {
+  if (b.windows !== false) {
+    windowRing(mb, {
+      origin: vec3(x, y, 0),
+      radius,
+      stretch,
+      count: seg(b.windowCount ?? 13),
+      height: high * (b.windowHeight ?? 0.03),
+    });
+    // And rows on the plate, for the camera that looks down at it.
+    const half = thickness / 2;
+    const domeR = radius * domeRatio;
+    for (const frac of [0.82, 0.62]) {
+      const r = radius * frac;
+      windowDeck(mb, {
+        origin: vec3(x, y, 0),
+        radius: r,
+        stretch,
+        y: half * ((radius - r) / (radius - domeR)) + half * 0.25,
+        count: seg(b.windowCount ?? 13),
+        depth: radius * 0.02,
+      });
+    }
+  }
+  if (b.impulse !== false) {
+    box(mb, {
+      center: vec3(x - radius * stretch * 0.96, y + high * 0.02, 0),
+      size: vec3(radius * 0.1, high * 0.05, radius * (b.impulseWide ?? 0.5)),
+      color: p.impulse ?? p.glow,
+      glow: 1,
+    });
+  }
 }
 const FEDERATION_FORMS = {
   /**
@@ -5860,6 +6073,10 @@ const FEDERATION_FORMS = {
       segments: seg(b.segments ?? 22),
       color: p.hull,
       rimColor: p.trim,
+    });
+    primaryLights(mb, p, b, {
+      x: sx, radius: sr, stretch: b.saucerStretch ?? 0.86, high,
+      thickness: b.saucerThickness ?? high * 0.34, domeRatio: b.domeRatio ?? 0.3,
     });
 
     // The rollbar itself, which is what this form is named for.
@@ -5924,6 +6141,10 @@ const FEDERATION_FORMS = {
       segments: seg(b.segments ?? 20),
       color: p.hull, rimColor: p.trim,
     });
+    primaryLights(mb, p, b, {
+      x: sx, y: sy, radius: sr, stretch: b.saucerStretch ?? 0.94, high,
+      thickness: b.saucerThickness ?? high * 0.26, domeRatio: 0.3,
+    });
 
     const ly = b.lowerY ?? -high * 0.28;
     tube(mb, {
@@ -5972,6 +6193,10 @@ const FEDERATION_FORMS = {
       domeRatio: 0.32, domeHeight: high * 0.18,
       segments: seg(b.segments ?? 20),
       color: p.hull, rimColor: p.trim,
+    });
+    primaryLights(mb, p, b, {
+      x: sx, radius: sr, high,
+      thickness: b.saucerThickness ?? high * 0.24, domeRatio: 0.32,
     });
     box(mb, {
       center: vec3(sx - sr * 0.55, hy / 2, 0),
@@ -6032,6 +6257,10 @@ const FEDERATION_FORMS = {
       stretch: b.saucerStretch ?? 1.2,
       segments: seg(b.segments ?? 22),
       color: p.hull, rimColor: p.trim,
+    });
+    primaryLights(mb, p, b, {
+      x: sx, radius: sr, stretch: b.saucerStretch ?? 1.2, high,
+      thickness: b.saucerThickness ?? high * 0.2, domeRatio: 0.3,
     });
     tube(mb, {
       origin: vec3(-0.5, hy, 0),
@@ -6102,7 +6331,7 @@ const FEDERATION_FORMS = {
     sphere(mb, {
       origin: vec3(bl * 0.46, -high * 0.06, 0),
       radius: high * 0.24, segments: seg(8), rings: 5,
-      color: p.dish ?? p.glow,
+      color: p.dish ?? p.glow, glow: 0.55,
     });
 
     // Part of the body rather than hung off it, which is the whole point of
@@ -6148,7 +6377,7 @@ __define("src/gfx/blueprint.js", function (__exports, __require) {
 // renderer normalises so the largest live hull frames sensibly.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { MeshBuilder, saucer, tube, box, sphere, mirrored, seg } = __require("src/gfx/mesh.js");
+const { MeshBuilder, saucer, tube, box, sphere, mirrored, seg, windowRing, windowBelt, windowDeck } = __require("src/gfx/mesh.js");
 const { FEDERATION_FORMS } = __require("src/gfx/forms.federation.js");
 
 /**
@@ -6166,6 +6395,15 @@ const PALETTE = {
   federation: {
     hull: [0.82, 0.81, 0.77], trim: [0.56, 0.57, 0.60], glow: [0.45, 0.72, 1.0],
     dish: [0.85, 0.55, 0.25],   // the copper deflector
+    // Three lights that are not the same light, and were all `glow` before.
+    // `glow` is warp plasma and reads blue; a bussard collector is an amber
+    // scoop and an impulse deck is a hot red-orange grid, and a Starfleet hull
+    // with blue ones is instantly the wrong ship. Every other faction falls
+    // back to its `glow` — one accent is the right budget for a silhouette
+    // seen for thirty seconds, and three is the right budget for the one the
+    // player is flying.
+    bussard: [1.0, 0.46, 0.22],
+    impulse: [1.0, 0.34, 0.14],
   },
   klingon: { hull: [0.42, 0.48, 0.44], trim: [0.28, 0.33, 0.30], glow: [0.95, 0.35, 0.25] },
   romulan: { hull: [0.44, 0.50, 0.44], trim: [0.30, 0.40, 0.32], glow: [0.55, 0.95, 0.60] },
@@ -6227,6 +6465,63 @@ const FORMS = {
       rimColor: p.trim,
     });
 
+    // Windows.
+    //
+    // This is the first thing on the hull that is not hull. A saucer is a
+    // smooth grey plate and reads as a model of a ship; a saucer with a band
+    // of lit ports around its rim reads as a place with people in it, and it
+    // reads that way from the far side of an engagement, where no other
+    // detail survives. It is also what says the ship is UNDER WAY rather than
+    // parked — the lights are on because someone is on watch.
+    //
+    // `windows: false` for a hull that has none to speak of; `windowCount`
+    // scales with the class, because a runabout does not have a Galaxy's
+    // number of them.
+    const saucerY = b.saucerY ?? 0;
+    const saucerHalf = (b.saucerThickness ?? high * 0.2) / 2;
+    const domeR = sr * (b.domeRatio ?? 0.34);
+    // The plate's own height at a given radius: it runs from y = 0 at the rim
+    // up to y = half at the dome's edge, linearly.
+    const plateY = (r) => saucerHalf * ((sr - r) / (sr - domeR));
+    if (b.windows !== false) {
+      windowRing(mb, {
+        origin: vec3(sx, saucerY, 0),
+        radius: sr,
+        stretch,
+        count: seg(b.windowCount ?? 13),
+        height: high * (b.windowHeight ?? 0.03),
+      });
+      // Two concentric rows on the plate itself, which is the view the
+      // tactical camera actually has.
+      for (const at of [0.82, 0.62]) {
+        const r = sr * at;
+        windowDeck(mb, {
+          origin: vec3(sx, saucerY, 0),
+          radius: r,
+          stretch,
+          // Clear of the plate, not flush with it. Coplanar geometry is
+          // decided per pixel per frame by whichever z wins, and the result
+          // is a window band that crawls as the camera moves.
+          y: plateY(r) + saucerHalf * 0.25,
+          count: seg(b.windowCount ?? 13),
+          depth: sr * 0.02,
+        });
+      }
+    }
+
+    // The impulse deck, across the saucer's trailing edge.
+    //
+    // Every Starfleet saucer ends in one, and it is the only part of the ship
+    // that tells you which way it is pointing when you are behind it.
+    if (b.impulse !== false) {
+      box(mb, {
+        center: vec3(sx - sr * stretch * 0.96, (b.saucerY ?? 0) + high * 0.02, 0),
+        size: vec3(sr * 0.1, high * 0.05, sr * (b.impulseWide ?? 0.5)),
+        color: p.impulse ?? p.glow,
+        glow: 1,
+      });
+    }
+
     const hy = b.hullY ?? -high * 0.42;
     if (b.neck !== false) {
       box(mb, {
@@ -6280,7 +6575,40 @@ const FORMS = {
         segments: seg(12),
         rings: 6,
         color: p.dish ?? p.glow,
+        // Lit, but not fully: a deflector is a copper dish that is ALSO
+        // running, so it keeps enough of the key light to stay a curved
+        // object rather than becoming a flat orange disc.
+        glow: 0.55,
       });
+    }
+
+    // A row of ports down each flank of the secondary hull, where the crew
+    // decks are. A third of the circumference each side, centred on the beam,
+    // so they run along the flanks rather than around the belly.
+    if (b.windows !== false) {
+      // Angle 0 in `windowBelt` is +y, so a belt centred on 0 runs along the
+      // SPINE of the hull, not its flank. Centred on ±pi/2 instead — which is
+      // ±z, which is where a habitable deck's ports actually are.
+      const hullR0 = b.hullR0 ?? high * 0.17 * thick;
+      const rAt = (u) => hullR0 + (hullR1 - hullR0) * u;
+      // Short ports at three stations, not one long strip. A single belt as
+      // long as a quarter of the hull is a stripe, and a stripe reads as
+      // painted trim rather than as windows.
+      for (const phase of [Math.PI * (0.5 - 0.14), Math.PI * (1.5 - 0.14)]) {
+        for (const u of [0.28, 0.44, 0.6]) {
+          windowBelt(mb, {
+            origin: vec3(0, hy, 0),
+            x: -0.5 + hullLen * u,
+            r0: rAt(u),
+            r1: rAt(u + 0.07),
+            count: seg(b.hullWindowCount ?? 2),
+            arc: Math.PI * 0.28,
+            phase,
+            length: hullLen * 0.07,
+            fill: 0.5,
+          });
+        }
+      }
     }
 
     // Nacelles, one built and one mirrored.
@@ -6351,15 +6679,31 @@ const FORMS = {
         radius: nr * 1.04,
         segments: seg(10),
         rings: 6,
-        color: p.glow,
+        color: p.bussard ?? p.glow,
+        glow: 1,
       });
       // The intercooler grille along the outboard face, which does more for
       // the read of a nacelle than its cost suggests: it is the one thing that
       // says which way is outboard.
+      // On the OUTBOARD flank, and protruding.
+      //
+      // #134 placed this ventrally and 0.68 of a nacelle radius from the
+      // axis — which is to say entirely INSIDE the tube it was decorating.
+      // Twelve triangles a side that could not be seen from any angle, and
+      // the comment above claiming the feature "says which way is outboard"
+      // while the box sat symmetric in z. Measured rather than eyeballed, by
+      // slicing the hull across the grille's station: its outer face has to
+      // clear the nacelle's own surface at that station or there is nothing
+      // there. It stands about a tenth of a nacelle radius proud of it — a
+      // fin, not a wing.
+      //
+      // Part lit. A grille is a vent over something running hot, so it
+      // carries the warp colour without becoming a light bulb.
       box(m, {
-        center: vec3(nx + nl * 0.45, ny - nr * 0.55, nz),
-        size: vec3(nl * 0.42, nr * 0.17, nr * 0.5),
-        color: p.trim,
+        center: vec3(nx + nl * 0.45, ny, nz + nr * 0.98),
+        size: vec3(nl * 0.42, nr * 0.62, nr * 0.24),
+        color: p.glow,
+        glow: 0.45,
       });
     });
 
@@ -6419,6 +6763,41 @@ const FORMS = {
       rimColor: p.trim,
     });
 
+    // Rim windows and the impulse deck, as on the generic form. Same reasons,
+    // and the 1966 miniature is where both come from in the first place.
+    const saucerHalf = (b.saucerThickness ?? high * 0.19) / 2;
+    const domeR = sr * (b.domeRatio ?? 0.3);
+    const plateY = (r) => saucerHalf * ((sr - r) / (sr - domeR));
+    if (b.windows !== false) {
+      windowRing(mb, {
+        origin: vec3(sx, b.saucerY ?? 0, 0),
+        radius: sr,
+        count: seg(b.windowCount ?? 13),
+        height: high * (b.windowHeight ?? 0.03),
+      });
+      for (const at of [0.82, 0.62]) {
+        const r = sr * at;
+        windowDeck(mb, {
+          origin: vec3(sx, b.saucerY ?? 0, 0),
+          radius: r,
+          // Clear of the plate, not flush with it. Coplanar geometry is
+          // decided per pixel per frame by whichever z wins, and the result
+          // is a window band that crawls as the camera moves.
+          y: plateY(r) + saucerHalf * 0.25,
+          count: seg(b.windowCount ?? 13),
+          depth: sr * 0.02,
+        });
+      }
+    }
+    if (b.impulse !== false) {
+      box(mb, {
+        center: vec3(sx - sr * 0.96, (b.saucerY ?? 0) + high * 0.02, 0),
+        size: vec3(sr * 0.1, high * 0.05, sr * 0.5),
+        color: p.impulse ?? p.glow,
+        glow: 1,
+      });
+    }
+
     // The dorsal neck, raked rather than vertical.
     box(mb, {
       center: vec3(sx - sr * 0.6, hullY / 2, 0),
@@ -6457,7 +6836,30 @@ const FORMS = {
       segments: seg(12),
       rings: 6,
       color: p.dish ?? p.glow,
+      glow: 0.55,
     });
+
+    // Ports down each flank of the secondary hull.
+    if (b.windows !== false) {
+      // Angle 0 in `windowBelt` is +y, so a belt centred on 0 runs along the
+      // SPINE of the hull, not its flank. Centred on ±pi/2 instead — which is
+      // ±z, which is where a habitable deck's ports actually are.
+      for (const phase of [Math.PI * (0.5 - 0.14), Math.PI * (1.5 - 0.14)]) {
+        for (const u of [0.28, 0.44, 0.6]) {
+          windowBelt(mb, {
+            origin: vec3(0, hullY, 0),
+            x: -0.48 + hl * u,
+            r0: hr * (0.85 + 0.15 * u),
+            r1: hr * (0.85 + 0.15 * (u + 0.07)),
+            count: seg(b.hullWindowCount ?? 2),
+            arc: Math.PI * 0.28,
+            phase,
+            length: hl * 0.07,
+            fill: 0.5,
+          });
+        }
+      }
+    }
 
     // The hangar: a flat transom closing the stern.
     box(mb, {
@@ -6521,13 +6923,32 @@ const FORMS = {
         radius: nr * 1.08,
         segments: seg(10),
         rings: 6,
-        color: p.glow,
+        // This form's own docstring says "AMBER caps on the front of each
+        // nacelle" and the colour here was `glow`, which is warp blue. The
+        // comment was right and the code was not.
+        color: p.bussard ?? p.glow,
+        glow: 1,
       });
       // The blue intercooler grille along the outboard face.
+      // On the OUTBOARD flank, and protruding.
+      //
+      // #134 placed this ventrally and 0.68 of a nacelle radius from the
+      // axis — which is to say entirely INSIDE the tube it was decorating.
+      // Twelve triangles a side that could not be seen from any angle, and
+      // the comment above claiming the feature "says which way is outboard"
+      // while the box sat symmetric in z. Measured rather than eyeballed, by
+      // slicing the hull across the grille's station: its outer face has to
+      // clear the nacelle's own surface at that station or there is nothing
+      // there. It stands about a tenth of a nacelle radius proud of it — a
+      // fin, not a wing.
+      //
+      // Part lit. A grille is a vent over something running hot, so it
+      // carries the warp colour without becoming a light bulb.
       box(m, {
-        center: vec3(nx + nl * 0.45, ny - nr * 0.55, nz),
-        size: vec3(nl * 0.42, nr * 0.17, nr * 0.5),
-        color: p.trim,
+        center: vec3(nx + nl * 0.45, ny, nz + nr * 0.98),
+        size: vec3(nl * 0.42, nr * 0.62, nr * 0.24),
+        color: p.glow,
+        glow: 0.45,
       });
     });
   },
@@ -6566,12 +6987,31 @@ const FORMS = {
         sweep: b.wingSweep ?? 0.42,
         color: p.hull,
       });
-      // Wing-tip disruptor housing.
+      // Wing-tip disruptor housing, lit: on a Klingon hull the wingtips are
+      // where the guns are, and a lit muzzle is what tells you so.
       box(m, {
         center: vec3(-0.02, droop, span),
         size: vec3(0.3, 0.07, 0.08),
         color: p.glow,
+        glow: 0.8,
       });
+    });
+
+    // The engine bank, on the aft face.
+    //
+    // Every Federation hull in this file has glowing engines and not one
+    // hostile did, so a Klingon cruiser drawn alongside a Constitution read as
+    // a derelict. This is the cheapest possible fix and the correct one: the
+    // one part of a warship you can always see running.
+    tube(mb, {
+      origin: vec3(-0.4, 0, 0),
+      length: 0.05,
+      r0: (b.bodyR0 ?? 0.2) * 0.52,
+      r1: (b.bodyR0 ?? 0.2) * 0.6,
+      segments: seg(9),
+      color: p.glow,
+      glow: 1,
+      capFore: false,
     });
   },
 
@@ -6606,7 +7046,30 @@ const FORMS = {
         color: p.trim,
       });
     });
-    sphere(mb, { origin: vec3(0.62, 0, 0), radius: 0.11, segments: seg(10), rings: 6, color: p.glow });
+    // The forward sensor, genuinely lit, and a lit strip down the inboard
+    // face of each arm — the arms are the whole silhouette and they were two
+    // unbroken grey slabs.
+    sphere(mb, {
+      origin: vec3(0.62, 0, 0), radius: 0.11,
+      segments: seg(10), rings: 6, color: p.glow, glow: 1,
+    });
+    // On the INBOARD EDGE of each arm, not across its face.
+    //
+    // Sized (0.72, 0.02, span * 0.46) this was a horizontal PANEL the size of
+    // a wing, lying flat on top of the arm — the arm's own area in glowing
+    // green rather than a light along its edge. Thin in y and in z, long in x,
+    // and placed at the arm's inboard face: a seam, which is what it is.
+    const armIn = span * 0.3;
+    mirrored(mb, (m) => {
+      for (const [cx, cy] of [[0.22, 0.11], [-0.32, -0.11]]) {
+        box(m, {
+          center: vec3(cx, cy, armIn),
+          size: vec3(0.72, 0.03, 0.02),
+          color: p.glow,
+          glow: 0.7,
+        });
+      }
+    });
   },
 
   /**
@@ -6645,7 +7108,28 @@ const FORMS = {
         color: p.hull,
       });
     });
-    sphere(mb, { origin: vec3(0.55, 0.02, 0), radius: 0.1, segments: seg(8), rings: 5, color: p.glow });
+    sphere(mb, {
+      origin: vec3(0.55, 0.02, 0), radius: 0.1,
+      segments: seg(8), rings: 5, color: p.glow, glow: 1,
+    });
+    // Lit stripes down the flanks and an engine bank across the stern. A
+    // Cardassian hull is an armoured slab with light bleeding out of the seams
+    // in it, and without them it is just the slab.
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(0.05, 0.02, (b.width ?? 0.34) * 0.5),
+        size: vec3((b.length_ ?? 1.3) * 0.5, (b.height ?? 0.16) * 0.16, 0.02),
+        sweep: (b.sweep ?? 0.3) * 0.4,
+        color: p.glow,
+        glow: 0.7,
+      });
+    });
+    box(mb, {
+      center: vec3(-(b.length_ ?? 1.3) * 0.5, 0, 0),
+      size: vec3(0.03, (b.height ?? 0.16) * 0.55, (b.width ?? 0.34) * 0.62),
+      color: p.glow,
+      glow: 1,
+    });
   },
 
   /** Literally a cube. There is nothing else to say about it. */
@@ -6666,6 +7150,10 @@ const FORMS = {
         center: vec3(Math.cos(a) * s * 0.36, Math.sin(a * 1.7) * sy * 0.36, Math.sin(a) * sz * 0.5),
         size: vec3(s * 0.2, sy * 0.18, sz * 0.12),
         color: i % 4 === 0 ? p.glow : p.trim,
+        // The lit quarter is genuinely lit. A cube has no silhouette to read
+        // and no lighting to model it — the green is the only thing that says
+        // it is powered, and it was a pale green surface taking a key light.
+        glow: i % 4 === 0 ? 1 : 0,
       });
     }
   },
@@ -6683,6 +7171,41 @@ const FORMS = {
     box(mb, { center: vec3(0.42, 0.14, 0), size: vec3(0.24, 0.14, 0.2), color: p.trim });
     mirrored(mb, (m) => {
       box(m, { center: vec3(-0.18, 0, 0.2), size: vec3(0.5, 0.12, 0.12), color: p.trim });
+    });
+
+    // A freighter is a working ship with people living on it for months, so it
+    // gets the most windows in the fleet and no weapons to glow instead.
+    const L = b.length_ ?? 1.0;
+    const hr0 = b.r0 ?? 0.16; const hr1 = b.r1 ?? 0.13;
+    const rAt = (u) => hr0 + (hr1 - hr0) * u;
+    // Short ports at four stations. Thirteen windows spanning seventy degrees
+    // of arc and half the hull's length was not a row of ports, it was a woven
+    // mat — the same mistake the secondary hulls started with.
+    for (const phase of [Math.PI * (0.5 - 0.12), Math.PI * (1.5 - 0.12)]) {
+      for (const u of [0.2, 0.36, 0.52, 0.68]) {
+        windowBelt(mb, {
+          origin: vec3(-0.5, 0, 0),
+          x: L * u,
+          r0: rAt(u),
+          r1: rAt(u + 0.08),
+          count: seg(2),
+          arc: Math.PI * 0.24,
+          phase,
+          length: L * 0.08,
+          fill: 0.5,
+        });
+      }
+    }
+    // Engine glow on the stern.
+    tube(mb, {
+      origin: vec3(-0.54, 0, 0),
+      length: 0.05,
+      r0: hr0 * 0.5,
+      r1: hr0 * 0.58,
+      segments: seg(9),
+      color: p.glow,
+      glow: 1,
+      capFore: false,
     });
   },
 };

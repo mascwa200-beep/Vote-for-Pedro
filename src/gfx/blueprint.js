@@ -20,7 +20,10 @@
 // renderer normalises so the largest live hull frames sensibly.
 
 import { vec3 } from './math.js';
-import { MeshBuilder, saucer, tube, box, sphere, mirrored, seg } from './mesh.js';
+import {
+  MeshBuilder, saucer, tube, box, sphere, mirrored, seg,
+  windowRing, windowBelt, windowDeck,
+} from './mesh.js';
 import { FEDERATION_FORMS } from './forms.federation.js';
 
 /**
@@ -38,6 +41,15 @@ const PALETTE = {
   federation: {
     hull: [0.82, 0.81, 0.77], trim: [0.56, 0.57, 0.60], glow: [0.45, 0.72, 1.0],
     dish: [0.85, 0.55, 0.25],   // the copper deflector
+    // Three lights that are not the same light, and were all `glow` before.
+    // `glow` is warp plasma and reads blue; a bussard collector is an amber
+    // scoop and an impulse deck is a hot red-orange grid, and a Starfleet hull
+    // with blue ones is instantly the wrong ship. Every other faction falls
+    // back to its `glow` — one accent is the right budget for a silhouette
+    // seen for thirty seconds, and three is the right budget for the one the
+    // player is flying.
+    bussard: [1.0, 0.46, 0.22],
+    impulse: [1.0, 0.34, 0.14],
   },
   klingon: { hull: [0.42, 0.48, 0.44], trim: [0.28, 0.33, 0.30], glow: [0.95, 0.35, 0.25] },
   romulan: { hull: [0.44, 0.50, 0.44], trim: [0.30, 0.40, 0.32], glow: [0.55, 0.95, 0.60] },
@@ -100,6 +112,63 @@ const FORMS = {
       rimColor: p.trim,
     });
 
+    // Windows.
+    //
+    // This is the first thing on the hull that is not hull. A saucer is a
+    // smooth grey plate and reads as a model of a ship; a saucer with a band
+    // of lit ports around its rim reads as a place with people in it, and it
+    // reads that way from the far side of an engagement, where no other
+    // detail survives. It is also what says the ship is UNDER WAY rather than
+    // parked — the lights are on because someone is on watch.
+    //
+    // `windows: false` for a hull that has none to speak of; `windowCount`
+    // scales with the class, because a runabout does not have a Galaxy's
+    // number of them.
+    const saucerY = b.saucerY ?? 0;
+    const saucerHalf = (b.saucerThickness ?? high * 0.2) / 2;
+    const domeR = sr * (b.domeRatio ?? 0.34);
+    // The plate's own height at a given radius: it runs from y = 0 at the rim
+    // up to y = half at the dome's edge, linearly.
+    const plateY = (r) => saucerHalf * ((sr - r) / (sr - domeR));
+    if (b.windows !== false) {
+      windowRing(mb, {
+        origin: vec3(sx, saucerY, 0),
+        radius: sr,
+        stretch,
+        count: seg(b.windowCount ?? 13),
+        height: high * (b.windowHeight ?? 0.03),
+      });
+      // Two concentric rows on the plate itself, which is the view the
+      // tactical camera actually has.
+      for (const at of [0.82, 0.62]) {
+        const r = sr * at;
+        windowDeck(mb, {
+          origin: vec3(sx, saucerY, 0),
+          radius: r,
+          stretch,
+          // Clear of the plate, not flush with it. Coplanar geometry is
+          // decided per pixel per frame by whichever z wins, and the result
+          // is a window band that crawls as the camera moves.
+          y: plateY(r) + saucerHalf * 0.25,
+          count: seg(b.windowCount ?? 13),
+          depth: sr * 0.02,
+        });
+      }
+    }
+
+    // The impulse deck, across the saucer's trailing edge.
+    //
+    // Every Starfleet saucer ends in one, and it is the only part of the ship
+    // that tells you which way it is pointing when you are behind it.
+    if (b.impulse !== false) {
+      box(mb, {
+        center: vec3(sx - sr * stretch * 0.96, (b.saucerY ?? 0) + high * 0.02, 0),
+        size: vec3(sr * 0.1, high * 0.05, sr * (b.impulseWide ?? 0.5)),
+        color: p.impulse ?? p.glow,
+        glow: 1,
+      });
+    }
+
     const hy = b.hullY ?? -high * 0.42;
     if (b.neck !== false) {
       box(mb, {
@@ -153,7 +222,40 @@ const FORMS = {
         segments: seg(12),
         rings: 6,
         color: p.dish ?? p.glow,
+        // Lit, but not fully: a deflector is a copper dish that is ALSO
+        // running, so it keeps enough of the key light to stay a curved
+        // object rather than becoming a flat orange disc.
+        glow: 0.55,
       });
+    }
+
+    // A row of ports down each flank of the secondary hull, where the crew
+    // decks are. A third of the circumference each side, centred on the beam,
+    // so they run along the flanks rather than around the belly.
+    if (b.windows !== false) {
+      // Angle 0 in `windowBelt` is +y, so a belt centred on 0 runs along the
+      // SPINE of the hull, not its flank. Centred on ±pi/2 instead — which is
+      // ±z, which is where a habitable deck's ports actually are.
+      const hullR0 = b.hullR0 ?? high * 0.17 * thick;
+      const rAt = (u) => hullR0 + (hullR1 - hullR0) * u;
+      // Short ports at three stations, not one long strip. A single belt as
+      // long as a quarter of the hull is a stripe, and a stripe reads as
+      // painted trim rather than as windows.
+      for (const phase of [Math.PI * (0.5 - 0.14), Math.PI * (1.5 - 0.14)]) {
+        for (const u of [0.28, 0.44, 0.6]) {
+          windowBelt(mb, {
+            origin: vec3(0, hy, 0),
+            x: -0.5 + hullLen * u,
+            r0: rAt(u),
+            r1: rAt(u + 0.07),
+            count: seg(b.hullWindowCount ?? 2),
+            arc: Math.PI * 0.28,
+            phase,
+            length: hullLen * 0.07,
+            fill: 0.5,
+          });
+        }
+      }
     }
 
     // Nacelles, one built and one mirrored.
@@ -224,15 +326,31 @@ const FORMS = {
         radius: nr * 1.04,
         segments: seg(10),
         rings: 6,
-        color: p.glow,
+        color: p.bussard ?? p.glow,
+        glow: 1,
       });
       // The intercooler grille along the outboard face, which does more for
       // the read of a nacelle than its cost suggests: it is the one thing that
       // says which way is outboard.
+      // On the OUTBOARD flank, and protruding.
+      //
+      // #134 placed this ventrally and 0.68 of a nacelle radius from the
+      // axis — which is to say entirely INSIDE the tube it was decorating.
+      // Twelve triangles a side that could not be seen from any angle, and
+      // the comment above claiming the feature "says which way is outboard"
+      // while the box sat symmetric in z. Measured rather than eyeballed, by
+      // slicing the hull across the grille's station: its outer face has to
+      // clear the nacelle's own surface at that station or there is nothing
+      // there. It stands about a tenth of a nacelle radius proud of it — a
+      // fin, not a wing.
+      //
+      // Part lit. A grille is a vent over something running hot, so it
+      // carries the warp colour without becoming a light bulb.
       box(m, {
-        center: vec3(nx + nl * 0.45, ny - nr * 0.55, nz),
-        size: vec3(nl * 0.42, nr * 0.17, nr * 0.5),
-        color: p.trim,
+        center: vec3(nx + nl * 0.45, ny, nz + nr * 0.98),
+        size: vec3(nl * 0.42, nr * 0.62, nr * 0.24),
+        color: p.glow,
+        glow: 0.45,
       });
     });
 
@@ -292,6 +410,41 @@ const FORMS = {
       rimColor: p.trim,
     });
 
+    // Rim windows and the impulse deck, as on the generic form. Same reasons,
+    // and the 1966 miniature is where both come from in the first place.
+    const saucerHalf = (b.saucerThickness ?? high * 0.19) / 2;
+    const domeR = sr * (b.domeRatio ?? 0.3);
+    const plateY = (r) => saucerHalf * ((sr - r) / (sr - domeR));
+    if (b.windows !== false) {
+      windowRing(mb, {
+        origin: vec3(sx, b.saucerY ?? 0, 0),
+        radius: sr,
+        count: seg(b.windowCount ?? 13),
+        height: high * (b.windowHeight ?? 0.03),
+      });
+      for (const at of [0.82, 0.62]) {
+        const r = sr * at;
+        windowDeck(mb, {
+          origin: vec3(sx, b.saucerY ?? 0, 0),
+          radius: r,
+          // Clear of the plate, not flush with it. Coplanar geometry is
+          // decided per pixel per frame by whichever z wins, and the result
+          // is a window band that crawls as the camera moves.
+          y: plateY(r) + saucerHalf * 0.25,
+          count: seg(b.windowCount ?? 13),
+          depth: sr * 0.02,
+        });
+      }
+    }
+    if (b.impulse !== false) {
+      box(mb, {
+        center: vec3(sx - sr * 0.96, (b.saucerY ?? 0) + high * 0.02, 0),
+        size: vec3(sr * 0.1, high * 0.05, sr * 0.5),
+        color: p.impulse ?? p.glow,
+        glow: 1,
+      });
+    }
+
     // The dorsal neck, raked rather than vertical.
     box(mb, {
       center: vec3(sx - sr * 0.6, hullY / 2, 0),
@@ -330,7 +483,30 @@ const FORMS = {
       segments: seg(12),
       rings: 6,
       color: p.dish ?? p.glow,
+      glow: 0.55,
     });
+
+    // Ports down each flank of the secondary hull.
+    if (b.windows !== false) {
+      // Angle 0 in `windowBelt` is +y, so a belt centred on 0 runs along the
+      // SPINE of the hull, not its flank. Centred on ±pi/2 instead — which is
+      // ±z, which is where a habitable deck's ports actually are.
+      for (const phase of [Math.PI * (0.5 - 0.14), Math.PI * (1.5 - 0.14)]) {
+        for (const u of [0.28, 0.44, 0.6]) {
+          windowBelt(mb, {
+            origin: vec3(0, hullY, 0),
+            x: -0.48 + hl * u,
+            r0: hr * (0.85 + 0.15 * u),
+            r1: hr * (0.85 + 0.15 * (u + 0.07)),
+            count: seg(b.hullWindowCount ?? 2),
+            arc: Math.PI * 0.28,
+            phase,
+            length: hl * 0.07,
+            fill: 0.5,
+          });
+        }
+      }
+    }
 
     // The hangar: a flat transom closing the stern.
     box(mb, {
@@ -394,13 +570,32 @@ const FORMS = {
         radius: nr * 1.08,
         segments: seg(10),
         rings: 6,
-        color: p.glow,
+        // This form's own docstring says "AMBER caps on the front of each
+        // nacelle" and the colour here was `glow`, which is warp blue. The
+        // comment was right and the code was not.
+        color: p.bussard ?? p.glow,
+        glow: 1,
       });
       // The blue intercooler grille along the outboard face.
+      // On the OUTBOARD flank, and protruding.
+      //
+      // #134 placed this ventrally and 0.68 of a nacelle radius from the
+      // axis — which is to say entirely INSIDE the tube it was decorating.
+      // Twelve triangles a side that could not be seen from any angle, and
+      // the comment above claiming the feature "says which way is outboard"
+      // while the box sat symmetric in z. Measured rather than eyeballed, by
+      // slicing the hull across the grille's station: its outer face has to
+      // clear the nacelle's own surface at that station or there is nothing
+      // there. It stands about a tenth of a nacelle radius proud of it — a
+      // fin, not a wing.
+      //
+      // Part lit. A grille is a vent over something running hot, so it
+      // carries the warp colour without becoming a light bulb.
       box(m, {
-        center: vec3(nx + nl * 0.45, ny - nr * 0.55, nz),
-        size: vec3(nl * 0.42, nr * 0.17, nr * 0.5),
-        color: p.trim,
+        center: vec3(nx + nl * 0.45, ny, nz + nr * 0.98),
+        size: vec3(nl * 0.42, nr * 0.62, nr * 0.24),
+        color: p.glow,
+        glow: 0.45,
       });
     });
   },
@@ -439,12 +634,31 @@ const FORMS = {
         sweep: b.wingSweep ?? 0.42,
         color: p.hull,
       });
-      // Wing-tip disruptor housing.
+      // Wing-tip disruptor housing, lit: on a Klingon hull the wingtips are
+      // where the guns are, and a lit muzzle is what tells you so.
       box(m, {
         center: vec3(-0.02, droop, span),
         size: vec3(0.3, 0.07, 0.08),
         color: p.glow,
+        glow: 0.8,
       });
+    });
+
+    // The engine bank, on the aft face.
+    //
+    // Every Federation hull in this file has glowing engines and not one
+    // hostile did, so a Klingon cruiser drawn alongside a Constitution read as
+    // a derelict. This is the cheapest possible fix and the correct one: the
+    // one part of a warship you can always see running.
+    tube(mb, {
+      origin: vec3(-0.4, 0, 0),
+      length: 0.05,
+      r0: (b.bodyR0 ?? 0.2) * 0.52,
+      r1: (b.bodyR0 ?? 0.2) * 0.6,
+      segments: seg(9),
+      color: p.glow,
+      glow: 1,
+      capFore: false,
     });
   },
 
@@ -479,7 +693,30 @@ const FORMS = {
         color: p.trim,
       });
     });
-    sphere(mb, { origin: vec3(0.62, 0, 0), radius: 0.11, segments: seg(10), rings: 6, color: p.glow });
+    // The forward sensor, genuinely lit, and a lit strip down the inboard
+    // face of each arm — the arms are the whole silhouette and they were two
+    // unbroken grey slabs.
+    sphere(mb, {
+      origin: vec3(0.62, 0, 0), radius: 0.11,
+      segments: seg(10), rings: 6, color: p.glow, glow: 1,
+    });
+    // On the INBOARD EDGE of each arm, not across its face.
+    //
+    // Sized (0.72, 0.02, span * 0.46) this was a horizontal PANEL the size of
+    // a wing, lying flat on top of the arm — the arm's own area in glowing
+    // green rather than a light along its edge. Thin in y and in z, long in x,
+    // and placed at the arm's inboard face: a seam, which is what it is.
+    const armIn = span * 0.3;
+    mirrored(mb, (m) => {
+      for (const [cx, cy] of [[0.22, 0.11], [-0.32, -0.11]]) {
+        box(m, {
+          center: vec3(cx, cy, armIn),
+          size: vec3(0.72, 0.03, 0.02),
+          color: p.glow,
+          glow: 0.7,
+        });
+      }
+    });
   },
 
   /**
@@ -518,7 +755,28 @@ const FORMS = {
         color: p.hull,
       });
     });
-    sphere(mb, { origin: vec3(0.55, 0.02, 0), radius: 0.1, segments: seg(8), rings: 5, color: p.glow });
+    sphere(mb, {
+      origin: vec3(0.55, 0.02, 0), radius: 0.1,
+      segments: seg(8), rings: 5, color: p.glow, glow: 1,
+    });
+    // Lit stripes down the flanks and an engine bank across the stern. A
+    // Cardassian hull is an armoured slab with light bleeding out of the seams
+    // in it, and without them it is just the slab.
+    mirrored(mb, (m) => {
+      box(m, {
+        center: vec3(0.05, 0.02, (b.width ?? 0.34) * 0.5),
+        size: vec3((b.length_ ?? 1.3) * 0.5, (b.height ?? 0.16) * 0.16, 0.02),
+        sweep: (b.sweep ?? 0.3) * 0.4,
+        color: p.glow,
+        glow: 0.7,
+      });
+    });
+    box(mb, {
+      center: vec3(-(b.length_ ?? 1.3) * 0.5, 0, 0),
+      size: vec3(0.03, (b.height ?? 0.16) * 0.55, (b.width ?? 0.34) * 0.62),
+      color: p.glow,
+      glow: 1,
+    });
   },
 
   /** Literally a cube. There is nothing else to say about it. */
@@ -539,6 +797,10 @@ const FORMS = {
         center: vec3(Math.cos(a) * s * 0.36, Math.sin(a * 1.7) * sy * 0.36, Math.sin(a) * sz * 0.5),
         size: vec3(s * 0.2, sy * 0.18, sz * 0.12),
         color: i % 4 === 0 ? p.glow : p.trim,
+        // The lit quarter is genuinely lit. A cube has no silhouette to read
+        // and no lighting to model it — the green is the only thing that says
+        // it is powered, and it was a pale green surface taking a key light.
+        glow: i % 4 === 0 ? 1 : 0,
       });
     }
   },
@@ -556,6 +818,41 @@ const FORMS = {
     box(mb, { center: vec3(0.42, 0.14, 0), size: vec3(0.24, 0.14, 0.2), color: p.trim });
     mirrored(mb, (m) => {
       box(m, { center: vec3(-0.18, 0, 0.2), size: vec3(0.5, 0.12, 0.12), color: p.trim });
+    });
+
+    // A freighter is a working ship with people living on it for months, so it
+    // gets the most windows in the fleet and no weapons to glow instead.
+    const L = b.length_ ?? 1.0;
+    const hr0 = b.r0 ?? 0.16; const hr1 = b.r1 ?? 0.13;
+    const rAt = (u) => hr0 + (hr1 - hr0) * u;
+    // Short ports at four stations. Thirteen windows spanning seventy degrees
+    // of arc and half the hull's length was not a row of ports, it was a woven
+    // mat — the same mistake the secondary hulls started with.
+    for (const phase of [Math.PI * (0.5 - 0.12), Math.PI * (1.5 - 0.12)]) {
+      for (const u of [0.2, 0.36, 0.52, 0.68]) {
+        windowBelt(mb, {
+          origin: vec3(-0.5, 0, 0),
+          x: L * u,
+          r0: rAt(u),
+          r1: rAt(u + 0.08),
+          count: seg(2),
+          arc: Math.PI * 0.24,
+          phase,
+          length: L * 0.08,
+          fill: 0.5,
+        });
+      }
+    }
+    // Engine glow on the stern.
+    tube(mb, {
+      origin: vec3(-0.54, 0, 0),
+      length: 0.05,
+      r0: hr0 * 0.5,
+      r1: hr0 * 0.58,
+      segments: seg(9),
+      color: p.glow,
+      glow: 1,
+      capFore: false,
     });
   },
 };
