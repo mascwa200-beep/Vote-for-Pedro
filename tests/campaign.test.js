@@ -12,6 +12,8 @@ import assert from 'node:assert/strict';
 import { CampaignClock, COMMISSION_DAYS, MAX_ABSENCE_HOURS, absenceReport } from '../src/campaign/clock.js';
 import { checksum } from '../src/core/save.js';
 import { Game } from '../src/core/state.js';
+import { checkAll } from '../src/sim/invariants.js';
+import { ARENA_RADIUS } from '../src/sim/combat.js';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1047,6 +1049,85 @@ describe('the same leg, flown two ways', () => {
       assert.ok(Number.isFinite(a) && Number.isFinite(b),
         `${what} is not a number: watched ${a}, closed ${b}`);
       assert.ok(Math.abs(a - b) < 1e-9, `${what}: watched ${a}, closed ${b}`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The order line, after there is nobody to give orders.
+//
+// `over` is set by three endings — a career finished by a second ship lost, a
+// ship stranded with no port in reach, and the five years served. The app
+// routes to the ending screen for all three. The model did not.
+
+describe('a captain who is no longer a captain', () => {
+  /** Serve the whole five years by playing, which nothing could do before. */
+  const served = () => {
+    const g = new Game({ seed: 4242n, crewMode: 'original', compression: HOUR_PER_TICK });
+    g.ship.antimatter = g.ship.maxAntimatter;
+    for (let i = 0; i < COMMISSION_DAYS * 24 + 100 && !g.over; i++) g.update(SIM_STEP);
+    return g;
+  };
+
+  /** A career ended by a second ship lost. */
+  const relieved = () => {
+    const g = new Game({ seed: 77n, crewMode: 'original', compression: HOUR_PER_TICK });
+    g.ship.antimatter = g.ship.maxAntimatter;
+    g.shipsLost = 1;
+    g.ship.hull = 0;
+    g.ship.destroyed = true;
+    for (let i = 0; i < 400 && !g.over; i++) g.update(SIM_STEP);
+    return g;
+  };
+
+  test('the five years can be served by playing, and they end', () => {
+    // The control for everything below, and a path nothing could reach until
+    // the commission clock ran while the app was open: the only previous way
+    // to 1,826 days was to leave the game shut for five years.
+    const g = served();
+    assert.equal(g.over, true, `still steering on day ${g.campaign.elapsedDays.toFixed(1)}`);
+    assert.equal(g.campaign.complete, true);
+    assert.ok(g.campaign.elapsedDays >= COMMISSION_DAYS,
+      `ended on day ${g.campaign.elapsedDays}`);
+    assert.match(g.overReason ?? '', /commission is complete/i, g.overReason);
+    assert.deepEqual(checkAll(g, { arenaRadius: ARENA_RADIUS }), [],
+      'the end of the five years is an illegal state');
+  });
+
+  test('and a career ended is a career ended', () => {
+    const g = relieved();
+    assert.equal(g.over, true, 'a second ship lost did not end the career');
+    assert.match(g.overReason ?? '', /no further command/i, g.overReason);
+  });
+
+  test('and neither of them takes another order', () => {
+    // Measured before this: after "no further command was offered",
+    // `setCourse` returned `{ ok: true }` and the ship went to warp. Docking
+    // and ordered repairs did too. That is the shape `endOfCommission`'s own
+    // comment was written to prevent — "Year six, day thirty-one, still
+    // steering" — and the fix that stopped the clock's ending being ignored
+    // did not stop the orders being taken.
+    for (const [what, g] of [['the five years served', served()], ['a career ended', relieved()]]) {
+      const orders = {
+        'set a course': () => g.setCourse(g.galaxy.neighbors(g.locationId)[0]?.id, 7),
+        'enter orbit': () => g.enterOrbit(),
+        'dock': () => g.dock(),
+        'order repairs': () => { g.ship.hull = g.ship.maxHull * 0.5; return g.effectRepairs(); },
+        'work the shop': () => g.workTheShop(8),
+        'a landing party': () => g.awayMission('diplomatic_landing'),
+        'train an officer': () => g.trainOfficer(g.crew.officers[0], 'fire_at_will'),
+        'fabricate': () => g.fabricate('hull_patch'),
+      };
+      for (const [order, give] of Object.entries(orders)) {
+        const r = give();
+        assert.equal(r?.ok, false, `${what}: "${order}" was accepted`);
+        // And refused for the RIGHT reason. Several of these would be refused
+        // anyway — an empty bench, a wrong department, a tank already dry —
+        // and a test that only checked `ok === false` would pass without the
+        // guard existing at all.
+        assert.match(r.error ?? r.reason ?? '', /command has ended/i,
+          `${what}: "${order}" was refused, but for the wrong reason: ${r.error ?? r.reason}`);
+      }
     }
   });
 });
