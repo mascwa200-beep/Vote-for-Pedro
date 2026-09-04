@@ -546,9 +546,42 @@ export class Character {
     add('shieldRegen', 1 + Math.max(0, this.mod('engineering')) * 0.03);
     add('stealthDetect', 1 + Math.max(0, this.mod('science')) * 0.06);
 
-    if (this.hasFeat('tactical_genius')) bump('critSeverity', 0.1);
+    // "Critical hits on a natural 19 or 20."
+    //
+    // The twenty-sided die is gone from gameplay — rules/resolve.js says why —
+    // but the thing that sentence is ABOUT is alive and is called `critChance`,
+    // which every ship starts with at 0.05: one twentieth, which is a natural
+    // 20. A crit range of 19 is two twentieths. So the feat's own declared
+    // number is what sets the bump, and `critRange` stops being a number
+    // printed on a card that nothing anywhere read.
+    const critRange = this.mechanic('critRange');
+    if (critRange) bump('critChance', Math.max(0, (21 - critRange) / 20 - 0.05));
+    // Read from the mechanic rather than written out a second time. This line
+    // used to be `if (this.hasFeat('tactical_genius')) bump('critSeverity', 0.1)`
+    // — the same 0.1 the feat declares, duplicated, so editing the feat table
+    // would have changed what the card promised and not what the ship did.
+    const critSeverity = this.mechanic('critSeverity');
+    if (critSeverity) bump('critSeverity', critSeverity);
     if (this.species.mechanic?.critBonus) bump('critChance', this.species.mechanic.critBonus * 0.1);
     return mods;
+  }
+
+  /**
+   * What this captain lends to ships that are not theirs.
+   *
+   * "Allied ships in your engagements gain your Tactics modifier" — the same
+   * two terms Tactics contributes to your own ship above, and no others. A
+   * Fleet Tactician makes the squadron shoot the way you do; they do not
+   * repair or scan the way your engineer and your science officer do, because
+   * your engineer and your science officer are not aboard those ships.
+   *
+   * @returns {object|null} mods to apply to an ally, or null if nothing to lend
+   */
+  allyMods() {
+    if (!this.mechanic('allyCommand')) return null;
+    const t = Math.max(0, this.mod('tactics'));
+    if (!t) return null;
+    return { accuracy: 1 + t * 0.02, critChance: t * 0.012 };
   }
 
   /** Reset per-engagement resources. */

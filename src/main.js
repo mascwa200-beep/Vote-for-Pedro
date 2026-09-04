@@ -2135,6 +2135,12 @@ class App {
         if (g.ship.ejectCore()) { audio.play('explosion'); haptic('explosion'); ack('engineering', 'Core away!'); }
         else audio.play('ui_deny');
         break;
+      case 'recover_core': {
+        const r = g.recoverCore();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('engineering', r.reason); }
+        break;
+      }
       case 'ability': {
         const ability = ABILITIES[order.ability];
         const officer = ability ? g.crew.officerFor(ability.id) : null;

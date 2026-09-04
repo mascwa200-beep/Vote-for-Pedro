@@ -18032,6 +18032,16 @@ class Ship {
     this.breaching = false;
     this.breachTimer = 0;
     this.coreEjected = false;
+    // Set from the character sheet by `Game.applyCharacter`; false on every
+    // hull that has nobody aboard who could put a core back in, which is all
+    // of them by default.
+    this.canRecoverCore = false;
+    this.coreRecoverable = false;
+    // "Once per commission": the allowance is recomputed from the sheet, and
+    // this is the half that must survive being recomputed. See
+    // `Game.applyCharacter`.
+    this.deathSaves = 0;
+    this.deathSavesSpent = 0;
     this.fires = 0;
     this.boarders = 0;
     this.adaptation = {};          // Borg: damage type -> resistance 0..0.9
@@ -18599,6 +18609,10 @@ class Ship {
     this.subsystems.warpcore = 0;
     this.power.cap = Math.round(this.cls.powerCap * 0.45);
     this.power.normalize();
+    // A core thrown clear is out there, and whether anybody aboard could put
+    // one back in is decided now, at the moment it goes — not later, when it
+    // would be a question about who happens to be on the bridge.
+    this.coreRecoverable = this.canRecoverCore === true;
 
     // Ejecting the core stops the antimatter going up. It does not put a hull
     // back together.
@@ -18612,8 +18626,61 @@ class Ship {
     return true;
   }
 
+  /**
+   * Go back for it.
+   *
+   * An ejected core does not evaporate; it is drifting a few thousand
+   * kilometres off the port quarter with its own transponder on it. Getting a
+   * tractor beam on a live antimatter assembly and walking it back into the
+   * housing is the part almost nobody can do, which is why this is a rank-two
+   * feat and not a button — `canRecoverCore` is set from the character sheet.
+   *
+   * It comes back cold. A third of a warp core is enough to leave the system
+   * and not enough to pretend nothing happened.
+   */
+  recoverCore() {
+    if (!this.coreEjected || !this.coreRecoverable || this.destroyed) return false;
+    this.coreEjected = false;
+    this.coreRecoverable = false;
+    this.subsystems.warpcore = 0.35;
+    this.power.cap = this.cls.powerCap;
+    this.power.normalize();
+    emit('ship:core-recovered', { ship: this });
+    return true;
+  }
+
   destroy(cause = 'destroyed') {
     if (this.destroyed) return;
+
+    // "Survivor — once per commission, survive what would destroy the ship at
+    // 1% hull." Here, in `destroy`, rather than at the one call site that
+    // seemed likeliest: the ship is destroyed by weapons fire, by a warp core
+    // breach, by a collision, by boarders taking the bridge and by a hull that
+    // fails while the core is clear, and a feat that only answered one of
+    // those would be a feat that worked when the game happened to kill you the
+    // expected way.
+    //
+    // Not with the crew gone. A hull miracle needs somebody alive to work it,
+    // and spending the one save of a commission on a ship nobody is standing
+    // in buys a single tick: `update` finds the crew at zero on the next pass
+    // and destroys it again, with the allowance now spent. Measured over sixty
+    // battles a Miranda could not win, the ship was lost 58 times to
+    // catastrophic hull failure and twice to total crew loss, so this costs
+    // the feat almost nothing and stops it being wasted on the one death it
+    // cannot prevent.
+    if (this.deathSaves > 0 && this.crew > 0) {
+      this.deathSaves--;
+      this.deathSavesSpent = (this.deathSavesSpent ?? 0) + 1;
+      this.hull = Math.max(1, this.maxHull * 0.01);
+      // Whatever was about to finish the ship is over. A save that left the
+      // breach counting down would buy the captain nine seconds.
+      this.breaching = false;
+      this.breachTimer = 0;
+      this.boarders = 0;
+      for (const f of FACINGS) this.shields[f] = 0;
+      emit('ship:deathsave', { ship: this, cause });
+      return;
+    }
     this.destroyed = true;
     this.destroyCause = cause;
     this.hull = 0;
@@ -18710,6 +18777,10 @@ class Ship {
     this.breaching = false;
     this.breachTimer = 0;
     this.coreEjected = false;
+    // A yard fits a new core. There is nothing left drifting to go back for,
+    // and leaving this set would let a captain "recover" a core they are
+    // already flying on.
+    this.coreRecoverable = false;
     this.power.cap = this.cls.powerCap;
     this.torpedoes = this.maxTorpedoes;
     this.antimatter = MAX_ANTIMATTER;
@@ -18733,6 +18804,11 @@ class Ship {
       // progress, and a save taken during one used to come back with the
       // intruders gone, the alert cleared and the crew no longer dying.
       fires: this.fires, boarders: this.boarders, coreEjected: this.coreEjected, mods: this.mods,
+      // Whether the core is still out there to go back for, and whether the
+      // one survival this commission gets has already been spent. Both are
+      // once-only allowances, and an allowance that comes back when the app is
+      // closed and reopened is not an allowance.
+      coreRecoverable: this.coreRecoverable, deathSavesSpent: this.deathSavesSpent,
       // A breach in progress is state, not decoration. Left out, a save taken
       // during the twenty seconds you have to eject the core came back as a
       // ship sitting at zero hull with no countdown running and no way to die
@@ -18781,6 +18857,8 @@ class Ship {
         ? clamp(data.antimatter, 0, MAX_ANTIMATTER) : MAX_ANTIMATTER,
       fires: data.fires ?? 0, boarders: Math.max(0, Number(data.boarders) || 0),
       coreEjected: data.coreEjected ?? false,
+      coreRecoverable: data.coreRecoverable === true,
+      deathSavesSpent: Math.max(0, Number(data.deathSavesSpent) || 0),
       breaching: data.breaching === true, breachTimer: Number(data.breachTimer) || 0,
       destroyed: data.destroyed === true,
       destroyCause: data.destroyCause ?? null,
@@ -18912,6 +18990,12 @@ const ABILITIES = {
   eject_core: {
     id: 'eject_core', dept: 'engineering', rank: 3, name: 'Eject Warp Core',
     order: 'Eject the core', cooldown: 0, duration: 0, special: 'eject',
+    // What the bridge thinks of the order. `risk` and `ethicalWeight` are the
+    // two numbers `Officer.reactTo` has always read, and until now the only
+    // one supplied was a `a.id === 'eject_core' ? 0.9 : 0.2` written at the
+    // call site — so this was the single order in the game anybody could have
+    // an opinion about, and even that opinion was thrown away unspoken.
+    risk: 0.9,
     say: 'Ejecting the core!',
   },
 
@@ -18993,12 +19077,25 @@ const ABILITIES = {
   stimulants: {
     id: 'stimulants', dept: 'medical', rank: 2, name: 'Stimulants',
     order: 'Break out the stimulants', cooldown: 60, duration: 20,
+    // A doctor is being asked to put the crew on drugs to get another hour out
+    // of them. A candid one says so first and then does it.
+    ethicalWeight: 0.35,
     mods: { repairRate: 1.4, accuracy: 1.08 },
     say: 'They will feel this tomorrow. Not today.',
   },
   back_to_duty: {
     id: 'back_to_duty', dept: 'medical', rank: 2, name: 'Back to Duty',
     order: 'Clear someone for duty', cooldown: 90, duration: 0,
+    // Signing an injured officer back onto a post they are not fit for.
+    //
+    // Deliberately UNDER 0.5, which is the line `reactTo` draws between an
+    // objection and a refusal. A chief medical officer refusing this is the
+    // most in-character thing in the franchise and it was tried at 0.55 — and
+    // the TOS doctor has the discipline and the candor for it, so a canon crew
+    // lost the use of a rank-two ability outright, every time, for the whole
+    // campaign. A doctor who says it is a bad idea and then does it is the
+    // right answer; a game feature one crew can never use is not.
+    ethicalWeight: 0.4,
     special: 'return_officer',
     say: 'I can give you one of them back. One.',
   },
@@ -19025,6 +19122,9 @@ const ABILITIES = {
   false_signal: {
     id: 'false_signal', dept: 'operations', rank: 2, name: 'False Signal',
     order: 'Put a false signal out', cooldown: 55, duration: 12,
+    // Deception under a Federation transponder. Legal, and not everybody at
+    // operations is comfortable with it.
+    ethicalWeight: 0.35,
     special: 'false_signal',
     say: 'Broadcasting a ship that is not there.',
   },
@@ -19115,11 +19215,21 @@ class Officer {
     return this.available && this.abilities.includes(abilityId) && (this.cooldowns[abilityId] ?? 0) <= 0;
   }
 
-  startCooldown(abilityId) {
+  /**
+   * @param {string} abilityId
+   * @param {number} haste  fraction FASTER the station recovers, not fraction
+   *   off the clock: 0.4 is "recover 40% faster", which is the same wait
+   *   divided by 1.4 rather than multiplied by 0.6. The difference matters at
+   *   the top end, where the two readings diverge sharply and only one of them
+   *   can ever reach zero.
+   */
+  startCooldown(abilityId, haste = 0) {
     const ability = ABILITIES[abilityId];
     if (!ability) return;
-    // Expertise shaves cooldowns.
-    this.cooldowns[abilityId] = ability.cooldown * (1 - (this.expertise - 50) * 0.003);
+    // Expertise shaves cooldowns; a captain the bridge would follow anywhere
+    // shaves them further.
+    this.cooldowns[abilityId] = ability.cooldown
+      * (1 - (this.expertise - 50) * 0.003) / (1 + Math.max(0, haste));
   }
 
   update(dt) {
@@ -23264,6 +23374,12 @@ const ORDERS = [
     help: 'Eject the warp core',
     test: (t) => /\beject (the )?(warp )?core\b/.test(t),
     build: () => ({ action: 'eject_core' }),
+  },
+  {
+    id: 'recover_core',
+    help: 'Recover the ejected warp core',
+    test: (t) => /\b(recover|retrieve|tractor|go back for|get)\b[^.]{0,20}\b(warp )?core\b/.test(t),
+    build: () => ({ action: 'recover_core' }),
   },
   {
     id: 'brace',
@@ -30693,8 +30809,32 @@ function applyAbility(game, officer, ability) {
 
   // The officer gets a say, and it is taken BEFORE the cooldown starts so the
   // reaction is to the order rather than to its aftermath.
-  const reaction = officer.reactTo({ risk: a.id === 'eject_core' ? 0.9 : 0.2 });
-  officer.startCooldown(a.id);
+  //
+  // The order's own weights, not `a.id === 'eject_core' ? 0.9 : 0.2`. That
+  // expression meant exactly one order in the game could draw an opinion, and
+  // `ethicalWeight` — the input `reactTo` needs to produce a refusal at all —
+  // was never supplied by anybody, so the refusal branch had never once run.
+  //
+  // "Inspiring Presence — officers never object." A captain the bridge would
+  // follow anywhere is not argued with; that is the whole of what the feat
+  // says and it had never been read.
+  const reaction = game.character?.mechanic('noObjection')
+    ? 'comply'
+    : officer.reactTo({ risk: a.risk ?? 0.2, ethicalWeight: a.ethicalWeight ?? 0 });
+
+  // A refusal is a refusal. `reactTo` has documented three answers since it was
+  // written and the third one did nothing: the order went through regardless,
+  // and the officer's line about it was then discarded too. Refused before the
+  // cooldown starts and before any effect lands, because an order that was not
+  // carried out must not cost the station its clock.
+  if (reaction === 'refuse') {
+    const line = officer.acknowledge('refuse');
+    game.pushLog(`${officer.name}: ${line}`, officer.station);
+    return { ok: false, reason: line, ability: a, officer, reaction, line };
+  }
+
+  // "Bridge officer cooldowns recover 40% faster."
+  officer.startCooldown(a.id, game.character?.mechanic('officerCooldown') ?? 0);
 
   if (a.mods) {
     // The specialists at the back of the bridge get a say in how long it holds.
@@ -30859,7 +30999,12 @@ function applyAbility(game, officer, ability) {
       break;
   }
 
-  const spoken = a.say ?? officer.acknowledge(reaction === 'comply' ? 'order' : reaction);
+  // `a.say ?? officer.acknowledge(...)`, it used to read — and every one of the
+  // twenty-six abilities carries a `say`, so the right-hand side was
+  // unreachable and an officer's objection was computed, stored on the result
+  // and then spoken as the cheerful canned line. The `say` is what COMPLIANCE
+  // sounds like. Anything else is said in the officer's own voice.
+  const spoken = reaction === 'comply' ? a.say : officer.acknowledge(reaction);
   game.pushLog(`${officer.name}: ${spoken}`, officer.station);
   return { ok: true, ability: a, officer, reaction, line: spoken, report };
 }
@@ -33682,9 +33827,42 @@ class Character {
     add('shieldRegen', 1 + Math.max(0, this.mod('engineering')) * 0.03);
     add('stealthDetect', 1 + Math.max(0, this.mod('science')) * 0.06);
 
-    if (this.hasFeat('tactical_genius')) bump('critSeverity', 0.1);
+    // "Critical hits on a natural 19 or 20."
+    //
+    // The twenty-sided die is gone from gameplay — rules/resolve.js says why —
+    // but the thing that sentence is ABOUT is alive and is called `critChance`,
+    // which every ship starts with at 0.05: one twentieth, which is a natural
+    // 20. A crit range of 19 is two twentieths. So the feat's own declared
+    // number is what sets the bump, and `critRange` stops being a number
+    // printed on a card that nothing anywhere read.
+    const critRange = this.mechanic('critRange');
+    if (critRange) bump('critChance', Math.max(0, (21 - critRange) / 20 - 0.05));
+    // Read from the mechanic rather than written out a second time. This line
+    // used to be `if (this.hasFeat('tactical_genius')) bump('critSeverity', 0.1)`
+    // — the same 0.1 the feat declares, duplicated, so editing the feat table
+    // would have changed what the card promised and not what the ship did.
+    const critSeverity = this.mechanic('critSeverity');
+    if (critSeverity) bump('critSeverity', critSeverity);
     if (this.species.mechanic?.critBonus) bump('critChance', this.species.mechanic.critBonus * 0.1);
     return mods;
+  }
+
+  /**
+   * What this captain lends to ships that are not theirs.
+   *
+   * "Allied ships in your engagements gain your Tactics modifier" — the same
+   * two terms Tactics contributes to your own ship above, and no others. A
+   * Fleet Tactician makes the squadron shoot the way you do; they do not
+   * repair or scan the way your engineer and your science officer do, because
+   * your engineer and your science officer are not aboard those ships.
+   *
+   * @returns {object|null} mods to apply to an ally, or null if nothing to lend
+   */
+  allyMods() {
+    if (!this.mechanic('allyCommand')) return null;
+    const t = Math.max(0, this.mod('tactics'));
+    if (!t) return null;
+    return { accuracy: 1 + t * 0.02, critChance: t * 0.012 };
   }
 
   /** Reset per-engagement resources. */
@@ -35020,7 +35198,7 @@ class Game {
   crossingWarningFor(dest) {
     if (!dest) return null;
     const shut = Object.entries(dest.requiresStanding ?? {})
-      .filter(([f, v]) => this.ledger.standingOf(f) < v && !this.perk(Game.PASSAGE_PERKS[f]));
+      .filter(([f, v]) => this.ledger.standingOf(f) < v && !this.mayBerthDespiteStanding(f));
     if (shut.length) {
       const [f, v] = shut[0];
       return `A word before we go, Captain: ${dest.name} will not open a berth to us. `
@@ -35358,6 +35536,21 @@ class Game {
     const eps = this.loadout.special('powerTransfer');
     if (eps) this.ship.power.transferRate = 55 + eps;
     if (this.character?.hasFeat('master_engineer')) this.ship.power.transferRate = 400;
+
+    // The other half of Master Engineer, which said "the warp core can be
+    // ejected and later recovered" and had never in its life recovered one.
+    // The flag lives on the SHIP for the same reason the cloak does: the feat
+    // is the captain's, the housing the core goes back into is not, and
+    // `takeCommandOf` builds a new hull.
+    this.ship.canRecoverCore = !!this.character?.mechanic('coreRecovery');
+
+    // "Survivor — once per commission, survive what would destroy the ship at
+    // 1% hull." Computed rather than assigned, because this method runs again
+    // every time anything touches the ship's modifiers — a refit, a perk, a
+    // promotion — and a save that came back each time a captain changed a
+    // console is not once per commission.
+    this.ship.deathSaves = Math.max(0,
+      (this.character?.mechanic('deathSave') ?? 0) - (this.ship.deathSavesSpent ?? 0));
 
     // And put the ship back where it was, proportionally. One rescale against
     // the maxima this method finally settled on, rather than one per source of
@@ -37142,6 +37335,22 @@ class Game {
         if (e.line) this.pushLog(e.line, 'comms');
       }
     }
+    // "Fleet Tactician — allied ships in your engagements gain your Tactics
+    // modifier." Applied here, after the escorts have been assembled, so it
+    // reaches every ally the same way: the freighter in a distress call, the
+    // Miranda a reputation bought, and the Galor that came along to watch us.
+    //
+    // Worth exactly as much as allies are, which since they became shootable
+    // is a great deal — a squadron that fires like you do also survives being
+    // fired at for longer.
+    const allyMods = this.character?.allyMods();
+    if (allyMods) {
+      for (const s of allies) s.applyMods(allyMods);
+      if (allies.length) {
+        this.pushLog('They are shooting off our firing solutions, Captain. Squadron doctrine.',
+          'tactical');
+      }
+    }
     // "Battle Doctrine Exchange — you always fire first in an engagement."
     //
     // Firing first has to MEAN something, and both sides opening with their
@@ -38097,6 +38306,10 @@ class Game {
     const ally = new Ship(inbound.classId, {
       name: inbound.name, faction: inbound.faction ?? 'federation',
     });
+    // The ship that answers a distress call is an allied ship in your
+    // engagement too, and it arrives after `startCombat` has already run.
+    const allyMods = this.character?.allyMods();
+    if (allyMods) ally.applyMods(allyMods);
     eng.allies.push(ally);
     eng.placeCombatants();
     eng.pushLog(`${ally.name} dropping out of warp, Captain. She is engaging.`, 'comms');
@@ -38159,6 +38372,28 @@ class Game {
     },
   ];
 
+  /**
+   * May we be berthed somewhere that asks for standing we do not have?
+   *
+   * One question, asked in the two places that ask it — `canDock`, which turns
+   * you away at the door, and `crossingWarningFor`, which warns you before you
+   * set the course that you are going to be. They had drifted into the same
+   * expression written out twice, which is how a captain ends up warned off a
+   * berth and then given it.
+   *
+   * "Diplomatic Immunity — you may enter any faction's home system regardless
+   * of standing." Regardless of STANDING, and that is the whole of it: this
+   * lifts the standing gate and nothing else. The Neutral Zone and the
+   * demilitarised zone stay shut, because those are not standing gates. They
+   * are treaty lines, and they close on a captain in perfect standing exactly
+   * as hard as on one in disgrace — same discipline as the note on
+   * `PASSAGE_PERKS` above.
+   */
+  mayBerthDespiteStanding(faction) {
+    if (this.perk(Game.PASSAGE_PERKS[faction])) return true;
+    return !!this.character?.mechanic('universalPassage');
+  }
+
   canDock() {
     const sys = this.location;
     // "Safe Harbour — every inhabited system will dock and repair you." A
@@ -38171,11 +38406,42 @@ class Game {
         // The gate is the whole of what these projects were selling, and it
         // was never lifted: a captain sworn to the Empire was still turned
         // away at Qo'noS for want of ten points of standing.
-        if (this.perk(Game.PASSAGE_PERKS[f]) || harbour) continue;
+        if (this.mayBerthDespiteStanding(f) || harbour) continue;
         if (this.ledger.standingOf(f) < v) return false;
       }
     }
     return true;
+  }
+
+  /**
+   * Come about and get the warp core back.
+   *
+   * The order half of `Ship.recoverCore`, and the place the four different
+   * noes live, because "nothing happened" is the worst answer a bridge can
+   * give. Not in a fight: putting a tractor beam on a loose antimatter
+   * assembly is a twenty-minute manoeuvre at station-keeping, and a ship doing
+   * it is not a ship that is manoeuvring. That is the cost of the feat as well
+   * as the flavour of it — eject to live, then win the fight before you can go
+   * back for it.
+   */
+  recoverCore() {
+    const s = this.ship;
+    if (!s.coreEjected) return { ok: false, reason: 'There is a core in the ship, Captain.' };
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, reason: 'Not while they are still shooting, Captain. We would be sitting still.' };
+    }
+    if (!s.coreRecoverable) {
+      return {
+        ok: false,
+        reason: 'It is gone, Captain. Nobody aboard could walk a live core back into that housing.',
+      };
+    }
+    if (!s.recoverCore()) return { ok: false, reason: 'We cannot, Captain.' };
+    this.pushLog(
+      'Core is back in the housing and holding, Captain. A third of normal and climbing.',
+      'engineering',
+    );
+    return { ok: true };
   }
 
   dock() {
@@ -39820,7 +40086,16 @@ function chairConsole(app) {
     // captain has an order for. Nothing anywhere used to report it, because
     // nothing could ever put one aboard.
     g.ship.boarders > 0 ? el('p', { class: 'muted', text: `${Math.ceil(g.ship.boarders)} intruder${Math.ceil(g.ship.boarders) > 1 ? 's' : ''} aboard. Say "repel boarders".` }) : null,
-    g.ship.coreEjected ? el('p', { class: 'muted', text: 'Warp core ejected. Impulse only until we dock.' }) : null,
+    g.ship.coreEjected ? el('p', {
+      class: 'muted',
+      // Two different sentences, because they are two different situations and
+      // the difference is a rank-two feat. A ship with a Master Engineer aboard
+      // has a core drifting off the quarter with a transponder on it; everyone
+      // else has an impulse ship and a long walk to a yard.
+      text: g.ship.coreRecoverable
+        ? 'Warp core ejected and still on our sensors. Say "recover the core" when they stop shooting.'
+        : 'Warp core ejected. Impulse only until we dock.',
+    }) : null,
   ], g.ship.hullPct < 0.4 ? 'danger' : g.ship.hullPct < 0.8 ? 'warn' : ''));
 
   // --- Missions here ---
@@ -44668,6 +44943,12 @@ class App {
         if (g.ship.ejectCore()) { audio.play('explosion'); haptic('explosion'); ack('engineering', 'Core away!'); }
         else audio.play('ui_deny');
         break;
+      case 'recover_core': {
+        const r = g.recoverCore();
+        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        else { audio.play('ui_deny'); ack('engineering', r.reason); }
+        break;
+      }
       case 'ability': {
         const ability = ABILITIES[order.ability];
         const officer = ability ? g.crew.officerFor(ability.id) : null;

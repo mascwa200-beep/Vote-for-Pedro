@@ -2671,6 +2671,150 @@ A second wrote `g.ship.repairAll?.() ?? g.ship.fullRepair?.()`, neither of which
 exists, and then cleared the map by hand as a fallback. It passed while proving
 nothing. The method is `restore()`.
 
+## 42. Six of the twelve feats did nothing at all
+
+A feat costs a promotion. There are twelve of them in `src/rules/character.js`,
+each one a sentence on a card and a `mechanic` object under it. Measured on
+`origin/main` at `a3f2de8`, through the game's own entry points:
+
+| feat | mechanic | what it did |
+| --- | --- | --- |
+| Field Commission | — | raises scores; works |
+| Xenobiologist | `advantageOn` | works |
+| Polymath | `extraProficiencies` | works |
+| Tactical Genius | `critRange`, `critSeverity` | half — severity hard-coded beside the table, `critRange` dead |
+| Master Engineer | `coreRecovery`, `instantPower` | half — power wired by a `hasFeat` check, recovery dead |
+| Living Legend | `repGain`, `enemyHesitation` | half |
+| Diplomatic Immunity | `universalPassage` | **nothing** |
+| Fleet Tactician | `allyCommand` | **nothing** |
+| Inspiring Presence | `officerCooldown`, `noObjection` | **nothing** |
+| Survivor | `deathSave` | **nothing** |
+| Unshakeable | `autoSave` | **nothing** |
+| Improviser | `noUntrainedPenalty` | **nothing** |
+
+The measurement that says it plainly: a Diplomatic Immunity captain — "you may
+enter any faction's home system regardless of standing" — standing in each of
+the four systems in the galaxy that ask for standing. `canDock()` returned
+false, false, false, false, and the helm still read out the warning that they
+would not open a berth. Master Engineer and Inspiring Presence produced
+byte-identical results with and without them.
+
+### Counting it honestly
+
+The **strict** count, which is the one to trust: a mechanic is READ when its
+VALUE is consumed somewhere outside the declaration tables — named to
+`mechanic()`, or read off a `mechanic` object by a method. On `origin/main`
+that is **14 of 61**. After this work it is **22 of 61**.
+
+A looser name-grep gives 24 and is wrong in both directions. It counts
+`autoSave` and `xpRate` as read because the *difficulty ladder* has fields by
+those names, which have nothing to do with the feats that declare them; and it
+misses `instantPower`, which is genuinely wired by a `hasFeat` check in
+`state.js`. This is the third time a count of these has been published and the
+first two were both wrong — §39 corrected "57 of 61 unread" to 12/49, and a
+later note said 15/46. **Say what the counting rule is, or do not publish the
+number.**
+
+### What each of the six now does
+
+**Diplomatic Immunity.** `mayBerthDespiteStanding(faction)` — one question,
+asked in the two places that ask it. `canDock`, which turns you away at the
+door, and `crossingWarningFor`, which warns you before you lay the course that
+you are going to be. They had drifted into the same expression written out
+twice, which is how a captain ends up warned off a berth and then given it.
+Qo'noS, Romulus and Cardassia Prime open. The Founders' Homeworld stays shut,
+because it has no dock in its facilities at all and the feat says *regardless
+of standing* — it lifts the standing gate and nothing else. The Neutral Zone
+and the DMZ stay shut for the same reason: those are treaty lines, and they
+close on a captain in perfect standing exactly as hard.
+
+**Tactical Genius.** "Critical hits on a natural 19 or 20." The twenty-sided
+die is gone from gameplay — the header of `rules/resolve.js` says why —
+but the thing that sentence is *about* is alive and is called `critChance`,
+which every ship starts with at **0.05**: one twentieth, which is a natural 20.
+A crit range of 19 is two twentieths. So the feat's own declared number sets the
+bump, `critRange` stops being decoration, and `critSeverity` is read off the
+table instead of being written out a second time beside it.
+
+**Master Engineer.** `Ship.recoverCore()`. An ejected core does not evaporate;
+it is drifting off the quarter with its own transponder on it. Getting a
+tractor beam on a live antimatter assembly and walking it back into the housing
+is the part almost nobody can do. It comes back **cold** — the warp core
+subsystem at 0.35 — and not in a fight, because a ship doing that manoeuvre is
+station-keeping. That is the cost of the feat as much as the flavour of it:
+eject to live, then win the fight before you can go back for it.
+
+**Fleet Tactician.** `Character.allyMods()` — the same two terms Tactics
+contributes to your own ship, and no others, applied to every ally: the
+freighter in a distress call, the Miranda a reputation bought, the Galor that
+came along to watch us, and the ship that answers mid-fight. It is worth
+exactly as much as allies are, which since #156 made them shootable is a great
+deal.
+
+**Survivor.** "Once per commission, survive what would destroy the ship at 1%
+hull." Put in `Ship.destroy` rather than at the likeliest call site, because a
+ship is destroyed by weapons fire, by a breach it ran out of time on, by losing
+its whole crew and by a hull that fails while the core is clear — a feat that
+answered one of those is a feat that works when the game happens to kill you
+the expected way. Not spent with the crew gone: over sixty battles a Miranda
+could not win, the ship was lost **58 times to catastrophic hull failure and
+twice to total crew loss**, and a save spent on the second buys one tick before
+`update` finds the crew at zero again. The allowance is *computed* from the
+sheet minus what has been spent, because `applyAllMods` runs again every time
+anything touches the ship's modifiers and a save refunded by changing a console
+is not once per commission.
+
+**Inspiring Presence.** Cooldowns divided by 1.4 — "recover 40% faster" is the
+same wait divided by 1.4, not multiplied by 0.6, and only one of those readings
+can reach zero. And officers never object.
+
+### The defect underneath the last one
+
+`noObjection` could not mean anything until this was fixed. Every ability
+computed the officer's reaction:
+
+    const reaction = officer.reactTo({ risk: a.id === 'eject_core' ? 0.9 : 0.2 });
+
+and then spoke it:
+
+    const spoken = a.say ?? officer.acknowledge(reaction === 'comply' ? 'order' : reaction);
+
+All **twenty-six** abilities carry a `say`. The right-hand side of that `??`
+had never once evaluated. An officer's objection was computed, stored on the
+result object, and then delivered as the cheerful canned line — and a *refusal*,
+the third answer `reactTo` has documented since it was written, executed the
+order anyway.
+
+Three fixes. The `say` is what compliance sounds like; anything else is said in
+the officer's own voice. A refusal is refused before the cooldown starts and
+before any effect lands, because an order that was not carried out must not
+cost the station its clock. And the weights come off the ability rather than
+from `a.id === 'eject_core' ? 0.9 : 0.2` — `ethicalWeight`, which is the input
+`reactTo` needs to refuse at all, had never been supplied by anybody.
+
+Four abilities now carry weights: Eject the Core (`risk: 0.9`), Stimulants and
+False Signal (`ethicalWeight: 0.35`), Back to Duty (`0.4`).
+
+**Back to Duty was tried at 0.55** — over the refusal line — because a chief
+medical officer who will not clear an unfit officer for duty is the most
+in-character refusal in the franchise. The TOS doctor has the discipline and
+the candor for it, so a canon crew lost the use of a rank-two ability outright,
+for the whole campaign, in every seed. It sits at 0.4 and draws an objection
+instead. A doctor who says it is a bad idea and then does it is the right
+answer; a game feature one crew can never use is not.
+
+### The two left alone, and why
+
+`autoSave` (Unshakeable) and `noUntrainedPenalty` (Improviser) are phrased
+against machinery the game does not have. `dice.js` exports `save()` and
+nothing calls it; there is no untrained *penalty* anywhere — an untrained
+ability simply lacks the proficiency bonus, so there is no disadvantage for the
+feat to remove. Both need a design decision about what the underlying mechanic
+means before any code, and guessing is how a project comes to do something
+other than what its cards say. Same shelf as `ignorePressure`,
+`ignoreOutnumbered` and `outnumberedAdvantage` in §40.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

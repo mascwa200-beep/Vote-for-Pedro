@@ -51,8 +51,32 @@ export function applyAbility(game, officer, ability) {
 
   // The officer gets a say, and it is taken BEFORE the cooldown starts so the
   // reaction is to the order rather than to its aftermath.
-  const reaction = officer.reactTo({ risk: a.id === 'eject_core' ? 0.9 : 0.2 });
-  officer.startCooldown(a.id);
+  //
+  // The order's own weights, not `a.id === 'eject_core' ? 0.9 : 0.2`. That
+  // expression meant exactly one order in the game could draw an opinion, and
+  // `ethicalWeight` — the input `reactTo` needs to produce a refusal at all —
+  // was never supplied by anybody, so the refusal branch had never once run.
+  //
+  // "Inspiring Presence — officers never object." A captain the bridge would
+  // follow anywhere is not argued with; that is the whole of what the feat
+  // says and it had never been read.
+  const reaction = game.character?.mechanic('noObjection')
+    ? 'comply'
+    : officer.reactTo({ risk: a.risk ?? 0.2, ethicalWeight: a.ethicalWeight ?? 0 });
+
+  // A refusal is a refusal. `reactTo` has documented three answers since it was
+  // written and the third one did nothing: the order went through regardless,
+  // and the officer's line about it was then discarded too. Refused before the
+  // cooldown starts and before any effect lands, because an order that was not
+  // carried out must not cost the station its clock.
+  if (reaction === 'refuse') {
+    const line = officer.acknowledge('refuse');
+    game.pushLog(`${officer.name}: ${line}`, officer.station);
+    return { ok: false, reason: line, ability: a, officer, reaction, line };
+  }
+
+  // "Bridge officer cooldowns recover 40% faster."
+  officer.startCooldown(a.id, game.character?.mechanic('officerCooldown') ?? 0);
 
   if (a.mods) {
     // The specialists at the back of the bridge get a say in how long it holds.
@@ -217,7 +241,12 @@ export function applyAbility(game, officer, ability) {
       break;
   }
 
-  const spoken = a.say ?? officer.acknowledge(reaction === 'comply' ? 'order' : reaction);
+  // `a.say ?? officer.acknowledge(...)`, it used to read — and every one of the
+  // twenty-six abilities carries a `say`, so the right-hand side was
+  // unreachable and an officer's objection was computed, stored on the result
+  // and then spoken as the cheerful canned line. The `say` is what COMPLIANCE
+  // sounds like. Anything else is said in the officer's own voice.
+  const spoken = reaction === 'comply' ? a.say : officer.acknowledge(reaction);
   game.pushLog(`${officer.name}: ${spoken}`, officer.station);
   return { ok: true, ability: a, officer, reaction, line: spoken, report };
 }

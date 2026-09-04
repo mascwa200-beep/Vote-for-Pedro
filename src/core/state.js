@@ -462,7 +462,7 @@ export class Game {
   crossingWarningFor(dest) {
     if (!dest) return null;
     const shut = Object.entries(dest.requiresStanding ?? {})
-      .filter(([f, v]) => this.ledger.standingOf(f) < v && !this.perk(Game.PASSAGE_PERKS[f]));
+      .filter(([f, v]) => this.ledger.standingOf(f) < v && !this.mayBerthDespiteStanding(f));
     if (shut.length) {
       const [f, v] = shut[0];
       return `A word before we go, Captain: ${dest.name} will not open a berth to us. `
@@ -800,6 +800,21 @@ export class Game {
     const eps = this.loadout.special('powerTransfer');
     if (eps) this.ship.power.transferRate = 55 + eps;
     if (this.character?.hasFeat('master_engineer')) this.ship.power.transferRate = 400;
+
+    // The other half of Master Engineer, which said "the warp core can be
+    // ejected and later recovered" and had never in its life recovered one.
+    // The flag lives on the SHIP for the same reason the cloak does: the feat
+    // is the captain's, the housing the core goes back into is not, and
+    // `takeCommandOf` builds a new hull.
+    this.ship.canRecoverCore = !!this.character?.mechanic('coreRecovery');
+
+    // "Survivor — once per commission, survive what would destroy the ship at
+    // 1% hull." Computed rather than assigned, because this method runs again
+    // every time anything touches the ship's modifiers — a refit, a perk, a
+    // promotion — and a save that came back each time a captain changed a
+    // console is not once per commission.
+    this.ship.deathSaves = Math.max(0,
+      (this.character?.mechanic('deathSave') ?? 0) - (this.ship.deathSavesSpent ?? 0));
 
     // And put the ship back where it was, proportionally. One rescale against
     // the maxima this method finally settled on, rather than one per source of
@@ -2584,6 +2599,22 @@ export class Game {
         if (e.line) this.pushLog(e.line, 'comms');
       }
     }
+    // "Fleet Tactician — allied ships in your engagements gain your Tactics
+    // modifier." Applied here, after the escorts have been assembled, so it
+    // reaches every ally the same way: the freighter in a distress call, the
+    // Miranda a reputation bought, and the Galor that came along to watch us.
+    //
+    // Worth exactly as much as allies are, which since they became shootable
+    // is a great deal — a squadron that fires like you do also survives being
+    // fired at for longer.
+    const allyMods = this.character?.allyMods();
+    if (allyMods) {
+      for (const s of allies) s.applyMods(allyMods);
+      if (allies.length) {
+        this.pushLog('They are shooting off our firing solutions, Captain. Squadron doctrine.',
+          'tactical');
+      }
+    }
     // "Battle Doctrine Exchange — you always fire first in an engagement."
     //
     // Firing first has to MEAN something, and both sides opening with their
@@ -3539,6 +3570,10 @@ export class Game {
     const ally = new Ship(inbound.classId, {
       name: inbound.name, faction: inbound.faction ?? 'federation',
     });
+    // The ship that answers a distress call is an allied ship in your
+    // engagement too, and it arrives after `startCombat` has already run.
+    const allyMods = this.character?.allyMods();
+    if (allyMods) ally.applyMods(allyMods);
     eng.allies.push(ally);
     eng.placeCombatants();
     eng.pushLog(`${ally.name} dropping out of warp, Captain. She is engaging.`, 'comms');
@@ -3601,6 +3636,28 @@ export class Game {
     },
   ];
 
+  /**
+   * May we be berthed somewhere that asks for standing we do not have?
+   *
+   * One question, asked in the two places that ask it — `canDock`, which turns
+   * you away at the door, and `crossingWarningFor`, which warns you before you
+   * set the course that you are going to be. They had drifted into the same
+   * expression written out twice, which is how a captain ends up warned off a
+   * berth and then given it.
+   *
+   * "Diplomatic Immunity — you may enter any faction's home system regardless
+   * of standing." Regardless of STANDING, and that is the whole of it: this
+   * lifts the standing gate and nothing else. The Neutral Zone and the
+   * demilitarised zone stay shut, because those are not standing gates. They
+   * are treaty lines, and they close on a captain in perfect standing exactly
+   * as hard as on one in disgrace — same discipline as the note on
+   * `PASSAGE_PERKS` above.
+   */
+  mayBerthDespiteStanding(faction) {
+    if (this.perk(Game.PASSAGE_PERKS[faction])) return true;
+    return !!this.character?.mechanic('universalPassage');
+  }
+
   canDock() {
     const sys = this.location;
     // "Safe Harbour — every inhabited system will dock and repair you." A
@@ -3613,11 +3670,42 @@ export class Game {
         // The gate is the whole of what these projects were selling, and it
         // was never lifted: a captain sworn to the Empire was still turned
         // away at Qo'noS for want of ten points of standing.
-        if (this.perk(Game.PASSAGE_PERKS[f]) || harbour) continue;
+        if (this.mayBerthDespiteStanding(f) || harbour) continue;
         if (this.ledger.standingOf(f) < v) return false;
       }
     }
     return true;
+  }
+
+  /**
+   * Come about and get the warp core back.
+   *
+   * The order half of `Ship.recoverCore`, and the place the four different
+   * noes live, because "nothing happened" is the worst answer a bridge can
+   * give. Not in a fight: putting a tractor beam on a loose antimatter
+   * assembly is a twenty-minute manoeuvre at station-keeping, and a ship doing
+   * it is not a ship that is manoeuvring. That is the cost of the feat as well
+   * as the flavour of it — eject to live, then win the fight before you can go
+   * back for it.
+   */
+  recoverCore() {
+    const s = this.ship;
+    if (!s.coreEjected) return { ok: false, reason: 'There is a core in the ship, Captain.' };
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, reason: 'Not while they are still shooting, Captain. We would be sitting still.' };
+    }
+    if (!s.coreRecoverable) {
+      return {
+        ok: false,
+        reason: 'It is gone, Captain. Nobody aboard could walk a live core back into that housing.',
+      };
+    }
+    if (!s.recoverCore()) return { ok: false, reason: 'We cannot, Captain.' };
+    this.pushLog(
+      'Core is back in the housing and holding, Captain. A third of normal and climbing.',
+      'engineering',
+    );
+    return { ok: true };
   }
 
   dock() {

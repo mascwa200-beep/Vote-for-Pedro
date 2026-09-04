@@ -287,7 +287,16 @@ export function chairConsole(app) {
     // captain has an order for. Nothing anywhere used to report it, because
     // nothing could ever put one aboard.
     g.ship.boarders > 0 ? el('p', { class: 'muted', text: `${Math.ceil(g.ship.boarders)} intruder${Math.ceil(g.ship.boarders) > 1 ? 's' : ''} aboard. Say "repel boarders".` }) : null,
-    g.ship.coreEjected ? el('p', { class: 'muted', text: 'Warp core ejected. Impulse only until we dock.' }) : null,
+    g.ship.coreEjected ? el('p', {
+      class: 'muted',
+      // Two different sentences, because they are two different situations and
+      // the difference is a rank-two feat. A ship with a Master Engineer aboard
+      // has a core drifting off the quarter with a transponder on it; everyone
+      // else has an impulse ship and a long walk to a yard.
+      text: g.ship.coreRecoverable
+        ? 'Warp core ejected and still on our sensors. Say "recover the core" when they stop shooting.'
+        : 'Warp core ejected. Impulse only until we dock.',
+    }) : null,
   ], g.ship.hullPct < 0.4 ? 'danger' : g.ship.hullPct < 0.8 ? 'warn' : ''));
 
   // --- Missions here ---
