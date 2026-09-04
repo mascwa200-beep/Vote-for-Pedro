@@ -9,7 +9,10 @@ import { Ship, FACINGS, SHIELD_OVERCHARGE } from '../sim/ship.js';
 import { Crew, Officer, ABILITIES, ABILITY_LIST } from '../sim/officers.js';
 import { CaptainProgress, combatXP, SKILLS } from '../sim/skills.js';
 import { Loadout, startingLoadout, CONSOLES } from '../sim/loadout.js';
-import { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } from '../sim/combat.js';
+import {
+  Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES, romanNumeral, stripSuffix,
+  MAX_FORCE_HULLS,
+} from '../sim/combat.js';
 import { buildArena } from '../sim/arena.js';
 import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } from '../sim/away.js';
 import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
@@ -75,8 +78,12 @@ import { CampaignClock, absenceReport, COMMISSION_DAYS } from '../campaign/clock
 /**
  * Ceiling on hostiles in one engagement. Beyond this the tactical display
  * stops being readable on a phone, whatever the difficulty asks for.
+ *
+ * One constant, in `sim/combat.js`, because there are now two places that can
+ * ask for too many hulls: the difficulty setting adding reinforcements, and a
+ * force costed to a strength that would rather have nine Orion raiders.
  */
-const MAX_HOSTILES = 6;
+const MAX_HOSTILES = MAX_FORCE_HULLS;
 
 /**
  * How much lived time the tick loop banks before spending it on the ship.
@@ -115,12 +122,6 @@ const PLACE_TEMPLATES = new Set(['colony_rescue', 'diplomatic_landing', 'covert_
  * four, which is where the old number landed for every voyage at once.
  */
 const INTERCEPT_PER_HOUR = 0.001;
-
-/** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
-const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
-
-const ROMAN = ['', '', 'II', 'III', 'IV', 'V', 'VI'];
-const romanNumeral = (n) => ROMAN[n] ?? String(n);
 
 /** Events the Idealist trait doubles reputation for. */
 const PEACEFUL_EVENTS = new Set([
@@ -720,6 +721,11 @@ export class Game {
       quietInHostileSpace: this.perk('reduced_detection'),
       halveHostile: this.perk('route_intel') && this.galaxy.visited.has(systemId),
       distressSooner: this.perk('folk_hero'),
+      // Not a perk, and here anyway for the reason above: a garrison sizes its
+      // answer to what it can see coming, and the three call sites have to
+      // agree about that too. A fourth that forgets it gets a patrol built for
+      // nobody in particular.
+      player: this.ship,
     };
   }
 

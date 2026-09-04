@@ -13,7 +13,7 @@ import { emit } from '../core/events.js';
 import { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } from './ship.js';
 import { chooseAction } from './ai.js';
 import { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } from './arena.js';
-import { assessEngagement } from './assess.js';
+import { assessEngagement, classPower, forcePower } from './assess.js';
 import { clamp, wrapDegrees, finite } from '../core/num.js';
 
 export const WEAPON_RANGE = {
@@ -1146,28 +1146,146 @@ export const HOSTILE_NAMES = {
   independent: ['SS Vico', 'SS Odin', 'SS Norkova'],
 };
 
-/** The nth ship of a faction in one engagement. */
+/**
+ * The nth ship of a faction in one engagement.
+ *
+ * The lists are short — three Orion names, two Tholian — and a patrol is no
+ * longer one or two hulls, so the wrap has to say which one it is. Four raiders
+ * used to be Syndicate Raider, Green Wind, Profit Margin and Syndicate Raider
+ * again, which the tactical display then offered as two identical targets.
+ */
 export function hostileName(factionId, index = 0) {
   const list = HOSTILE_NAMES[factionId] ?? ['Unknown Vessel'];
-  return list[index % list.length];
+  const name = list[index % list.length];
+  const lap = Math.floor(index / list.length);
+  return lap ? `${name} ${romanNumeral(lap + 1)}` : name;
 }
+
+/**
+ * II, III… for a hull whose name has come round again.
+ *
+ * Lives here rather than in `core/state.js`, which had the only copy, because
+ * there are now two places that run out of names: reinforcements added by the
+ * difficulty setting, and a force built to a strength that wants more hulls
+ * than the faction has names for. Both have to agree, or `stripSuffix` — which
+ * matches `I{1,3}|IV|V|VI` — silently stops stripping.
+ */
+const ROMAN = ['', '', 'II', 'III', 'IV', 'V', 'VI'];
+export const romanNumeral = (n) => ROMAN[n] ?? String(n);
+
+/** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
+export const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
+
+/**
+ * Never more hulls than the tactical display can stay readable with.
+ *
+ * The same six `Game.scaleHostileFleet` uses, and for the same reason. Kept
+ * here as well because a force is now built to a WEIGHT, and the arithmetic
+ * that turns a weight into hulls will happily ask for nine Orion raiders.
+ */
+export const MAX_FORCE_HULLS = 6;
+
+/**
+ * How often a force is drawn without regard to what the situation was worth.
+ *
+ * One encounter in twelve. High enough that a long commission meets a capital
+ * ship; low enough that meeting one is a thing that happened rather than a
+ * Tuesday.
+ */
+export const CAPITAL_CHANCE = 0.08;
 
 /**
  * A hostile force of a given strength, drawn from a pool of classes.
  *
- * Written when combat was, and called from nowhere for the whole life of the
- * project: `world/encounters.js` grew its own copy rather than importing this
- * one. It is the single builder now.
+ * `strength` is in Constitutions (see `classPower`), not in hulls. That is the
+ * whole change: for the life of the project this argument was named `strength`,
+ * documented as strength, and used as a count — `rng.int(1, 2)` hulls picked
+ * uniformly from a pool spanning a scout to a battleship.
+ *
+ * Measured through `rollEncounter`, one encounter kind in one system, four
+ * hundred rolls of each, against a Constitution:
+ *
+ *     Qo'noS      "A Klingon patrol"    ratio 0.05 .. 2.44  — 45x
+ *                 worst: two Negh'Vars (hopeless, dead every time)
+ *                 best:  one Bird-of-Prey (favourable, free)
+ *     Rigel       "An Orion patrol"     ratio 1.32 .. 10.72
+ *                 worst: two Marauders (still in the player's favour)
+ *                 best:  one Orion raider (no contest)
+ *
+ * Identical text both times. The captain could not tell a walkover from a
+ * funeral, and 47% of Klingon patrols were funerals.
+ *
+ * How it builds: pick a lead from the classes that could plausibly make up a
+ * force this size — nothing whose single hull outweighs the whole force by more
+ * than `overshoot` — then add escorts, each lighter than the lead, for as long
+ * as adding one brings the force CLOSER to the target. The square law does the
+ * rest: `n` identical hulls are worth n² of one, so light classes arrive in
+ * packs and capitals arrive alone, without either being written down anywhere.
+ *
+ *     strength   klingon                       orion
+ *     0.6        a Bird-of-Prey                three raiders
+ *     1.0        two Birds-of-Prey, or a D7    three raiders
+ *     1.6        a D7, or a Vor'cha            four raiders
+ *     2.5        a Vor'cha, or two K't'ingas   five raiders
+ *     4.0        a Vor'cha and a Bird-of-Prey  six raiders
+ *                or a Negh'Var, alone
+ *
+ * The Orion raider's own description says "Dangerous in threes, worthless
+ * alone." It is now possible for the game to field three.
  */
 export function buildHostiles(rng, factionId, strength = 1, classPool = []) {
-  const count = Math.max(1, Math.round(strength));
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    const cls = rng.pick(classPool);
-    if (!cls) break;
-    out.push(new Ship(cls, { name: hostileName(factionId, i), faction: factionId }));
+  const classes = pickForce(rng, strength, classPool);
+  return classes.map((cls, i) => new Ship(cls, {
+    name: hostileName(factionId, i), faction: factionId,
+  }));
+}
+
+/**
+ * The classes that make up a force of the given strength.
+ *
+ * Split out from `buildHostiles` so it can be costed and asserted on without
+ * building ships, and so the encounter text can say what is coming.
+ */
+export function pickForce(rng, strength, classPool = [], {
+  overshoot = 1.6, capitalChance = CAPITAL_CHANCE,
+} = {}) {
+  const armed = [...new Set(classPool)].filter((c) => classPower(c) > 0);
+  // A convoy of freighters is a pool with no fighting power in it. It is still
+  // a thing that turns up, so it comes back as one hull rather than as nothing.
+  if (!armed.length) return classPool.slice(0, 1);
+
+  const want = Math.max(0.01, strength);
+  // Sometimes what turns up is not what the situation warranted. Costing every
+  // force to the target made a Borg cube unreachable — the Borg pool is two
+  // capitals and the deepspace garrison is worth 0.2 of a Constitution, so the
+  // affordability rule fielded a bioship every time and the cube, which is the
+  // game's whole illustration of a fight you run from, stopped existing outside
+  // scripted missions. It also left a Sovereign with nothing to fear anywhere
+  // on the map: 1% of deep-space encounters rated dangerous and none worse.
+  //
+  // This is the encounter that is genuinely out of scale, and it is rare on
+  // purpose. The captain is not ambushed by it in the dark: the bridge weighs
+  // the fight and says so before a shot is fired.
+  const wild = rng.chance(capitalChance);
+  const affordable = wild ? armed : armed.filter((c) => classPower(c) <= want * overshoot);
+  const lightest = armed.reduce((a, b) => (classPower(a) <= classPower(b) ? a : b));
+  const eligible = affordable.length ? affordable : [lightest];
+  // Weighted by the pool's own repetition, because that is how the fleet tables
+  // say which hull is common: the Klingon list names bird_of_prey twice.
+  const weighted = classPool.filter((c) => eligible.includes(c));
+  const lead = rng.pick(weighted.length ? weighted : eligible);
+
+  // An escort is lighter than the ship it escorts. Two Negh'Vars is not a
+  // patrol with a big flagship, it is a war.
+  const escorts = armed.filter((c) => classPower(c) <= classPower(lead));
+  const force = [lead];
+  while (force.length < MAX_FORCE_HULLS) {
+    const err = Math.abs(forcePower(force) - want);
+    const better = escorts.filter((c) => Math.abs(forcePower([...force, c]) - want) < err);
+    if (!better.length) break;
+    force.push(rng.pick(better));
   }
-  return out;
+  return force;
 }
 
 export { FACINGS, facingForBearing };
