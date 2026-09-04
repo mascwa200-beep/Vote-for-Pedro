@@ -29,7 +29,7 @@
 
 import { vec3 } from './math.js';
 import {
-  saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck,
+  saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck, portRow,
 } from './mesh.js';
 
 /**
@@ -388,6 +388,32 @@ export const FEDERATION_FORMS = {
       radius: high * 0.24, segments: seg(8), rings: 5,
       color: p.dish ?? p.glow, glow: 0.55,
     });
+
+    // Ports along the top of the wedge, as boxes rather than a belt.
+    //
+    // This form was the last one in the fleet with no lit port on it at all,
+    // and it needs them least and most at once: a Defiant is famously a
+    // warship with almost no habitable hull, and it is also the ship a captain
+    // most often flies. The body is a swept wedge whose upper surface is flat,
+    // so a ring about the x axis cannot lie on it — `portRow` can.
+    if (b.windows !== false) {
+      mirrored(mb, (m) => {
+        portRow(m, {
+          from: vec3(-bl * 0.1, bh * 0.54, bw * 0.16),
+          to: vec3(bl * 0.34, bh * 0.54, bw * 0.1),
+          count: b.windowCount ?? 3,
+          size: high * 0.09,
+        });
+      });
+      // And the forward viewport, which on both classes is the one window
+      // anybody outside would actually notice.
+      box(mb, {
+        center: vec3(bl * 0.44, bh * 0.34, 0),
+        size: vec3(bl * 0.05, high * 0.1, bw * 0.26),
+        color: [1.0, 0.93, 0.72],
+        glow: 1,
+      });
+    }
 
     // Part of the body rather than hung off it, which is the whole point of
     // the class — but riding its upper surface, not buried inside it. Sunk

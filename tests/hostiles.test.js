@@ -173,13 +173,11 @@ describe('a ship with a crew has lights on', () => {
   });
 
   test('and the hulls that still have none are named, not forgotten', () => {
-    // The omission, asserted. Two forms still build a ship with nobody
-    // aboard, and both have an argument: `compact` is a Defiant and a runabout,
-    // a warship with almost no habitable hull and a four-berth shuttle, and
-    // `cube` is the Borg, who do not fit windows. When either gains ports this
-    // list shrinks and this test says so, which is the point of writing it
-    // down. `hauler`, which is not on this list, is a civilian freighter and
-    // has had them all along.
+    // The omission, asserted — and now it is an omission on purpose. The two
+    // forms left with no lit port are the two that should not have any: the
+    // Borg do not fit windows, and a bioship has one occupant, no decks, and
+    // nothing behind its hull to light. Every crewed hull in the game has them.
+    // If either of these gains ports this list shrinks and the test says so.
     const dark = [];
     for (const id of Object.keys(BLUEPRINTS)) {
       const m = mesh(id);
@@ -188,7 +186,7 @@ describe('a ship with a crew has lights on', () => {
       if (ports === 0) dark.push(BLUEPRINTS[id].form);
     }
     assert.deepEqual([...new Set(dark)].sort(),
-      ['compact', 'cube'],
+      ['bioship', 'cube'],
       'the set of forms that build a ship with nobody aboard has changed');
   });
 
@@ -389,6 +387,55 @@ describe('a hull is one object, not several near each other', () => {
     assert.deepEqual(gapped, [], 'these hulls have a horizontal slice with no ship in it');
   });
 
+  test('and what is bolted to a hull reaches its surface', () => {
+    // The Borg cube's own version of #134. Its surface structures were placed
+    // by a trigonometric walk at 0.36 of the half-extent in x and y — which is
+    // INSIDE the cube — so ten of the fourteen were paid for and could not be
+    // seen from anywhere. Measured, 22% of the hull's faces were buried.
+    //
+    // Measured per PIECE, not per face: a box bolted to a hull has a back face
+    // against it that is hidden and is meant to be, and asking every triangle
+    // to reach the surface fails on ninety-six of those. Pieces are the
+    // mesh's connected components, found by union-find over quantised vertex
+    // positions — every box is one, because nothing here shares vertices with
+    // anything else.
+    const m = mesh('borg_cube');
+    const f = m.stride / 4;
+    const key = (i) => [0, 1, 2].map((k) => m.data[i * f + k].toFixed(5)).join(',');
+    const parent = new Map();
+    const find = (a) => {
+      while (parent.get(a) !== a) { parent.set(a, parent.get(parent.get(a))); a = parent.get(a); }
+      return a;
+    };
+    const union = (a, b) => {
+      if (!parent.has(a)) parent.set(a, a);
+      if (!parent.has(b)) parent.set(b, b);
+      const ra = find(a); const rb = find(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+    for (let t = 0; t < m.vertexCount; t += 3) {
+      const ks = [key(t), key(t + 1), key(t + 2)];
+      union(ks[0], ks[1]);
+      union(ks[1], ks[2]);
+    }
+    let half = 0;
+    for (let i = 0; i < m.vertexCount; i++) {
+      for (let k = 0; k < 3; k++) half = Math.max(half, Math.abs(m.data[i * f + k]));
+    }
+    const reach = new Map();
+    for (let i = 0; i < m.vertexCount; i++) {
+      const r = find(key(i));
+      let d = 0;
+      for (let k = 0; k < 3; k++) d = Math.max(d, Math.abs(m.data[i * f + k]));
+      reach.set(r, Math.max(reach.get(r) ?? 0, d));
+    }
+    const pieces = [...reach.values()];
+    assert.ok(pieces.length > 20, `the cube came apart into ${pieces.length} pieces`);
+    const sunk = pieces.filter((d) => d < half * 0.9).length;
+    assert.equal(sunk, 0,
+      `${sunk} of ${pieces.length} pieces of a Borg cube never reach its surface`);
+  });
+
   test('and the measurement can see one that does', () => {
     // The control, built rather than borrowed: with the fleet clean there is
     // nothing left in it to prove this can fail, and an assertion with nothing
@@ -451,7 +498,7 @@ describe('every hull is the same ship on both sides of its own centreline', () =
     // mounted on it.
     const bad = [];
     for (const id of Object.keys(BLUEPRINTS)) {
-      if (BLUEPRINTS[id].form === 'cube') continue;
+      if (BLUEPRINTS[id].form === 'cube') continue;   // see the next test
       const off = lopsided(id);
       if (off > 0.02) bad.push(`${id} ${(off * 100).toFixed(1)}% (${BLUEPRINTS[id].form})`);
     }
@@ -464,10 +511,14 @@ describe('every hull is the same ship on both sides of its own centreline', () =
     // place in the fleet where an irregular hull is the right answer: a Borg
     // vessel is accreted, not laid down. Holding it to the rule above would
     // mean making the Borg tidy.
-    for (const id of ['borg_cube', 'bioship']) {
-      assert.ok(lopsided(id) > 0.1,
-        `${id} has become symmetrical, so the exception above is now dead code`);
-    }
+    assert.ok(lopsided('borg_cube') > 0.1,
+      'the Borg cube has become symmetrical, so the exception above is dead code');
+    // And the exception is exactly one hull wide. The bioship used to be built
+    // by this form too and inherited the irregularity along with everything
+    // else about a cube; it is a grown thing now, and grown things are
+    // bilaterally symmetrical.
+    assert.ok(lopsided('bioship') < 0.02,
+      'the bioship is still built with a cube\'s scattered clutter');
   });
 
   test('and the measurement can tell the two apart', () => {
