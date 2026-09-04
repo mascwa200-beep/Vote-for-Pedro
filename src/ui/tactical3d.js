@@ -25,7 +25,7 @@ import {
 import { Renderer } from '../gfx/gl.js';
 import { hullMesh, hullScale, paletteFor } from '../gfx/blueprint.js';
 import {
-  starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, VOLUME,
+  starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, VOLUME,
 } from '../gfx/scene.js';
 import { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } from '../gfx/vista.js';
 import { drawCombatEffects } from '../gfx/effects.js';
@@ -459,6 +459,10 @@ export class TacticalView3D {
 
     this.drawEnvironment();
     if (this.vistaSource) this.drawVista(dt);
+    // Rock before ships, gas after: solid geometry wants the depth buffer
+    // filled behind it, and a translucent shell wants everything it is meant
+    // to be in front of already drawn.
+    this.drawTerrain(engagement.arena, 'solid');
     for (const ship of this.lastShips) {
       // Your own hull is not on your own viewscreen. The camera is standing
       // where the bridge is; there is nothing in front of it but space.
@@ -467,6 +471,7 @@ export class TacticalView3D {
       this.drawShip(ship, ship === engagement.target);
     }
     this.drawEffects(engagement);
+    this.drawTerrain(engagement.arena, 'cloud');
 
     this.stats.drawCalls = this.renderer.drawCalls;
     this.stats.triangles = this.renderer.triangles;
@@ -647,6 +652,63 @@ export class TacticalView3D {
       alpha: 0.55,
       tint: [1, 1, 1],
     });
+  }
+
+  /**
+   * The terrain of the engagement, as geometry.
+   *
+   * One draw per feature, which is the same budget a ship costs — sixteen
+   * rocks is sixteen draws, and the measurement in the hull budget says this
+   * renderer is bound by draw calls. That is the ceiling on how much terrain
+   * a fight can have, and it is why `ARENA_KINDS` counts features in the
+   * teens rather than the hundreds.
+   *
+   * Rock and gas are drawn in separate passes because they want opposite
+   * things from the depth buffer — see the call sites.
+   */
+  drawTerrain(arena, pass) {
+    if (!arena?.features?.length) return;
+    for (let i = 0; i < arena.features.length; i++) {
+      const f = arena.features[i];
+      if (f.type !== pass) continue;
+      this._pos[0] = f.x; this._pos[1] = f.z; this._pos[2] = f.y;
+      if (f.type === 'solid') {
+        // A fixed tumble per rock rather than an animated one: a debris field
+        // that spins is a debris field whose collision spheres are lying, and
+        // the spheres are what the simulation actually tests against.
+        quatFromEuler(i * 0.7, i * 1.3, i * 2.1, this._quat);
+        compose(this._pos, this._quat, f.r, this._model);
+        this.renderer.draw(`rock:${i & 7}`, rockMesh(i), {
+          model: this._model,
+          normalMatrix: normalMatrix(this._model, this._normal),
+          tint: [1, 1, 1],
+          fogFar: VOLUME * 4,
+        });
+        continue;
+      }
+      compose(this._pos, quat(), f.r, this._model);
+      this.renderer.draw('cloud', cloudMesh(), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model, this._normal),
+        emissive: 1,
+        // Fainter the bigger it is, and DOUBLED by the two-sided shell.
+        //
+        // A Mutara-sized cloud is 2,400 units across with the entire battle
+        // inside it, so anything you could call a colour at that size is a
+        // wall between the player and the fight; a 500-unit plasma patch is a
+        // place on the board and has to look like one. The first version of
+        // this was `28 / (r / 40)`, which is above the ceiling for every
+        // radius in ARENA_KINDS — it clamped to 0.16 for the 2,400-unit
+        // nebula and the 420-unit patch alike, which is to say it was a
+        // constant wearing an expression.
+        //
+        // `cloudMesh` draws both windings so a cloud you are standing in does
+        // not vanish, so whatever is set here arrives on screen twice.
+        alpha: clamp(0.14 - f.r / 22000, 0.030, 0.080),
+        tint: arena.tint ?? [0.8, 0.7, 1.0],
+        fogFar: 1e9,
+      });
+    }
   }
 
   drawShip(ship, isTarget) {

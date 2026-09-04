@@ -179,6 +179,99 @@ export function bodyMesh(kind = 'planet', seed = 0) {
   });
 }
 
+/**
+ * A tumbling piece of rock or hull, for a debris field.
+ *
+ * A sphere is what the SIMULATION uses — `blockedBy` in sim/arena.js tests a
+ * segment against a sphere, and it has to, because a per-triangle test on
+ * sixteen rocks for every shot of every tick is not a phone budget. So the
+ * drawn shape has to READ as the sphere it is: lumpy enough not to be a
+ * billiard ball, and nowhere far enough off the sphere for a shot to look
+ * like it should have got past.
+ *
+ * The displacement is on the RINGS, not per vertex. Flat shading means every
+ * triangle already has its own three vertices, so moving them individually
+ * tears the surface into confetti; moving whole latitude bands keeps it a
+ * closed solid and still kills the silhouette of a ball.
+ *
+ * `seed` picks one of eight shapes, so a field is not sixteen copies of one
+ * rock, and the memo means eight meshes are built for the life of the process.
+ */
+export function rockMesh(seed = 0) {
+  return memo(`rock:${seed & 7}`, () => {
+    const mb = new MeshBuilder();
+    const rings = 9;
+    const segs = 14;
+    const n = (i) => 0.78 + 0.44 * ((Math.imul(i + 1, 0x9e3779b1) ^ (seed * 2654435761)) >>> 8 & 255) / 255;
+    const at = (ring, seg) => {
+      const t = (ring / rings) * Math.PI;
+      const a = (seg / segs) * Math.PI * 2;
+      // Two bands blended, so a rock is squashed on one axis as well as lumpy.
+      const rad = n(ring) * (0.82 + 0.24 * n(seg % 5 + 40));
+      return vec3(
+        Math.sin(t) * Math.cos(a) * rad,
+        Math.cos(t) * rad,
+        Math.sin(t) * Math.sin(a) * rad,
+      );
+    };
+    const base = [0.40, 0.38, 0.36];
+    for (let ring = 0; ring < rings; ring++) {
+      const shade = 0.82 + 0.3 * n(ring + 17);
+      const c = [base[0] * shade, base[1] * shade, base[2] * shade];
+      for (let seg = 0; seg < segs; seg++) {
+        const A = at(ring, seg); const B = at(ring, seg + 1);
+        const C = at(ring + 1, seg + 1); const D = at(ring + 1, seg);
+        if (ring === 0) mb.tri(A, C, D, c);
+        else if (ring === rings - 1) mb.tri(A, B, C, c);
+        else mb.quad(A, B, C, D, c);
+      }
+    }
+    return mb;
+  });
+}
+
+/**
+ * The shell of a gas cloud, drawn from the inside as well as the outside.
+ *
+ * A nebula in this game is a sphere two and a half thousand units across with
+ * the whole battle inside it, so the one thing it must not be is a solid ball
+ * hiding the fight. It is drawn at very low alpha with BOTH windings present —
+ * the same shell twice, once facing out and once facing in — because back-face
+ * culling would otherwise make a cloud you are standing in disappear
+ * completely, which is the exact moment the player most needs to be told they
+ * are in one.
+ */
+export function cloudMesh() {
+  return memo('cloud', () => {
+    const mb = new MeshBuilder();
+    const rings = 10;
+    const segs = 16;
+    // A SMOOTH shell, deliberately.
+    //
+    // The first version wobbled the radius per face to keep the horizon from
+    // being a perfect circle, and rendered as a heap of glass shards: every
+    // face is the same emissive colour, so what the eye reads is how many
+    // layers a view ray crosses, and an irregular shell makes that vary
+    // face-to-face in hard-edged triangles. A round shell crossed twice at
+    // every angle reads as a ball of gas — thicker at the rim, where the ray
+    // travels further through it, which is what gas actually does.
+    const at = (ring, seg) => {
+      const t = (ring / rings) * Math.PI;
+      const a = (seg / segs) * Math.PI * 2;
+      return vec3(Math.sin(t) * Math.cos(a), Math.cos(t), Math.sin(t) * Math.sin(a));
+    };
+    for (let ring = 0; ring < rings; ring++) {
+      for (let seg = 0; seg < segs; seg++) {
+        const A = at(ring, seg); const B = at(ring, seg + 1);
+        const C = at(ring + 1, seg + 1); const D = at(ring + 1, seg);
+        mb.quad(A, B, C, D, [1, 1, 1], 1);
+        mb.quad(A, D, C, B, [1, 1, 1], 1);   // and the inside face
+      }
+    }
+    return mb;
+  });
+}
+
 // ------------------------------------------------------------------ orbit
 //
 // A world seen from standard orbit is a different object from a world seen on

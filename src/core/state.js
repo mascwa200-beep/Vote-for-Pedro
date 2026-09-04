@@ -10,6 +10,7 @@ import { Crew, Officer, ABILITIES, ABILITY_LIST } from '../sim/officers.js';
 import { CaptainProgress, combatXP, SKILLS } from '../sim/skills.js';
 import { Loadout, startingLoadout, CONSOLES } from '../sim/loadout.js';
 import { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } from '../sim/combat.js';
+import { buildArena } from '../sim/arena.js';
 import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } from '../sim/away.js';
 import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
@@ -2451,11 +2452,32 @@ export class Game {
       for (const s of fleet) for (const w of s.weapons) w.cooldown = w.cycle;
       this.pushLog('Their gunnery is slow off the mark, Captain. Empire doctrine.', 'tactical');
     }
+    // The terrain, from what the map has said about this system all along.
+    //
+    // Six systems carry a `hazard` — a debris field at Wolf 359, a nebula at
+    // Mutara, a plasma storm in the Badlands — and until now the only thing
+    // that read it was the red pill on the system panel and a slightly higher
+    // encounter chance. A battle in the Mutara Nebula was a battle in orbit of
+    // Earth with different words on the screen.
+    //
+    // From a DERIVED stream, for the same reason the escorts' names are: rolls
+    // taken from `this.rng` here would move every seeded outcome downstream of
+    // the fight, so the same battle would play out differently depending on
+    // whether the place it happened in had weather.
+    // A FACTORY, not a stream: the engagement rebuilds the arena whenever it
+    // re-places the combatants, and reinforcements do that mid-fight. Handing
+    // it a live stream would move the rocks when the second wave arrived.
+    const hazard = this.location?.hazard ?? null;
+    const arenaRng = () => this.derived(`arena:${this.locationId}`);
     // `onEnd` is how a fight settles itself the moment it ends, from wherever
     // it ends. See Engagement.end.
     this.engagement = new Engagement(this.ship, fleet, this.rng, {
-      ...opts, allies, onEnd: () => this.resolveCombat(),
+      ...opts, allies, hazard, arenaRng, onEnd: () => this.resolveCombat(),
     });
+    if (this.engagement.arena.features.length) {
+      this.engagement.pushLog(
+        `We are fighting in a ${this.engagement.arena.name}, Captain.`, 'science');
+    }
     if (allies.length > (opts.allies?.length ?? 0)) {
       this.pushLog(`${allies[allies.length - 1].name} is closing to support us, Captain.`, 'comms');
     }
