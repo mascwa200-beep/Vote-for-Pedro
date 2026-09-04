@@ -4225,7 +4225,7 @@ export class Game {
 
     const lines = fighting
       ? [`${pending < 24 ? `${Math.round(pending)} hours` : `${(pending / 24).toFixed(1)} days`} have passed, and we are still under fire. Nothing has been repaired.`]
-      : absenceReport(pending, { ship, forfeited, voyage });
+      : absenceReport(pending, { ship, forfeited, voyage, finished, returned });
     if (before.fires > 0 && ship.fires === 0) {
       lines.push('All fires are out. Damage control has secured the affected decks.');
     }

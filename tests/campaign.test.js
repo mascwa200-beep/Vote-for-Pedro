@@ -1282,3 +1282,76 @@ describe('the whole command ladder, one rung at a time', () => {
       'the ship at the top of the ladder loaded broken');
   });
 });
+
+// ---------------------------------------------------------------------------
+// What the ship got done while nobody was watching.
+//
+// The same shape as the voyage that was missing from this report: a two-day
+// job in the machine shop finished while the captain was away, the log
+// recorded it — twice — and the one screen a returning player reads talked
+// about hull plating. Committing to a two-day job is supposed to be a decision
+// rather than a button, and a decision whose outcome is never reported is a
+// decision the player does not see land.
+
+describe('what the ship got done while nobody was watching', () => {
+  /** A ship with a long job on the bench and a detail out. */
+  const busy = (now) => {
+    const g = new Game({ seed: 12n, crewMode: 'original', now });
+    g.ship.hull = g.ship.maxHull * 0.5;
+    // A replacement pallet is wanted when the ARRAY is hurt, not the hull —
+    // "Nothing aboard needs it, Captain." is what a probe gets for assuming
+    // otherwise, and it looks exactly like a bench that cannot be used.
+    for (const k of Object.keys(g.ship.subsystems)) g.ship.subsystems[k] = 0.4;
+    g.stores = { duranium: 200, isolinear: 200, deuterium: 200, salvage: 200 };
+    assert.notEqual(g.fabricate('sensor_pallet').ok, false, 'nothing went on the bench');
+    assert.ok(g.fabrication, 'the bench is empty');
+    return g;
+  };
+
+  test('a job that finishes while you are away is in the report, not just the log', () => {
+    const now = fakeClock();
+    const g = busy(now);
+    const hours = g.fabrication.hoursRemaining;
+    assert.ok(hours > 24, `pick a job longer than a day (${hours}h)`);
+
+    now.advance(Math.ceil(hours + 12) * HOUR);
+    const r = g.syncCampaign();
+
+    assert.equal(g.fabrication, null, 'the job never finished');
+    const said = r.lines.filter((l) => /pallet/i.test(l));
+    assert.ok(said.length,
+      `came back to a finished job and was told: ${r.lines.join(' | ')}`);
+    assert.match(said[0], /while you were away/i, said[0]);
+  });
+
+  test('and a ship with an empty bench is not told about one', () => {
+    // The control. A report that always mentions the shop is not reporting the
+    // shop, it is printing a line — the same trap as the voyage line in #122.
+    const now = fakeClock();
+    const g = new Game({ seed: 12n, crewMode: 'original', now });
+    g.ship.hull = g.ship.maxHull * 0.5;
+    assert.equal(g.fabrication, null, 'this ship was supposed to have an empty bench');
+    now.advance(48 * HOUR);
+    const r = g.syncCampaign();
+    assert.ok(r.lines.length, 'no report at all');
+    assert.deepEqual(r.lines.filter((l) => /bench|finished while you were away/i.test(l)), [],
+      'a ship with nothing on the bench was told something came off it');
+  });
+
+  test('and the job still survives being saved half-done', () => {
+    // Not new, but it is the thing the report above is reporting ON, and a
+    // half-finished job silently reset by a save would make the rest of this
+    // suite describe something that cannot happen.
+    const now = fakeClock();
+    const g = busy(now);
+    now.advance(10 * HOUR);
+    g.syncCampaign();
+    const left = g.fabrication?.hoursRemaining;
+    assert.ok(left > 0 && left < 48, `ten hours in and ${left}h left of 48`);
+
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())), { now });
+    assert.ok(back.fabrication, 'the bench was cleared by a save');
+    assert.ok(Math.abs(back.fabrication.hoursRemaining - left) < 1e-9,
+      `${left}h left before the save and ${back.fabrication.hoursRemaining}h after`);
+  });
+});

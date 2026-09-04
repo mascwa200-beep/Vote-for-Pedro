@@ -259,7 +259,9 @@ export class CampaignClock {
  * and it is the difference between "time passed" as a number and time passing
  * as something that happened to a crew.
  */
-export function absenceReport(hours, { ship = null, forfeited = 0, voyage = null } = {}) {
+export function absenceReport(hours, {
+  ship = null, forfeited = 0, voyage = null, finished = null, returned = [],
+} = {}) {
   const lines = [];
   if (hours < 0.5) return lines;
 
@@ -283,6 +285,20 @@ export function absenceReport(hours, { ship = null, forfeited = 0, voyage = null
       ? `${Math.max(1, Math.round(left))} hours out`
       : `${(left / 24).toFixed(1)} days out`;
     lines.push(`Still under way for ${voyage.to}, ${Math.round(voyage.progress * 100)} percent of the way, ${eta}.`);
+  }
+
+  // What the ship got DONE while nobody was watching, as opposed to what
+  // merely happened to her. A two-day job in the machine shop finished while
+  // the captain was away, the log recorded it twice, and this report — the one
+  // screen a returning player actually reads — talked about hull plating. The
+  // same was true of a survey party that had been out for a day and a half:
+  // committing to a two-day job is supposed to be a decision, and a decision
+  // whose outcome is not reported is a decision the player never sees land.
+  if (finished) {
+    lines.push(`${finished.recipe?.name ?? 'The job on the bench'} was finished while you were away.`);
+  }
+  for (const back of returned) {
+    lines.push(`${back.assignment?.name ?? 'A detail'} came back aboard while you were away.`);
   }
 
   if (ship) {
