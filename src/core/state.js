@@ -2271,9 +2271,11 @@ export class Game {
       case 'board': {
         const team = this.buildAwayTeam();
         // DC scales with how dangerous the specific derelict looked.
-        const r1 = team.check(this.rng, 'engineering', {
+        const salvageOpts = {
           dc: 10 + Math.round((enc.risk ?? 0.4) * 14), hazard: 'dangerous',
-        });
+        };
+        const r1 = team.rerollIfPossible(this.rng, 'engineering', salvageOpts,
+          team.check(this.rng, 'engineering', salvageOpts));
         out.messages.push(r1);
         if (r1.killed) this.ledger.loseOfficer(r1.killed, { system: enc.system.id });
         if (r1.success && enc.salvage) {
@@ -3079,7 +3081,16 @@ export class Game {
       // ones being boarded.
       locals: !opts.boarding && this.perk('folk_hero') && Game.INHABITED.has(this.location?.type)
         ? 2 : 0,
+      // The ship they came off, for the one trait that asks: "Resistance
+      // Veteran — advantage on checks made while your ship is below half
+      // hull." This is the only caller that knows.
+      hullPct: this.ship?.hullPct ?? 1,
     });
+    // A landing party is a mission, and the Human reroll is once per mission.
+    // `Character.refresh` is called by `startCombat`, which is a different
+    // thing entirely — so before this the reroll was replenished by getting
+    // into a fight and spent by nothing.
+    this.awayTeam.beginMission();
     return this.awayTeam;
   }
 
@@ -3216,9 +3227,9 @@ export class Game {
     const steps = [];
     let captainWounded = false;
     for (const step of template.steps) {
-      const r = team.check(this.rng, step.check, {
-        dc: step.dc, hazard: template.hazard, label: step.text,
-      });
+      const opts = { dc: step.dc, hazard: template.hazard, label: step.text };
+      const r = team.rerollIfPossible(this.rng, step.check, opts,
+        team.check(this.rng, step.check, opts));
       this.pushLog(`${step.text} — ${r.formatted}`, 'science');
       if (r.killed) this.pushLog(`We lost ${r.killed.name}.`, 'medical');
       else if (r.injured) this.pushLog(`${r.injured.name} is hurt.`, 'medical');

@@ -423,6 +423,11 @@ export class Character {
     this.signatureUsed = false;
     this.featUses = data.featUses ?? {};
     this.rerollsRemaining = 0;
+    // "Two Disciplines — choose Logic or Instinct before any check." A real
+    // choice needs somewhere to live, and it has to survive a save or it is
+    // not a choice, it is a default. Null means "whichever the mechanic lists
+    // first", so a captain who never picks still gets one of the two.
+    this.discipline = data.discipline ?? null;
 
     if (!this.proficiencies.length) this.applyCareerProficiencies();
   }
@@ -480,6 +485,25 @@ export class Character {
     if (this.isProficient(abilityId)) total += this.proficiencyBonus;
     if (this.hasTrait('haunted')) total += 3;
     return total;
+  }
+
+  /**
+   * Pick which of the switchable disciplines is live.
+   *
+   * Refuses anything the character does not actually have, so a save file or a
+   * misheard order cannot grant advantage on an ability nobody was promised.
+   */
+  chooseDiscipline(abilityId) {
+    const list = this.mechanic('switchableAdvantage');
+    if (!Array.isArray(list) || !list.includes(abilityId)) return false;
+    this.discipline = abilityId;
+    return true;
+  }
+
+  /** The disciplines this character may switch between, if any. */
+  get disciplines() {
+    const list = this.mechanic('switchableAdvantage');
+    return Array.isArray(list) ? list : [];
   }
 
   hasTrait(id) { return this.traits.includes(id); }
@@ -566,6 +590,7 @@ export class Character {
       traits: this.traits, feats: this.feats, baseScores: this.baseScores,
       proficiencies: this.proficiencies, level: this.level,
       featUses: this.featUses, serialNumber: this.serialNumber,
+      discipline: this.discipline,
     };
   }
 
