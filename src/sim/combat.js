@@ -13,6 +13,7 @@ import { emit } from '../core/events.js';
 import { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } from './ship.js';
 import { chooseAction } from './ai.js';
 import { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } from './arena.js';
+import { assessEngagement } from './assess.js';
 import { clamp, wrapDegrees, finite } from '../core/num.js';
 
 export const WEAPON_RANGE = {
@@ -198,6 +199,35 @@ export class Engagement {
     // Metreon gas will not let a warp field form. Read AFTER the arena is
     // built, which placeCombatants does.
     this.canWarpOut = opts.canWarpOut !== false && !this.arena.noWarp;
+
+    // What tactical makes of it, before a shot is fired.
+    //
+    // Played through the encounter generator, a hostile encounter either did
+    // nothing at all or took the ship: ten Cardassian patrols out of ten, five
+    // Borg out of five, against Ferengi and Orion patrols that never took the
+    // hull below 90%. The game already intends the bad ones to be broken off
+    // rather than won — `beginWarpOut` exists and the difficulty ladder's main
+    // lever is enemy COUNT — and it had no way of saying which those were.
+    this.assessment = assessEngagement({
+      player: this.player, allies: this.allies, hostiles: this.hostiles,
+    });
+    if (this.assessment) {
+      this.pushLog(this.assessment.line, 'tactical');
+    }
+  }
+
+  /**
+   * Weigh the fight as it stands now.
+   *
+   * Separate from `this.assessment`, which is the OPENING reading and is what
+   * tactical said before a shot was fired. This one is live: a fight that was
+   * outmatched three ships ago is not outmatched now, and a captain watching a
+   * bar wants the second number, not the first.
+   */
+  assess() {
+    return assessEngagement({
+      player: this.player, allies: this.allies, hostiles: this.liveHostiles,
+    });
   }
 
   /**

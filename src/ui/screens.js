@@ -6,6 +6,16 @@ import {
   el, clear, panel, button, readout, shieldDiagram, powerSlider,
   pill, modal, field, textInput, select, officerRow, logLine, channelName,
 } from './lcars.js';
+
+/**
+ * The pill colour for each assessment band. Green for a fight you will win,
+ * red for one you will not — and 'even' left plain, because a fight you might
+ * lose is the ordinary case and colouring it teaches the captain to ignore the
+ * colour.
+ */
+const ODDS_TONE = {
+  nocontest: 'green', favourable: 'green', even: '', dangerous: 'amber', hopeless: 'red',
+};
 import { haptic } from './touch.js';
 import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
@@ -535,8 +545,15 @@ export function viewscreenScreen(app) {
   ];
   if (eng && !eng.over) {
     const t = eng.target;
+    // Tactical's own reading of the fight, live rather than at the opening
+    // bell — a battle that was outmatched three ships ago is not outmatched
+    // now. It is the one number that answers "should I be running?", which
+    // played through the encounter generator was a question the game never
+    // answered until the ship was gone.
+    const odds = eng.assess?.();
     status.push(el('div', { class: 'meta' }, [
       pill(`${eng.liveHostiles.length} hostile${eng.liveHostiles.length === 1 ? '' : 's'}`, 'red'),
+      odds ? pill(odds.label, ODDS_TONE[odds.band] ?? null) : null,
       t && !t.destroyed ? pill(`${Math.round(g.ship.distanceTo(t))} km`) : null,
       g.ship.shieldsUp ? pill('shields up', 'green') : pill('shields down', 'red'),
     ].filter(Boolean)));

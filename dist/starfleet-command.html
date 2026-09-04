@@ -26146,6 +26146,141 @@ __exports.chooseAction = chooseAction;
 
 });
 
+__define("src/sim/assess.js", function (__exports, __require) {
+// What the tactical officer says when the shooting is about to start.
+//
+// Played through the encounter generator with the balance suite's own pilot — a
+// Constitution, thirty-three hostile encounters out of four hundred rolls — the
+// distribution of outcomes was not a curve. It was two piles:
+//
+//     Cardassian patrol   10 of 10 encounters lost the ship
+//     Borg                 5 of  5 lost the ship
+//     Klingon patrol       4 of  7 lost the ship
+//     Ferengi              3 of  4 never took the hull below 90%
+//     Orion, independent   never took the hull below 99%
+//
+// A fight is either nothing or it is fatal, and the captain finds out which by
+// having it. That is the gap this closes. The game already intends outnumbered
+// fights to be broken off rather than won — `beginWarpOut` exists, the balance
+// suite asserts it works, and the difficulty ladder's main lever is enemy COUNT
+// — and it never told anybody which fights those were.
+//
+// Nothing here changes a battle. It reads the ships and says what the bridge
+// would say.
+
+/**
+ * Sustained damage a ship can put out, per second, on paper.
+ *
+ * Every weapon it carries, ignoring arcs and range: this is an assessment made
+ * from a sensor return before a shot is fired, not a firing solution. A
+ * tactical officer counting an opponent's guns counts all of them.
+ */
+const outputOf = (ship) => (ship?.weapons ?? [])
+  .reduce((n, w) => n + w.damage / Math.max(0.1, w.cycle), 0);
+
+/**
+ * What a ship can absorb: hull, plus six facings of shield.
+ *
+ * Discounted, because you never get the value of all six — a ship under fire
+ * presents two or three of them and the rest go unused. 0.8 of the nominal
+ * total is what the simulated fights bear out.
+ */
+const enduranceOf = (ship) => (ship?.maxHull ?? 0) + (ship?.maxShield ?? 0) * 6 * 0.8;
+
+/**
+ * A side's fighting power: what it shoots with, times what it can take.
+ *
+ * Lanchester's square law for aimed fire, which is the right shape for this: two
+ * identical ships are not twice one ship, they are four times one ship, because
+ * they do twice the damage for twice as long. That is exactly the cliff the
+ * measurements found — one Galor takes a Constitution to 83% hull and two of
+ * them kill it every single time.
+ */
+const powerOf = (ships) => {
+  const live = (ships ?? []).filter((s) => s && !s.destroyed && !s.withdrawn);
+  if (!live.length) return 0;
+  return live.reduce((n, s) => n + outputOf(s), 0) * live.reduce((n, s) => n + enduranceOf(s), 0);
+};
+
+/**
+ * The bands, and the numbers behind them.
+ *
+ * Twenty-four matchups, ten battles each, flown by the pilot the balance suite
+ * uses — which does not disengage, use an officer's ability, or call a shot, so
+ * a real captain has headroom above every row:
+ *
+ *     ratio   matchup                              lost    lowest hull
+ *     11.9    Constitution v Orion raider           0/10      100%
+ *      2.7    Constitution v Bird-of-Prey           0/10       98%
+ *      1.45   Constitution v Galor                  0/10       83%
+ *      1.12   Constitution v D7                     0/10       74%
+ *      0.74   Galaxy v three K't'ingas              0/10       47%
+ *      0.67   Constitution v D'deridex              0/10       57%
+ *      0.37   Sovereign v Borg cube                10/10        0%
+ *      0.36   Constitution v two Galors            10/10        0%
+ *      0.28   Constitution v two D7s               10/10        0%
+ *
+ * Every fight that was always lost is below 0.4 and every fight that was never
+ * lost is above it, on both sides of a boundary nothing was tuned to.
+ */
+const BANDS = [
+  {
+    id: 'nocontest', min: 3,
+    label: 'no contest',
+    line: 'They are outclassed, Captain. This will not take long.',
+  },
+  {
+    id: 'favourable', min: 1.5,
+    label: 'favourable',
+    line: 'We have the advantage.',
+  },
+  {
+    id: 'even', min: 0.8,
+    label: 'even',
+    line: 'An even match, Captain. It will cost us something.',
+  },
+  {
+    id: 'dangerous', min: 0.4,
+    label: 'dangerous',
+    line: 'They have the advantage. We can take them, but not cheaply.',
+  },
+  {
+    id: 'hopeless', min: 0,
+    label: 'outmatched',
+    // The one line that is advice rather than a reading, because it is the one
+    // case where the game has an answer the captain may not know it has.
+    line: 'We are outmatched. Recommend we break off before they close.',
+  },
+];
+
+/**
+ * Weigh the two sides of a fight.
+ *
+ * @returns {{ratio, band, label, line, ours, theirs}}
+ */
+function assessEngagement({ player, allies = [], hostiles = [] } = {}) {
+  const ours = powerOf([player, ...allies]);
+  const theirs = powerOf(hostiles);
+  // Nobody to fight is not a walkover, it is not a fight. Callers that ask
+  // before the hostiles are placed used to get Infinity and a cheerful line
+  // about how short this would be.
+  if (!theirs || !ours) return null;
+  const ratio = ours / theirs;
+  const band = BANDS.find((b) => ratio >= b.min) ?? BANDS[BANDS.length - 1];
+  return { ratio, band: band.id, label: band.label, line: band.line, ours, theirs };
+}
+
+/** The band ids, in order from best to worst. Exported so a test can hold them. */
+const ASSESSMENT_BANDS = BANDS.map((b) => b.id);
+
+__exports.outputOf = outputOf;
+__exports.enduranceOf = enduranceOf;
+__exports.powerOf = powerOf;
+__exports.assessEngagement = assessEngagement;
+__exports.ASSESSMENT_BANDS = ASSESSMENT_BANDS;
+
+});
+
 __define("src/sim/combat.js", function (__exports, __require) {
 // Combat resolution.
 //
@@ -26162,6 +26297,7 @@ const { emit } = __require("src/core/events.js");
 const { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } = __require("src/sim/ship.js");
 const { chooseAction } = __require("src/sim/ai.js");
 const { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } = __require("src/sim/arena.js");
+const { assessEngagement } = __require("src/sim/assess.js");
 const { clamp, wrapDegrees, finite } = __require("src/core/num.js");
 const WEAPON_RANGE = {
   beam: 900,
@@ -26345,6 +26481,35 @@ class Engagement {
     // Metreon gas will not let a warp field form. Read AFTER the arena is
     // built, which placeCombatants does.
     this.canWarpOut = opts.canWarpOut !== false && !this.arena.noWarp;
+
+    // What tactical makes of it, before a shot is fired.
+    //
+    // Played through the encounter generator, a hostile encounter either did
+    // nothing at all or took the ship: ten Cardassian patrols out of ten, five
+    // Borg out of five, against Ferengi and Orion patrols that never took the
+    // hull below 90%. The game already intends the bad ones to be broken off
+    // rather than won — `beginWarpOut` exists and the difficulty ladder's main
+    // lever is enemy COUNT — and it had no way of saying which those were.
+    this.assessment = assessEngagement({
+      player: this.player, allies: this.allies, hostiles: this.hostiles,
+    });
+    if (this.assessment) {
+      this.pushLog(this.assessment.line, 'tactical');
+    }
+  }
+
+  /**
+   * Weigh the fight as it stands now.
+   *
+   * Separate from `this.assessment`, which is the OPENING reading and is what
+   * tactical said before a shot was fired. This one is live: a fight that was
+   * outmatched three ships ago is not outmatched now, and a captain watching a
+   * bar wants the second number, not the first.
+   */
+  assess() {
+    return assessEngagement({
+      player: this.player, allies: this.allies, hostiles: this.liveHostiles,
+    });
   }
 
   /**
@@ -38200,6 +38365,16 @@ __define("src/ui/screens.js", function (__exports, __require) {
 // straight rebuild is cheaper than any machinery to avoid one.
 
 const { el, clear, panel, button, readout, shieldDiagram, powerSlider, pill, modal, field, textInput, select, officerRow, logLine, channelName } = __require("src/ui/lcars.js");
+
+/**
+ * The pill colour for each assessment band. Green for a fight you will win,
+ * red for one you will not — and 'even' left plain, because a fight you might
+ * lose is the ordinary case and colouring it teaches the captain to ignore the
+ * colour.
+ */
+const ODDS_TONE = {
+  nocontest: 'green', favourable: 'green', even: '', dangerous: 'amber', hopeless: 'red',
+};
 const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
@@ -38726,8 +38901,15 @@ function viewscreenScreen(app) {
   ];
   if (eng && !eng.over) {
     const t = eng.target;
+    // Tactical's own reading of the fight, live rather than at the opening
+    // bell — a battle that was outmatched three ships ago is not outmatched
+    // now. It is the one number that answers "should I be running?", which
+    // played through the encounter generator was a question the game never
+    // answered until the ship was gone.
+    const odds = eng.assess?.();
     status.push(el('div', { class: 'meta' }, [
       pill(`${eng.liveHostiles.length} hostile${eng.liveHostiles.length === 1 ? '' : 's'}`, 'red'),
+      odds ? pill(odds.label, ODDS_TONE[odds.band] ?? null) : null,
       t && !t.destroyed ? pill(`${Math.round(g.ship.distanceTo(t))} km`) : null,
       g.ship.shieldsUp ? pill('shields up', 'green') : pill('shields down', 'red'),
     ].filter(Boolean)));
