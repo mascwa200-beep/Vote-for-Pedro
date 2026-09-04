@@ -1905,20 +1905,25 @@ export function encounterPanel(app) {
  * stage, because that is where most of an episode happens and defaulting the
  * other way would strand every existing episode.
  */
+// Both of these ask the MISSION now rather than answering for themselves.
+//
+// The panel used to own this rule and be the only thing that enforced it, by
+// declining to draw the choices — while `mission_choice` took a choice by index
+// out of `mission.choices()` and checked only whether it was locked. So a
+// captain on the bridge could say "option two" and advance a scene happening in
+// sickbay. `Mission.testWhere` is the one answer now, beside the one about
+// which star system a stage is in; a second copy here would eventually
+// disagree with it.
 function stageIsHere(g, stage) {
-  const where = stage?.where ?? 'bridge';
-  if (where === 'anywhere') return true;
-  if (where === 'surface') return g.ashore;
-  if (g.ashore) return false;
-  return g.walk?.roomId === where;
+  return g.missions?.active?.testWhere(stage)?.ok ?? true;
 }
 
 /** What to say when the captain is in the wrong place for it. */
 function stageElsewhere(g, stage) {
   const where = stage?.where ?? 'bridge';
   if (where === 'surface') return 'This is happening on the surface. Beam down.';
-  const room = ROOMS[where];
-  return `They are waiting for you in ${room?.name ?? where}.`;
+  const said = g.missions?.active?.testWhere(stage)?.reason;
+  return said ?? `They are waiting for you in ${ROOMS[where]?.name ?? where}.`;
 }
 
 /**

@@ -1272,6 +1272,17 @@ describe('every episode graph is sound', () => {
           // graph, it is a captain who has not left spacedock.
           const here = m.testLocation();
           if (!here.ok) { g.locationId = here.need; trips++; }
+          // And the captain walks to the compartment it is happening in. A
+          // stage is at a place AND in a room, and the room is enforced by the
+          // engine now rather than only by the panel — so a walker that never
+          // left the bridge would report every scene in sickbay as stranded,
+          // which is not a broken graph, it is a captain who did not get up.
+          const inside = m.testWhere();
+          if (!inside.ok && inside.need && inside.need !== 'surface') {
+            g.goToRoom(inside.need);
+            for (let n = 0; n < 4000 && g.walkOrder; n++) g.update(1 / 30);
+            trips++;
+          }
           const open = m.choices().filter((c) => !c.locked);
           if (!open.length) break;
           const pick = open[(trial * 7 + steps * 13) % open.length];

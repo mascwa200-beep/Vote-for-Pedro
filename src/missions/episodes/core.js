@@ -48,6 +48,14 @@ export const CORE_EPISODES = [
       report: {
         // A report is written wherever the ship is. `system: null` is a stage
         // that happens on board rather than at a place.
+        //
+        // NOT `where: 'quarters'`, though the speaker has been 'Ready Room' all
+        // along. This is the fifth screen of the first episode in the game, and
+        // the room gate is enforced now — so putting it in the captain's
+        // quarters makes "walk to a compartment" a thing a new captain has to
+        // work out before they can finish the tutorial. The scenes that ask you
+        // to get up are ones where being in the room is the point: a survivor
+        // waking in sickbay, eighty-two people arriving in the transporter room.
         system: null,
         text: 'The trials are done. What goes in the report?',
         speaker: 'Ready Room',
@@ -330,6 +338,11 @@ export const CORE_EPISODES = [
         ],
       },
       revived: {
+        // The speaker has said 'Sickbay' since this was written, and the text
+        // says "nobody in the room wants to answer" — about a room the captain
+        // was never in. `where` names the compartment a scene happens in; it
+        // was read by the mission panel and set by no stage in the game.
+        where: 'sickbay',
         text: 'She wakes. Lieutenant Commander Aris Vell, tactical officer, USS Kyushu. She asks whether the fleet held. Nobody in the room wants to answer.',
         speaker: 'Sickbay',
         choices: [
@@ -488,6 +501,10 @@ export const CORE_EPISODES = [
     summary: 'Starfleet has questions about your command, and this time they are formal.',
     stages: {
       start: {
+        // Conference room four, Starbase 11. Not a compartment of this ship, so
+        // the room gate does not apply — but the DEFAULT is 'bridge', and the
+        // engine enforces it now, so a scene that is not aboard has to say so.
+        where: 'anywhere',
         text: 'Starbase 11, conference room four. Three flag officers, a JAG advocate, and your own service record on the table between you. The advocate begins reading it aloud.',
         speaker: 'Judge Advocate',
         choices: [
@@ -500,6 +517,7 @@ export const CORE_EPISODES = [
         ],
       },
       defence: {
+        where: 'anywhere',
         text: 'You argue it through. The board listens. Your first officer is called and asked, under oath, whether they ever considered relieving you.',
         speaker: 'Judge Advocate',
         choices: [
@@ -510,6 +528,7 @@ export const CORE_EPISODES = [
         ],
       },
       accept: {
+        where: 'anywhere',
         text: 'The advocate stops reading. One of the admirals leans back. "That is the first useful thing anyone has said in this room today."',
         speaker: 'Admiral',
         choices: [
@@ -517,6 +536,7 @@ export const CORE_EPISODES = [
         ],
       },
       verdict: {
+        where: 'anywhere',
         text: 'The board withdraws for four hours and returns.',
         speaker: 'Board of Inquiry',
         choices: [

@@ -2218,6 +2218,94 @@ event, not an arithmetic result) and is left alone; it is recorded because a
 test that wants a flag officer has to promote them one step at a time, and the
 first one written did not.
 
+## 37. Seventeen rooms, and every scene on the bridge
+
+`stage.where` names the compartment a scene happens in — `'bridge'` by default,
+`'anywhere'`, `'surface'`, or any `ROOMS` key. The ship has **17 walkable
+rooms** with stations, props, corridors and a walk system: sickbay, the brig,
+the armoury, the briefing room, the transporter room, main engineering, the
+hangar deck, crew quarters. Across sixteen episodes and seventy-two stages,
+**no stage had ever set one.**
+
+So the survivor of Wolf 359 wakes up in a stage whose speaker is literally
+`'Sickbay'`, whose text reads *"Nobody in the room wants to answer"* — and the
+captain was on the bridge for it. Eighty-two people arrive four waves at a time
+in a stage whose speaker is `'Transporter Room'`, and the captain was on the
+bridge for that too.
+
+### Drawing is not enforcing
+
+The room was read in exactly one place: `stageIsHere` in the mission panel,
+which declines to **draw** the choices. But `mission_choice` takes a choice by
+index out of `mission.choices()` and checks only whether it is `locked` — and
+`choices()` gated on the star system and not on the room. Measured before any
+stage set a `where` at all:
+
+```
+the captain is standing in : bridge
+the scene is happening in  : sickbay
+choices the engine offers  : accept, question
+gave the order anyway      : start -> trials
+```
+
+A captain on the bridge could say "option two" and advance a scene two decks
+down. It was invisible only because no shipped stage had ever set one — the
+same shape as every other defect the order monkey in `tools/verify-app.mjs`
+has found. So `Mission.testWhere` enforces it beside `testLocation`, and the
+panel asks the mission rather than answering for itself: one answer, not two
+that can drift.
+
+`Game.ashore` turned out to be `walk.roomId === 'surface'` — so there is one
+place value, not two, and `testWhere` reads only that. The first draft asked
+for both and threw inside the `ashore` getter whenever there was no walker.
+
+### Which scenes ask you to get up
+
+Only where being in the room **is** the point, and only where the episode had
+already said so in its own speaker line:
+
+| episode / stage | room | its speaker, all along |
+| --- | --- | --- |
+| Wolf 359 / `revived` | sickbay | `'Sickbay'` |
+| The Web at the Border / `lock` | transporter | `'Transporter Room'` |
+| Board of Inquiry (4 stages) | `anywhere` | conference room four, Starbase 11 |
+
+The inquiry is the other direction: the default is `'bridge'` and it is
+enforced now, so a scene that is **not** aboard this ship has to say so.
+
+### The one that was reverted
+
+`shakedown/report` has had the speaker `'Ready Room'` since it was written, and
+`where: 'quarters'` is the obvious reading. It is deliberately **not** set.
+
+That stage is the fifth screen of the first episode in the game. With the room
+enforced, putting it in the captain's quarters makes "walk to a compartment"
+something a new captain has to work out before they can finish the tutorial —
+and the measurement was blunt about the cost: it stalled the full-commission
+driver in `tests/commission.test.js` outright ("seed 77002 ran only 8046
+ticks", zero episode battles flown).
+
+### Every driver was a captain who never stood up
+
+The episode walker flies the ship to where a stage happens; it had no idea a
+stage could also be in a room. Both drivers now walk, through `goToRoom` — the
+same order the player gives:
+
+- `tests/wiring.test.js`, which plays all 16 episodes 30× each;
+- `tests/commission.test.js`, which plays a whole five-year commission.
+
+A driver that stays on the bridge reports a survivor waking in sickbay as a
+stranded episode, which is not a broken graph — it is a captain who did not
+get up.
+
+### And one hazard worth writing down
+
+`Mission.stage` hands back the **shipped definition object**. A test that writes
+`m.stage.where = 'sickbay'` changes that episode for every test after it in the
+same file. The first draft of `tests/rooms.test.js` did exactly that and then
+failed three tests later, claiming the tutorial sends a new captain to the
+planet surface. Probes copy the stage now.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

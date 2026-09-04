@@ -269,6 +269,18 @@ function playCommission(spec) {
     for (let step = 0; step < 30 && !m.complete && !g.over; step++) {
       const where = m.testLocation?.();
       if (where && !where.ok) return;              // the next leg goes there
+      // A stage is at a place AND in a compartment, and the compartment is
+      // enforced by the engine rather than only drawn by the panel. So the
+      // captain gets up and walks to it, through `goToRoom` — the same order
+      // the player gives. A driver that stayed on the bridge would report a
+      // survivor waking in sickbay as a stalled episode.
+      const inside = m.testWhere?.();
+      if (inside && !inside.ok) {
+        if (inside.need === 'surface') return;     // a landing, not a walk
+        if (!g.goToRoom(inside.need).ok) { refused('walk', `to ${inside.need}`); return; }
+        for (let n = 0; n < 4000 && g.walkOrder; n++) g.update(1 / 30);
+        if (!m.testWhere().ok) { refused('walk', `never reached ${inside.need}`); return; }
+      }
       const open = m.choices().filter((c) => !c.locked);
       if (!open.length) return;
       const choice = pick(open);
