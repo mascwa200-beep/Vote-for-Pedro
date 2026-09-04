@@ -28801,6 +28801,43 @@ class CampaignClock {
     return { hours: credited, forfeited, wentBackwards };
   }
 
+  /**
+   * Credit time that passed with the app open and the simulation running.
+   *
+   * `sync()` is for time nobody watched. It caps what a single absence can
+   * deliver and it hands back a report, because the captain was not there and
+   * has to be told. This is the other half — the hours a captain spends in the
+   * chair — and it is deliberately not the same method: there is no ceiling,
+   * because nothing is being credited that was not lived through, and there is
+   * no report, because the captain was watching.
+   *
+   * Without it the five-year mission advanced only while nobody was playing
+   * it. Measured: two hours of continuous play moved the commission clock by
+   * exactly nothing, and then a single background-and-foreground with zero
+   * seconds closed credited the whole two hours as an absence — repairing the
+   * hull, and having the watch officer report on a watch the captain had stood
+   * themselves. Both halves of that were wrong in the same place.
+   *
+   * Taken from the simulation's own fixed step rather than from the wall clock.
+   * `Clock.frame` is where real time is allowed into the sim; everything after
+   * it works in `dt`, and a second reading of the wall clock down here would
+   * make the same seed play a different commission on a slower phone.
+   *
+   * @param {number} realSeconds elapsed sim time, unscaled
+   * @returns {number} commission hours credited
+   */
+  advanceOpen(realSeconds) {
+    if (!(realSeconds > 0)) return 0;
+    const hours = (realSeconds / 3600) * this.compression;
+    this.commissionHours += hours;
+    // The wall time those hours account for, so a resume does not charge for
+    // them a second time. If the sim ran slower than real time — a throttled
+    // tab, a long frame, a phone that went to sleep — this lags the wall clock
+    // and `sync()` credits the difference as the absence it actually was.
+    this.lastSeen += realSeconds * 1000;
+    return hours;
+  }
+
   /** Take the accrued time, leaving the counter empty. */
   drainPending() {
     const hours = this.pendingHours;
@@ -28993,6 +29030,17 @@ const { CampaignClock, absenceReport, COMMISSION_DAYS } = __require("src/campaig
  * stops being readable on a phone, whatever the difficulty asks for.
  */
 const MAX_HOSTILES = 6;
+
+/**
+ * How much lived time the tick loop banks before spending it on the ship.
+ *
+ * A quarter of an hour of commission time. At real time that is a quarter of
+ * an hour in the chair; at ×1000 it is under a second, which is the point of
+ * compression. Short enough that nothing the player is waiting on is held up
+ * by it, long enough that the jobs it drives are given a number rather than a
+ * rounding error thirty times a second.
+ */
+const LIVED_SLICE_HOURS = 0.25;
 
 /** "IKS Bortas" and "IKS Bortas II" should not become "IKS Bortas II II". */
 const stripSuffix = (name) => String(name).replace(/\s+(?:I{1,3}|IV|V|VI)$/, '');
@@ -29218,6 +29266,10 @@ class Game {
       now: options.now,
       compression: options.compression ?? 1,
     });
+    // Lived time banked but not yet spent on the ship. Saved, because losing it
+    // silently on every save would let a player pick the app up and put it down
+    // repeatedly to keep a fabrication job permanently a quarter-hour from done.
+    this.livedHours = 0;
 
     this.commission();
     this.pushLog(`Assumed command of the ${this.ship.name}, ${this.ship.registry}.`, 'captain');
@@ -32288,6 +32340,37 @@ class Game {
   // ------------------------------------------------------------------ tick
 
   update(dt) {
+    // The commission runs while you are on the bridge.
+    //
+    // `campaign.commissionHours` was written by `syncCampaign` and by nothing
+    // else, and `syncCampaign` is called on load and when the tab comes back —
+    // so the five-year mission advanced only while nobody was playing it.
+    // Measured: two hours of continuous play moved the commission clock by
+    // 0.0000 days, and then one background-and-foreground with zero seconds
+    // closed credited all two hours as an absence and repaired the hull for
+    // them. Time the captain sat through was worth nothing until they left.
+    //
+    // First, and unconditional. Time does not stop for a fight, for a board of
+    // inquiry, or for a career that has already ended — and the commission's
+    // own end at 1,826 days is checked ninety lines below, which is the first
+    // thing that can now be reached by playing rather than by walking away.
+    // Spent in slices rather than every tick. `advanceFabrication` and
+    // `advanceAssignments` are the same functions an absence runs, and calling
+    // them thirty times a second with four ten-thousandths of an hour each is
+    // both wasteful and, for anything that rounds, wrong. A quarter of an hour
+    // is short enough that nothing waits on it and long enough to be a number.
+    this.livedHours += this.campaign?.advanceOpen(dt) ?? 0;
+    if (this.livedHours >= LIVED_SLICE_HOURS) {
+      const lived = this.livedHours;
+      this.livedHours = 0;
+      const { finished, returned } = this.passTime(lived, { livedThrough: true });
+      if (finished) {
+        this.pushLog(`${finished.recipe.name} is finished, Captain. ${finished.text}`, 'engineering');
+      }
+      for (const back of returned) {
+        this.pushLog(`${back.assignment.name} is back aboard. ${back.text}`, 'comms');
+      }
+    }
     this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
 
     // A ship lost where nobody was shooting is still a ship lost.
@@ -32742,6 +32825,7 @@ class Game {
         }
         : null,
       campaign: this.campaign?.save() ?? null,
+      livedHours: this.livedHours,
       stores: this.stores,
       fabrication: this.fabrication,
       dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
@@ -32804,6 +32888,73 @@ class Game {
   // -------------------------------------------------- the five-year mission
 
   /**
+   * What a span of hours does to a ship, whoever was watching.
+   *
+   * All of this lived inside `syncCampaign` and was reachable from nowhere
+   * else, so every one of these things happened exclusively while the app was
+   * closed. Damage control did nothing for a captain sitting in the chair; the
+   * machine shop only ever finished a job during an absence. The way to repair
+   * a ship was to stop playing it, and after the tick loop stopped crediting
+   * play time as absence that became the only way.
+   *
+   * Both callers now spend the same hours through the same door: `syncCampaign`
+   * with the hours nobody watched, the tick loop with the hours they did.
+   *
+   * @param {number} hours commission hours to spend
+   * @param {object} opts `livedThrough` when the tick loop has already stepped
+   *   the ship and the crew through these hours — fires, shields and injuries
+   *   are handled there, second by second, and doing them again here would
+   *   heal an injured officer twice for the same hour.
+   */
+  passTime(hours, { livedThrough = false } = {}) {
+    const none = { finished: null, returned: [] };
+    if (!(hours > 0)) return none;
+
+    // Time passes during a firefight; damage control does not get to rebuild
+    // your shields in the middle of one. Without this guard, backgrounding the
+    // app for three days mid-engagement returned hull 20% -> 43%, shields
+    // 0% -> 100% and fires 3 -> 0 while a Klingon was still shooting.
+    if (this.engagement && !this.engagement.over) return none;
+
+    const ship = this.ship;
+
+    // Repair: a full hull from nothing would take about a fortnight underway,
+    // which is slower than a starbase and faster than nothing. Nothing in
+    // `Ship.update` repairs hull — that is deliberate and stated there — so
+    // this is the only thing that does it under way, watched or not.
+    if (ship.hullPct < 1 && !ship.destroyed) {
+      const perHour = ship.maxHull / (14 * 24);
+      ship.repair(perHour * hours * ship.mod('repairRate'));
+    }
+
+    if (!livedThrough) {
+      // Fires go out. Slowly, and one at a time.
+      if (ship.fires > 0) ship.fires = Math.max(0, ship.fires - Math.floor(hours / 6));
+
+      // Shields recharge to full given a quiet watch.
+      if (hours > 2 && ship.shieldsUp) {
+        for (const f of Object.keys(ship.shields)) ship.shields[f] = ship.maxShield;
+      }
+
+      // The crew heals, and the dead stay dead.
+      for (const officer of this.crew.officers) {
+        if (officer.alive && officer.injured) officer.recover?.(hours);
+      }
+    }
+
+    // The machine shop works too. A two-day job is a two-day job whether you
+    // are watching it or not — which is what makes committing to one a
+    // decision rather than a button.
+    const finished = advanceFabrication(this, hours);
+
+    // And the details that were out. Same clock, same reason: a survey party
+    // sent out on Tuesday is back on Thursday whether anybody was watching.
+    const returned = advanceAssignments(this, hours, this.rng);
+
+    return { finished, returned };
+  }
+
+  /**
    * Credit the time that passed while nobody was watching.
    *
    * Called on load and whenever the app comes back to the foreground. The ship
@@ -32827,52 +32978,17 @@ class Game {
       return { hours: 0, lines: [] };
     }
 
-    // Time passes during a firefight; damage control does not get to rebuild
-    // your shields in the middle of one. Without this guard, backgrounding the
-    // app for three days mid-engagement returned hull 20% -> 43%, shields
-    // 0% -> 100% and fires 3 -> 0 while a Klingon was still shooting.
-    const fighting = !!this.engagement && !this.engagement.over;
-
     const ship = this.ship;
     const before = { hull: ship.hullPct, fires: ship.fires };
 
-    // Repair: a full hull from nothing would take about a fortnight underway,
-    // which is slower than a starbase and faster than nothing.
-    if (!fighting && ship.hullPct < 1 && !ship.destroyed) {
-      const perHour = ship.maxHull / (14 * 24);
-      ship.repair(perHour * pending * ship.mod('repairRate'));
-    }
-
-    // Fires go out. Slowly, and one at a time.
-    if (!fighting && ship.fires > 0) ship.fires = Math.max(0, ship.fires - Math.floor(pending / 6));
-
-    // Shields recharge to full given a quiet watch.
-    if (!fighting && pending > 2 && ship.shieldsUp) {
-      for (const f of Object.keys(ship.shields)) ship.shields[f] = ship.maxShield;
-    }
-
-    // The crew heals, and the dead stay dead.
-    if (!fighting) {
-      for (const officer of this.crew.officers) {
-        if (officer.alive && officer.injured) officer.recover?.(pending);
-      }
-    }
-
-    // The machine shop works too. A two-day job is a two-day job whether you
-    // are watching it or not — which is what makes committing to one a
-    // decision rather than a button.
-    const finished = fighting ? null : advanceFabrication(this, pending);
+    const { finished, returned } = this.passTime(pending);
     if (finished) {
       this.pushLog(`${finished.recipe.name} completed while you were away. ${finished.text}`, 'engineering');
     }
-
-    // And the details that were out. Same clock, same reason: a survey party
-    // sent out on Tuesday is back on Thursday whether anybody was watching.
-    if (!fighting) {
-      for (const back of advanceAssignments(this, pending, this.rng)) {
-        this.pushLog(`${back.assignment.name} finished while you were away. ${back.text}`, 'comms');
-      }
+    for (const back of returned) {
+      this.pushLog(`${back.assignment.name} finished while you were away. ${back.text}`, 'comms');
     }
+    const fighting = !!this.engagement && !this.engagement.over;
 
     // One stardate unit is roughly a day.
     this.clock.advanceStardate(pending / 24);
@@ -33261,6 +33377,7 @@ class Game {
     // now rather than pretending the time already passed. Nobody should lose a
     // campaign they had not begun.
     g.campaign = CampaignClock.load(data.campaign, opts.now ?? undefined);
+    g.livedHours = Math.max(0, Number(data.livedHours) || 0);
     if (opts.compression) g.campaign.compression = opts.compression;
 
     g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };

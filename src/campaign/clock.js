@@ -121,6 +121,43 @@ export class CampaignClock {
     return { hours: credited, forfeited, wentBackwards };
   }
 
+  /**
+   * Credit time that passed with the app open and the simulation running.
+   *
+   * `sync()` is for time nobody watched. It caps what a single absence can
+   * deliver and it hands back a report, because the captain was not there and
+   * has to be told. This is the other half — the hours a captain spends in the
+   * chair — and it is deliberately not the same method: there is no ceiling,
+   * because nothing is being credited that was not lived through, and there is
+   * no report, because the captain was watching.
+   *
+   * Without it the five-year mission advanced only while nobody was playing
+   * it. Measured: two hours of continuous play moved the commission clock by
+   * exactly nothing, and then a single background-and-foreground with zero
+   * seconds closed credited the whole two hours as an absence — repairing the
+   * hull, and having the watch officer report on a watch the captain had stood
+   * themselves. Both halves of that were wrong in the same place.
+   *
+   * Taken from the simulation's own fixed step rather than from the wall clock.
+   * `Clock.frame` is where real time is allowed into the sim; everything after
+   * it works in `dt`, and a second reading of the wall clock down here would
+   * make the same seed play a different commission on a slower phone.
+   *
+   * @param {number} realSeconds elapsed sim time, unscaled
+   * @returns {number} commission hours credited
+   */
+  advanceOpen(realSeconds) {
+    if (!(realSeconds > 0)) return 0;
+    const hours = (realSeconds / 3600) * this.compression;
+    this.commissionHours += hours;
+    // The wall time those hours account for, so a resume does not charge for
+    // them a second time. If the sim ran slower than real time — a throttled
+    // tab, a long frame, a phone that went to sleep — this lags the wall clock
+    // and `sync()` credits the difference as the absence it actually was.
+    this.lastSeen += realSeconds * 1000;
+    return hours;
+  }
+
   /** Take the accrued time, leaving the counter empty. */
   drainPending() {
     const hours = this.pendingHours;
