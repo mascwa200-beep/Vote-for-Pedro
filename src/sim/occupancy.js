@@ -69,6 +69,34 @@ function place(room, roomId, i, salt) {
       || (room.stations ?? []).some((st) => Math.hypot(x - st.at[0], z - st.at[1]) < 0.9);
     if (!clash) return [x, z];
   }
+
+  // Twelve throws of a dart, and then a look round the edge of the room.
+  //
+  // Rejection sampling alone is fine in an empty box and hopeless in a narrow
+  // band: the briefing room is six metres by four and a half with a conference
+  // table in the middle, which leaves a ring about a metre wide, and twelve
+  // uniform samples found a spot for one person in three. The other two were
+  // dropped silently — the ship simply had fewer people in it than its own
+  // rule said, and nothing anywhere complained. That is the same failure the
+  // note above records happening in the recreation room, fixed there by moving
+  // a threshold, which fixed that room and not the sampler.
+  //
+  // So when the darts miss, walk the perimeter deterministically. Sixteen
+  // bearings at two radii, offset by the person's index so two people do not
+  // stand in the same corner, and every one of them is a real position rather
+  // than a smaller crew.
+  for (let ring = 0; ring < 2; ring++) {
+    const scale = 1 - ring * 0.22;
+    for (let k = 0; k < 16; k++) {
+      const theta = ((k + i * 5) % 16) / 16 * Math.PI * 2;
+      const x = Math.cos(theta) * w * scale;
+      const z = Math.sin(theta) * d * scale;
+      const clash = (room.props ?? []).some((p) => p.solid !== false
+        && Math.hypot(x - p.at[0], z - p.at[1]) < (p.radius ?? 0.6) * 0.8 + 0.34)
+        || (room.stations ?? []).some((st) => Math.hypot(x - st.at[0], z - st.at[1]) < 0.9);
+      if (!clash) return [x, z];
+    }
+  }
   return null;
 }
 
@@ -148,6 +176,52 @@ const RULES = {
     crew: 'engineering',
     count: at(g, { normal: 2, yellow: 1, red: 0, blue: 4 }),
   }),
+
+  // The five rooms this table forgot.
+  //
+  // The header above says the two rooms that exist to be where people LIVE
+  // were the two rooms with nobody in them, and names the captain's quarters
+  // and the briefing room in the same sentence as the mess and the crew
+  // quarters. Only the second two got a rule. Measured at yellow alert, seven
+  // of seventeen compartments still returned nobody at all — including the
+  // room the ship is fought from when the bridge is gone.
+
+  // Auxiliary control. Dark and empty while the bridge is answering, and
+  // manned the moment it might not be: that is the entire reason deck eight
+  // has a second bridge in it. Blue is a maintenance watch, which is a
+  // different two people doing a different job.
+  auxcontrol: (g) => ({ crew: 'engineering', count: at(g, { normal: 0, yellow: 1, red: 2, blue: 2 }) }),
+
+  // The captain's own quarters. A yeoman with something to sign, and nobody
+  // at all once the klaxon goes — a captain who walks in at red alert and
+  // finds it empty has been told where his ship's people are.
+  quarters: (g) => ({ crew: 'ops', count: at(g, { normal: 1, yellow: 0, red: 0, blue: 1 }) }),
+
+  // The briefing room fills up when there is something to brief. At yellow
+  // that is the senior staff; docked, it is whoever is being handed orders.
+  //
+  // This is the room that found the silent drop in `place`: asked for three, it
+  // stood one up and lost the other two without a word. The count is what a
+  // senior staff briefing looks like; making the sampler able to find the
+  // positions was the fix, not shrinking the number to suit it.
+  briefing: (g) => ({ crew: 'command', count: at(g, { normal: 0, yellow: 3, red: 0, blue: 2 }) }),
+
+  // The brig is a guard post whether or not there is anybody in the cell, and
+  // it doubles at red alert because that is when there might be.
+  brig: (g) => ({ crew: 'security', count: at(g, { normal: 1, yellow: 1, red: 2, blue: 1 }) }),
+
+  // The transporter chief is always at the pad. A second operator while there
+  // is a party on the surface to bring back — `ashore` is the game's own word
+  // for it — and two more at blue, when cargo comes through here rather than
+  // round the hull.
+  transporter: (g) => ({
+    crew: 'engineering',
+    count: 1 + (g?.ashore ? 1 : 0) + at(g, { blue: 2 }),
+  }),
+
+  // Not the turbolift. A lift car is two and a bit metres square and the
+  // captain is standing in it; putting a second person in there is not a
+  // busier ship, it is a worse one.
 };
 
 /** How much of her complement the ship still has. */

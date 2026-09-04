@@ -602,5 +602,12 @@ export function findRoom(text) {
   return null;
 }
 
-/** Every phrasing that names a room, for the parser's gazetteer. */
-export const ROOM_WORDS = Object.keys(ROOM_ALIASES);
+// There was a `ROOM_WORDS` export here — `Object.keys(ROOM_ALIASES)`, with a
+// docstring saying it was "for the parser's gazetteer." Nothing ever imported
+// it, and it should not be wired now: the gazetteer's business is fuzzy and
+// phonetic matching of star system names, and the note above says room
+// matching is deliberately NOT fuzzy. Handing it `bridge`, `brig` and `cargo`
+// as place words is how "set course for the bridge" starts resolving to a
+// star. Room names reach the parser the way they always have, through
+// `findRoom`'s own exact longest-first scan, called from the `go_to_room`
+// intent.

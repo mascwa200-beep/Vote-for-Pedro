@@ -779,14 +779,27 @@ class App {
     }
 
     if (w.atExit) {
-      const r = w.room.lift ? { ok: false, needsDestination: true } : w.useExit();
+      // `g.useExitAhead`, not `w.useExit`. Going round the game into the
+      // walker meant the door was the one way off a deck that asked nothing:
+      // not whether we are under fire, and not who has the con.
+      // Asked before the lift's own question, so a captain under fire is told
+      // no rather than offered a list of decks that will each refuse him.
+      const may = g.mayWalk();
+      if (!may.ok) {
+        audio.play('ui_deny');
+        g.pushLog(may.reason, 'computer');
+        this.render();
+        return;
+      }
+      const r = w.room.lift ? { ok: false, needsDestination: true } : g.useExitAhead();
       if (r.ok) { audio.play('door'); haptic('confirm'); this.render(); return; }
       // A lift needs a deck. Offer the stops rather than guessing one.
       this.showMessage('Turbolift', ['Which deck, Captain?'],
         w.liftStops().map((e) => button(e.label ?? e.to, () => {
           this.closeModal();
-          w.useExit(e.to);
-          audio.play('door');
+          const ride = g.useExitAhead(e.to);
+          audio.play(ride.ok ? 'door' : 'ui_deny');
+          if (!ride.ok && ride.reason) g.pushLog(ride.reason, 'computer');
           this.render();
         }, { color: 'blue' })));
       return;

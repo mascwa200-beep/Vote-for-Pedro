@@ -34,14 +34,6 @@ export const EXIT_REACH = 0.9;
 
 const TAU = Math.PI * 2;
 
-/** Shortest signed angle from a to b, in radians. */
-export function angleDelta(a, b) {
-  let d = (b - a) % TAU;
-  if (d > Math.PI) d -= TAU;
-  if (d < -Math.PI) d += TAU;
-  return d;
-}
-
 /**
  * Push a point out of a solid circle, if it is inside one.
  *
