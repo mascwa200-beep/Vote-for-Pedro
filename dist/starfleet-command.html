@@ -11685,8 +11685,15 @@ function findRoom(text) {
   return null;
 }
 
-/** Every phrasing that names a room, for the parser's gazetteer. */
-const ROOM_WORDS = Object.keys(ROOM_ALIASES);
+// There was a `ROOM_WORDS` export here — `Object.keys(ROOM_ALIASES)`, with a
+// docstring saying it was "for the parser's gazetteer." Nothing ever imported
+// it, and it should not be wired now: the gazetteer's business is fuzzy and
+// phonetic matching of star system names, and the note above says room
+// matching is deliberately NOT fuzzy. Handing it `bridge`, `brig` and `cargo`
+// as place words is how "set course for the bridge" starts resolving to a
+// star. Room names reach the parser the way they always have, through
+// `findRoom`'s own exact longest-first scan, called from the `go_to_room`
+// intent.
 
 __exports.DECKS = DECKS;
 __exports.BAY_COUNT = BAY_COUNT;
@@ -11699,7 +11706,6 @@ __exports.LIFT_STOPS = LIFT_STOPS;
 __exports.ROOM_LIST = ROOM_LIST;
 __exports.START_ROOM = START_ROOM;
 __exports.findRoom = findRoom;
-__exports.ROOM_WORDS = ROOM_WORDS;
 
 });
 
@@ -12943,6 +12949,34 @@ function place(room, roomId, i, salt) {
       || (room.stations ?? []).some((st) => Math.hypot(x - st.at[0], z - st.at[1]) < 0.9);
     if (!clash) return [x, z];
   }
+
+  // Twelve throws of a dart, and then a look round the edge of the room.
+  //
+  // Rejection sampling alone is fine in an empty box and hopeless in a narrow
+  // band: the briefing room is six metres by four and a half with a conference
+  // table in the middle, which leaves a ring about a metre wide, and twelve
+  // uniform samples found a spot for one person in three. The other two were
+  // dropped silently — the ship simply had fewer people in it than its own
+  // rule said, and nothing anywhere complained. That is the same failure the
+  // note above records happening in the recreation room, fixed there by moving
+  // a threshold, which fixed that room and not the sampler.
+  //
+  // So when the darts miss, walk the perimeter deterministically. Sixteen
+  // bearings at two radii, offset by the person's index so two people do not
+  // stand in the same corner, and every one of them is a real position rather
+  // than a smaller crew.
+  for (let ring = 0; ring < 2; ring++) {
+    const scale = 1 - ring * 0.22;
+    for (let k = 0; k < 16; k++) {
+      const theta = ((k + i * 5) % 16) / 16 * Math.PI * 2;
+      const x = Math.cos(theta) * w * scale;
+      const z = Math.sin(theta) * d * scale;
+      const clash = (room.props ?? []).some((p) => p.solid !== false
+        && Math.hypot(x - p.at[0], z - p.at[1]) < (p.radius ?? 0.6) * 0.8 + 0.34)
+        || (room.stations ?? []).some((st) => Math.hypot(x - st.at[0], z - st.at[1]) < 0.9);
+      if (!clash) return [x, z];
+    }
+  }
   return null;
 }
 
@@ -13022,6 +13056,52 @@ const RULES = {
     crew: 'engineering',
     count: at(g, { normal: 2, yellow: 1, red: 0, blue: 4 }),
   }),
+
+  // The five rooms this table forgot.
+  //
+  // The header above says the two rooms that exist to be where people LIVE
+  // were the two rooms with nobody in them, and names the captain's quarters
+  // and the briefing room in the same sentence as the mess and the crew
+  // quarters. Only the second two got a rule. Measured at yellow alert, seven
+  // of seventeen compartments still returned nobody at all — including the
+  // room the ship is fought from when the bridge is gone.
+
+  // Auxiliary control. Dark and empty while the bridge is answering, and
+  // manned the moment it might not be: that is the entire reason deck eight
+  // has a second bridge in it. Blue is a maintenance watch, which is a
+  // different two people doing a different job.
+  auxcontrol: (g) => ({ crew: 'engineering', count: at(g, { normal: 0, yellow: 1, red: 2, blue: 2 }) }),
+
+  // The captain's own quarters. A yeoman with something to sign, and nobody
+  // at all once the klaxon goes — a captain who walks in at red alert and
+  // finds it empty has been told where his ship's people are.
+  quarters: (g) => ({ crew: 'ops', count: at(g, { normal: 1, yellow: 0, red: 0, blue: 1 }) }),
+
+  // The briefing room fills up when there is something to brief. At yellow
+  // that is the senior staff; docked, it is whoever is being handed orders.
+  //
+  // This is the room that found the silent drop in `place`: asked for three, it
+  // stood one up and lost the other two without a word. The count is what a
+  // senior staff briefing looks like; making the sampler able to find the
+  // positions was the fix, not shrinking the number to suit it.
+  briefing: (g) => ({ crew: 'command', count: at(g, { normal: 0, yellow: 3, red: 0, blue: 2 }) }),
+
+  // The brig is a guard post whether or not there is anybody in the cell, and
+  // it doubles at red alert because that is when there might be.
+  brig: (g) => ({ crew: 'security', count: at(g, { normal: 1, yellow: 1, red: 2, blue: 1 }) }),
+
+  // The transporter chief is always at the pad. A second operator while there
+  // is a party on the surface to bring back — `ashore` is the game's own word
+  // for it — and two more at blue, when cargo comes through here rather than
+  // round the hull.
+  transporter: (g) => ({
+    crew: 'engineering',
+    count: 1 + (g?.ashore ? 1 : 0) + at(g, { blue: 2 }),
+  }),
+
+  // Not the turbolift. A lift car is two and a bit metres square and the
+  // captain is standing in it; putting a second person in there is not a
+  // busier ship, it is a worse one.
 };
 
 /** How much of her complement the ship still has. */
@@ -28517,14 +28597,6 @@ const EXIT_REACH = 0.9;
 
 const TAU = Math.PI * 2;
 
-/** Shortest signed angle from a to b, in radians. */
-function angleDelta(a, b) {
-  let d = (b - a) % TAU;
-  if (d > Math.PI) d -= TAU;
-  if (d < -Math.PI) d += TAU;
-  return d;
-}
-
 /**
  * Push a point out of a solid circle, if it is inside one.
  *
@@ -28960,7 +29032,6 @@ __exports.WALK_SPEED = WALK_SPEED;
 __exports.RUN_SPEED = RUN_SPEED;
 __exports.REACH = REACH;
 __exports.EXIT_REACH = EXIT_REACH;
-__exports.angleDelta = angleDelta;
 __exports.confine = confine;
 __exports.nearAnyExit = nearAnyExit;
 __exports.avoidProps = avoidProps;
@@ -34765,7 +34836,7 @@ const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __req
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
 const { boardableState, BOARDING_RANGE } = __require("src/sim/ai.js");
 const { STARTING_STORES, beginFabrication, advanceFabrication, salvageWreck, RECIPE_BY_ID } = __require("src/sim/fabrication.js");
-const { buildDutyRoster, advanceAssignments, beginAssignment, dutySlots, DutyOfficer, replaceLosses } = __require("src/sim/duty.js");
+const { buildDutyRoster, advanceAssignments, DutyOfficer, replaceLosses } = __require("src/sim/duty.js");
 const { ShipMastery } = __require("src/sim/mastery.js");
 const { offerCommand, acceptCommandOffer, declineCommandOffer, takeCommandOf, replacementFor, yardReport } = __require("src/sim/command.js");
 const { resolveHail, STANDING_EFFECTS, HAIL_ENDING } = __require("src/sim/diplomacy.js");
@@ -35506,8 +35577,12 @@ class Game {
     this.ship.applyMods(this.loadout.shipMods());
     // What the crew know about this hull is part of what the hull can do.
     if (this.mastery) this.ship.applyMods(this.mastery.shipMods());
-    // The captain's own abilities are part of the ship's performance.
-    if (this.character) this.ship.applyMods(this.character.shipMods());
+    // The captain's own abilities are part of the ship's performance — while
+    // the captain is the one commanding her. See `commandMods`.
+    this.ship.applyMods(this.commandMods());
+    // And what the captain buys by standing somewhere other than the chair.
+    const here = this.stationMods();
+    if (here) this.ship.applyMods(here);
     // Difficulty is a setting on the campaign, not on a training simulator.
     // Inside a scripted scenario the player flies the ship as designed, because
     // an exercise that got easier when you moved a slider would not be an
@@ -36084,6 +36159,29 @@ class Game {
     }
   }
 
+  /**
+   * May the captain leave the compartment they are standing in?
+   *
+   * One question, asked in the one place that asks it. It used to be asked in
+   * `goToRoom` and nowhere else, and there are TWO ways off a deck: say "go to
+   * engineering", or walk up to the door and open it. The second went through
+   * `Walker.useExit` straight from the screen, with no mode check anywhere on
+   * the path — so a captain under fire was refused the order and then stepped
+   * through the door beside him into the turbolift, which serves every deck on
+   * the ship. Measured: `goToRoom` returned "Not while we are under fire,
+   * Captain" on the same tick that `useExit` returned `{ok: true}` and put him
+   * on deck one with a Galor still shooting.
+   *
+   * The same shape as `mayBerthDespiteStanding` in the feats work: a rule
+   * written out twice is a rule that will be enforced once.
+   */
+  mayWalk() {
+    if (this.mode === MODES.COMBAT) {
+      return { ok: false, reason: 'Not while we are under fire, Captain.' };
+    }
+    return { ok: true };
+  }
+
   /** Set off for another part of the ship. */
   goToRoom(nameOrId) {
     const room = findRoom(nameOrId) ?? null;
@@ -36091,12 +36189,37 @@ class Game {
     if (room.id === this.walk.roomId && !this.walkOrder) {
       return { ok: false, reason: `You are in ${room.name}, Captain.` };
     }
-    if (this.mode === MODES.COMBAT) {
-      return { ok: false, reason: 'Not while we are under fire, Captain.' };
-    }
+    const may = this.mayWalk();
+    if (!may.ok) return may;
     this.walkOrder = { toId: room.id, memory: {}, elapsed: 0 };
     this.pushLog(`Making for ${room.name}.`, 'captain');
     return { ok: true, room };
+  }
+
+  /**
+   * Go through the door in front of you.
+   *
+   * The game-level verb behind the "Use" button and "open the door", so the
+   * screen no longer reaches past the game into the walker. Two things were
+   * lost by going round: the combat rule above, and the con — walking through
+   * a door by hand never called `updateCon`, so a captain who left the bridge
+   * that way was still holding the con from the cargo bay while the first
+   * officer stood on the bridge with nothing to do.
+   *
+   * @param {string|null} toId which stop, for the turbolift; it has one door
+   *        and nine destinations behind it.
+   */
+  useExitAhead(toId = null) {
+    const may = this.mayWalk();
+    if (!may.ok) return may;
+    const r = this.walk.useExit(toId);
+    if (r.ok) {
+      this.walkOrder = null;
+      this.pushLog(`Arrived at ${this.walk.room.name}.`, 'captain');
+      this.updateCon();
+      emit('walk', { roomId: this.walk.roomId, arrived: true });
+    }
+    return r;
   }
 
   // -------------------------------------------------------- the diagnostic
@@ -36165,6 +36288,103 @@ class Game {
 
   /** True while the captain is standing on their own bridge. */
   get onBridge() { return this.walk.roomId === 'bridge'; }
+
+  /**
+   * The two compartments the ship can be commanded from.
+   *
+   * Auxiliary control is on deck eight and it is what auxiliary control is
+   * FOR. It was one of six rooms nothing outside the deck plan referenced —
+   * a room with a door, a light and no reason to walk to it.
+   */
+  static CON_ROOMS = new Set(['bridge', 'auxcontrol']);
+
+  /** Is the captain somewhere they can actually conn the ship from? */
+  get atTheCon() { return Game.CON_ROOMS.has(this.walk.roomId); }
+
+  /**
+   * What the ship gets from whoever is actually conning her.
+   *
+   * The captain's ability modifiers used to reach the ship unconditionally, so
+   * a captain asleep in his quarters or locked in his own brig flew exactly the
+   * ship a captain in the chair flew. Measured over twenty-four battles against
+   * two Galors, from the bridge and from the brig: accuracy 1.0450 both ways,
+   * repair 1.116 both ways, three won of twenty-four both ways, 4.7% hull left
+   * both ways. Byte for byte the same fight.
+   *
+   * And the con — handover, the line of succession, the watch bill, the hours
+   * kept, the handback report — was read by two display sites, one invariant
+   * and the save file. Nothing about the ship changed hands with it.
+   *
+   * Now the ship is commanded by whoever has the con. That is the cost of
+   * walking off the bridge, and it is also the thing that makes a good first
+   * officer worth having: a green captain's ship is measurably better off with
+   * the exec conning her, which is true and was not sayable before.
+   */
+  commandMods() {
+    const relief = this.conOfficer;
+    if (relief) return Game.watchMods(relief);
+    return this.character?.shipMods() ?? {};
+  }
+
+  /**
+   * How a watch officer commands, as against how a captain does.
+   *
+   * The captain's contribution comes off the character sheet, ability by
+   * ability. An officer has no character sheet — they have `expertise`, which
+   * runs 0..100 with 50 for competent — so it is the same shape scaled off the
+   * one number they do have. A very good exec at 85 is worth about a third of
+   * a sharp captain and rather more than a poor one.
+   */
+  static watchMods(officer) {
+    const e = Math.max(0, ((officer?.expertise ?? 50) - 50) / 50);
+    return {
+      accuracy: 1 + e * 0.05,
+      critChance: e * 0.02,
+      repairRate: 1 + e * 0.10,
+      shieldRegen: 1 + e * 0.05,
+      stealthDetect: 1 + e * 0.10,
+    };
+  }
+
+  /**
+   * What the captain buys by being in the room rather than on the bridge.
+   *
+   * The other half of the trade. Standing in main engineering while the
+   * repair parties work is worth something an order over the intercom is not,
+   * and so is being in sickbay while they are carrying people in — and both
+   * are paid for by not having the con, which is what `commandMods` just took
+   * away. That is the whole point: the room is a choice with two sides now,
+   * rather than a backdrop.
+   */
+  stationMods() {
+    const c = this.character;
+    if (!c) return null;
+    switch (this.walk?.roomId) {
+      case 'engineering':
+        return { repairRate: 1 + Math.max(0, c.mod('engineering')) * 0.08 };
+      case 'sickbay':
+        return { crewProtect: Math.max(0, c.mod('medicine')) * 0.04 };
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Recompute the ship's modifiers when — and only when — what they depend on
+   * has changed.
+   *
+   * `updateCon` runs every frame the captain is walking, and `applyAllMods`
+   * resets the whole modifier stack and rebuilds it. Doing that thirty times a
+   * second while somebody crosses a corridor is not free, and the answer is
+   * the same on all thirty. Two comparisons say whether to ask.
+   */
+  refreshCommand() {
+    const key = `${this.walk?.roomId ?? ''}:${this.conStation ?? ''}`;
+    if (key === this.commandKey) return false;
+    this.commandKey = key;
+    this.applyAllMods();
+    return true;
+  }
 
   /** The officer who has the con, or null when the captain has it. */
   get conOfficer() {
@@ -36244,6 +36464,10 @@ class Game {
       this.officerSays(officer.station, 'Aye, Captain. I have the con.', 'report');
     }
     emit('con', { officer, held: true });
+    // The ship changes hands with the con. Also here, and not only in
+    // `updateCon`, because "Mister Spock, you have the con" is an order the
+    // captain can give from the chair.
+    this.refreshCommand();
     return { ok: true, officer };
   }
 
@@ -36300,6 +36524,7 @@ class Game {
       this.pushLog('I have the con.', 'captain');
     }
     emit('con', { officer, held: false });
+    this.refreshCommand();
     return { ok: true, officer, lines };
   }
 
@@ -36313,8 +36538,15 @@ class Game {
    */
   updateCon() {
     if (this.over) return null;
-    if (this.onBridge) {
-      if (this.conStation && !this.conGiven) return this.takeCon();
+    // `atTheCon`, not `onBridge`. Auxiliary control is a place the ship can be
+    // commanded from, which is the whole of what the room is for.
+    if (this.atTheCon) {
+      if (this.conStation && !this.conGiven) {
+        const r = this.takeCon();
+        this.refreshCommand();
+        return r;
+      }
+      this.refreshCommand();
       return null;
     }
     if (!this.conStation) {
@@ -36322,8 +36554,10 @@ class Game {
       if (r.ok) {
         this.officerSays(r.officer.station, 'I have the con, Captain.', 'report');
       }
+      this.refreshCommand();
       return r;
     }
+    this.refreshCommand();
     return null;
   }
 
@@ -43587,14 +43821,27 @@ class App {
     }
 
     if (w.atExit) {
-      const r = w.room.lift ? { ok: false, needsDestination: true } : w.useExit();
+      // `g.useExitAhead`, not `w.useExit`. Going round the game into the
+      // walker meant the door was the one way off a deck that asked nothing:
+      // not whether we are under fire, and not who has the con.
+      // Asked before the lift's own question, so a captain under fire is told
+      // no rather than offered a list of decks that will each refuse him.
+      const may = g.mayWalk();
+      if (!may.ok) {
+        audio.play('ui_deny');
+        g.pushLog(may.reason, 'computer');
+        this.render();
+        return;
+      }
+      const r = w.room.lift ? { ok: false, needsDestination: true } : g.useExitAhead();
       if (r.ok) { audio.play('door'); haptic('confirm'); this.render(); return; }
       // A lift needs a deck. Offer the stops rather than guessing one.
       this.showMessage('Turbolift', ['Which deck, Captain?'],
         w.liftStops().map((e) => button(e.label ?? e.to, () => {
           this.closeModal();
-          w.useExit(e.to);
-          audio.play('door');
+          const ride = g.useExitAhead(e.to);
+          audio.play(ride.ok ? 'door' : 'ui_deny');
+          if (!ride.ok && ride.reason) g.pushLog(ride.reason, 'computer');
           this.render();
         }, { color: 'blue' })));
       return;

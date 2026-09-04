@@ -2815,6 +2815,113 @@ other than what its cards say. Same shelf as `ignorePressure`,
 `ignoreOutnumbered` and `outnumberedAdvantage` in §40.
 
 
+## 43. A captain fought the same battle from the chair and from his own brig
+
+Twenty-four battles against two Galors, the same captain, the same seeds, moved
+from compartment to compartment before the shooting started:
+
+| standing in | accuracy | repair | won | hull left |
+| --- | --- | --- | --- | --- |
+| the bridge | 1.0450 | 1.116 | 3 / 24 | 4.7% |
+| his quarters | 1.0450 | 1.116 | 3 / 24 | 4.7% |
+| **the brig** | 1.0450 | 1.116 | 3 / 24 | 4.7% |
+| main engineering | 1.0450 | 1.116 | 3 / 24 | 4.7% |
+
+Byte for byte the same fight from the captain's chair and from a cell. The ship
+has seventeen hand-authored rooms, a walker with collision and routing, a
+turbolift serving nine decks, ambient occupancy and a first-person view, and
+the only mechanical question any of it could answer was whether the chair was
+within arm's reach.
+
+### The con was the missing wire
+
+Walking off the bridge already handed the con over. There is a line of
+succession (`watch.js`), a watch bill, hours kept, and a handback report read
+out when the captain takes it back — *"the ship kept going without you, which is
+the whole reason the con exists rather than the bridge simply pausing."*
+
+`conStation` was read by two display sites, one invariant, and the save file.
+**Nothing about the ship changed hands with it.**
+
+So the ship is now commanded by whoever holds the con. The captain's ability
+modifiers reach the ship while the captain is conning her; a watch officer
+contributes the same shape scaled off `expertise`, which is the one number an
+officer has where a captain has a character sheet.
+
+The rule cuts both ways, and that is the test of whether it is a rule about
+command rather than a penalty for walking: **a captain with no ability
+modifiers at all is measurably better off with a good first officer conning the
+ship.** That was true of real ships and was not sayable in this one before.
+
+Auxiliary control is the second place the ship can be commanded from. It was
+one of six rooms nothing outside the deck plan referenced — a compartment with
+a door, a light and no reason to walk to it.
+
+And the room buys what an intercom cannot: main engineering scales `repairRate`
+off the captain's Engineering, sickbay scales `crewProtect` off Medicine, and
+both are paid for with the con. The room is a choice with two sides now.
+
+### Two doors off a deck, one rule
+
+`goToRoom` refused to move the captain under fire. The other way off a deck —
+walk up to the door, press Use — went from the screen into `Walker.useExit`
+with no mode check anywhere on the path. Measured on the same tick:
+
+    goToRoom('engineering') -> {ok: false, reason: "Not while we are under fire, Captain."}
+    useExit()               -> {ok: true, room: turbolift}   ... and the lift serves nine decks
+
+Going round the game also skipped `updateCon`, so a captain who left the bridge
+by hand was still holding the con from the cargo bay while his first officer
+stood on the bridge with nothing to do.
+
+`Game.useExitAhead` is the verb, `Game.mayWalk` is the rule, and a wiring test
+now asserts that **only `state.js` and `walk.js` call `useExit` at all** —
+because "one rule in one place" is a claim about the whole tree, not about the
+two lines that were fixed. Same shape as §42's `mayBerthDespiteStanding`.
+
+### The sampler that quietly shipped a smaller crew
+
+Five compartments had no occupancy rule: auxiliary control, the captain's
+quarters, the briefing room, the brig and the transporter room. At yellow alert
+seven of seventeen returned nobody at all.
+
+Writing the rules found something older. `place()` threw twelve uniform darts at
+the room and gave up, and the briefing room is six metres by four and a half
+with a conference table in the middle of it — a clear ring about a metre wide.
+Asked for three, it stood **one** of them up and dropped the other two without a
+word. The ship had fewer people in it than its own table said and nothing
+anywhere complained.
+
+The note already on `place` records exactly this happening in the recreation
+room and fixing it by moving a threshold, which fixed that room and not the
+sampler. So the darts now fall back to a deterministic walk round the
+perimeter — sixteen bearings at two radii, offset by the person's index. The
+briefing room seats its briefing, and **the recreation room got back a sixth
+person it had been asking for and losing all along.**
+
+A test now walks every room at every alert condition and fails if anybody is
+standing inside the furniture, so no future rule can quietly ask for more than a
+compartment holds.
+
+### Read it or delete it
+
+`angleDelta` (`walk.js`) was exported and not called even inside the file that
+declared it — `stepToward` snaps its facing with a raw `atan2`. Deleted.
+
+`ROOM_WORDS` (`interiors.data.js`) was exported, imported nowhere, and
+documented as being "for the parser's gazetteer." Deleted rather than wired: the
+gazetteer's business is fuzzy and phonetic matching of star system names, the
+note directly above `findRoom` says room matching is **deliberately not fuzzy**,
+and handing it `bridge`, `brig` and `cargo` as place words is how "set course
+for the bridge" starts resolving to a star.
+
+Three other things a survey called dead were not, and were checked before being
+touched: `Game.get watchOrder` is used at `screens.js:77`, and `RECIPE_BY_ID`
+and `resolveIn` are both used in `state.js`. Only `beginAssignment` and
+`dutySlots` were genuinely unused imports. **Verify a standing figure before
+building on it** — §42, and the third time this run.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
