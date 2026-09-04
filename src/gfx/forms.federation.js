@@ -28,7 +28,7 @@
 // reflects it, so everything below is written for one side only.
 
 import { vec3 } from './math.js';
-import { saucer, tube, box, sphere, mirrored } from './mesh.js';
+import { saucer, tube, box, sphere, mirrored, seg } from './mesh.js';
 
 /**
  * One nacelle and its glowing cap, at a point. Every form here ends with a
@@ -37,12 +37,12 @@ import { saucer, tube, box, sphere, mirrored } from './mesh.js';
 function nacelle(m, p, { x, y, z, length: len, radius: r }) {
   tube(m, {
     origin: vec3(x, y, z), length: len, r0: r, r1: r * 0.84,
-    segments: 10, color: p.hull,
+    segments: seg(10), color: p.hull,
   });
   // The bussard cap: the one emissive detail on a Federation hull.
   sphere(m, {
     origin: vec3(x + len, y, z), radius: r * 1.05,
-    segments: 8, rings: 5, color: p.glow,
+    segments: seg(8), rings: 5, color: p.glow,
   });
 }
 
@@ -73,7 +73,7 @@ export const FEDERATION_FORMS = {
       // A Miranda's primary hull is wider across than it is deep fore-and-aft,
       // which is the opposite of every other saucer in the fleet.
       stretch: b.saucerStretch ?? 0.86,
-      segments: b.segments ?? 22,
+      segments: seg(b.segments ?? 22),
       color: p.hull,
       rimColor: p.trim,
     });
@@ -97,7 +97,7 @@ export const FEDERATION_FORMS = {
     });
     tube(mb, {
       origin: vec3(sx - sr * 0.34, ry, 0), length: sr * 0.68,
-      r0: high * 0.11, r1: high * 0.11, segments: 8, color: p.hull,
+      r0: high * 0.11, r1: high * 0.11, segments: seg(8), color: p.hull,
     });
 
     const ny = b.nacelleY ?? -high * 0.28;
@@ -137,7 +137,7 @@ export const FEDERATION_FORMS = {
       thickness: b.saucerThickness ?? high * 0.26,
       domeRatio: 0.3, domeHeight: high * 0.14,
       stretch: b.saucerStretch ?? 0.94,
-      segments: b.segments ?? 20,
+      segments: seg(b.segments ?? 20),
       color: p.hull, rimColor: p.trim,
     });
 
@@ -146,7 +146,7 @@ export const FEDERATION_FORMS = {
       origin: vec3(-0.5, ly, 0),
       length: b.hullLength ?? 0.86,
       r0: high * 0.3, r1: high * 0.36,
-      segments: 12, color: p.hull,
+      segments: seg(12), color: p.hull,
     });
     mirrored(mb, (m) => {
       box(m, {
@@ -186,7 +186,7 @@ export const FEDERATION_FORMS = {
       radius: sr,
       thickness: b.saucerThickness ?? high * 0.24,
       domeRatio: 0.32, domeHeight: high * 0.18,
-      segments: b.segments ?? 20,
+      segments: seg(b.segments ?? 20),
       color: p.hull, rimColor: p.trim,
     });
     box(mb, {
@@ -198,7 +198,7 @@ export const FEDERATION_FORMS = {
       origin: vec3(-0.5, hy, 0),
       length: b.hullLength ?? 0.5 + sx * 0.8,
       r0: high * 0.22, r1: high * 0.28,
-      segments: 12, color: p.hull,
+      segments: seg(12), color: p.hull,
     });
 
     // `mirrored` gives port and starboard; the loop gives the stack.
@@ -246,14 +246,14 @@ export const FEDERATION_FORMS = {
       thickness: b.saucerThickness ?? high * 0.2,
       domeRatio: 0.3, domeHeight: high * 0.12,
       stretch: b.saucerStretch ?? 1.2,
-      segments: b.segments ?? 22,
+      segments: seg(b.segments ?? 22),
       color: p.hull, rimColor: p.trim,
     });
     tube(mb, {
       origin: vec3(-0.5, hy, 0),
       length: b.hullLength ?? 0.5 + sx * 0.8,
       r0: high * 0.2, r1: high * 0.26,
-      segments: 12, color: p.hull,
+      segments: seg(12), color: p.hull,
     });
 
     const spine = sx - sr * 0.45;
@@ -317,7 +317,7 @@ export const FEDERATION_FORMS = {
     });
     sphere(mb, {
       origin: vec3(bl * 0.46, -high * 0.06, 0),
-      radius: high * 0.24, segments: 8, rings: 5,
+      radius: high * 0.24, segments: seg(8), rings: 5,
       color: p.dish ?? p.glow,
     });
 

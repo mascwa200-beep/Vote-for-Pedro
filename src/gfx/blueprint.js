@@ -20,7 +20,7 @@
 // renderer normalises so the largest live hull frames sensibly.
 
 import { vec3 } from './math.js';
-import { MeshBuilder, saucer, tube, box, sphere, mirrored } from './mesh.js';
+import { MeshBuilder, saucer, tube, box, sphere, mirrored, seg } from './mesh.js';
 import { FEDERATION_FORMS } from './forms.federation.js';
 
 /**
@@ -95,7 +95,7 @@ const FORMS = {
       // this primitive could only make circles, so all three were drawn as the
       // one shape they are not.
       stretch,
-      segments: b.segments ?? 22,
+      segments: seg(b.segments ?? 22),
       color: p.hull,
       rimColor: p.trim,
     });
@@ -118,7 +118,7 @@ const FORMS = {
       length: b.hullLength ?? 0.5 + sx * (b.hullReach ?? 0.85),
       r0: b.hullR0 ?? high * 0.17 * thick,
       r1: b.hullR1 ?? high * 0.23 * thick,
-      segments: 12,
+      segments: seg(12),
       color: p.hull,
     });
 
@@ -166,14 +166,14 @@ const FORMS = {
         length: nl,
         r0: nr,
         r1: nr * 0.82,
-        segments: 10,
+        segments: seg(10),
         color: p.hull,
       });
       // The bussard cap: the one emissive detail on the whole hull.
       sphere(m, {
         origin: vec3(nx + nl, ny, nz),
         radius: nr * 1.05,
-        segments: 8,
+        segments: seg(8),
         rings: 5,
         color: p.glow,
       });
@@ -217,7 +217,7 @@ const FORMS = {
       thickness: b.saucerThickness ?? high * 0.19,
       domeRatio: b.domeRatio ?? 0.3,
       domeHeight: b.domeHeight ?? high * 0.2,
-      segments: b.segments ?? 24,
+      segments: seg(b.segments ?? 24),
       color: p.hull,
       rimColor: p.trim,
     });
@@ -239,7 +239,7 @@ const FORMS = {
       length: hl,
       r0: hr * 0.85,
       r1: hr,
-      segments: 14,
+      segments: seg(14),
       color: p.hull,
       capAft: true,
     });
@@ -251,13 +251,13 @@ const FORMS = {
       length: hr * 0.34,
       r0: hr,
       r1: hr * 0.86,
-      segments: 14,
+      segments: seg(14),
       color: p.trim,
     });
     sphere(mb, {
       origin: vec3(dishX + hr * 0.24, hullY, 0),
       radius: hr * 0.74,
-      segments: 12,
+      segments: seg(12),
       rings: 6,
       color: p.dish ?? p.glow,
     });
@@ -306,7 +306,7 @@ const FORMS = {
         length: nl,
         r0: nr,
         r1: nr * 0.9,
-        segments: 12,
+        segments: seg(12),
         color: p.hull,
         capAft: true,
       });
@@ -316,13 +316,13 @@ const FORMS = {
         length: nr * 0.6,
         r0: nr * 0.95,
         r1: nr * 1.1,
-        segments: 12,
+        segments: seg(12),
         color: p.trim,
       });
       sphere(m, {
         origin: vec3(nx + nl + nr * 0.45, ny, nz),
         radius: nr * 1.08,
-        segments: 10,
+        segments: seg(10),
         rings: 6,
         color: p.glow,
       });
@@ -345,7 +345,7 @@ const FORMS = {
       length: b.bodyLength ?? 0.6,
       r0: b.bodyR0 ?? 0.2,
       r1: b.bodyR1 ?? 0.12,
-      segments: 10,
+      segments: seg(10),
       color: p.hull,
     });
     // Neck forward to the command head.
@@ -386,7 +386,7 @@ const FORMS = {
       length: 0.42,
       r0: 0.13,
       r1: 0.1,
-      segments: 10,
+      segments: seg(10),
       color: p.trim,
     });
     mirrored(mb, (m) => {
@@ -409,7 +409,7 @@ const FORMS = {
         color: p.trim,
       });
     });
-    sphere(mb, { origin: vec3(0.62, 0, 0), radius: 0.11, segments: 10, rings: 6, color: p.glow });
+    sphere(mb, { origin: vec3(0.62, 0, 0), radius: 0.11, segments: seg(10), rings: 6, color: p.glow });
   },
 
   /**
@@ -448,7 +448,7 @@ const FORMS = {
         color: p.hull,
       });
     });
-    sphere(mb, { origin: vec3(0.55, 0.02, 0), radius: 0.1, segments: 8, rings: 5, color: p.glow });
+    sphere(mb, { origin: vec3(0.55, 0.02, 0), radius: 0.1, segments: seg(8), rings: 5, color: p.glow });
   },
 
   /** Literally a cube. There is nothing else to say about it. */
@@ -480,7 +480,7 @@ const FORMS = {
       length: b.length_ ?? 1.0,
       r0: b.r0 ?? 0.16,
       r1: b.r1 ?? 0.13,
-      segments: 10,
+      segments: seg(10),
       color: p.hull,
     });
     box(mb, { center: vec3(0.42, 0.14, 0), size: vec3(0.24, 0.14, 0.2), color: p.trim });
