@@ -56,18 +56,30 @@ describe('an enemy captain calls a shot', () => {
     // Doctrine asserted through behaviour: fly the fight and read what the
     // hostiles actually set. A table held against itself would pass on a
     // table nothing reads.
+    //
+    // The player's ship is chosen per opponent so the test is about the
+    // doctrine and not about whether that class can hurt a Constitution.
+    // Measured over thirty battles, how often each ever got a facing below the
+    // threshold at all: a Galor 30/30, a Marauder 7/30 against a Constitution
+    // and 26/30 against a Miranda — and an Orion raider and a Romulan scout
+    // 0/30, never once taking any facing of a Constitution below 0.74. A
+    // Jem'Hadar attack ship manages 28/30 against a Constitution and 0/30
+    // against a Galaxy, which is a hull it cannot reach past at all.
     const WANT = {
-      d7: 'shields',            // Klingon, aggressive — they want the kill
-      galor: 'weapons',         // Cardassian, attrition — take the guns first
-      warbird: 'engines',       // Romulan, ambush — strike and leave
-      jem_hadar_attack: 'warpcore', // Dominion, fanatic — cost is not weighed
-      marauder: 'engines',      // Ferengi, opportunist — the hull intact
-      borg_cube: 'shields',     // Borg, assimilate — the boarding precondition
+      d7: ['shields', 'constitution'],      // Klingon, aggressive — the kill
+      galor: ['weapons', 'constitution'],   // Cardassian, attrition — the guns first
+      warbird: ['engines', 'constitution'], // Romulan, ambush — strike and leave
+      jem_hadar_attack: ['warpcore', 'constitution'], // Dominion, fanatic — cost unweighed
+      marauder: ['engines', 'miranda'],     // Ferengi, opportunist — the hull intact
+      borg_cube: ['shields', 'galaxy'],     // Borg, assimilate — the boarding door
     };
     const seen = {};
-    for (const [cls, want] of Object.entries(WANT)) {
-      const me = cls === 'borg_cube' ? 'galaxy' : 'constitution';
-      for (let seed = 1n; seed <= 4n && !seen[cls]; seed++) {
+    for (const [cls, [want, me]] of Object.entries(WANT)) {
+      // Eight seeds, not four. A Marauder against a Constitution rarely gets
+      // through the shields at all, so whether it ever reaches the threshold
+      // in a given battle is a coin toss — and a four-seed sample of a coin
+      // toss fails whenever anything upstream shifts the seeds.
+      for (let seed = 1n; seed <= 8n && !seen[cls]; seed++) {
         brawl({
           me, them: [cls], seed,
           each: (g, eng) => {

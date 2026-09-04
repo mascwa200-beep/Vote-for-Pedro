@@ -1748,6 +1748,115 @@ because a D7 carries torpedoes and they were enough on their own.
 
 ---
 
+## 32. The shield facing that had never once been attacked
+
+A ship carries six shield facings. The AI chose its elevation like this:
+
+```js
+const dorsalWeak = target.shieldPctOf('dorsal') < target.shieldPctOf('ventral');
+const bias = dorsalWeak ? 1 : -1;
+```
+
+With both poles at full, `<` is false. So the bias was **-1 on the opening tick
+of every engagement ever fought**; the ship went below, shot the ventral shield,
+and made `dorsal < ventral` false for the rest of the battle. Self-reinforcing,
+and never revisited.
+
+Measured over 133,804 ticks with two or more hostiles alive, the facing of the
+player's ship that a shot would have landed on:
+
+| | fore | aft | starboard | port | ventral | dorsal |
+|---|---|---|---|---|---|---|
+| before | 37% | 25% | 16% | 11% | 15% | **0.0%** |
+| after | 36% | 23% | 17% | 10% | 11% | **9%** |
+
+Every hostile in the game attacked from below, always. One sixth of the
+defensive geometry the ship carries was decoration.
+
+### And the line under the comment was not doing what the comment said
+
+```js
+// Hold the elevation that keeps the target's weaker face toward us.
+ship.desiredPitch = ship.elevationTo(target);
+```
+
+`elevationTo(target)` points **at** the target. So a ship in the pocket levelled
+off — and the pocket is where a ship spends most of a battle. `chooseElevation`
+was only ever consulted while closing or backing off, which is why a fixed
+220-unit offset had so little effect that scaling it looked necessary.
+
+### Two things measured and thrown away
+
+**Scaling the offset to the current distance.** To reach the dorsal facing you
+have to be more above the ship than beside it, so the offset "ought" to scale
+with the range. It diverges: the further out you are the further above you want
+to be, which puts you further out. The median battle in a debris field went from
+59 seconds to **189**, and fights stopped resolving.
+
+**Scaling it to the attacker's own preferred range.** Stable, but it moved the
+dorsal share not at all — 6% either way — while costing thirteen seconds a
+battle, because a ship that climbs to its own engagement range arrives late and
+by a longer route. The share of shots that land dorsally does not come from
+where the attacker holds station; it comes from the player manoeuvring
+underneath somebody who has chosen the high side.
+
+What is left is one line for the tie-break and one for the pocket. The split
+offset was then measured rather than picked:
+
+| split | dorsal shots | open-space median | debris median |
+|---|---|---|---|
+| 220 | 10% | 67 s | 70 s |
+| 150 | 10% | 67 s | 61 s |
+| **110** | **9%** | **63 s** | **67 s** |
+| 70 | 5% | 63 s | 65 s |
+| *(before)* | *0%* | *60 s* | *59 s* |
+
+The first version of that table was measured before the pocket held its
+elevation at all, and said 110 bought 3% and 220 bought 6% at thirteen seconds a
+battle. Fixing the pocket moved every row: **a tuning table is only true for the
+code it was measured on.**
+
+### A guard that the code had quietly walked up to
+
+The cover work's stall guard asserted a median under 150 seconds over five
+seeds. Measured properly, thirty seeds of one matchup — a Constitution against
+two Galors in a debris field:
+
+| | median | worst | player deaths |
+|---|---|---|---|
+| §30 (cover) | 109 s | 176 s | 6 / 30 |
+| §31 (called shots) | 148 s | 227 s | 13 / 30 |
+| this change | 134 s | 314 s | 17 / 30 |
+
+Nine seeds of that distribution have a median anywhere between 60 and 190, so a
+150 bar is a coin toss dressed as an assertion — and §31 walked the code most of
+the way to it without anything noticing. What the guard is actually for is a
+fight that never ends because both sides are behind rocks, so it now asserts
+that no battle runs to the harness limit, with the distribution written down
+beside it.
+
+### And a balance observation for later
+
+Setting up the doctrine test meant asking how often each class can get *any*
+facing of the player's ship below the threshold at all, over thirty battles:
+
+| matchup | ever reached it |
+|---|---|
+| Constitution vs Galor | 30 / 30 |
+| Constitution vs Jem'Hadar attack ship | 28 / 30 |
+| Miranda vs Marauder | 26 / 30 |
+| Constitution vs Marauder | 7 / 30 |
+| **Constitution vs Orion raider** | **0 / 30** |
+| **Constitution vs Romulan scout** | **0 / 30** |
+| **Galaxy vs Jem'Hadar attack ship** | **0 / 30** |
+
+A raider and a scout never once took any facing of a Constitution below 0.74 in
+thirty battles, and a Jem'Hadar attack ship cannot reach past a Galaxy at all.
+Small hulls are not a threat to a heavy cruiser in any sense the simulation
+models.
+
+---
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
