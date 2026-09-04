@@ -31,6 +31,7 @@ import {
   quatFromTo, quatAxisAngle, quatFromEuler,
 } from '../gfx/math.js';
 import { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } from '../gfx/room.js';
+import { occupantsOf } from '../sim/occupancy.js';
 import {
   starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME,
 } from '../gfx/scene.js';
@@ -247,6 +248,10 @@ export class FirstPersonView {
     if (!room) return;
     this.lastRoom = room;
     this.lastWalker = walker;
+    // Kept for `drawCrew`, which needs the SHIP to know who is standing in the
+    // room — see src/sim/occupancy.js. Stored rather than threaded through
+    // three call sites, like `lastRoom` and `lastWalker` above it.
+    this.lastGame = game;
 
     // Interior camera. A wider lens than the tactical plot, because a room at
     // arm's length through a 52-degree window is a keyhole.
@@ -702,6 +707,26 @@ export class FirstPersonView {
         normalMatrix: normalMatrix(this._model, this._normal),
         fogFar: 1e6,
       });
+    }
+
+    // And everybody who is not at a station.
+    //
+    // The stations above are static data, so before this the interior never
+    // changed: sickbay held one medical officer whether nobody was hurt or the
+    // ship had just taken forty casualties, the mess was equally deserted at
+    // green alert and at red, and a boarding party could be cutting through
+    // deck seven with the corridor outside standing empty. See
+    // src/sim/occupancy.js — who is in a room is a function of the ship now.
+    for (const who of occupantsOf(this.lastGame, room.id)) {
+      quatAxisAngle(vec3(0, 1, 0), who.facing, this._quat);
+      this._pos[0] = who.at[0]; this._pos[1] = 0; this._pos[2] = who.at[1];
+      compose(this._pos, this._quat, 1, this._model);
+      this.renderer.draw(`crew:${who.crew}:${who.mounted}`,
+        officerMesh(who.crew, who.mounted), {
+          model: this._model,
+          normalMatrix: normalMatrix(this._model, this._normal),
+          fogFar: 1e6,
+        });
     }
   }
 

@@ -816,7 +816,18 @@ function prop3d(solid, glow, prop) {
  * The uniform colour is the division, which is the one thing about a crewman
  * you are supposed to be able to read across a room.
  */
+/**
+ * Somebody who should not be aboard.
+ *
+ * Not a Starfleet division, and deliberately nothing like one: a boarding
+ * party in the corridor has to be unmistakable at a glance, in a first-person
+ * view with no labels on anything. Dark, and the one colour the 1966 uniform
+ * palette does not contain.
+ */
+const INTRUDER_COLOUR = [0.22, 0.24, 0.20];
+
 const DIVISION_COLOUR = {
+  intruder: INTRUDER_COLOUR,
   command: [0.86, 0.72, 0.18],       // gold
   helm: [0.86, 0.72, 0.18],
   comms: [0.68, 0.16, 0.16],         // red
