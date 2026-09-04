@@ -397,6 +397,16 @@ describe('a commission, played from the first order to the last', () => {
     // actually measured, so a real regression trips it and ordinary drift does
     // not. The measured figures are in the comment at the foot of the file.
     for (const j of FLOWN) {
+      // A commission that ends early is held to a different bar, not to no bar
+      // at all: it has to have ended for a reason the GAME gave. Losing two
+      // ships is one — that is a career, and walking it is worth doing. A
+      // driver that quietly broke out of its own loop is not, and would leave
+      // `over` empty, which is the difference this asserts.
+      if (j.endedEarly) {
+        assert.ok(j.over, `seed ${j.seed} stopped after ${j.legs} legs and nothing had ended`);
+        assert.ok(j.legs >= 8, `seed ${j.seed} ended after only ${j.legs} legs (${j.over})`);
+        continue;
+      }
       assert.ok(j.legs >= 20, `seed ${j.seed} only flew ${j.legs} legs`);
       assert.ok(j.systems.size >= 12,
         `seed ${j.seed} saw ${j.systems.size} systems in ${j.legs} legs`);
@@ -575,19 +585,19 @@ describe('and it plays the same way twice', () => {
 // that has quietly become a formality, and so a large swing shows up as a
 // difference from a written number rather than as nothing at all.
 //
-//   seed  legs ticks fights systems away outcomes eps/stages left days   SD
-//   77001  26  11326   3      17      3     2       5/13       4  471.9 5016.5
-//   77002  24  16219   3      16      3     3       3/8        2  675.8 5216.5
-//   77003  26  15677   6      22      4     3       6/16       7  653.2 5207.1
+//   seed  legs ticks fights systems away eps/stages left days   SD    ended
+//   77001  26  16771   5      22      5    9/23        5  705.1 5248.3 flying
+//   77002  17   5654   2      12      2    3/8         0  239.5 4770.3 two ships lost
+//   77003  26  15114   7      19      4    4/11        8  635.8 5191.3 flying
 //
 //   union: 6 encounter kinds, 6 choices, all 5 away templates,
 //          3 outcomes (routed, escaped, destroyed)
-//   worst hull 0.00 | ticks the hull rose on 876 | mission fights 5
-//   ships lost 1 | commissions ended early 1 (77002, stranded) | refusals 2
-//   watchdog violations 0 in 43,222 ticks
+//   worst hull 0.00 | ticks the hull rose on 927 | mission fights 6
+//   commissions ended early 1 (77002, a career ended, not a driver giving up)
+//   watchdog violations 0 in 37,539 ticks
 //
 // The days and the stardate are the columns to watch. Before the commission
 // clock ran while the app was open, all three sat on day one of 1,826 with the
-// stardate wandering off on its own; they now spend one to two years of a
+// stardate wandering off on its own; they now spend most of a year or two of a
 // five-year commission and the two numbers move together, because they are the
 // same number read two ways.

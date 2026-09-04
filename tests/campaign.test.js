@@ -13,6 +13,7 @@ import { CampaignClock, COMMISSION_DAYS, MAX_ABSENCE_HOURS, absenceReport } from
 import { checksum } from '../src/core/save.js';
 import { Game } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
+import { AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } from '../src/sim/away.js';
 
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
@@ -671,5 +672,114 @@ describe('a voyage takes the hours it takes', () => {
     assert.ok(g.dropOutOfWarp().ok, 'the order to break off was refused');
     const moved = (g.clock.stardate - before) * 24;
     assert.ok(Math.abs(moved - flown) < 1, `flew ${flown}h and the calendar moved ${moved}h`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A landing party costs time, and a world is done with once.
+//
+// Measured before this: thirty-two diplomatic landings at Vulcan back to back,
+// 190 experience, stardate 4523.3 -> 4523.3. The same two officers opened the
+// same discussion with the same government thirty-two times in an afternoon
+// and were paid for it every time — the only free action in a game where a
+// repair costs most of a day and docking costs two.
+
+describe('a landing party costs time, and a world is done with once', () => {
+  const inOrbitAt = (where, seed = 8n) => {
+    const g = new Game({ seed, crewMode: 'original' });
+    g.locationId = where;
+    assert.ok(g.enterOrbit().ok, `could not make orbit at ${where}`);
+    return g;
+  };
+
+  test('thirty-two landings at Vulcan are one landing at Vulcan', () => {
+    const g = inOrbitAt('vulcan');
+    let ran = 0;
+    let refusal = null;
+    for (let i = 0; i < 32; i++) {
+      const r = g.awayMission('diplomatic_landing');
+      if (!r.ok) { refusal = r.reason; break; }
+      ran++;
+    }
+    assert.equal(ran, 1, `${ran} landings at the same world`);
+    assert.match(refusal ?? '', /nowhere to send/i, `refused with: ${refusal}`);
+    assert.deepEqual(g.availableAwayMissions().map((t) => t.id), [],
+      'the offer came back at a world already done with');
+  });
+
+  test('and it charged the hours the hazard says it takes', () => {
+    const g = inOrbitAt('vulcan');
+    const before = { sd: g.clock.stardate, days: g.campaign.elapsedDays };
+    const r = g.awayMission('diplomatic_landing');
+    assert.equal(r.ok, true, r.reason);
+
+    const hazard = HAZARD_LEVEL[AWAY_TEMPLATES.diplomatic_landing.hazard];
+    assert.equal(r.hours, hazard.hours, `charged ${r.hours}h for a ${hazard.id} landing`);
+    // Both clocks, and by the same amount. One of them used not to move at all.
+    assert.ok(Math.abs((g.clock.stardate - before.sd) * 24 - hazard.hours) < 1e-6,
+      `the calendar moved ${(g.clock.stardate - before.sd) * 24} hours`);
+    assert.ok(Math.abs((g.campaign.elapsedDays - before.days) * 24 - hazard.hours) < 1e-6,
+      `the commission moved ${(g.campaign.elapsedDays - before.days) * 24} hours`);
+  });
+
+  test('and a more dangerous world keeps the party down longer', () => {
+    // The whole of what "time by hazard" means, asserted against the table
+    // rather than against numbers copied out of it.
+    const levels = ['routine', 'elevated', 'dangerous', 'extreme']
+      .map((id) => HAZARD_LEVEL[id].hours);
+    for (let i = 1; i < levels.length; i++) {
+      assert.ok(levels[i] > levels[i - 1],
+        `hazard ${i} is ${levels[i]}h and hazard ${i - 1} is ${levels[i - 1]}h`);
+    }
+    // Except the one the fiction will not have. A boarding action happens at
+    // weapons range in the middle of a battle; a day and a quarter cannot pass.
+    assert.ok(awayHours(AWAY_TEMPLATES.boarding_action) < 1,
+      `a boarding action takes ${awayHours(AWAY_TEMPLATES.boarding_action)} hours`);
+    assert.equal(awayHours(AWAY_TEMPLATES.colony_rescue), HAZARD_LEVEL.elevated.hours,
+      'a template with no override should take what its hazard says');
+  });
+
+  test('and the next world along is a different world', () => {
+    // The control for the assertion above: if "done with" were global rather
+    // than per world, the first test would pass for the wrong reason.
+    const g = inOrbitAt('vulcan');
+    assert.equal(g.awayMission('diplomatic_landing').ok, true);
+    g.locationId = 'andoria';
+    assert.ok(g.enterOrbit().ok);
+    assert.ok(g.availableAwayMissions().some((t) => t.id === 'diplomatic_landing'),
+      'a world nobody has landed on refused a landing party');
+  });
+
+  test('and failing does not re-arm the offer', () => {
+    // Otherwise retrying until it works is the correct play, and a colony you
+    // failed to evacuate is a colony you evacuate on the fourth attempt.
+    const g = inOrbitAt('vulcan');
+    const r = g.awayMission('diplomatic_landing');
+    assert.equal(r.ok, true);
+    // Whatever it returned — success, partial or failure — the world is done.
+    assert.ok(['success', 'partial', 'failure'].includes(r.outcome), r.outcome);
+    assert.deepEqual(g.availableAwayMissions().map((t) => t.id), [],
+      `a ${r.outcome} landing left the offer standing`);
+  });
+
+  test('and the record of where you have been survives a save', () => {
+    const g = inOrbitAt('vulcan');
+    assert.equal(g.awayMission('diplomatic_landing').ok, true);
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    back.locationId = 'vulcan';
+    assert.ok(back.enterOrbit().ok);
+    assert.deepEqual(back.availableAwayMissions().map((t) => t.id), [],
+      'reloading forgot which worlds had already been landed on');
+  });
+
+  test('and the hours the party was down did the ship’s work too', () => {
+    // `spendHours` goes through the same `passTime` an absence and the tick
+    // loop use, so an afternoon on the surface is an afternoon aboard.
+    const g = inOrbitAt('vulcan');
+    g.ship.hull = g.ship.maxHull * 0.5;
+    const hull = g.ship.hullPct;
+    assert.equal(g.awayMission('diplomatic_landing').ok, true);
+    assert.ok(g.ship.hullPct > hull,
+      `damage control did nothing for the ${HAZARD_LEVEL.routine.hours} hours the party was down`);
   });
 });

@@ -10,7 +10,7 @@ import { Crew, Officer, ABILITIES, ABILITY_LIST } from '../sim/officers.js';
 import { CaptainProgress, combatXP, SKILLS } from '../sim/skills.js';
 import { Loadout, startingLoadout, CONSOLES } from '../sim/loadout.js';
 import { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } from '../sim/combat.js';
-import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } from '../sim/away.js';
+import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } from '../sim/away.js';
 import { Walker, stepToward, findRoom, resolve as resolveIn } from '../sim/walk.js';
 import { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } from '../sim/watch.js';
 import { checkAll, Watchdog } from '../sim/invariants.js';
@@ -87,6 +87,16 @@ const MAX_HOSTILES = 6;
  * rounding error thirty times a second.
  */
 const LIVED_SLICE_HOURS = 0.25;
+
+/**
+ * Away templates that are about a place rather than about a target.
+ *
+ * These are the ones a world is done with once. The other two are gated by the
+ * thing they are about — a hostile's boardable state, and a hulk that has not
+ * been boarded — and filtering those by system would refuse the second hostile
+ * in a fight and the second wreck in a system.
+ */
+const PLACE_TEMPLATES = new Set(['colony_rescue', 'diplomatic_landing', 'covert_landing']);
 
 /**
  * The chance, per commission hour under way, that something drops us out.
@@ -335,6 +345,10 @@ export class Game {
     // silently on every save would let a player pick the app up and put it down
     // repeatedly to keep a fabrication job permanently a quarter-hour from done.
     this.livedHours = 0;
+    // `templateId@systemId` for every landing party that has already gone down
+    // somewhere this commission. A colony is evacuated once. See
+    // `availableAwayMissions`.
+    this.awayDone = new Set();
 
     this.commission();
     this.pushLog(`Assumed command of the ${this.ship.name}, ${this.ship.registry}.`, 'captain');
@@ -2920,7 +2934,18 @@ export class Game {
       }
     }
 
-    return out;
+    // A world is done with once. Thirty-two diplomatic landings at Vulcan back
+    // to back was a real measurement, not a hypothetical: the same two officers
+    // opened the same discussion with the same government thirty-two times in
+    // an afternoon and were paid for it every time.
+    //
+    // Only the templates that are about a PLACE. A boarding action is about a
+    // ship and is gated by that ship's state; a derelict search is about a hulk
+    // and is gated by `wreckHere.boarded`. Filtering those by system would stop
+    // a captain boarding the second hostile in a fight, or the second wreck in
+    // a system, which is not what "once per world" means.
+    return out.filter((t) => !PLACE_TEMPLATES.has(t.id)
+      || !this.awayDone.has(`${t.id}@${this.locationId}`));
   }
 
   /**
@@ -3017,6 +3042,19 @@ export class Game {
       casualties: team.casualties.slice(), lost,
     };
     this.lastAway = report;
+    // A world is done with once, whatever the party brought back: a colony you
+    // failed to evacuate is a colony that has been evacuated as far as it is
+    // going to be, and letting failure re-arm the offer would make retrying
+    // until it works the correct play.
+    if (PLACE_TEMPLATES.has(template.id)) {
+      this.awayDone.add(`${template.id}@${this.locationId}`);
+    }
+    // What it cost. Charged after the checks are rolled, so the hours the party
+    // was down do their work — damage control, the shop, the details — against
+    // a ship whose casualties are already aboard.
+    const hours = awayHours(template);
+    this.spendHours(hours);
+    report.hours = hours;
     this.ledger.record('away_mission', {
       text: `${template.title}: ${won} of ${total} objectives`
         + (lost ? `, ${lost} lost` : '')
@@ -3902,6 +3940,7 @@ export class Game {
         : null,
       campaign: this.campaign?.save() ?? null,
       livedHours: this.livedHours,
+      awayDone: [...this.awayDone],
       stores: this.stores,
       fabrication: this.fabrication,
       dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
@@ -3962,6 +4001,36 @@ export class Game {
   }
 
   // -------------------------------------------------- the five-year mission
+
+  /**
+   * Spend a span of the commission on something the captain ordered.
+   *
+   * The one door for "this took a while". It moves the commission clock and
+   * the calendar together, and it does the work of those hours — damage
+   * control, the machine shop, the details that are out — through the same
+   * `passTime` an absence and the tick loop use, so an afternoon on the
+   * surface is an afternoon aboard as well.
+   *
+   * Distinct from the tick loop, which spends hours as they pass. This spends
+   * them because an ORDER cost them: the ship is somewhere else afterwards in
+   * time rather than in space, and the twelve remaining `advanceStardate`
+   * callers are the queue for this door.
+   *
+   * @param {number} hours commission hours the order cost
+   */
+  spendHours(hours) {
+    if (!(hours > 0)) return 0;
+    this.campaign?.spend(hours);
+    this.clock.advanceStardate(hours / 24);
+    const { finished, returned } = this.passTime(hours);
+    if (finished) {
+      this.pushLog(`${finished.recipe.name} is finished, Captain. ${finished.text}`, 'engineering');
+    }
+    for (const back of returned) {
+      this.pushLog(`${back.assignment.name} is back aboard. ${back.text}`, 'comms');
+    }
+    return hours;
+  }
 
   /**
    * Fly the course, if one is laid in, for a span of the commission.
@@ -4479,6 +4548,7 @@ export class Game {
     // campaign they had not begun.
     g.campaign = CampaignClock.load(data.campaign, opts.now ?? undefined);
     g.livedHours = Math.max(0, Number(data.livedHours) || 0);
+    g.awayDone = new Set(Array.isArray(data.awayDone) ? data.awayDone : []);
     if (opts.compression) g.campaign.compression = opts.compression;
 
     g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };

@@ -1580,12 +1580,42 @@ __define("src/sim/away.js", function (__exports, __require) {
 
 const { emit } = __require("src/core/events.js");
 const { resolve, formatResolution, describeDifficulty, DIFFICULTY: DC } = __require("src/rules/resolve.js");
+
+/**
+ * What a landing party costs, including the hours.
+ *
+ * `hours` is how long the party is down, and it is what a landing party cost
+ * for the first time. Thirty-two diplomatic landings at Vulcan back to back
+ * moved the stardate from 4523.3 to 4523.3 and paid 190 experience — the only
+ * free action in a game where a repair costs most of a day, docking costs two,
+ * and `surveyFeature` twenty lines away says in its own comment that each
+ * feature resolves once.
+ *
+ * Scaled by hazard, because how dangerous a place is and how long you are
+ * exposed to it are the same question asked twice. A routine landing is an
+ * afternoon; an evacuation is a long day; boarding a derelict with something
+ * still aboard is two watches.
+ */
 const HAZARD_LEVEL = {
-  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy },
-  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate },
-  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06, dc: DC.hard },
-  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14, dc: DC.formidable },
+  routine: { id: 'routine', label: 'Routine', injury: 0.04, death: 0.004, dc: DC.easy, hours: 5 },
+  elevated: { id: 'elevated', label: 'Elevated', injury: 0.14, death: 0.02, dc: DC.moderate, hours: 11 },
+  dangerous: { id: 'dangerous', label: 'Dangerous', injury: 0.28, death: 0.06, dc: DC.hard, hours: 19 },
+  extreme: { id: 'extreme', label: 'Extreme', injury: 0.45, death: 0.14, dc: DC.formidable, hours: 30 },
 };
+
+/**
+ * How long a template's party is away, in commission hours.
+ *
+ * The hazard level decides it, except where the fiction will not have it. A
+ * boarding action is `extreme` and happens inside a battle, at weapons range,
+ * against a ship that is still under way — a day and a quarter cannot pass
+ * while it does. It is minutes, and it says so here rather than quietly
+ * inheriting a number that would put the enemy in another sector.
+ */
+function awayHours(template) {
+  if (template?.hours != null) return template.hours;
+  return HAZARD_LEVEL[template?.hazard]?.hours ?? HAZARD_LEVEL.elevated.hours;
+}
 
 /**
  * Check types map to a captain ability and to the bridge stations whose
@@ -1860,7 +1890,9 @@ const AWAY_TEMPLATES = {
     ],
   },
   boarding_action: {
-    id: 'boarding_action', title: 'Board the hostile', hazard: 'extreme',
+    // Minutes, not the day and a quarter `extreme` would otherwise buy: this
+    // one happens at weapons range in the middle of a fight.
+    id: 'boarding_action', title: 'Board the hostile', hazard: 'extreme', hours: 0.6,
     steps: [
       { check: 'engineering', dc: DC.hard, text: 'Beam through their shields.' },
       { check: 'combat', dc: DC.very_hard, text: 'Take the bridge.' },
@@ -1870,6 +1902,7 @@ const AWAY_TEMPLATES = {
 };
 
 __exports.HAZARD_LEVEL = HAZARD_LEVEL;
+__exports.awayHours = awayHours;
 __exports.CHECK_TYPES = CHECK_TYPES;
 __exports.AwayTeam = AwayTeam;
 __exports.AWAY_TEMPLATES = AWAY_TEMPLATES;
@@ -28887,6 +28920,23 @@ class CampaignClock {
     return hours;
   }
 
+  /**
+   * Spend commission hours on an order that took them.
+   *
+   * `advanceOpen` is time going by while the captain sits there; this is time
+   * an order cost — a landing party down for a watch, a ship in dock for two
+   * days. It moves the commission and nothing else: `lastSeen` stays where it
+   * is, because no wall-clock time has passed and pushing it forward would
+   * make the ship's next absence shorter than it was.
+   *
+   * @param {number} hours commission hours
+   */
+  spend(hours) {
+    if (!(hours > 0)) return 0;
+    this.commissionHours += hours;
+    return hours;
+  }
+
   /** Take the accrued time, leaving the counter empty. */
   drainPending() {
     const hours = this.pendingHours;
@@ -29020,7 +29070,7 @@ const { Crew, Officer, ABILITIES, ABILITY_LIST } = __require("src/sim/officers.j
 const { CaptainProgress, combatXP, SKILLS } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
 const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES } = __require("src/sim/combat.js");
-const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL } = __require("src/sim/away.js");
+const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
 const { nextInLine, watchOrder, watchAt, assignWatches, handbackReport } = __require("src/sim/watch.js");
 const { checkAll, Watchdog } = __require("src/sim/invariants.js");
@@ -29090,6 +29140,16 @@ const MAX_HOSTILES = 6;
  * rounding error thirty times a second.
  */
 const LIVED_SLICE_HOURS = 0.25;
+
+/**
+ * Away templates that are about a place rather than about a target.
+ *
+ * These are the ones a world is done with once. The other two are gated by the
+ * thing they are about — a hostile's boardable state, and a hulk that has not
+ * been boarded — and filtering those by system would refuse the second hostile
+ * in a fight and the second wreck in a system.
+ */
+const PLACE_TEMPLATES = new Set(['colony_rescue', 'diplomatic_landing', 'covert_landing']);
 
 /**
  * The chance, per commission hour under way, that something drops us out.
@@ -29336,6 +29396,10 @@ class Game {
     // silently on every save would let a player pick the app up and put it down
     // repeatedly to keep a fabrication job permanently a quarter-hour from done.
     this.livedHours = 0;
+    // `templateId@systemId` for every landing party that has already gone down
+    // somewhere this commission. A colony is evacuated once. See
+    // `availableAwayMissions`.
+    this.awayDone = new Set();
 
     this.commission();
     this.pushLog(`Assumed command of the ${this.ship.name}, ${this.ship.registry}.`, 'captain');
@@ -31921,7 +31985,18 @@ class Game {
       }
     }
 
-    return out;
+    // A world is done with once. Thirty-two diplomatic landings at Vulcan back
+    // to back was a real measurement, not a hypothetical: the same two officers
+    // opened the same discussion with the same government thirty-two times in
+    // an afternoon and were paid for it every time.
+    //
+    // Only the templates that are about a PLACE. A boarding action is about a
+    // ship and is gated by that ship's state; a derelict search is about a hulk
+    // and is gated by `wreckHere.boarded`. Filtering those by system would stop
+    // a captain boarding the second hostile in a fight, or the second wreck in
+    // a system, which is not what "once per world" means.
+    return out.filter((t) => !PLACE_TEMPLATES.has(t.id)
+      || !this.awayDone.has(`${t.id}@${this.locationId}`));
   }
 
   /**
@@ -32018,6 +32093,19 @@ class Game {
       casualties: team.casualties.slice(), lost,
     };
     this.lastAway = report;
+    // A world is done with once, whatever the party brought back: a colony you
+    // failed to evacuate is a colony that has been evacuated as far as it is
+    // going to be, and letting failure re-arm the offer would make retrying
+    // until it works the correct play.
+    if (PLACE_TEMPLATES.has(template.id)) {
+      this.awayDone.add(`${template.id}@${this.locationId}`);
+    }
+    // What it cost. Charged after the checks are rolled, so the hours the party
+    // was down do their work — damage control, the shop, the details — against
+    // a ship whose casualties are already aboard.
+    const hours = awayHours(template);
+    this.spendHours(hours);
+    report.hours = hours;
     this.ledger.record('away_mission', {
       text: `${template.title}: ${won} of ${total} objectives`
         + (lost ? `, ${lost} lost` : '')
@@ -32903,6 +32991,7 @@ class Game {
         : null,
       campaign: this.campaign?.save() ?? null,
       livedHours: this.livedHours,
+      awayDone: [...this.awayDone],
       stores: this.stores,
       fabrication: this.fabrication,
       dutyRoster: (this.dutyRoster ?? []).map((p) => p.save()),
@@ -32963,6 +33052,36 @@ class Game {
   }
 
   // -------------------------------------------------- the five-year mission
+
+  /**
+   * Spend a span of the commission on something the captain ordered.
+   *
+   * The one door for "this took a while". It moves the commission clock and
+   * the calendar together, and it does the work of those hours — damage
+   * control, the machine shop, the details that are out — through the same
+   * `passTime` an absence and the tick loop use, so an afternoon on the
+   * surface is an afternoon aboard as well.
+   *
+   * Distinct from the tick loop, which spends hours as they pass. This spends
+   * them because an ORDER cost them: the ship is somewhere else afterwards in
+   * time rather than in space, and the twelve remaining `advanceStardate`
+   * callers are the queue for this door.
+   *
+   * @param {number} hours commission hours the order cost
+   */
+  spendHours(hours) {
+    if (!(hours > 0)) return 0;
+    this.campaign?.spend(hours);
+    this.clock.advanceStardate(hours / 24);
+    const { finished, returned } = this.passTime(hours);
+    if (finished) {
+      this.pushLog(`${finished.recipe.name} is finished, Captain. ${finished.text}`, 'engineering');
+    }
+    for (const back of returned) {
+      this.pushLog(`${back.assignment.name} is back aboard. ${back.text}`, 'comms');
+    }
+    return hours;
+  }
 
   /**
    * Fly the course, if one is laid in, for a span of the commission.
@@ -33480,6 +33599,7 @@ class Game {
     // campaign they had not begun.
     g.campaign = CampaignClock.load(data.campaign, opts.now ?? undefined);
     g.livedHours = Math.max(0, Number(data.livedHours) || 0);
+    g.awayDone = new Set(Array.isArray(data.awayDone) ? data.awayDone : []);
     if (opts.compression) g.campaign.compression = opts.compression;
 
     g.stores = { ...STARTING_STORES, ...(data.stores ?? {}) };
