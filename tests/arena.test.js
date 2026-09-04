@@ -17,6 +17,11 @@
 //   The blocked-shot rate was measured with random lines across the volume and
 //   read 56%. Measured through `combat:fire` in real battles it was 5%. They
 //   are not the same question and only one of them is the game.
+//
+// And one design change that came out of measuring it: a blocked shot used to
+// be FIRED and wasted. Holding fire instead is what makes cover cover — the
+// same pair at the same range takes 838 hull damage in the open and none at
+// all with a rock between them.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -202,30 +207,79 @@ describe('the place a fight happens in', () => {
 });
 
 describe('what terrain does to a battle', () => {
-  test('a fight in a debris field has shots that never arrive', () => {
-    // Counted through the event the game itself fires, not by sampling lines
-    // through the volume — those two answers were 5% and 56% for the same
-    // field, and only the first one is what a player experiences.
-    const count = (place) => {
-      let fired = 0;
-      let blocked = 0;
-      const off = on('combat:fire', (e) => {
-        if (e.type === 'torpedo') return;
-        fired++;
-        if (e.result?.reason === 'blocked') blocked++;
-      });
-      try {
-        for (let seed = 1; seed <= 4; seed++) fight({ place, seed });
-      } finally { off?.(); }
-      return { fired, blocked };
+  test('nobody fires through rock, and the shot is not wasted either', () => {
+    // The first version let a blocked shot go, spent the cooldown, and drew
+    // the beam terminating on the rock. Legible, and wrong: a gunner with no
+    // firing solution does not pull the trigger, and burning a cooldown on a
+    // shot that cannot arrive punishes you for THEIR position instead of
+    // rewarding you for your own.
+    const { eng } = fight({ place: 'wolf359', seed: 1, them: ['d7'], cap: 0 });
+    const rock = eng.arena.features.find((f) => f.type === 'solid');
+    const h = eng.hostiles[0];
+    const gap = rock.r + 120;
+    h.x = rock.x - gap; h.y = rock.y; h.z = rock.z;
+    eng.player.x = rock.x + gap; eng.player.y = rock.y; eng.player.z = rock.z;
+    eng.comeAboutTo(h);
+    eng.player.heading = eng.player.desiredHeading;
+    eng.player.pitch = eng.player.desiredPitch;
+
+    const bank = eng.player.weapons.find((w) => w.type !== 'torpedo');
+    bank.cooldown = 0;
+    assert.equal(eng.fireWeapon(eng.player, bank, h), false,
+      'a bank fired through a rock');
+    assert.equal(bank.cooldown, 0, 'a blocked shot still spent the cooldown');
+
+    // The control, and it has to be the same bank at the same range with the
+    // same facing: only the rock differs. Moved off the line by more than the
+    // rock is wide, in the axis the ship is not pointing along, so the arc
+    // check is not what changes the answer.
+    h.x = rock.x + gap * 0.5; h.y = rock.y + gap * 2; h.z = rock.z;
+    eng.comeAboutTo(h);
+    eng.player.heading = eng.player.desiredHeading;
+    eng.player.pitch = eng.player.desiredPitch;
+    assert.equal(eng.fireWeapon(eng.player, bank, h), true,
+      'the same bank at the same range with no rock in the way did not fire');
+    assert.ok(bank.cooldown > 0, 'a shot that was taken did not spend its cooldown');
+  });
+
+  test('a rock between you and them stops the shooting', () => {
+    // What holding fire actually BUYS, measured as damage taken rather than
+    // as shots not fired. Both ships pinned in place so the only difference
+    // between the two runs is whether the rock is on the line — and at the
+    // SAME separation in both, because the first version of this put the
+    // covered pair 1,177 units apart, outside beam and cannon range, and was
+    // measuring "too far to shoot" while calling it cover.
+    const trial = (behindCover) => {
+      const { eng, g } = fight({ place: 'wolf359', seed: 7, them: ['d7'], cap: 0 });
+      const rock = eng.arena.features.find((f) => f.type === 'solid');
+      const h = eng.hostiles[0];
+      const gap = rock.r + 120;
+      h.x = rock.x - gap; h.y = rock.y; h.z = rock.z;
+      if (behindCover) {
+        g.ship.x = rock.x + gap; g.ship.y = rock.y; g.ship.z = rock.z;
+      } else {
+        g.ship.x = h.x; g.ship.y = h.y + gap * 2; g.ship.z = h.z;
+      }
+      const startHull = g.ship.hull;
+      const range = Math.hypot(h.x - g.ship.x, h.y - g.ship.y, h.z - g.ship.z);
+      for (let i = 0; i < 300; i++) {
+        const p = [g.ship.x, g.ship.y, g.ship.z];
+        const q = [h.x, h.y, h.z];
+        g.ship.throttle = 0; h.throttle = 0;
+        eng.update(1 / 30);
+        [g.ship.x, g.ship.y, g.ship.z] = p;
+        [h.x, h.y, h.z] = q;
+      }
+      return { lost: startHull - g.ship.hull, range };
     };
-    const rocks = count('wolf359');
-    assert.ok(rocks.fired > 100, `only ${rocks.fired} shots fired`);
-    assert.ok(rocks.blocked > 0, 'not one shot in four battles was blocked by the debris');
-    // The control, and the whole claim: the same battle somewhere with no
-    // terrain has none. Without this the assertion above passes on a build
-    // where every shot everywhere is blocked.
-    assert.equal(count('sol').blocked, 0, 'a shot was blocked in open space');
+    const hidden = trial(true);
+    const exposed = trial(false);
+    assert.ok(Math.abs(hidden.range - exposed.range) < 1,
+      `the two runs are at different ranges: ${hidden.range} and ${exposed.range}`);
+    assert.equal(hidden.lost, 0,
+      `took ${Math.round(hidden.lost)} hull damage from behind a rock`);
+    assert.ok(exposed.lost > 100,
+      `the control took only ${Math.round(exposed.lost)} damage — it was never in danger`);
   });
 
   test('a nebula scrambles shields and sensors, and open space does not', () => {
@@ -281,6 +335,35 @@ describe('what terrain does to a battle', () => {
     const sol = fight({ place: 'sol', seed: 5, them: ['galor'], cap: 1 });
     assert.equal(sol.eng.canWarpOut, true);
     assert.equal(sol.eng.beginWarpOut(), true);
+  });
+
+  test('a collapsing Tholian web does not hand back what the gas is holding', () => {
+    // Two reasons to be pinned, one temporary and one a property of the place.
+    // The web's collapse handler said `canWarpOut = true` flat, so a web
+    // closing and reopening inside the Briar Patch would have handed back a
+    // warp drive that metreon gas will not let form. Found by reading the
+    // handler, not by playing it — a Tholian in the Briar Patch is rare — and
+    // it is exactly the kind of thing that is invisible until the one time it
+    // happens.
+    const { eng } = fight({ place: 'briar', seed: 4, them: ['galor'], cap: 0 });
+    assert.equal(eng.canWarpOut, false, 'the gas was not pinning us to begin with');
+    // A web closes over the top of it, and then the spinner dies.
+    eng.webbed = true;
+    assert.equal(eng.hostiles.some((s2) => s2.cls.websAfter), false,
+      'the control hostile spins a web, so the collapse would never fire');
+    eng.update(1 / 30);
+    assert.equal(eng.webbed, false, 'the web did not collapse with no spinner left');
+    assert.equal(eng.canWarpOut, false,
+      'the web collapsing handed back a warp drive the metreon gas will not allow');
+
+    // The control: the same collapse in open space DOES hand it back.
+    const open = fight({ place: 'sol', seed: 4, them: ['galor'], cap: 0 });
+    open.eng.webbed = true;
+    open.eng.canWarpOut = false;
+    open.eng.update(1 / 30);
+    assert.equal(open.eng.webbed, false);
+    assert.equal(open.eng.canWarpOut, true,
+      'the web collapsed in open space and the warp drive stayed pinned');
   });
 
   test('nothing ends up inside a rock, in any of these battles', () => {

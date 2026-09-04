@@ -4397,6 +4397,7 @@ class TacticalView {
     ctx.translate(this.view.x, this.view.y);
 
     this.drawGrid(ctx, width, height);
+    this.drawTerrain(ctx, engagement.arena);
     this.drawRangeRings(ctx, engagement.player);
 
     for (const e of engagement.effects) this.drawEffect(ctx, e);
@@ -4435,6 +4436,41 @@ class TacticalView {
       ctx.moveTo(originX - halfW, y); ctx.lineTo(originX + halfW, y);
     }
     ctx.stroke();
+  }
+
+  /**
+   * The terrain, in plan.
+   *
+   * The flat plot is the fallback when WebGL is unavailable, and it is a
+   * complete view of the fight rather than a decorative one — so it has to
+   * show the rocks. Without them a shot stops in empty space and the display
+   * is lying about why.
+   *
+   * Drawn at full radius rather than at the cross-section through z = 0. A
+   * plan view already flattens altitude — that is what the drop lines in the
+   * 3D view exist to put back — and a rock that shrinks and vanishes as it
+   * rises out of the plane is a rock the player stops believing in while it is
+   * still blocking their guns.
+   */
+  drawTerrain(ctx, arena) {
+    if (!arena?.features?.length) return;
+    const tint = arena.tint
+      ? `${Math.round(arena.tint[0] * 255)},${Math.round(arena.tint[1] * 255)},${Math.round(arena.tint[2] * 255)}`
+      : '200,180,255';
+    for (const f of arena.features) {
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+      if (f.type === 'solid') {
+        ctx.fillStyle = 'rgba(96,92,86,0.55)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(150,144,134,0.7)';
+        ctx.lineWidth = 1.5 / this.view.scale;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = `rgba(${tint},0.10)`;
+        ctx.fill();
+      }
+    }
   }
 
   /** Weapon range rings around the player — the reason to close or hold. */
@@ -23143,8 +23179,16 @@ function chooseAction(ship, engagement, dt, opts = {}) {
   if (engagement.webbed
     && !engagement.liveHostiles.some((s) => s.cls.websAfter)) {
     engagement.webbed = false;
-    engagement.canWarpOut = true;
-    engagement.pushLog('The web is collapsing. Warp drive is ours again.', 'science');
+    // Back to what the PLACE allows, not unconditionally true.
+    //
+    // A flat `= true` here means a Tholian web collapsing inside the Briar
+    // Patch hands back a warp drive that metreon gas will not let form — one
+    // temporary reason to be pinned expiring and cancelling a permanent one.
+    engagement.canWarpOut = !engagement.arena?.noWarp;
+    engagement.pushLog(engagement.canWarpOut
+      ? 'The web is collapsing. Warp drive is ours again.'
+      : 'The web is collapsing — though the gas will still not let a field form.',
+    'science');
   }
 
   if (ship.cls.websAfter) {
@@ -23917,6 +23961,26 @@ class Engagement {
     const distance = attacker.distanceTo(target);
     if (distance > (WEAPON_RANGE[weapon.type] ?? 900)) return false;
 
+    // Nobody fires through rock.
+    //
+    // The first version let the shot go, spent the cooldown, and drew the
+    // beam terminating on the rock — legible, and wrong: a gunner with no
+    // firing solution does not pull the trigger, and a cooldown burned on a
+    // shot that cannot arrive is a punishment for the enemy's position rather
+    // than a reward for your own. Holding fire is what makes cover COVER:
+    // getting a rock between you and them stops the incoming fire instead of
+    // making it miss.
+    //
+    // Checked here, before the cooldown, so it applies to every shooter in
+    // the fight — the player's auto-fire, the hostiles, and the allies.
+    if (blockedBy(this.arena, attacker, target)) {
+      if (attacker === this.player && !this.saidBlocked) {
+        this.saidBlocked = true;
+        this.pushLog('No firing solution — there is rock between us and them.', 'tactical');
+      }
+      return false;
+    }
+
     weapon.cooldown = weapon.cycle;
     // Whether a shot was ever fired in this engagement, which the after-action
     // report needs and could not otherwise know. "Nobody fired" is a real thing
@@ -23939,26 +24003,13 @@ class Engagement {
 
     // Beams and cannons resolve immediately, with a visible trace.
     //
-    // Unless there is a rock in the way, in which case the trace stops at the
-    // rock and nothing arrives. The cooldown is spent either way: firing into
-    // cover costs you the shot, which is the entire reason cover is worth
-    // flying to.
-    const rock = blockedBy(this.arena, attacker, target);
-    const result = rock
-      ? { hit: false, reason: 'blocked' }
-      : this.resolveHit(attacker, target, weapon, distance,
-        attacker === this.player ? this.targetedSubsystem : null);
-    if (rock && attacker === this.player && !this.saidBlocked) {
-      this.saidBlocked = true;
-      this.pushLog('No firing solution — there is rock between us and them.', 'tactical');
-    }
+    const result = this.resolveHit(attacker, target, weapon, distance,
+      attacker === this.player ? this.targetedSubsystem : null);
     this.effects.push({
       kind: weapon.type,
       from: { x: attacker.x, y: attacker.y, z: attacker.z ?? 0 },
-      to: rock
-        ? this.stoppedAt(attacker, target, rock)
-        : { x: target.x, y: target.y, z: target.z ?? 0 },
-      life: 0.35, hit: result.hit, faction: attacker.faction, blocked: !!rock,
+      to: { x: target.x, y: target.y, z: target.z ?? 0 },
+      life: 0.35, hit: result.hit, faction: attacker.faction,
     });
     emit('combat:fire', { attacker, weapon, type: weapon.type, result });
     return true;
@@ -24427,29 +24478,6 @@ class Engagement {
    * Clamping alone would leave a ship grinding against the edge at full
    * throttle forever, which looks broken and pins the auto-framing camera.
    */
-  /**
-   * Where a shot that hit a rock actually stopped, for the trace.
-   *
-   * A beam drawn all the way to a target it never reached is a lie the player
-   * would reasonably act on — it looks exactly like a shot that connected and
-   * did nothing. The trace ends on the rock's near face.
-   */
-  stoppedAt(from, to, rock) {
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const dz = (to.z ?? 0) - (from.z ?? 0);
-    const len = Math.hypot(dx, dy, dz) || 1;
-    // Distance along the shot to the rock's centre, pulled back by its radius.
-    const along = Math.max(0,
-      ((rock.x - from.x) * dx + (rock.y - from.y) * dy + (rock.z - (from.z ?? 0)) * dz) / len
-      - rock.r);
-    return {
-      x: from.x + (dx / len) * along,
-      y: from.y + (dy / len) * along,
-      z: (from.z ?? 0) + (dz / len) * along,
-    };
-  }
-
   /**
    * What standing in the gas does, every tick, to everyone standing in it.
    *

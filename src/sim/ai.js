@@ -325,8 +325,16 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   if (engagement.webbed
     && !engagement.liveHostiles.some((s) => s.cls.websAfter)) {
     engagement.webbed = false;
-    engagement.canWarpOut = true;
-    engagement.pushLog('The web is collapsing. Warp drive is ours again.', 'science');
+    // Back to what the PLACE allows, not unconditionally true.
+    //
+    // A flat `= true` here means a Tholian web collapsing inside the Briar
+    // Patch hands back a warp drive that metreon gas will not let form — one
+    // temporary reason to be pinned expiring and cancelling a permanent one.
+    engagement.canWarpOut = !engagement.arena?.noWarp;
+    engagement.pushLog(engagement.canWarpOut
+      ? 'The web is collapsing. Warp drive is ours again.'
+      : 'The web is collapsing — though the gas will still not let a field form.',
+    'science');
   }
 
   if (ship.cls.websAfter) {
