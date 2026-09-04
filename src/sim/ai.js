@@ -298,6 +298,64 @@ function presentStrongestShield(ship, threat) {
 }
 
 /**
+ * What a hostile comes about for.
+ *
+ * The rule was written down and never run. The code read
+ *
+ *     ship.aiTarget = candidates.includes(player) ? player : candidates[0];
+ *
+ * under a comment that said "Prefer whoever is hurting them most, otherwise the
+ * player" — and nothing anywhere recorded who was hurting whom, so the first
+ * half had nothing to read. The player was the target while the player lived,
+ * which made every ally in the game unshootable: the escorts three reputation
+ * perks buy, and the freighter in "a civilian freighter is under attack", which
+ * over twenty battles was hit exactly zero times.
+ *
+ * Three rules, in order:
+ *
+ *  1. Whoever has hurt us most lately. `Ship.threat` records it and halves it
+ *     every eight seconds, so this means still hurting us, not ever did.
+ *  2. Failing that, anything here that cannot shoot back. Raiders were already
+ *     shooting the freighter when the captain arrived; they go on shooting it
+ *     until somebody gives them a reason not to. This is what makes rule 1
+ *     matter — the reason is that you started shooting.
+ *  3. Failing that, the player.
+ */
+/**
+ * Whether somebody else has become the bigger problem.
+ *
+ * With hysteresis, and a wide one: a ship that came about every time the
+ * damage numbers crossed would spend the battle turning instead of shooting,
+ * and two ships trading fire would flip targets every few seconds. It takes
+ * being hurt half again as much to be worth breaking a firing solution for.
+ */
+const RETARGET_MARGIN = 1.5;
+
+function reconsider(ship, engagement) {
+  const current = ship.aiTarget;
+  if (!stillEngaged(current)) return pickTarget(ship, engagement);
+  const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
+  const worst = ship.worstThreat(candidates);
+  if (!worst || worst === current) return null;
+  return ship.threatFrom(worst) > ship.threatFrom(current) * RETARGET_MARGIN ? worst : null;
+}
+
+function pickTarget(ship, engagement) {
+  const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
+  if (!candidates.length) return null;
+
+  const hurting = ship.worstThreat(candidates);
+  if (hurting) return hurting;
+
+  // A ship with no working weapons is not a threat, it is an errand.
+  const defenceless = candidates.find((s) =>
+    s !== engagement.player && !(s.weapons ?? []).some((w) => w.enabled !== false && w.damage > 0));
+  if (defenceless) return defenceless;
+
+  return candidates.includes(engagement.player) ? engagement.player : candidates[0];
+}
+
+/**
  * Climb or dive to come at the target from a facing it is not presenting.
  *
  * The whole point of a third axis is that it is a way to get at a weak shield
@@ -418,10 +476,18 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
     if (opts.allyOf) {
       ship.aiTarget = engagement.liveHostiles[0] ?? null;
     } else {
-      const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
-      // Prefer whoever is hurting them most, otherwise the player.
-      ship.aiTarget = candidates.includes(engagement.player) ? engagement.player : candidates[0];
+      ship.aiTarget = pickTarget(ship, engagement);
     }
+  } else if (decide && !opts.allyOf) {
+    // And think again, on the decision tick.
+    //
+    // The target was chosen ONCE and kept until it died or ran, so a rule that
+    // reads who is hurting us could only ever have fired on the opening tick,
+    // when nobody had hurt anybody yet. Measured with the re-pick missing: a
+    // Galaxy-class ally shooting alongside a Miranda drew fire in 3 of 20
+    // battles, because the hostiles had locked onto the Miranda before the
+    // Galaxy fired a shot and never looked up again.
+    ship.aiTarget = reconsider(ship, engagement) ?? ship.aiTarget;
   }
   const target = ship.aiTarget;
   if (!stillEngaged(target)) return;

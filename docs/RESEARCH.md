@@ -2576,6 +2576,101 @@ moves the stream at all could take it away. One did.
 The bar is unchanged; the evidence is wider. Five commissions instead of three,
 which costs 10.5 seconds and asks the same question of more play.
 
+## 41. "Prefer whoever is hurting them most, otherwise the player"
+
+That comment sat above this, in `src/sim/ai.js`:
+
+```js
+const candidates = [engagement.player, ...engagement.allies].filter(stillEngaged);
+// Prefer whoever is hurting them most, otherwise the player.
+ship.aiTarget = candidates.includes(engagement.player) ? engagement.player : candidates[0];
+```
+
+It never looked at who was hurting them, because **nothing anywhere recorded who
+was hurting whom**. `Ship.takeDamage` took a bearing, a type and a piercing
+value, and no attacker.
+
+And there was a second half to it, found only when the first was fixed: the pick
+sat inside `if (!stillEngaged(ship.aiTarget))`, so a target was chosen **once**
+and kept until it died or ran. Even a rule that could read the damage would only
+have run on the opening tick, before anybody had fired.
+
+### What it cost
+
+| | destroyed | damaged | untouched |
+| --- | --- | --- | --- |
+| the SS Kobayashi, 20 battles vs three raiders | 0 | 0 | **20** |
+| a Galaxy-class escort firing alongside a Miranda, 20 battles vs two D7s | 0 | 3 | **17** |
+
+Every ally in the game was unshootable while the player lived — including the
+escorts that **three separate reputation perks** are sold to buy, and the
+freighter in *"A civilian freighter is under attack and losing containment"*,
+which #154 had put on the board and could not make shootable.
+
+### The three rules
+
+1. **Whoever has hurt us most lately.** `Ship.threat` records it, keyed by the
+   ship that dealt it, and halves it every eight seconds — so this means still
+   hurting us, not ever did. Hazards, collisions and boarding pass no attacker
+   and record nothing.
+2. **Failing that, anything here that cannot shoot back.** The raiders were
+   already shooting the freighter when the captain arrived; they go on shooting
+   it until somebody gives them a reason not to. This is what makes rule 1 mean
+   something — the reason is that you started shooting.
+3. **Failing that, the player.**
+
+Plus a re-pick on the decision tick, with wide hysteresis: it takes being hurt
+**half again** as much to be worth breaking a firing solution for, or two ships
+trading fire flip targets every few seconds.
+
+### After
+
+| | destroyed | damaged | untouched |
+| --- | --- | --- | --- |
+| the SS Kobayashi | **10** | 10 | 0 |
+| the Galaxy escort | 0 | **20** | 0 |
+| a Miranda escort beside a Constitution | 0 | 19 | 1 |
+
+The distress call is a thing you can now fail: median 19% hull left on the
+freighter you came to save.
+
+### And it changes nothing about a fight nobody else is in
+
+The control that matters most, because a change to how a target is chosen must
+not touch the balance of a duel. Four matchups, 25 seeds each, no allies:
+
+| | ship lost | median lowest hull |
+| --- | --- | --- |
+| before | 71 of 100 | 0% |
+| after | **71 of 100** | 0% |
+
+Identical. With one candidate there is nothing to choose between.
+
+### What it did move, and what that says
+
+The commission driver's *"fights ended in more than one way"* lost `destroyed`:
+allies now absorb fire, so a captain with an escort is harder to kill, which is
+what an escort is for. Widening from five commissions to seven did **not** bring
+it back, so this is systematic rather than noise, and widening further would be
+chasing a seed.
+
+So the bar there is now what that driver can honestly deliver — two — and the
+claim it used to carry is asserted where it can be: over fights flown to the
+finish across five matchups, measured **routed 38, victory 10, destroyed 12 of
+60**. All three reachable, none needing luck. That is a better test than the one
+it replaces, which inferred the game's variety from twenty-three fights a
+cautious scripted captain happened to have.
+
+### Two mistakes worth keeping
+
+A first draft hit an Orion raider for 1200 to make it reconsider — which is most
+of a 1900-hull ship, so it broke off, and **a fleeing ship never reaches target
+selection at all**. The test measured nothing and said so as a failure.
+
+A second wrote `g.ship.repairAll?.() ?? g.ship.fullRepair?.()`, neither of which
+exists, and then cleared the map by hand as a fallback. It passed while proving
+nothing. The method is `restore()`.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
