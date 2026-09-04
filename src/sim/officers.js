@@ -232,7 +232,6 @@ export class Officer {
     Object.assign(this, {
       station: 'tactical', name: 'Officer', species: 'Human', rank: 'Lieutenant',
       discipline: 80, daring: 70, candor: 70, expertise: 80,
-      canon: false,
       // What the captain calls them when there is no time for a surname.
       // Read by src/sim/address.js; saved, because a name somebody answers to
       // that stops working after a reload is worse than never having it.
@@ -343,16 +342,102 @@ export class Officer {
 
   /**
    * How this officer responds to an order they consider questionable.
+   *
+   * `relationship` finally means something here. It was declared on this class
+   * with the comment "-100..100, how they feel about serving under you", saved,
+   * loaded — and appeared on exactly three lines in the whole of `src/`, all
+   * three of them moving the number in and out of the save file. Nothing
+   * incremented it, nothing decremented it, and nothing branched on it.
+   *
+   * What it buys is the benefit of the doubt. An officer who has served you
+   * through a year of this gives you the order; one whose objections you have
+   * overruled six times does not, and says so. It is expressed as a shift in
+   * the two scores that already decide this — twenty points of candor and
+   * discipline across the full range — rather than as a fourth rule, so a
+   * captain the crew would follow anywhere reads as officers who are simply
+   * less argumentative, which is what it is.
+   *
+   * @param {object} order `risk` and `ethicalWeight`, both 0..1
+   * @param {object} opts `friction` from the captain's own traits — the
+   *        Tellarite's "Officers object more" is 0.2, and it had never been
+   *        read either.
    * @returns {'comply'|'object'|'refuse'}
    */
-  reactTo(order) {
+  reactTo(order, { friction = 0 } = {}) {
     const risk = order.risk ?? 0;             // 0..1
     const ethics = order.ethicalWeight ?? 0;  // 0..1, e.g. Prime Directive
-    if (ethics > 0.5 && this.discipline < 70 && this.candor > 75) return 'refuse';
+    const trust = Math.max(-1, Math.min(1, this.relationship / 100)) - friction * 2;
+    const candor = this.candor - trust * 20;
+    const discipline = this.discipline + trust * 20;
+    if (ethics > 0.5 && discipline < 70 && candor > 75) return 'refuse';
     if (risk > 0.7 && this.daring < 45) return 'object';
-    if (ethics > 0.3 && this.candor > 70) return 'object';
-    if (risk > 0.5 && this.candor > 80) return 'object';
+    if (ethics > 0.3 && candor > 70) return 'object';
+    if (risk > 0.5 && candor > 80) return 'object';
     return 'comply';
+  }
+
+  /**
+   * How this officer feels about serving under you, moved by something that
+   * happened.
+   *
+   * Bounded at the range the field was declared with. Small numbers on
+   * purpose: this is a five-year commission, and a relationship that could be
+   * bought back with one good afternoon is not one.
+   */
+  regard(delta, reason = '') {
+    const before = this.relationship;
+    this.relationship = Math.max(-100, Math.min(100, before + delta));
+    if (this.relationship !== before && reason) {
+      emit('officer:regard', { officer: this, delta: this.relationship - before, reason });
+    }
+    return this.relationship;
+  }
+
+  /** What the next level costs. Rising, so the fourth is not the first. */
+  static xpForLevel(level) { return 200 * level; }
+
+  /**
+   * Service tells.
+   *
+   * `xp` and `level` were declared here, defaulted, saved, loaded and guarded
+   * by an invariant in `sim/invariants.js` — and the only writes anywhere in
+   * `src/` were those two defaults. Measured over twelve battles, twelve
+   * landings, thirty-six days and forty-eight thousand experience, while the
+   * captain went from his first command to Captain: every officer aboard came
+   * out byte-identical to the day they were commissioned.
+   *
+   * What a level buys is `expertise`, which is the one number an officer has
+   * where a captain has a character sheet — and which is read in five places
+   * that matter: how fast their station comes off cooldown, how well they conn
+   * the ship when the captain is not on the bridge, how a detail they lead
+   * turns out, and who gets picked for one.
+   *
+   * Deliberately NOT new abilities. `Game.trainOfficer` is the route to those
+   * and it is gated on the CAPTAIN's rank, with a comment saying that is on
+   * purpose — "what a crew is allowed to train for is a function of the ship's
+   * standing orders" — so growing into them here would quietly undercut a
+   * decision the game has already made.
+   *
+   * Called `serve`, not `addXP`. `CaptainProgress.addXP` is a different
+   * currency with a promotion, a feat and skill points behind it, and
+   * `tests/rules.test.js` guards it with a net across the whole tree that
+   * nothing may call `.addXP` outside `Game.awardXP` — because ten call sites
+   * once dropped the promotion on the floor. Two unrelated things sharing a
+   * name is how that net comes to be loosened to let one of them through.
+   */
+  serve(amount) {
+    if (!this.alive || !(amount > 0)) return null;
+    this.xp += amount;
+    let gained = 0;
+    while (this.xp >= Officer.xpForLevel(this.level)) {
+      this.xp -= Officer.xpForLevel(this.level);
+      this.level++;
+      gained++;
+      this.expertise = Math.min(100, this.expertise + 2);
+    }
+    if (!gained) return null;
+    emit('officer:level', { officer: this, level: this.level, expertise: this.expertise });
+    return { level: this.level, gained, expertise: this.expertise };
   }
 
   /** A line in this officer's voice. Generated from traits, not quoted. */
@@ -410,7 +495,12 @@ export class Officer {
     return {
       station: this.station, name: this.name, species: this.species, rank: this.rank,
       discipline: this.discipline, daring: this.daring, candor: this.candor,
-      expertise: this.expertise, canon: this.canon, aliases: this.aliases,
+      // No `canon`. It was defaulted here, set true for the canonical roster
+      // in crews.data.js, saved, reloaded — and read by nothing, ever. What
+      // the screens actually ask is `game.crewMode === 'canon'`, which is the
+      // game-level fact; a per-officer copy of it is a second source of truth
+      // that can only ever drift away from the first.
+      expertise: this.expertise, aliases: this.aliases,
       alive: this.alive, injured: this.injured, injurySeverity: this.injurySeverity,
       xp: this.xp, level: this.level, abilities: this.abilities, relationship: this.relationship,
     };

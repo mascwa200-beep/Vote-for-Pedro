@@ -218,7 +218,7 @@ export function buildRoster({ mode, era }, rng) {
     const src = ERAS[era] ?? ERAS.tos;
     // `alias: true` entries are the same person double-hatted at a second
     // station; keep one canonical record per station.
-    return src.crew.map((c) => ({ ...c, canon: true, speciesId: null }));
+    return src.crew.map((c) => ({ ...c, speciesId: null }));
   }
   return generateCrew(rng);
 }

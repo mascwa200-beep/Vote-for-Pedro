@@ -2922,6 +2922,132 @@ and `resolveIn` are both used in `state.js`. Only `beginAssignment` and
 building on it** — §42, and the third time this run.
 
 
+## 44. Every officer came out of the commission exactly as they went in
+
+`Officer.xp` and `Officer.level` were declared on the class, defaulted, saved,
+loaded, and guarded by an invariant in `sim/invariants.js` that checks they are
+not negative. The only writes anywhere in `src/` were those two defaults.
+Measured over twelve battles, twelve landings, thirty-six days and forty-eight
+thousand experience, while the captain went from his first command to Captain:
+
+    AT COMMISSIONING     Spock  xp=0 lvl=1 rel=0 exp=94
+    AFTER ALL OF THAT    Spock  xp=0 lvl=1 rel=0 exp=94
+
+Byte-identical, every officer aboard.
+
+`Officer.relationship` was worse: it carried the comment *"-100..100, how they
+feel about serving under you"* and appeared on three lines in the whole of
+`src/` — the declaration, `save()` and `load()`. Nothing incremented it, nothing
+decremented it, nothing branched on it.
+
+### What a level buys, and what it deliberately does not
+
+`expertise`. It is the one number an officer has where a captain has a
+character sheet, and it is read in five places that matter: how fast their
+station comes off cooldown, how well they conn the ship when the captain is off
+the bridge (§43), how a detail they lead turns out, and who gets picked for one.
+
+**Not new abilities.** `Game.trainOfficer` is the route to those and it is gated
+on the CAPTAIN's rank, with a comment saying that is deliberate — *"what a crew
+is allowed to train for is a function of the ship's standing orders."* Growing
+into them here would quietly undercut a decision the game has already made.
+
+An earlier note in this dossier's planning called five rank-3 abilities ones
+"nobody can ever hold." That was wrong and was checked before anything was
+built on it: they are unheld **by default** and reachable by training, which is
+wired to the officer panel and to a spoken order. Unheld is not unreachable.
+
+The method is `serve`, not `addXP`. `CaptainProgress.addXP` carries a promotion,
+a feat and skill points, and `tests/rules.test.js` nets the whole tree so that
+nothing calls `.addXP` outside `Game.awardXP` — ten call sites once dropped the
+promotion on the floor. Two unrelated things sharing a name is how that net
+comes to be loosened to let one of them through.
+
+### The measurement that nearly fooled me
+
+The first tuning pass had a crew finishing a twelve-battle run at **-50**, and I
+read that as a mistuned penalty and started moving thresholds. It was not.
+Instrumenting the regard by reason showed the run's real shape:
+
+    combat outcomes: { victory: 2, null: 2, destroyed: 8 }
+    regard by reason: { 'a fight won': +4, casualties: -1,
+                        "a butcher's bill": -27, 'the ship lost': -48 }
+
+**That captain lost the ship eight times in twelve.** A crew that has been blown
+up eight times ought to think poorly of him. The scenario was wrong, not the
+numbers — and "retune until the number looks nice" would have quietly destroyed
+a mechanic that was already correct. Both directions are now measured:
+
+| | outcomes | exec's regard |
+| --- | --- | --- |
+| a winning captain | 14 victories | **+28** |
+| a losing captain | 14 ships lost | **-100** |
+
+One real retune survived that: a single D7 battle costs a median **26%** of the
+ship's complement, so docking regard above 8% fired in 27 of 30 fights. That is
+not "casualties cost something", it is "fighting costs something", and it
+drowned every other term. A quarter is the cost of a hard fight; nearly half is
+a butcher's bill.
+
+### Read where the officer layer said it would be
+
+`relationship` shifts the two scores `reactTo` already weighs, twenty points
+across the full range, rather than adding a fourth rule — so a captain the crew
+would follow anywhere reads as officers who are simply less argumentative.
+Measured over forty crews and three ethically-weighted orders:
+
+| the bridge's regard | objects |
+| --- | --- |
+| -80 | **79.2%** |
+| 0 | 48.3% |
+| +80 | **19.2%** |
+| 0, Tellarite captain | 65.0% |
+
+That last row is `officerFriction: 0.2` — the Tellarite's *"Argumentative:
+officers object more"* — declared on the species and read by nothing until now.
+
+A bar measured against the canon TOS crew reads **66.7% at every level of
+regard** and says nothing: that crew has one medical officer with one candor
+score, twenty points of trust does not carry him across his own threshold, and
+the third order is gated on daring, which regard does not touch. A rule about
+officers has to be measured against a population of officers.
+
+### The redshirts were the safest people on the ship
+
+Found by a test that refused to pass without the case it was about. The first
+draft of "a redshirt is not a grievance" asserted that nobody's regard had
+changed — after doing nothing at all. Rewritten to fly landings until it found a
+security-only casualty, it reported: **sixty landings, nine casualties, every
+one a named officer, and not one of the four security crewmen on every single
+team was so much as scratched.**
+
+The cause: the casualty branch absorbs a **death** into the security detail, and
+nothing absorbed an **injury** — and injuries are the common case (`routine`
+hazard is 4% injury against 0.4% death). The detail that exists to stand between
+the officers and the danger only ever absorbed the rarest outcome.
+
+Letting it absorb every injury measured just as wrong the other way: all nine
+casualties became security crewmen, no named officer was ever hurt again, and
+sickbay, `back_to_duty` and the whole injury system went quiet — four crewmen
+against two or three checks a mission is a detail that never runs out. So
+bringing security **halves** the chance the casualty is one of your officers.
+Nine casualties, four of them security. A number a captain can act on, with the
+risk that makes the choice matter left in.
+
+### Read it or delete it
+
+`DutyOfficer.species` — generated, saved and reloaded for every one of the 2-14
+duty officers since the roster was written, and the panel printed a name, a
+rating and a state. **Read**: the roster shows it, so the ship's complement is
+as varied on the page as it always was in the save file.
+
+`Officer.canon` — defaulted on the class, set true for the canonical roster,
+saved, reloaded, read by nothing ever. What the screens actually ask is
+`game.crewMode === 'canon'`, which is the game-level fact. **Deleted**: a
+per-officer copy of it is a second source of truth that can only drift away from
+the first.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
