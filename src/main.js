@@ -23,7 +23,7 @@ import { SIM_STEP } from './core/time.js';
 import { hashSeed } from './core/rng.js';
 import {
   saveGame, loadSave, hasSave, loadSettings, saveSettings as persistSettings,
-  exportSave, downloadSave, importSave,
+  exportSave, downloadSave, importSave, reloadRefusal,
 } from './core/save.js';
 
 import { ABILITIES } from './sim/officers.js';
@@ -2457,6 +2457,17 @@ class App {
       if (!file) return;
       try {
         const data = importSave(await file.text());
+        // The one rewind a player can perform, and the one place
+        // `allowReload` has to be enforced. See `reloadRefusal`: a restore onto
+        // a device with no commission is still allowed, and so is importing a
+        // different captain's record. What is refused is taking THIS
+        // commission back, on the five rungs that promised it could not be.
+        const no = reloadRefusal(this.game, data);
+        if (no) {
+          audio.play('ui_deny');
+          this.showMessage('Command Record', [no]);
+          return;
+        }
         this.game = Game.load(data, { compression: this.settings.compression });
         this.go('bridge');
         this.showMessage('Record Restored', [`Resumed command at stardate ${this.game.stardate}.`]);

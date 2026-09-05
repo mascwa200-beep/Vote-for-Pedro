@@ -70,8 +70,11 @@ do to you: whether officers die permanently, whether the ship can be lost,
 how hard the target numbers are, and — the main lever at the top — how many
 hostiles arrive at once. A single same-tier opponent stays beatable at every
 rung (tested); what changes is that patrols stop arriving one at a time, and
-that some fights are meant to be broken off rather than won. Fleet Admiral is
-ironman.
+that some fights are meant to be broken off rather than won. Commodore and
+above are ironman: permadeath, the ship can be lost, and the record cannot be
+taken back — importing an earlier export of the commission you are flying is
+refused. Restoring onto a device with nothing on it is still a backup, not an
+undo, and still works.
 
 **Two-axis reputation.** *Standing* is how a faction feels this week and
 decides who fires on sight. *Reputation* is what you have earned over a

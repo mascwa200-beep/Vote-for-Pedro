@@ -168,6 +168,26 @@ try {
   // observable later, and confirm the ladder is all present.
   const difficultyCount = await page.locator('.diffcard').count();
   check('the full difficulty ladder is offered', difficultyCount === 12, `${difficultyCount} rungs`);
+  // ---- What the card promises about the save system ----
+  //
+  // Permadeath and ship loss were always shown BOTH WAYS on the selected card.
+  // The third rule, `allowReload`, was shown neither way and enforced nowhere —
+  // the one promise the screen kept quiet about was the one the game was not
+  // keeping. Read off the rendered card, on a rung that has it and one that
+  // does not, because a pill that is always present says nothing.
+  const pillsOn = async (name) => {
+    await page.locator('.diffcard', { has: page.locator('.diffhead b', { hasText: name }) })
+      .first().click();
+    await page.waitForTimeout(120);
+    return page.locator('.diffcard.on').first().innerText();
+  };
+  const top = await pillsOn(/^Fleet Admiral$/);
+  const mid = await pillsOn(/^Lieutenant$/);
+  check('the top rungs say the record cannot be taken back',
+    /no reloading/i.test(top) && /ironman/i.test(top), JSON.stringify(top).slice(0, 240));
+  check('and the middle ones say it can, rather than saying nothing',
+    /reloading allowed/i.test(mid) && !/ironman/i.test(mid), JSON.stringify(mid).slice(0, 240));
+
   // "Commander" is a substring of "Lieutenant Commander", so match the
   // heading exactly rather than by containment.
   await page.locator('.diffcard', { has: page.locator('.diffhead b', { hasText: /^Commander$/ }) })

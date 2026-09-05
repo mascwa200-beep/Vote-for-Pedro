@@ -36,15 +36,19 @@
 //   FirstFail      rerolls, wired and strictly more generous. The freebie was
 //                  already granted by a knob that works.
 //
-// And one is KEPT, unread, on purpose:
+// And one was KEPT, unread, on purpose — and has since been wired:
 //
 //   allowReload    false from Commodore up, with a getter on the class and no
 //                  caller. "Saves cannot be reloaded at the top five rungs" is
-//                  a real policy and a real promise, and enforcing it means
+//                  a real policy and a real promise, and enforcing it meant
 //                  changing what the load screen offers — a change about the
-//                  save system, not about this table. Left declared and
-//                  exposed so the next sweep finds the promise rather than
-//                  quietly losing it.
+//                  save system, not about this table. It was left declared and
+//                  exposed so the next sweep would find the promise rather
+//                  than quietly lose it. The next sweep found it: importing a
+//                  record that would rewind the commission is now refused at
+//                  those five rungs, and the difficulty card says so both ways
+//                  beside permadeath and ship loss. `ironman` went with it —
+//                  it named that combination and duplicated it.
 // -------------------------------------------------------------------------
 //
 // Naming note: this is the real commissioned-officer progression — Cadet,
@@ -228,9 +232,26 @@ export const DIFFICULTIES = [
     permadeath: true, shipLoss: true, crewLossScale: 2.7,
     xpRate: 2.6, fuelUse: 2.2, resourceRate: 0.35,
     allowReload: false,
-    enemyRelentless: true, ironman: true,
+    enemyRelentless: true,
   },
 ];
+
+/**
+ * Ironman: permanent losses, a ship that can be lost, and no reloading.
+ *
+ * DERIVED rather than declared. `ironman: true` was a field on Fleet Admiral
+ * and nothing else, with exactly one reader — a red pill on the difficulty
+ * card — and Fleet Admiral's actual save-and-death rules are identical to the
+ * four rungs below it. So the top card claimed a distinction the table does not
+ * make, which is §68's `autoSave` again: a flag that duplicates something
+ * already expressed.
+ *
+ * Now it is the NAME for the combination, and it is true wherever the
+ * combination is true — Commodore up, which is exactly the five rungs that
+ * declare `allowReload: false`.
+ */
+export const isIronman = (def) =>
+  !!(def?.permadeath && def?.shipLoss && def?.allowReload === false);
 
 export const DIFFICULTY_BY_ID = Object.fromEntries(DIFFICULTIES.map((d) => [d.id, d]));
 
@@ -253,7 +274,7 @@ export class DifficultySettings {
   get name() { return this.def.name; }
   get insignia() { return this.def.insignia; }
   get order() { return this.def.order; }
-  get ironman() { return !!this.def.ironman; }
+  get ironman() { return isIronman(this.def); }
   get permadeath() { return !!this.def.permadeath; }
   get allowReload() { return !!this.def.allowReload; }
 

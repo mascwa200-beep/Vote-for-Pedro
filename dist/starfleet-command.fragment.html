@@ -29436,6 +29436,53 @@ function importSave(text) {
   return data;
 }
 
+/**
+ * Whether loading this record would rewind the commission in progress.
+ *
+ * `allowReload: false` sits on the top five rungs of the difficulty table and
+ * has been read by nothing since it was written — a promise the difficulty
+ * screen makes and the game does not keep. `difficulty.js`'s own header left it
+ * declared and exposed "so the next sweep finds the promise rather than quietly
+ * losing it". This is what enforcing it turned out to mean.
+ *
+ * There is exactly ONE rewind a player can perform. The autosave is written as
+ * you go, so it holds what already happened; the three rotating backups are
+ * corruption recovery and are never offered as a choice; the three numbered
+ * slots have no caller anywhere in the UI. The whole of "reload to undo" is
+ * Options → Import from file.
+ *
+ * So this refuses that ONE case and nothing else:
+ *
+ *   no game in progress          allowed — that is a restore, not an undo, and
+ *                                the same screen tells you a five-year
+ *                                commission is worth exporting off the phone
+ *   a different commission       allowed — a different seed is a different
+ *                                captain, not a rewind of this one
+ *   the same one, further back   REFUSED, on a rung that promised it would be
+ *
+ * "Further back" is measured on `campaign.highWater`, which is monotonic by
+ * construction — the wall-clock mark the campaign accrues from, and the thing
+ * that already stops setting the phone's clock forward from buying progress.
+ * The stardate is what the refusal QUOTES, because that is the number the
+ * player has been looking at.
+ *
+ * @returns {string|null} the reason to refuse, or null to allow
+ */
+function reloadRefusal(game, incoming) {
+  if (!game || !incoming) return null;
+  if (game.difficulty?.allowReload !== false) return null;
+  if (String(incoming.seed) !== String(game.save?.().seed ?? game.seed)) return null;
+
+  const back = Number(incoming.campaign?.highWater ?? 0);
+  const now = Number(game.campaign?.highWater ?? 0);
+  if (!(back < now)) return null;
+
+  const then = incoming.stardate ?? 'an earlier stardate';
+  return `That record is from stardate ${then}, and we are at ${game.stardate}. `
+    + `${game.difficulty.name} does not allow a commission to be taken back. `
+    + 'The record you have is the record.';
+}
+
 // ---------------- settings ----------------
 
 const DEFAULT_SETTINGS = {
@@ -29488,6 +29535,7 @@ __exports.listSaves = listSaves;
 __exports.exportSave = exportSave;
 __exports.downloadSave = downloadSave;
 __exports.importSave = importSave;
+__exports.reloadRefusal = reloadRefusal;
 __exports.loadSettings = loadSettings;
 __exports.saveSettings = saveSettings;
 
@@ -36631,15 +36679,19 @@ __define("src/rules/difficulty.js", function (__exports, __require) {
 //   FirstFail      rerolls, wired and strictly more generous. The freebie was
 //                  already granted by a knob that works.
 //
-// And one is KEPT, unread, on purpose:
+// And one was KEPT, unread, on purpose — and has since been wired:
 //
 //   allowReload    false from Commodore up, with a getter on the class and no
 //                  caller. "Saves cannot be reloaded at the top five rungs" is
-//                  a real policy and a real promise, and enforcing it means
+//                  a real policy and a real promise, and enforcing it meant
 //                  changing what the load screen offers — a change about the
-//                  save system, not about this table. Left declared and
-//                  exposed so the next sweep finds the promise rather than
-//                  quietly losing it.
+//                  save system, not about this table. It was left declared and
+//                  exposed so the next sweep would find the promise rather
+//                  than quietly lose it. The next sweep found it: importing a
+//                  record that would rewind the commission is now refused at
+//                  those five rungs, and the difficulty card says so both ways
+//                  beside permadeath and ship loss. `ironman` went with it —
+//                  it named that combination and duplicated it.
 // -------------------------------------------------------------------------
 //
 // Naming note: this is the real commissioned-officer progression — Cadet,
@@ -36822,9 +36874,26 @@ const DIFFICULTIES = [
     permadeath: true, shipLoss: true, crewLossScale: 2.7,
     xpRate: 2.6, fuelUse: 2.2, resourceRate: 0.35,
     allowReload: false,
-    enemyRelentless: true, ironman: true,
+    enemyRelentless: true,
   },
 ];
+
+/**
+ * Ironman: permanent losses, a ship that can be lost, and no reloading.
+ *
+ * DERIVED rather than declared. `ironman: true` was a field on Fleet Admiral
+ * and nothing else, with exactly one reader — a red pill on the difficulty
+ * card — and Fleet Admiral's actual save-and-death rules are identical to the
+ * four rungs below it. So the top card claimed a distinction the table does not
+ * make, which is §68's `autoSave` again: a flag that duplicates something
+ * already expressed.
+ *
+ * Now it is the NAME for the combination, and it is true wherever the
+ * combination is true — Commodore up, which is exactly the five rungs that
+ * declare `allowReload: false`.
+ */
+const isIronman = (def) =>
+  !!(def?.permadeath && def?.shipLoss && def?.allowReload === false);
 const DIFFICULTY_BY_ID = Object.fromEntries(DIFFICULTIES.map((d) => [d.id, d]));
 const DEFAULT_DIFFICULTY = 'lieutenant';
 function getDifficulty(id) {
@@ -36844,7 +36913,7 @@ class DifficultySettings {
   get name() { return this.def.name; }
   get insignia() { return this.def.insignia; }
   get order() { return this.def.order; }
-  get ironman() { return !!this.def.ironman; }
+  get ironman() { return isIronman(this.def); }
   get permadeath() { return !!this.def.permadeath; }
   get allowReload() { return !!this.def.allowReload; }
 
@@ -36900,6 +36969,7 @@ class DifficultySettings {
 }
 
 __exports.DIFFICULTIES = DIFFICULTIES;
+__exports.isIronman = isIronman;
 __exports.DIFFICULTY_BY_ID = DIFFICULTY_BY_ID;
 __exports.DEFAULT_DIFFICULTY = DEFAULT_DIFFICULTY;
 __exports.getDifficulty = getDifficulty;
@@ -45671,7 +45741,7 @@ const { haptic } = __require("src/ui/touch.js");
 const { audio } = __require("src/audio/engine.js");
 
 const { ABILITIES, ABILITY_IDS, PLAYER_SPECIES, ORIGINS, CAREERS, TRAITS, FEATS, FEAT_BY_ID, MAX_TRAITS, POINT_BUY_COST, POINT_BUY_BUDGET, POINT_BUY_MIN, POINT_BUY_MAX, STANDARD_ARRAY, pointBuyCost, Character, randomCharacter } = __require("src/rules/character.js");
-const { DIFFICULTIES } = __require("src/rules/difficulty.js");
+const { DIFFICULTIES, isIronman } = __require("src/rules/difficulty.js");
 const { REP_TIERS, TRACK_LIST } = __require("src/rules/reputation.js");
 const { abilityMod } = __require("src/rules/dice.js");
 const { ERA_LIST } = __require("src/world/crews.data.js");
@@ -45808,7 +45878,14 @@ class CharacterCreator {
         chosen ? el('div', {}, [
           d.permadeath ? pill('permadeath', 'red') : pill('no permanent loss', 'green'),
           d.shipLoss ? pill('ship can be lost', 'red') : pill('ship cannot be lost', 'green'),
-          d.ironman ? pill('ironman', 'red') : null,
+          // The third save-and-death rule, which the card used to omit.
+          // Permadeath and ship loss were both shown BOTH WAYS; `allowReload`
+          // was shown neither way and enforced nowhere, so the one promise the
+          // screen kept quiet about was also the one the game was not keeping.
+          d.allowReload === false
+            ? pill('no reloading', 'red')
+            : pill('reloading allowed', 'green'),
+          isIronman(d) ? pill('ironman', 'red') : null,
           pill(`DC ${signed(d.dcShift)}`),
           pill(`XP ×${d.xpRate}`),
         ]) : null,
@@ -46365,7 +46442,7 @@ const { Game, MODES } = __require("src/core/state.js");
 const { on } = __require("src/core/events.js");
 const { SIM_STEP } = __require("src/core/time.js");
 const { hashSeed } = __require("src/core/rng.js");
-const { saveGame, loadSave, hasSave, loadSettings, saveSettings: persistSettings, exportSave, downloadSave, importSave } = __require("src/core/save.js");
+const { saveGame, loadSave, hasSave, loadSettings, saveSettings: persistSettings, exportSave, downloadSave, importSave, reloadRefusal } = __require("src/core/save.js");
 
 const { ABILITIES } = __require("src/sim/officers.js");
 const { WATCHES } = __require("src/sim/watch.js");
@@ -48798,6 +48875,17 @@ class App {
       if (!file) return;
       try {
         const data = importSave(await file.text());
+        // The one rewind a player can perform, and the one place
+        // `allowReload` has to be enforced. See `reloadRefusal`: a restore onto
+        // a device with no commission is still allowed, and so is importing a
+        // different captain's record. What is refused is taking THIS
+        // commission back, on the five rungs that promised it could not be.
+        const no = reloadRefusal(this.game, data);
+        if (no) {
+          audio.play('ui_deny');
+          this.showMessage('Command Record', [no]);
+          return;
+        }
         this.game = Game.load(data, { compression: this.settings.compression });
         this.go('bridge');
         this.showMessage('Record Restored', [`Resumed command at stardate ${this.game.stardate}.`]);

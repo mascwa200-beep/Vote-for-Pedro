@@ -13,7 +13,7 @@ import {
   POINT_BUY_MIN, POINT_BUY_MAX, STANDARD_ARRAY, pointBuyCost,
   Character, randomCharacter,
 } from '../rules/character.js';
-import { DIFFICULTIES } from '../rules/difficulty.js';
+import { DIFFICULTIES, isIronman } from '../rules/difficulty.js';
 import { REP_TIERS, TRACK_LIST } from '../rules/reputation.js';
 import { abilityMod } from '../rules/dice.js';
 import { ERA_LIST } from '../world/crews.data.js';
@@ -150,7 +150,14 @@ export class CharacterCreator {
         chosen ? el('div', {}, [
           d.permadeath ? pill('permadeath', 'red') : pill('no permanent loss', 'green'),
           d.shipLoss ? pill('ship can be lost', 'red') : pill('ship cannot be lost', 'green'),
-          d.ironman ? pill('ironman', 'red') : null,
+          // The third save-and-death rule, which the card used to omit.
+          // Permadeath and ship loss were both shown BOTH WAYS; `allowReload`
+          // was shown neither way and enforced nowhere, so the one promise the
+          // screen kept quiet about was also the one the game was not keeping.
+          d.allowReload === false
+            ? pill('no reloading', 'red')
+            : pill('reloading allowed', 'green'),
+          isIronman(d) ? pill('ironman', 'red') : null,
           pill(`DC ${signed(d.dcShift)}`),
           pill(`XP ×${d.xpRate}`),
         ]) : null,

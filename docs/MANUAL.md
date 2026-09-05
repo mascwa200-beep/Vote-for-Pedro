@@ -566,8 +566,14 @@ What actually changes:
 - **Cadet** — officers can be wounded but not killed.
 - **Ensign** — permadeath and ship loss switch on.
 - **Lieutenant** — the intended experience. No thumb on the scale either way.
-- **Commodore and above** — autosave only. The record stands as written.
-- **Fleet Admiral** — ironman. If the ship is lost, the commission is over.
+- **Commodore and above** — ironman. Permadeath, the ship can be lost, and
+  the record cannot be taken back: importing an earlier export of the
+  commission you are flying is refused. Restoring onto a device with no
+  commission on it, or importing a different captain's record, still works —
+  that is a backup, not an undo.
+- **Fleet Admiral** — the same ironman rules as Commodore up, with every number
+  at its worst: the widest target-number shift, the thirstiest engines, the
+  least out of a wreck, and nobody breaking off a fight.
 
 Target numbers shift with difficulty too: −3 on Story, +8 at Fleet Admiral.
 

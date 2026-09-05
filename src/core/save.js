@@ -217,6 +217,53 @@ export function importSave(text) {
   return data;
 }
 
+/**
+ * Whether loading this record would rewind the commission in progress.
+ *
+ * `allowReload: false` sits on the top five rungs of the difficulty table and
+ * has been read by nothing since it was written — a promise the difficulty
+ * screen makes and the game does not keep. `difficulty.js`'s own header left it
+ * declared and exposed "so the next sweep finds the promise rather than quietly
+ * losing it". This is what enforcing it turned out to mean.
+ *
+ * There is exactly ONE rewind a player can perform. The autosave is written as
+ * you go, so it holds what already happened; the three rotating backups are
+ * corruption recovery and are never offered as a choice; the three numbered
+ * slots have no caller anywhere in the UI. The whole of "reload to undo" is
+ * Options → Import from file.
+ *
+ * So this refuses that ONE case and nothing else:
+ *
+ *   no game in progress          allowed — that is a restore, not an undo, and
+ *                                the same screen tells you a five-year
+ *                                commission is worth exporting off the phone
+ *   a different commission       allowed — a different seed is a different
+ *                                captain, not a rewind of this one
+ *   the same one, further back   REFUSED, on a rung that promised it would be
+ *
+ * "Further back" is measured on `campaign.highWater`, which is monotonic by
+ * construction — the wall-clock mark the campaign accrues from, and the thing
+ * that already stops setting the phone's clock forward from buying progress.
+ * The stardate is what the refusal QUOTES, because that is the number the
+ * player has been looking at.
+ *
+ * @returns {string|null} the reason to refuse, or null to allow
+ */
+export function reloadRefusal(game, incoming) {
+  if (!game || !incoming) return null;
+  if (game.difficulty?.allowReload !== false) return null;
+  if (String(incoming.seed) !== String(game.save?.().seed ?? game.seed)) return null;
+
+  const back = Number(incoming.campaign?.highWater ?? 0);
+  const now = Number(game.campaign?.highWater ?? 0);
+  if (!(back < now)) return null;
+
+  const then = incoming.stardate ?? 'an earlier stardate';
+  return `That record is from stardate ${then}, and we are at ${game.stardate}. `
+    + `${game.difficulty.name} does not allow a commission to be taken back. `
+    + 'The record you have is the record.';
+}
+
 // ---------------- settings ----------------
 
 const DEFAULT_SETTINGS = {

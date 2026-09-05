@@ -13,7 +13,7 @@
 //     hazardScale        0.4 -> 2.7           DUPLICATE  -> deleted
 //     autoSave           true on all twelve   CONSTANT   -> deleted
 //     advantageOnFirstFail  Story only        SUBSUMED   -> deleted
-//     allowReload        false from Commodore unenforced -> kept, on purpose
+//     allowReload        false from Commodore unenforced -> kept, then wired
 //
 // The three deletions each have a different reason and that is the point. A
 // sweep whose only output is "wire everything you find" would have multiplied
@@ -74,10 +74,12 @@ describe('every knob the difficulty table declares is read by something', () => 
     for (const k of seen) {
       const inAccessor = new RegExp(`['\`]${k}['\`]|\\.${k}\\b`).test(accessors);
       const inRest = new RegExp(`['\`]${k}['\`]|\\.${k}\\b`).test(outside);
-      // `allowReload` is deliberately unenforced. See the header of
-      // difficulty.js: it is a real promise about the save system, and
-      // enforcing it is a change to the load screen rather than to this table.
-      if (!inAccessor && !inRest && k !== 'allowReload') dead.push(k);
+      // No exemptions any more. `allowReload` used to have one — it was a
+      // real promise about the save system that nothing enforced, left
+      // declared so a later sweep would find it. A later sweep did: it is read
+      // by `reloadRefusal` in core/save.js and shown both ways on the
+      // difficulty card, so it stands on its own here like every other knob.
+      if (!inAccessor && !inRest) dead.push(k);
     }
     assert.deepEqual(dead.sort(), [],
       'declared by a difficulty rung and read by nothing anywhere in src/');
