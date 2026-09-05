@@ -32,6 +32,68 @@ export const DECKS = {
   19: 'Deck 19 — Hangar deck',
 };
 
+/** The deck numbers this plan uses, low to high. */
+export const PLAN_DECKS = Object.keys(DECKS).map(Number).sort((a, b) => a - b);
+
+/**
+ * The same deck plan, renumbered for a hull that is not a Constitution.
+ *
+ * This plan is a Constitution's: eight decks between 1 and 19, on a ship with
+ * twenty-three. Every hull in the game wore it unaltered, because nothing read
+ * the published deck count — `DIMENSIONS.decks`, thirty-one records, written
+ * and never read. An Oberth has EIGHT decks and its captain walked to "Deck 11
+ * — Engineering" and "Deck 19 — Hangar deck"; the shipyard sells a runabout at
+ * tier one, twenty-three metres and a single deck, whose captain could ride a
+ * turbolift to fifteen rooms below a keel that is not there.
+ *
+ * Renumbering, not removal. A Defiant has an engine room, a transporter and an
+ * armoury — it simply does not have them on decks 11, 7 and 19. What was wrong
+ * was the NUMBER, and the number is the part the captain reads. Which
+ * facilities a small hull carries at all is a content question with a much
+ * wider blast radius (episode `where` gates, occupancy, the station panels,
+ * lift connectivity) and is deliberately not answered here.
+ *
+ * Order and grouping are preserved: the bridge is deck 1 on every ship, rooms
+ * that share a deck on a Constitution share one on every hull, and the order
+ * from top to bottom never changes. A hull with fewer decks than the plan has
+ * levels simply stacks them — which is what a small ship is.
+ *
+ * @param {number} hullDecks  the hull's published deck count
+ * @returns {Map<number, number>} plan deck -> deck on this hull
+ */
+export function deckPlanFor(hullDecks) {
+  const plan = PLAN_DECKS;
+  const out = new Map();
+  const n = Math.max(1, Math.floor(hullDecks || 0));
+  // A hull with room for the plan as written keeps it. Only a hull that cannot
+  // reach deck 19 gets renumbered, so a Constitution, an Excelsior and a Galaxy
+  // are untouched and the numbers a player already knows do not move.
+  if (n >= plan[plan.length - 1]) {
+    for (const d of plan) out.set(d, d);
+    return out;
+  }
+  // Scaled by DEPTH, not by index. Spreading the eight levels evenly put a
+  // Miranda's engineering, a Constellation's and an Intrepid's all on deck 7 —
+  // three different hulls of twelve, fourteen and fifteen decks with an
+  // identical deck plan, which is the flatness this is meant to fix. Deck 11 of
+  // 19 is two thirds of the way down whatever the hull is, so that is what gets
+  // preserved: the hangar is on the keel, the bridge is on top, and everything
+  // else keeps its position between them.
+  const deepest = plan[plan.length - 1];
+  for (const d of plan) {
+    const depth = (d - 1) / (deepest - 1);
+    out.set(d, Math.min(n, 1 + Math.round(depth * (n - 1))));
+  }
+  return out;
+}
+
+/** The label for a deck once it has been renumbered onto a hull. */
+export function deckLabelFor(planDeck, hullDecks) {
+  const actual = deckPlanFor(hullDecks).get(planDeck) ?? planDeck;
+  const name = (DECKS[planDeck] ?? `Deck ${planDeck}`).split('—')[1]?.trim();
+  return name ? `Deck ${actual} — ${name}` : `Deck ${actual}`;
+}
+
 /**
  * The ten stations documented on a Constitution bridge, in the order they ring
  * the room from the viewscreen round to port.

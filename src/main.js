@@ -806,6 +806,8 @@ class App {
       const r = w.room.lift ? { ok: false, needsDestination: true } : g.useExitAhead();
       if (r.ok) { audio.play('door'); haptic('confirm'); this.render(); return; }
       // A lift needs a deck. Offer the stops rather than guessing one.
+      // The lift asks "which deck" and then offered eight buttons with no deck
+      // on them. `deckOf` puts the number back, renumbered onto this hull.
       this.showMessage('Turbolift', ['Which deck, Captain?'],
         w.liftStops().map((e) => button(e.label ?? e.to, () => {
           this.closeModal();
@@ -813,7 +815,7 @@ class App {
           audio.play(ride.ok ? 'door' : 'ui_deny');
           if (!ride.ok && ride.reason) g.pushLog(ride.reason, 'computer');
           this.render();
-        }, { color: 'blue' })));
+        }, { color: 'blue', sub: `Deck ${g.deckOf(e.to) ?? e.deck}` })));
       return;
     }
 
@@ -921,7 +923,27 @@ class App {
         }
         break;
       }
-      case 'turbolift':
+      // The lift control panel, which is the ONE station inside the turbolift
+      // and the only reason the compartment has a console at all. It shared the
+      // `default` branch and answered "Working, Captain." — and it passed the
+      // audit in `tests/audit.test.js` for exactly that reason, because the
+      // guard harvested `case` labels and a case label is not a panel. Same
+      // failure as the sound-cue guard: a check satisfied by the shape of the
+      // source rather than by what it does.
+      case 'turbolift': {
+        const stops = g.walk.liftStops();
+        body.push(el('p', { class: 'muted', text: 'Turbolift control. Name a deck.' }));
+        for (const e of stops) {
+          body.push(button(e.label ?? e.to, () => {
+            this.closeModal();
+            const ride = g.useExitAhead(e.to);
+            audio.play(ride.ok ? 'door' : 'ui_deny');
+            if (!ride.ok && ride.reason) g.pushLog(ride.reason, 'computer');
+            this.render();
+          }, { color: 'blue', sub: g.deckLabel(e.to) ?? '' }));
+        }
+        break;
+      }
       default:
         body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
         break;

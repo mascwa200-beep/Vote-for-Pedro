@@ -7,7 +7,8 @@
 //     SYSTEMS        43 records, 16 distinct fields, ZERO orphans
 //     SHIP_CLASSES   31 records, 29 distinct fields, FIVE orphans
 //
-// The five appear nowhere else in `src/` at all:
+// Four of the five appear nowhere else in `src/` at all. The fifth does, and
+// this file said otherwise — see the correction on `boffSeats` below:
 //
 //     boffSeats         13 classes, a [{dept, rank}] seat layout
 //     auxBonus           3 classes (25, 35, 30) — all three science hulls
@@ -24,7 +25,7 @@ import assert from 'node:assert/strict';
 
 import { Game } from '../src/core/state.js';
 import { Ship, ABLATIVE_RESIST } from '../src/sim/ship.js';
-import { SHIP_CLASSES } from '../src/world/ships.data.js';
+import { SHIP_CLASSES, commandableAt } from '../src/world/ships.data.js';
 import { ABILITIES } from '../src/sim/officers.js';
 
 /** A ship of this class, power settled, so `factor` reads a real level. */
@@ -143,6 +144,33 @@ describe('three that are left alone, and why', () => {
     // And it is still declared, so a future sweep finds it again.
     const carriers = Object.values(SHIP_CLASSES).filter((c) => c.boffSeats);
     assert.equal(carriers.length, 13);
+  });
+
+  test('but boffSeats is NOT unread — it decides what the shipyard sells', () => {
+    // A correction to this file's own header. The sweep that produced it
+    // reported `boffSeats` as appearing nowhere else in `src/`, and it does:
+    //
+    //     ships.data.js:499  s.faction === 'federation' && s.boffSeats && s.tier <= tier
+    //
+    // `commandableAt` uses it as a truthiness flag meaning "a hull the player
+    // may command", which is why thirteen classes carry it and eighteen do
+    // not. It was missed because it lives in the file that DECLARES the field,
+    // and the sweep looked everywhere else. Reading the seat CONTENTS is still
+    // nobody's job, and the test above is still the reason that stays true —
+    // but the field is load-bearing and deleting it would empty every shipyard
+    // in the game.
+    const commandable = commandableAt(9);
+    assert.ok(commandable.length >= 10, `${commandable.length} hulls on sale`);
+    for (const c of commandable) {
+      assert.ok(c.boffSeats, `${c.id} is on sale without a seat layout`);
+    }
+    // And the gate is real: every Federation hull WITHOUT seats is unbuyable.
+    const seatless = Object.values(SHIP_CLASSES)
+      .filter((c) => c.faction === 'federation' && !c.boffSeats);
+    for (const c of seatless) {
+      assert.ok(!commandable.some((o) => o.id === c.id),
+        `${c.id} has no seats and is on sale anyway, so the flag is not the gate`);
+    }
   });
 
   test('saucerSeparation is a feature, not an unread number', () => {

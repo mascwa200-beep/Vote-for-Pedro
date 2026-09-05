@@ -12,7 +12,7 @@ export const SHIP_CLASSES = {
     id: 'constitution', name: 'Constitution class', faction: 'federation',
     tier: 3, role: 'cruiser',
     hull: 4200, shields: 3400, shieldRegen: 42,
-    crew: 430, mass: 1.0,
+    crew: 430, decks: 23, mass: 1.0,
     impulse: 0.72, turnRate: 9.0, maxWarp: 8.0, warpEfficiency: 1.0,
     powerCap: 200,
     weapons: [
@@ -31,7 +31,7 @@ export const SHIP_CLASSES = {
     id: 'constitution_refit', name: 'Constitution class (Refit)', faction: 'federation',
     tier: 4, role: 'cruiser', refitOf: 'constitution',
     hull: 5100, shields: 4400, shieldRegen: 55,
-    crew: 430, mass: 1.05,
+    crew: 430, decks: 23, mass: 1.05,
     impulse: 0.78, turnRate: 9.5, maxWarp: 9.0, warpEfficiency: 1.15,
     powerCap: 220,
     weapons: [
@@ -51,7 +51,7 @@ export const SHIP_CLASSES = {
     id: 'miranda', name: 'Miranda class', faction: 'federation',
     tier: 2, role: 'light cruiser',
     hull: 3100, shields: 2600, shieldRegen: 38,
-    crew: 220, mass: 0.8,
+    crew: 220, decks: 12, mass: 0.8,
     impulse: 0.8, turnRate: 12.0, maxWarp: 8.0, warpEfficiency: 1.1,
     powerCap: 180,
     weapons: [
@@ -68,7 +68,7 @@ export const SHIP_CLASSES = {
     id: 'oberth', name: 'Oberth class', faction: 'federation',
     tier: 2, role: 'science vessel',
     hull: 2400, shields: 2900, shieldRegen: 62,
-    crew: 80, mass: 0.6,
+    crew: 80, decks: 8, mass: 0.6,
     impulse: 0.68, turnRate: 14.0, maxWarp: 7.5, warpEfficiency: 1.3,
     powerCap: 190, auxBonus: 25,
     weapons: [
@@ -84,7 +84,7 @@ export const SHIP_CLASSES = {
     id: 'excelsior', name: 'Excelsior class', faction: 'federation',
     tier: 5, role: 'heavy cruiser',
     hull: 6400, shields: 5200, shieldRegen: 60,
-    crew: 750, mass: 1.35,
+    crew: 750, decks: 34, mass: 1.35,
     impulse: 0.75, turnRate: 7.5, maxWarp: 9.2, warpEfficiency: 1.25,
     powerCap: 240,
     weapons: [
@@ -104,7 +104,7 @@ export const SHIP_CLASSES = {
     id: 'constellation', name: 'Constellation class', faction: 'federation',
     tier: 3, role: 'explorer',
     hull: 3800, shields: 3200, shieldRegen: 44,
-    crew: 535, mass: 1.0,
+    crew: 535, decks: 14, mass: 1.0,
     impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 1.35,
     powerCap: 200,
     weapons: [
@@ -124,7 +124,7 @@ export const SHIP_CLASSES = {
     id: 'bird_of_prey', name: 'B’rel-class Bird-of-Prey', faction: 'klingon',
     tier: 3, role: 'raider',
     hull: 2600, shields: 2000, shieldRegen: 34,
-    crew: 36, mass: 0.55,
+    crew: 36, decks: 3, mass: 0.55,
     impulse: 0.95, turnRate: 18.0, maxWarp: 8.5, warpEfficiency: 1.0,
     powerCap: 190, cloak: true,
     weapons: [
@@ -137,7 +137,7 @@ export const SHIP_CLASSES = {
     id: 'd7', name: 'D7-class Battlecruiser', faction: 'klingon',
     tier: 4, role: 'battlecruiser',
     hull: 4600, shields: 3600, shieldRegen: 40,
-    crew: 400, mass: 1.1,
+    crew: 400, decks: 18, mass: 1.1,
     impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 0.95,
     powerCap: 210,
     weapons: [
@@ -153,7 +153,7 @@ export const SHIP_CLASSES = {
     id: 'warbird', name: 'D’deridex-class Warbird', faction: 'romulan',
     tier: 6, role: 'warbird',
     hull: 7800, shields: 6200, shieldRegen: 58,
-    crew: 1500, mass: 1.8,
+    crew: 1500, decks: 60, mass: 1.8,
     impulse: 0.62, turnRate: 5.5, maxWarp: 9.0, warpEfficiency: 1.0,
     powerCap: 250, cloak: true,
     weapons: [
@@ -166,7 +166,7 @@ export const SHIP_CLASSES = {
     id: 'scoutship', name: 'Romulan Scout', faction: 'romulan',
     tier: 2, role: 'scout',
     hull: 1800, shields: 1600, shieldRegen: 44,
-    crew: 24, mass: 0.5,
+    crew: 24, decks: 3, mass: 0.5,
     impulse: 1.0, turnRate: 20.0, maxWarp: 8.0, warpEfficiency: 1.2,
     powerCap: 170, cloak: true,
     weapons: [
@@ -180,7 +180,7 @@ export const SHIP_CLASSES = {
     id: 'galor', name: 'Galor-class Cruiser', faction: 'cardassian',
     tier: 4, role: 'cruiser',
     hull: 4400, shields: 3800, shieldRegen: 48,
-    crew: 300, mass: 1.05,
+    crew: 300, decks: 16, mass: 1.05,
     impulse: 0.74, turnRate: 9.0, maxWarp: 9.0, warpEfficiency: 1.05,
     powerCap: 205,
     weapons: [
@@ -195,7 +195,7 @@ export const SHIP_CLASSES = {
     id: 'marauder', name: 'D’Kora-class Marauder', faction: 'ferengi',
     tier: 3, role: 'marauder',
     hull: 3400, shields: 3000, shieldRegen: 46,
-    crew: 450, mass: 1.0,
+    crew: 450, decks: 20, mass: 1.0,
     impulse: 0.78, turnRate: 10.0, maxWarp: 9.2, warpEfficiency: 1.2,
     powerCap: 195,
     weapons: [
@@ -207,7 +207,7 @@ export const SHIP_CLASSES = {
     id: 'orion_raider', name: 'Orion Raider', faction: 'orion',
     tier: 2, role: 'raider',
     hull: 1900, shields: 1500, shieldRegen: 32,
-    crew: 60, mass: 0.6,
+    crew: 60, decks: 5, mass: 0.6,
     impulse: 0.92, turnRate: 16.0, maxWarp: 8.0, warpEfficiency: 1.0,
     powerCap: 170,
     weapons: [
@@ -219,7 +219,7 @@ export const SHIP_CLASSES = {
     id: 'tholian_web_spinner', name: 'Tholian Web Spinner', faction: 'tholian',
     tier: 4, role: 'interceptor',
     hull: 2200, shields: 4200, shieldRegen: 70,
-    crew: 12, mass: 0.5,
+    crew: 12, decks: 4, mass: 0.5,
     impulse: 1.05, turnRate: 22.0, maxWarp: 8.0, warpEfficiency: 1.0,
     powerCap: 200, websAfter: 45,
     weapons: [
@@ -231,7 +231,7 @@ export const SHIP_CLASSES = {
     id: 'jem_hadar_attack', name: 'Jem’Hadar Attack Ship', faction: 'dominion',
     tier: 5, role: 'attack ship',
     hull: 3000, shields: 2400, shieldRegen: 40,
-    crew: 50, mass: 0.7,
+    crew: 50, decks: 3, mass: 0.7,
     impulse: 1.1, turnRate: 19.0, maxWarp: 9.0, warpEfficiency: 1.0,
     powerCap: 220, ramsWhenDoomed: true,
     weapons: [
@@ -244,7 +244,7 @@ export const SHIP_CLASSES = {
     id: 'borg_cube', name: 'Borg Cube', faction: 'borg',
     tier: 10, role: 'cube',
     hull: 42000, shields: 30000, shieldRegen: 260,
-    crew: 64000, mass: 12.0,
+    crew: 64000, decks: 0, mass: 12.0,
     impulse: 0.55, turnRate: 3.0, maxWarp: 9.6, warpEfficiency: 2.0,
     powerCap: 400, adapts: true, regenerates: 180,
     weapons: [
@@ -259,7 +259,7 @@ export const SHIP_CLASSES = {
     id: 'ambassador', name: 'Ambassador class', faction: 'federation',
     tier: 5, role: 'explorer',
     hull: 6800, shields: 5600, shieldRegen: 62,
-    crew: 700, mass: 1.4,
+    crew: 700, decks: 36, mass: 1.4,
     impulse: 0.72, turnRate: 7.0, maxWarp: 9.2, warpEfficiency: 1.3,
     powerCap: 240,
     weapons: [
@@ -278,7 +278,7 @@ export const SHIP_CLASSES = {
     id: 'galaxy', name: 'Galaxy class', faction: 'federation',
     tier: 6, role: 'explorer',
     hull: 9200, shields: 7600, shieldRegen: 78,
-    crew: 1014, mass: 2.0,
+    crew: 1014, decks: 42, mass: 2.0,
     impulse: 0.68, turnRate: 5.5, maxWarp: 9.6, warpEfficiency: 1.5,
     powerCap: 265, saucerSeparation: true,
     weapons: [
@@ -298,7 +298,7 @@ export const SHIP_CLASSES = {
     id: 'nebula', name: 'Nebula class', faction: 'federation',
     tier: 6, role: 'science cruiser',
     hull: 7800, shields: 7200, shieldRegen: 96,
-    crew: 750, mass: 1.7,
+    crew: 750, decks: 30, mass: 1.7,
     impulse: 0.7, turnRate: 6.5, maxWarp: 9.5, warpEfficiency: 1.45,
     powerCap: 270, auxBonus: 35,
     weapons: [
@@ -316,7 +316,7 @@ export const SHIP_CLASSES = {
     id: 'intrepid', name: 'Intrepid class', faction: 'federation',
     tier: 5, role: 'science vessel',
     hull: 5400, shields: 5800, shieldRegen: 104,
-    crew: 150, mass: 0.9,
+    crew: 150, decks: 15, mass: 0.9,
     impulse: 0.92, turnRate: 13.0, maxWarp: 9.975, warpEfficiency: 1.7,
     powerCap: 250, auxBonus: 30,
     weapons: [
@@ -334,7 +334,7 @@ export const SHIP_CLASSES = {
     id: 'defiant', name: 'Defiant class', faction: 'federation',
     tier: 5, role: 'escort',
     hull: 4400, shields: 4600, shieldRegen: 58,
-    crew: 50, mass: 0.6,
+    crew: 50, decks: 4, mass: 0.6,
     impulse: 1.05, turnRate: 20.0, maxWarp: 9.5, warpEfficiency: 1.0,
     powerCap: 245, ablative: true,
     weapons: [
@@ -353,7 +353,7 @@ export const SHIP_CLASSES = {
     id: 'sovereign', name: 'Sovereign class', faction: 'federation',
     tier: 6, role: 'heavy explorer',
     hull: 9800, shields: 8200, shieldRegen: 88,
-    crew: 855, mass: 1.9,
+    crew: 855, decks: 24, mass: 1.9,
     impulse: 0.82, turnRate: 8.0, maxWarp: 9.9, warpEfficiency: 1.6,
     powerCap: 285,
     weapons: [
@@ -373,7 +373,7 @@ export const SHIP_CLASSES = {
     id: 'runabout', name: 'Danube-class Runabout', faction: 'federation',
     tier: 1, role: 'runabout',
     hull: 1200, shields: 1100, shieldRegen: 30,
-    crew: 4, mass: 0.25,
+    crew: 4, decks: 1, mass: 0.25,
     impulse: 1.0, turnRate: 24.0, maxWarp: 5.0, warpEfficiency: 0.9,
     powerCap: 140,
     weapons: [
@@ -390,7 +390,7 @@ export const SHIP_CLASSES = {
     id: 'vorcha', name: 'Vor’cha-class Attack Cruiser', faction: 'klingon',
     tier: 5, role: 'attack cruiser',
     hull: 6200, shields: 5000, shieldRegen: 52,
-    crew: 1900, mass: 1.5,
+    crew: 1900, decks: 28, mass: 1.5,
     impulse: 0.76, turnRate: 7.5, maxWarp: 9.6, warpEfficiency: 1.1,
     powerCap: 245, cloak: true,
     weapons: [
@@ -404,7 +404,7 @@ export const SHIP_CLASSES = {
     id: 'neghvar', name: 'Negh’Var-class Warship', faction: 'klingon',
     tier: 7, role: 'flagship',
     hull: 11000, shields: 8400, shieldRegen: 72,
-    crew: 2500, mass: 2.4,
+    crew: 2500, decks: 35, mass: 2.4,
     impulse: 0.64, turnRate: 4.5, maxWarp: 9.6, warpEfficiency: 1.0,
     powerCap: 300, cloak: true,
     weapons: [
@@ -418,7 +418,7 @@ export const SHIP_CLASSES = {
     id: 'ktinga', name: 'K’t’inga-class Battlecruiser', faction: 'klingon',
     tier: 4, role: 'battlecruiser',
     hull: 5000, shields: 3900, shieldRegen: 42,
-    crew: 440, mass: 1.15,
+    crew: 440, decks: 18, mass: 1.15,
     impulse: 0.72, turnRate: 8.0, maxWarp: 9.0, warpEfficiency: 1.0,
     powerCap: 215,
     weapons: [
@@ -431,7 +431,7 @@ export const SHIP_CLASSES = {
     id: 'keldon', name: 'Keldon-class Cruiser', faction: 'cardassian',
     tier: 5, role: 'heavy cruiser',
     hull: 5800, shields: 4800, shieldRegen: 56,
-    crew: 400, mass: 1.3,
+    crew: 400, decks: 18, mass: 1.3,
     impulse: 0.76, turnRate: 8.0, maxWarp: 9.2, warpEfficiency: 1.05,
     powerCap: 235,
     weapons: [
@@ -445,7 +445,7 @@ export const SHIP_CLASSES = {
     id: 'jem_hadar_battleship', name: 'Jem’Hadar Battleship', faction: 'dominion',
     tier: 8, role: 'battleship',
     hull: 16000, shields: 12000, shieldRegen: 120,
-    crew: 900, mass: 3.2,
+    crew: 900, decks: 40, mass: 3.2,
     impulse: 0.62, turnRate: 4.0, maxWarp: 9.4, warpEfficiency: 1.1,
     powerCap: 330, ramsWhenDoomed: true,
     weapons: [
@@ -458,7 +458,7 @@ export const SHIP_CLASSES = {
     id: 'bioship', name: 'Bioship', faction: 'borg',
     tier: 9, role: 'bioship',
     hull: 20000, shields: 14000, shieldRegen: 200,
-    crew: 1, mass: 2.6,
+    crew: 1, decks: 0, mass: 2.6,
     impulse: 1.2, turnRate: 14.0, maxWarp: 9.9, warpEfficiency: 2.0,
     powerCap: 360, adapts: true, regenerates: 120,
     weapons: [
@@ -470,7 +470,7 @@ export const SHIP_CLASSES = {
     id: 'transport', name: 'Colony Transport', faction: 'independent',
     tier: 1, role: 'transport',
     hull: 2200, shields: 1200, shieldRegen: 20,
-    crew: 1400, mass: 1.6,
+    crew: 1400, decks: 6, mass: 1.6,
     impulse: 0.45, turnRate: 4.0, maxWarp: 6.0, warpEfficiency: 1.0,
     powerCap: 130, civilian: true,
     weapons: [],
@@ -480,7 +480,7 @@ export const SHIP_CLASSES = {
     id: 'freighter', name: 'Civilian Freighter', faction: 'independent',
     tier: 1, role: 'freighter',
     hull: 1600, shields: 900, shieldRegen: 18,
-    crew: 14, mass: 1.2,
+    crew: 14, decks: 10, mass: 1.2,
     impulse: 0.5, turnRate: 5.0, maxWarp: 6.5, warpEfficiency: 1.0,
     powerCap: 120, civilian: true,
     weapons: [],

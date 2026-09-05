@@ -3617,6 +3617,109 @@ is narrower and worse — the guard existed, was specific, ran on every commit,
 and was satisfied by a substring.
 
 
+## 52. Every ship in the game wore a Constitution's deck plan
+
+The interior is one plan: seventeen rooms across eight decks numbered 1 to 19,
+built to the Constitution described in §3 and §11. It did not vary by class, and
+nothing read the published deck count — `DIMENSIONS.decks`, thirty-one records
+with a source in §13, **written and read by nothing**, the same shape as §45's
+flags and §48's `stealthDetect`.
+
+So the deck number a captain read was the Constitution's, whatever they were
+flying:
+
+| hull | decks | rooms below its keel |
+| --- | --- | --- |
+| Oberth | 8 | engineering (deck 11), hangar (deck 19) |
+| Defiant | 4 | eleven |
+| runabout | 1 | fifteen, including a hangar deck and a brig |
+
+The Oberth is not a corner case. It is the **bottom rung of `COMMAND_LADDER`** —
+the ship a career starts on — so the ordinary opening hours of the game had a
+captain walking to "Deck 11 — Engineering" on an eight-deck ship. The runabout
+is worse: `commandableAt` puts it on sale at **tier one**, so a captain can walk
+into any of the six shipyards on their first day, take a twenty-three-metre ship
+with a crew of four, and ride a turbolift to deck nineteen.
+
+### Renumbering, not removal
+
+A Defiant has an engine room, a transporter and an armoury. It does not have
+them on decks 11, 7 and 19. **What was wrong was the number**, and the number is
+the part the captain reads.
+
+Which facilities a small hull carries *at all* is a different question with a
+much wider blast radius — episode `where` gates, `occupancy.js`'s rules, the
+station panels, lift connectivity — and §50's rule applies: a sweep whose only
+output is "wire everything you find" is a sweep that will eventually break
+something. Naive gating would have left a Defiant captain with no transporter
+room and no engineering, which are load-bearing for beam-down and for repair.
+Stated, and not taken.
+
+`deckPlanFor(hullDecks)` compresses the plan, preserving what has to hold:
+
+- the bridge is deck 1 on every ship;
+- rooms sharing a deck on a Constitution share one on every hull (deck 7 is
+  transporters, armoury, brig and cargo — one space on a small ship, but never
+  scattered);
+- the order down the ship never changes;
+- **a hull with room for the plan as written keeps it unaltered**, so a
+  Constitution, an Excelsior and a Galaxy do not move and the numbers a player
+  already knows stay put.
+
+The first draft spread the eight levels by **index**, which put a Miranda's
+engineering, a Constellation's and an Intrepid's all on deck 7 — three hulls of
+twelve, fourteen and fifteen decks with an identical plan, which is the exact
+flatness the change exists to remove. Scaling by **depth** against the plan's own
+range fixes it: deck 11 of 19 is two thirds of the way down whatever the hull
+is, so the hangar lands on the keel and the bridge stays on top.
+
+### The second guard satisfied by a `case` label
+
+`lift_control` is the only station in the turbolift and the reason the
+compartment has a console. Its case in `openConsole` sat immediately above
+`default:` and shared its branch:
+
+```js
+      case 'turbolift':
+      default:
+        body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
+```
+
+`tests/audit.test.js` asserts that every station aboard "opens a console or
+answers with a report", and it passed this one — because that guard harvests
+`case '<id>':` labels out of the switch, and a case label is not a panel.
+
+**That is the same failure as §51's**, found one PR later in a different guard:
+the sound-cue check was satisfied by `case 'cloak':` in the order dispatcher.
+Two independent guards, both written specifically to catch dead ends, both
+matching the *shape of the source* rather than what it does. Where a check
+harvests identifiers out of source text, it has to harvest them from the
+construct that does the work — a `.play(` argument list, a case body — never
+from the label.
+
+### A correction to §50
+
+§50 recorded five orphan fields on the ship classes and said all five "appear
+nowhere else in `src/` at all". **That is wrong for `boffSeats`**, which is read
+at `ships.data.js:499`:
+
+```js
+  return SHIP_LIST.filter((s) => s.faction === 'federation' && s.boffSeats && s.tier <= tier);
+```
+
+`commandableAt` uses it as a truthiness flag meaning "a hull the player may
+command" — which is why thirteen classes carry it and eighteen do not, and why
+the runabout is on sale at tier one. It was missed because it lives in the file
+that *declares* the field and the sweep looked everywhere else. The §50 decision
+still stands: reading the seat *contents* would leave a Galaxy unable to use any
+medical ability, and that test remains. But the field is load-bearing, and
+deleting it as an orphan would have emptied every shipyard in the game.
+
+Two sweeps, two misses, both mine, both in the same direction: **a search that
+excludes the declaring file will call a field unread when its only reader is the
+line below it.**
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
