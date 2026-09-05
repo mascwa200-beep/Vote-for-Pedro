@@ -3129,6 +3129,80 @@ because it accuses the code.** Check the scanner before believing what it says
 about the thing being scanned.
 
 
+## 46. Two worlds that had a description and no episode
+
+Twenty-six of forty-three systems hosted nothing, and Act 5 held one episode,
+which was the finale. Among the empty ones were two places the map had already
+written an episode's worth of description for:
+
+| | |
+| --- | --- |
+| **Cardassia Prime** | *"Central Command, the Obsidian Order, and a customs process designed as an interrogation."* |
+| **Khitomer** | *"Neutral ground, chosen because both empires could reach it and neither could hold it."* |
+
+Both new episodes follow from earlier ones, the way the capitals do. *The Debt
+at Cardassia* is Act 4 and needs `torvan_owes_you` from the Terok Nor treaty
+(Act 3) — the choice *"raise it privately and let him withdraw the claim"*. *The
+Second Accord* is Act 5 and needs `qonos_upheld` from the Great Hall (Act 4).
+
+**Act 5 now has two episodes in it. Nineteen of forty-three systems host
+something, up from seventeen.**
+
+Each has one scene in a compartment that had never been used for anything: the
+**briefing room** and the **brig**. Both were among the six rooms with no
+functional reference outside the deck plan before §43 gave them occupancy
+rules; now the captain has to physically walk to them, because `stage.where` is
+enforced.
+
+### The rule for new content
+
+**New content may not write a flag nothing reads.** Forty-one of the book's
+fifty-seven are still write-only and that is a known debt (§45); adding to it in
+the same run as a PR about it would be indefensible.
+
+The first draft of these two episodes set **six** flags nothing anywhere read —
+`quoted_the_clause`, `named_the_source`, `torvan_owes_you_nothing`,
+`named_the_house`, `read_the_ninth` and `khitomer_source`. Exactly the defect
+just written up. Three were deleted, and three became things the game consults:
+
+- `torvan_clear`, `khitomer_signed` and `kang_owes_you` went into §45's faction
+  memory table. Standing up for a Cardassian officer in a Cardassian courtroom
+  is worth **+0.22** the next time a Cardassian answers a channel.
+- `read_the_ninth` and `khitomer_source` gate the endgame. **You cannot speak to
+  a page you did not read, or name a house nobody told you about** — a captain
+  who handed the prisoner to the Klingons and stayed at the table has exactly
+  one of the four closing choices available, and signs eight pages instead of
+  nine. That is the cost of not going down to the brig, and it is a gate made
+  out of two flags that would otherwise have been decoration.
+
+A test asserts the rule by name and fails with the offending flag printed.
+
+### Playing it found what the walk did not
+
+`tests/wiring.test.js` walks every episode thirty times with random legal
+choices, and both of these passed it on the first run. Playing them by hand
+through `availableAt` → `start` → `choices` → `choose` did not:
+
+    [anywhere ] tribunal -> Name the officer who sold the recording
+    [anywhere ] tribunal -> Name the officer who sold the recording
+    ... eighteen more times, xp 1,033,200
+
+The terminal choice applied its effects over and over and the mission never
+ended. **That was the probe, not the episodes.** `Mission` sets `complete` and
+`outcome`; the harness had guessed `over` and `ending`, found `undefined`, and
+looped. The million experience should have been the tell and was not.
+
+Same class as `Game.load` being static, `PLAYER_SPECIES` not `SPECIES`, and
+`eng.allShips` not `eng.combatants` — the fourth time this run a probe has
+invented an API and then reported about the code instead of about itself.
+**Check the harness before believing what it says about the thing being
+harnessed** — §45 said the same about a scanner two sections ago.
+
+Played correctly, both run clean: five stages to *The debt discharged* by way of
+the briefing room, five to *Kang's accord* by way of the brig, and three to
+*Eight pages* for the captain who never went down there.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

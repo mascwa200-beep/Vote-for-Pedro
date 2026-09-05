@@ -2611,6 +2611,8 @@ export class Game {
       { flag: 'kang_left_alone', weight: -0.10, line: 'They remember that we walked away, Captain.' },
       { flag: 'fired_first_archanis', weight: -0.12, line: 'They remember who fired first at Archanis.' },
       { flag: 'archanis_massacre', weight: -0.30, line: 'They remember Archanis, Captain. All of it.' },
+      { flag: 'khitomer_signed', weight: 0.15, line: 'Our name is on the Khitomer accord, Captain.' },
+      { flag: 'kang_owes_you', weight: 0.20, line: 'Kang said what he said at Qo\'noS because of us, Captain.' },
     ],
     romulan: [
       { flag: 'spared_warbird', weight: 0.15, line: 'We let one of theirs go home once, Captain.' },
@@ -2620,6 +2622,7 @@ export class Game {
     cardassian: [
       { flag: 'torvan_owes_you', weight: 0.18, line: 'Gul Torvan still owes us this one, Captain.' },
       { flag: 'dmz_accord', weight: 0.12, line: 'We signed with them at Terok Nor, Captain.' },
+      { flag: 'torvan_clear', weight: 0.22, line: 'We stood up for one of theirs in their own courtroom, Captain.' },
     ],
     orion: [
       { flag: 'paid_orions', weight: 0.20, line: 'We have paid these people before, Captain. They remember custom.' },
