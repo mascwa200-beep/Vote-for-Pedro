@@ -3126,12 +3126,29 @@ try {
       who: r.querySelector('.who b')?.textContent ?? '',
       bg: getComputedStyle(r.querySelector('.pip')).backgroundColor,
       ink: getComputedStyle(r.querySelector('.pip')).color,
+      // Whether `divisionInk` painted this one at all. `officerRow` tints only
+      // `officer.alive && !officer.injured`; the rest are left to the two CSS
+      // rules that fade them out.
+      off: r.classList.contains('dead') || r.classList.contains('injured'),
     }));
   });
-  const shirts = new Set(pips.map((p) => p.bg));
+  // Only the ones the division colours actually reach.
+  //
+  // This check used to run over every row and was a coin flip on whether
+  // anybody had died during the play-through: `.officer.dead .pip` is #777 on
+  // #333, deliberately muted, and the luminance rule below — which exists for
+  // black-on-operations-red — called it unreadable. A guard whose verdict
+  // depends on a casualty is measuring the casualty, not the colours.
+  const worn = pips.filter((p) => !p.off);
+  const shirts = new Set(worn.map((p) => p.bg));
   check('the roster lists the senior staff', pips.length >= 7, `${pips.length} officers`);
   check('and they do not all wear the same shirt',
-    shirts.size >= 3, `${shirts.size} colours over ${pips.length} officers`);
+    shirts.size >= 3, `${shirts.size} colours over ${worn.length} officers on duty`);
+  // And the exclusion cannot quietly swallow the whole roster: a run where
+  // every officer is dead or hurt would otherwise pass every assertion here
+  // with nothing examined.
+  check('and enough of them are on their feet for that to mean anything',
+    worn.length >= 5, `${worn.length} of ${pips.length} officers fit to be looked at`);
   // Legibility, not decoration: black initials on the operations red are very
   // nearly invisible, so the ink is picked by luminance rather than fixed.
   //
@@ -3143,7 +3160,7 @@ try {
     const [r, g, b] = (css.match(/\d+/g) ?? [0, 0, 0]).map(Number);
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
   };
-  const unreadable = pips.filter((p) => {
+  const unreadable = worn.filter((p) => {
     const wantsBlack = lum(p.bg) > 0.45;
     return wantsBlack !== (lum(p.ink) > 0.5 === false);
   });

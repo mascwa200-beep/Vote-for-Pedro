@@ -209,7 +209,13 @@ export const ACCORD_EPISODES = [
       stonewalled: {
         text: 'He runs out after two hours and tells you nothing you can use and one thing you cannot forget, which is the name of the moon his grandmother is buried on. It is in the Archanis system and the ninth page does not mention it anywhere.',
         speaker: 'The prisoner',
-        where: 'anywhere',
+        // The same cell, two hours later. `brig` sends the captain down to
+        // hear him and both of its outcomes were then marked 'anywhere', so a
+        // captain could walk back up to the bridge halfway through the
+        // interrogation and finish it from there. The speaker is still the
+        // prisoner; the prisoner is still in the brig. Leaving is what the
+        // choices below are FOR.
+        where: 'brig',
         choices: [
           { id: 'ninth', label: 'Take the ninth page back to the table', next: 'ninth',
             effects: { xp: 800, flag: 'read_the_ninth' } },
@@ -221,7 +227,9 @@ export const ACCORD_EPISODES = [
       bargained: {
         text: 'The paymaster is not Cardassian. The money is, and it came through three houses to reach him, and the last of the three is one that stood against you in the Great Hall a year ago. He gives you the name and then asks you not to tell anyone he gave it, which is the first frightened thing he has said.',
         speaker: 'The prisoner',
-        where: 'anywhere',
+        // As above: still in the cell, and "asks you not to tell anyone he
+        // gave it" is a thing said to somebody standing in front of him.
+        where: 'brig',
         choices: [
           { id: 'ninth', label: 'Take the name and the ninth page to the table',
             next: 'ninth', effects: { xp: 1000, flag: 'read_the_ninth' } },

@@ -182,6 +182,19 @@ export const FRONTIER_EPISODES = [
         ],
       },
       inside: {
+        // The speaker has been 'Engineering' since this was written, and the
+        // scene is a chief engineer standing at a core he does not want to run
+        // that hard. Nothing in this episode starts a fight, so the walk down
+        // is always available — which is the check every placement has to pass,
+        // because `mayWalk` refuses in combat and a scene in a compartment the
+        // captain cannot reach is a stranded episode.
+        //
+        // The stage after it stays on the bridge, and the walk back up is
+        // deliberate rather than an oversight: `pulse` says "nobody ON THE
+        // BRIDGE is entirely certain what just did not happen", so that is
+        // where it happens. You run the core hot from the engine room and you
+        // go back up to find out what you did.
+        where: 'engineering',
         text: 'Inside, the ship’s chronometers disagree by eleven minutes and the structural integrity field is fighting something it was not designed for. There is a way to collapse it — an inverse tachyon pulse — and it will require the warp core running at a level the chief engineer describes as "a very bad idea, Captain."',
         speaker: 'Engineering',
         choices: [
@@ -609,6 +622,19 @@ export const FRONTIER_EPISODES = [
     summary: 'Starfleet convenes to review your command in full.',
     stages: {
       start: {
+        // The last four stages of the campaign were held on your own bridge.
+        //
+        // `where` defaults to 'bridge' and the engine enforces it, so a scene
+        // that is not aboard this ship has to say so. `court_martial` says so —
+        // it was found and fixed and has a test named "a hearing at a starbase
+        // is not held on your own bridge". This is the same hearing at the end
+        // of the same commission and it was missed, because the test named one
+        // episode instead of the rule. The rule is now in the test.
+        //
+        // The text has never been ambiguous about it: Earth, a board that read
+        // the record "before you walked in", a casualty list on the table,
+        // nobody offering you a chair.
+        where: 'anywhere',
         text: 'Earth. A full review of your command — every log, every decision, every name on the casualty list. The board has read all of it before you walked in, and the president of the board is holding the summary rather than reading it, which is its own kind of answer.',
         speaker: 'Starfleet Command',
         choices: [
@@ -618,6 +644,7 @@ export const FRONTIER_EPISODES = [
       },
 
       commended: {
+        where: 'anywhere',
         text: 'The summary is read aloud because the board wants it in the record aloud. Colonies standing that would not be. Treaties that hold. A first contact conducted by somebody who took the question seriously. The president asks whether you have anything to add, in the tone of a man who hopes you do not.',
         speaker: 'Starfleet Command',
         choices: [
@@ -637,6 +664,7 @@ export const FRONTIER_EPISODES = [
       },
 
       questioned: {
+        where: 'anywhere',
         text: 'The summary is not read aloud. It is passed along the table, and each member of the board reads the same three pages and puts them down before looking up. The president asks you to account for the record in your own words.',
         speaker: 'Starfleet Command',
         choices: [
@@ -656,6 +684,7 @@ export const FRONTIER_EPISODES = [
       },
 
       censured: {
+        where: 'anywhere',
         text: 'Nobody offers you a chair. The president reads the finding first and the evidence afterwards, which is the order they use when the finding was decided before the room filled. There is a casualty list on the table, face up, and it is the longest document in front of anybody.',
         speaker: 'Starfleet Command',
         choices: [
