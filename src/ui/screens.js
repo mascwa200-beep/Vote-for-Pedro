@@ -2077,7 +2077,10 @@ export function hailOptions(app, factionId, onPick) {
   const winning = eng
     ? g.ship.hullPct > (eng.liveHostiles.reduce((n, s) => n + s.hullPct, 0) / Math.max(1, eng.liveHostiles.length))
     : false;
-  const options = availableHails(factionId, { winning, alwaysBribe: g.perk('always_bribe') });
+  const options = availableHails(factionId, {
+    winning, alwaysBribe: g.perk('always_bribe'),
+    latinum: g.latinum, bribePrice: g.bribePrice(),
+  });
   const faction = FACTIONS[factionId];
 
   return [

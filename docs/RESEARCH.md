@@ -3203,6 +3203,83 @@ the briefing room, five to *Kang's accord* by way of the brig, and three to
 *Eight pages* for the captain who never went down there.
 
 
+## 47. Latinum had one way in and no way out
+
+The hail option is called **"Offer them latinum."** `resolveHail` has returned
+`cost: 'latinum'` on a successful bribe since it was written. `Game.hail` never
+read that field. Measured over two hundred attempts against an Orion raider:
+
+    bribes accepted 165/200 | latinum actually changed hands 0 times
+
+It was worse than a free option, because there was nothing else to spend it on
+either. Latinum had exactly **one** income in the whole game — escort contracts,
+`state.js:2538` — and **no expenditure anywhere**. A number that started at 500,
+only rose, and was guarded by an invariant that it stay non-negative, which it
+could not fail to do.
+
+### What a bribe costs
+
+Stated before any code was written, per §40. The price is **what you would
+otherwise have to fight**, and the game already has a measure of exactly that:
+`forcePower`, in Constitutions, with Lanchester's square law already inside it.
+Two hundred times that, with a floor of fifty because nobody takes a derisory
+offer:
+
+| buying off | costs |
+| --- | --- |
+| one Orion raider | 50 |
+| two raiders | 75 |
+| a D7 | 198 |
+| two Galors | 612 |
+| three D7s | **1,784** |
+
+A lone raider is pocket change, a battlecruiser is most of a starting purse, and
+a squadron is out of reach until you have earned it. **An offer you cannot cover
+is not offered** — `availableHails` hides it — and a caller that says nothing
+about money gets the option exactly as it always was, so the fuzzer, the
+invariant checker and the order monkey are unchanged.
+
+165 of 200 accepted, and 165 of 165 paid.
+
+### Six mechanics about what a ship costs to keep
+
+Every one declared on a species, an origin or a trait, and read by nothing:
+
+| mechanic | carried by | before | after |
+| --- | --- | --- | --- |
+| `fieldRepair` 1.3 | frontier_colony | 40.0% → 53.6% | 40.0% → **57.7%** |
+| `repairTime` 0.5 | tinkerer | 2.500 days | **1.250 days** |
+| `recoveryRate` 2 | denobulan, beloved | severity 0.500 | **0.100** |
+| `salvageBonus` 1 | tinkerer | 16 / 7 / 16 | **33 / 13 / 33** |
+| `rescueXP` 1.6 | refugee | +400 | **+640** |
+| `tradeBonus` 0.25 | civilian_transport | +400 | **+500** |
+
+Two placements are decisions rather than lookups. **`fieldRepair` is not on
+`ship.mod('repairRate')`**, which is the in-combat damage-control path in
+`Ship.update`; it is on `passTime`'s underway repair, which is the only thing
+that mends a hull outside a yard. Being better at keeping her going between
+starbases is a different claim from being better at patching her while she is
+being shot at, and the card makes the first one. And **`tradeBonus` sits beside
+`better_prices`** — the one reputation perk of twenty-four that was ever read —
+because "prices improve by a quarter, everywhere" and `0.25` are the same
+sentence in the same units; they stack, because one was bought and the other is
+where you grew up.
+
+### The carriers are not the ones you would guess
+
+A draft of the test file measured `fieldRepair` on a Tellarite and
+`salvageBonus` on a Ferengi. **Neither has ever declared either.** They are an
+*origin* and a *trait* — `frontier_colony` and `tinkerer` — and the measurement
+would have compared two identical captains and reported the feature dead after
+it was wired.
+
+A test now asserts the carrier list by name, so the bar can never again be set
+on the wrong captain. Same lesson as §45's scanner and §46's probe: **check what
+the harness is pointed at before believing what it says.** That is three
+sections running, and the count of times a probe has invented an API or a
+carrier this run is now five.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

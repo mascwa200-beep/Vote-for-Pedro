@@ -65,6 +65,12 @@ export function availableHails(factionId, context = {}) {
     // heard, not accepted. `resolveHail` still rolls it, and a Klingon who
     // hears an offer of latinum is not obliged to like it.
     if (o.requires === 'bribeable' && !faction.bribeable && !context.alwaysBribe) return false;
+    // And an offer you cannot cover is not an offer. `context.latinum` and
+    // `context.bribePrice` come from the game; when neither is supplied — a
+    // test, a tool, an older caller — the option behaves exactly as it always
+    // has rather than silently vanishing.
+    if (o.id === 'bribe' && context.bribePrice > 0
+      && Number.isFinite(context.latinum) && context.latinum < context.bribePrice) return false;
     if (o.id === 'demand_surrender' && !context.winning) return false;
     return true;
   });
