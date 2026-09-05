@@ -1664,6 +1664,70 @@ try {
     corridorClear.min >= 0.35, JSON.stringify(corridorClear));
   await page.waitForTimeout(200);
   await page.screenshot({ path: join(SHOTS, '10b-corridor.png') });
+
+  // Two contacts close aboard, and two names you can still read.
+  //
+  // The plot draws hulls about 260x oversized against the distances between
+  // them and has to — at true scale a 289 m ship 600 km away is a fraction of
+  // a pixel. At close quarters two contacts project to nearly the same point
+  // and their NAMES were written on the same pixel, one over the other. This
+  // stages the worst realistic case (a Galaxy and a D'deridex, ~35 km) and
+  // checks the labels separate. See RESEARCH §60 for the three fixes to the
+  // hull geometry that were built, measured and thrown away.
+  const labels = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const { Ship } = await import('./src/sim/ship.js');
+    // Everything staged here is put back below. The harness keeps flying this
+    // captain for another two hundred checks: leaving her in a Galaxy, or in a
+    // fight (which `mayWalk` correctly refuses to let her leave), fails ten
+    // later checks that have nothing to do with labels.
+    globalThis.__wasShip = g.ship;
+    globalThis.__wasMode = g.mode;
+    globalThis.__wasEng = g.engagement;
+    g.ship = new Ship('galaxy', { faction: 'federation', name: 'Enterprise' });
+    const foe = new Ship('warbird', { faction: 'romulan', name: 'Foe' });
+    const eng = g.startCombat([foe], { relentless: true });
+    eng.target = foe;
+    app.go('tactical');
+    for (let i = 0; i < 8; i++) {
+      g.ship.x = 0; g.ship.y = 0; g.ship.z = 0; g.ship.heading = 0;
+      foe.x = 35; foe.y = 0; foe.z = 0; foe.heading = 200;
+      app.render();
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
+    foe.x = 35; foe.y = 0; foe.z = 0;
+    app.render();
+    return (app.tactical?.lastLabels ?? []).map((l) => ({ ...l }));
+  });
+  const near = (a, b) => Math.abs(a.x - b.x) < 46;
+  check('two contacts close aboard both get a name on the plot',
+    labels.length === 2, JSON.stringify(labels));
+  // The positive control, in the same measurement: without it, two labels that
+  // were never near each other would satisfy the assertion below.
+  check('and they really were about to be written on the same spot',
+    labels.length === 2 && near(labels[0], labels[1])
+      && Math.abs(labels[0].anchor - labels[1].anchor) < 15,
+    JSON.stringify(labels));
+  check('and neither is written over the other',
+    labels.length === 2 && Math.abs(labels[0].y - labels[1].y) >= 15,
+    JSON.stringify(labels));
+  await page.screenshot({ path: join(SHOTS, '10c-close-aboard.png') });
+  const putBack = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const g = app.game;
+    if (g.engagement && !g.engagement.over) g.engagement.end('interrupted');
+    g.engagement = globalThis.__wasEng ?? null;
+    g.ship = globalThis.__wasShip;
+    g.mode = globalThis.__wasMode;
+    app.go('bridge');
+    app.render();
+    return { cls: g.ship?.classId, mode: g.mode, fighting: !!(g.engagement && !g.engagement.over) };
+  });
+  check('and staging that put the captain back in her own ship, out of the fight',
+    putBack.cls !== 'galaxy' && !putBack.fighting, JSON.stringify(putBack));
+  await page.waitForTimeout(200);
   await page.evaluate((was) => {
     const app = globalThis.__app;
     app.game.setAlert(was);

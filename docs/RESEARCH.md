@@ -4450,6 +4450,121 @@ satisfied by the geometry of the very thing it was meant to catch.
 
 
 
+## 60. Ships flew through each other, and the fix for it did not work
+
+Second pass over the harness screenshots. `20-bridge-officers.png` shows a D7
+and the Enterprise drawn on top of one another, and the question that started
+this was whether that is a close-quarters fight or two models clipping.
+
+### The measurement
+
+Twelve seeded duels per matchup, sampling every combat tick, against the
+centre-to-centre distance at which the two drawn hulls meet:
+
+| matchup | hulls meet below | closest pass | ticks overlapping |
+| --- | --- | --- | --- |
+| constitution v d7 | 74 km | 22 km | **3.0%** |
+| defiant v bird_of_prey | 47 km | 6 km | **3.0%** |
+| excelsior v neghvar | 164 km | 21 km | **11.0%** |
+| galaxy v warbird | 241 km | 51 km | **8.4%** |
+
+And the picture at the bottom of that: staged at 53 km, a Galaxy is drawn
+**entirely inside** a D'deridex. The player's own ship is not visible at all,
+and the two name labels are written on the same pixel.
+
+### Why it happens, and why the simulation is not at fault
+
+`UNITS_PER_METRE` is 0.286 and positions are in kilometres, so a 289-metre
+Constitution is drawn **82.7 units long in a space where the enemy is 600 units
+away** — about 260 times oversized against the distances between hulls. That is
+deliberate and it is right: at true scale a 289-metre ship 600 km away is a
+fraction of a pixel, and a display whose job is telling you what you are looking
+at cannot show you nothing. `hullScale`'s own note is about being honest between
+hulls; it is silent about hulls against range.
+
+So the first thing to settle was which layer is lying. At 22 km a 289-metre ship
+and a 228-metre ship are 22 kilometres apart — nowhere near touching. **The
+simulation is correct.** Giving ships physical separation would have changed
+every seeded outcome in the game to fix an artifact of the drawing, and it was
+refused on that basis alone.
+
+### The fix that was built, measured, and thrown away
+
+A single shrink factor, **common to every hull** and taken from the closest
+pair, so relative size — the one thing `hullScale` exists to tell the truth
+about — is exactly preserved and only the scale of the whole plot changes. Built
+in full: `hullShrink()` in blueprint.js, eased into over frames the way the
+camera focus is, applied to the hull, the shield shell, the impact and cloak
+effects, the firing-arc rose and the framing camera.
+
+The floor was swept rather than chosen, reading back the enemy hull's **angular**
+size — drawn size over camera distance, which is what the player actually sees:
+
+| floor | factor reached | angular size | against 0.267 unshrunk |
+| --- | --- | --- | --- |
+| 0.30 | 0.301 (clamped) | 0.238 | 89% |
+| 0.20 | 0.213 | 0.242 | **91%** |
+| 0.15 | 0.214 | 0.232 | 87% |
+
+That looked like a win: the framing camera closes in by the same amount the
+hulls shrank, so the ships are the same size on screen as before. **Then I
+rendered it and looked**, which is the rule this project has paid for several
+times over, and it fails on three counts:
+
+1. **It does not fix the thing.** The sweep was taken at 50 km separation, where
+   0.207 is enough. The probe's own worst case drifted to 35 km, which asks for
+   0.145 — the floor binds and the hulls still intersect. Going low enough to
+   cover the real closest ranges puts a Defiant at four units, a speck.
+2. **The camera lurches.** Following the shrink swings the plot from 1,114 units
+   to 270 during a single pass. Preserving apparent hull size costs a four-times
+   zoom, and everything else in the fight leaves the frame with it.
+3. **It wrecks the firing arcs.** The arc rose is sized to the hull, so it shrinks
+   too — but the camera came in four times, so relative to the frame the wedges
+   grow until they are dark bands across the whole plot. The arcs were measured
+   into place two changes ago (§55) specifically to be readable, and this makes
+   them unreadable at exactly the range they matter most.
+
+Three independent costs against a cosmetic gain, one of which damages a feature
+that was itself measured into place. Reverted.
+
+**Displacement** — drawing the ships further apart than they are, the usual
+cartographic answer when map symbols collide — was refused without building.
+The plot now draws firing arcs, and a player reading *am I inside their arc* off
+a plot whose bearings have been nudged is being lied to about the one thing the
+arcs were added to tell them.
+
+### What actually shipped
+
+The worst of the artifact was never the hulls. It was that two contacts project
+to nearly the same point and their **names** were written on the same pixel, one
+over the other, both illegible — and a label is not a ship. It already sits 32
+pixels above the hull, so it is an annotation with an implied leader. Moving it
+lies about nothing, touches no geometry, and changes no bearing.
+
+Overlapping labels are now lifted clear, upward, capped at eight steps. The
+guard for it carries its own positive control in the same measurement: each
+label records the `anchor` it would have been written at, so the test can tell
+*"these two do not collide"* from *"these two were never near each other"* —
+with the lift switched off, the two anchors are **4.96 pixels apart at the same
+x**, and the guard fails.
+
+### The lesson worth keeping
+
+Ask which layer is lying before fixing anything. Three candidate fixes here sat
+in three different layers — the simulation, the projection, the annotation — and
+only the outermost one could be changed without breaking something that was
+already right. The simulation was correct, the exaggeration was a deliberate and
+necessary choice, and the only thing genuinely wrong was two pieces of text on
+top of each other.
+
+This is the third time in this sequence that measurement killed the main change
+and a smaller adjacent one survived it — §55's two removed levers, PR 2's
+abandoned weapon drain, and now this. The pattern is not that the ideas were
+bad. It is that the cost only becomes visible after it is built, which is an
+argument for building it and looking, not for planning harder.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
