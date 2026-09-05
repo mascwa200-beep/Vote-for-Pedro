@@ -1635,6 +1635,18 @@ describe('fabrication accounting', () => {
     //
     // Same shape as the reputation ledger in rules.test.js: a thing declared
     // in a table and connected to nothing.
+    // COMMENTS STRIPPED, and that is not a detail — it is the whole guard.
+    //
+    // This check existed to catch `multitarget` and passed on it for as long
+    // as it has been here, because `combat.js` contains the string
+    // 'multitarget' inside the JSDoc paragraph EXPLAINING that multitarget is
+    // inert. The guard written to catch a dead tag was satisfied by the prose
+    // documenting that the tag was dead. Third time this pattern has turned up
+    // (RESEARCH §51, §52, §53) and the first where the comment doing the
+    // satisfying was written by the same person as the guard.
+    const strip = (src) => src
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .split('\n').map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1')).join('\n');
     const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
     let source = '';
     const walk = (dir) => {
@@ -1644,7 +1656,7 @@ describe('fabrication accounting', () => {
         if (!entry.name.endsWith('.js')) continue;
         // officers.js DECLARES the specials; naming one there is not reading it.
         if (entry.name === 'officers.js') continue;
-        source += readFileSync(path, 'utf8');
+        source += strip(readFileSync(path, 'utf8'));
       }
     };
     walk(root);

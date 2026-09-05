@@ -121,7 +121,7 @@ export function chairPanel(app) {
   const pod = button('Jettison ion pod', press(app, { action: 'jettison_pod', chairLabel: 'jettison the pod' }, 'ui_deny', 'deny'), {
     say: 'jettison the pod',
     color: 'peach',
-    sub: inCombat ? 'Decoy — reads like us for about a minute' : 'Nothing to gain outside a fight',
+    sub: inCombat ? 'Decoy — reads like us for about fifteen seconds' : 'Nothing to gain outside a fight',
     disabled: !inCombat || g.podJettisoned,
   });
 

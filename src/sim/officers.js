@@ -22,7 +22,19 @@ export const ABILITIES = {
   fire_at_will: {
     id: 'fire_at_will', dept: 'tactical', rank: 1, name: 'Fire at Will',
     order: 'Fire at will', cooldown: 30, duration: 15,
-    mods: { damage: 0.8 }, special: 'multitarget',
+    // No `special`. It carried 'multitarget', which nothing ever implemented —
+    // the spreading fire it priced at a 20% damage penalty simply did not
+    // happen, so the game's rank-one tactical order was a gunnery penalty and
+    // nothing else. What the order actually does now is POINT DEFENCE, and
+    // `combat.js` reaches for that by the BUFF ID rather than by this tag, so
+    // the tag was dead weight on top of a working ability.
+    //
+    // Left in place it also defeated the guard written to catch it: the check
+    // in wiring.test.js asks whether the string appears anywhere in src/
+    // outside this file, and combat.js's own comment explaining that
+    // multitarget is inert contains the word. The guard now strips comments
+    // first, which is what made this removable.
+    mods: { damage: 0.8 },
     say: 'Firing at will.',
   },
   torpedo_spread: {

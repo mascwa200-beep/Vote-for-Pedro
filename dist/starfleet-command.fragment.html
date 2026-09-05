@@ -12262,7 +12262,19 @@ const ABILITIES = {
   fire_at_will: {
     id: 'fire_at_will', dept: 'tactical', rank: 1, name: 'Fire at Will',
     order: 'Fire at will', cooldown: 30, duration: 15,
-    mods: { damage: 0.8 }, special: 'multitarget',
+    // No `special`. It carried 'multitarget', which nothing ever implemented —
+    // the spreading fire it priced at a 20% damage penalty simply did not
+    // happen, so the game's rank-one tactical order was a gunnery penalty and
+    // nothing else. What the order actually does now is POINT DEFENCE, and
+    // `combat.js` reaches for that by the BUFF ID rather than by this tag, so
+    // the tag was dead weight on top of a working ability.
+    //
+    // Left in place it also defeated the guard written to catch it: the check
+    // in wiring.test.js asks whether the string appears anywhere in src/
+    // outside this file, and combat.js's own comment explaining that
+    // multitarget is inert contains the word. The guard now strips comments
+    // first, which is what made this removable.
+    mods: { damage: 0.8 },
     say: 'Firing at will.',
   },
   torpedo_spread: {
@@ -14685,7 +14697,7 @@ class Engagement {
    * @param {Ship} player
    * @param {Ship[]} hostiles
    * @param {RNG} rng
-   * @param {object} opts { allies, objective, escapeAt, name }
+   * @param {object} opts { allies, objective, name, onEnd }
    */
   constructor(player, hostiles, rng, opts = {}) {
     this.player = player;
@@ -23525,7 +23537,7 @@ function chairPanel(app) {
   const pod = button('Jettison ion pod', press(app, { action: 'jettison_pod', chairLabel: 'jettison the pod' }, 'ui_deny', 'deny'), {
     say: 'jettison the pod',
     color: 'peach',
-    sub: inCombat ? 'Decoy — reads like us for about a minute' : 'Nothing to gain outside a fight',
+    sub: inCombat ? 'Decoy — reads like us for about fifteen seconds' : 'Nothing to gain outside a fight',
     disabled: !inCombat || g.podJettisoned,
   });
 
@@ -27374,6 +27386,11 @@ function findTargetSubsystem(text) {
   if (/\b(engine|engines|nacelle|nacelles|impulse)\b/.test(text)) return 'engines';
   if (/\b(warp core|core|reactor)\b/.test(text)) return 'warpcore';
   if (/\b(sensor|sensors)\b/.test(text)) return 'sensors';
+  // The seventh. SUBSYSTEM_KEYS has seven entries and this list had six, so
+  // `auxiliary` — which powers damage control, fire suppression and sensor
+  // quality — was the one subsystem in the game a captain could neither say
+  // nor tap. It is the natural called shot against a burning ship.
+  if (/\b(auxiliary|aux|auxiliary power)\b/.test(text)) return 'auxiliary';
   if (/\b(life support|lifesupport)\b/.test(text)) return 'lifesupport';
   return null;
 }
@@ -37346,7 +37363,12 @@ class Game {
     }
     this.podJettisoned = true;
     this.engagement.deployDecoy(14);
-    this.officerSays('engineering', 'Ion pod away. It will read like us for a minute or so.', 'report');
+    // Fourteen seconds, and it used to say "a minute or so" — in two places,
+    // this line and the button subtitle in ui/chair.js. A decoy the captain
+    // believes will cover a withdrawal for a minute is a decoy that gets them
+    // killed at the fifteen-second mark. The number is the tuned one; the
+    // prose was what was wrong.
+    this.officerSays('engineering', 'Ion pod away. It will read like us for about fifteen seconds.', 'report');
     return { ok: true };
   }
 
@@ -41608,7 +41630,13 @@ const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
 const { commandReference } = __require("src/ui/orders.js");
 const { namesFor } = __require("src/sim/address.js");
-const { inArc } = __require("src/sim/ship.js");
+const { inArc, SUBSYSTEM_KEYS } = __require("src/sim/ship.js");
+
+/** What each targetable subsystem is called on a button, and out loud. */
+const SUBSYSTEM_TARGET_LABEL = {
+  weapons: 'Weapons', shields: 'Shields', engines: 'Engines', warpcore: 'Warp core',
+  sensors: 'Sensors', lifesupport: 'Life support', auxiliary: 'Auxiliary',
+};
 // `DECKS` was imported here too and used only in a comment. The deck label is
 // `game.deckLabel` now, which is the one place that knows which hull this is.
 const { ROOMS } = __require("src/world/interiors.data.js");
@@ -42273,10 +42301,37 @@ function tacticalScreen(app) {
       : null,
   ], 'danger'));
 
+  // --- How the fight stands ---
+  //
+  // `Engagement.assess()` has existed with its own JSDoc explaining that it is
+  // the LIVE reading, as against `this.assessment` which is the opening one —
+  // and nothing has ever called it. Only the opening line was pushed to the
+  // log, once, before a shot was fired, so a fight that stopped being
+  // outmatched three ships ago still read as outmatched, and the number that
+  // knew better was computed on request by nobody.
+  //
+  // Drawn as the balance of force it is, which is what `ratio` means: above
+  // half the bar is the player ahead.
+  {
+    const now = eng.assess();
+    const share = now.ours / Math.max(1, now.ours + now.theirs);
+    side.append(panel('The Fight', [
+      readout(now.label ?? 'even', share, `${(now.ratio ?? 1).toFixed(2)}:1`),
+      el('p', { class: 'hint', text: now.line ?? '' }),
+    ]));
+  }
+
   // --- Subsystem targeting ---
-  const subs = [
-    ['weapons', 'Weapons'], ['shields', 'Shields'], ['engines', 'Engines'], ['warpcore', 'Warp core'],
-  ];
+  // All seven, from SUBSYSTEM_KEYS rather than a hand-written four.
+  //
+  // The list had four of the seven the simulation models, so sensors, life
+  // support and auxiliary could be called by voice but not tapped, and
+  // `auxiliary` could not be reached at all by either — the one subsystem in
+  // the game with no route to it. Iterating the key list is what stops that
+  // happening again: a subsystem added to the simulation appears here, and a
+  // label missing from the table below is a visible gap rather than a silent
+  // omission.
+  const subs = SUBSYSTEM_KEYS.map((key) => [key, SUBSYSTEM_TARGET_LABEL[key] ?? key]);
   side.append(panel('Target Subsystem', [
     el('div', { class: 'grid-2' }, [
       ...subs.map(([key, label]) => button(label, tap(() => {
@@ -42287,7 +42342,7 @@ function tacticalScreen(app) {
         say: `target their ${label.toLowerCase()}`,
       })),
     ]),
-    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor.' }),
+    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor, auxiliary to keep a fire burning.' }),
   ]));
 
   // --- Weapons ---
@@ -42318,10 +42373,17 @@ function tacticalScreen(app) {
         if (n) { audio.play('phaser', { throttle: 120 }); haptic('hit_light'); }
         else { audio.play('ui_deny'); }
       }, 'ui_tap'), { say: 'fire phasers', color: 'red' }),
+      // The one button on this panel with no phrase on it, which is the rule
+      // this game is built on. Both directions are sayable already —
+      // "hold fire" is the `cease_fire` order and "weapons free" is `fire`,
+      // which now leaves auto-fire on rather than firing once into silence.
       button(eng.autoFire ? 'Auto: on' : 'Auto: off', tap(() => {
         eng.autoFire = !eng.autoFire;
         app.render();
-      }), { color: eng.autoFire ? 'green' : 'ghost' }),
+      }), {
+        color: eng.autoFire ? 'green' : 'ghost',
+        say: eng.autoFire ? 'hold fire' : 'weapons free',
+      }),
     ]),
     g.ship.maxTorpedoes > 0
       ? readout('Torpedoes', g.ship.torpedoes / g.ship.maxTorpedoes, `${g.ship.torpedoes}`)
@@ -46416,6 +46478,13 @@ class App {
         // out of the order and this threw it away, so "fire phasers" launched
         // torpedoes.
         const n = eng.fireAll(order.weaponType ?? 'all');
+        // And the guns stay working. `cease_fire` sets `autoFire` false and
+        // NOTHING anywhere set it back to true — not an order, not a phrase,
+        // only the button. A captain who said "hold fire" and then "weapons
+        // free" got one volley and then silence, with no way back except
+        // finding a toggle on the weapons panel. "Open fire" means keep
+        // firing; that is what the words are for.
+        if (eng) eng.autoFire = true;
         if (!n) audio.play('ui_deny');
         break;
       }

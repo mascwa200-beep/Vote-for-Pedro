@@ -1784,6 +1784,13 @@ class App {
         // out of the order and this threw it away, so "fire phasers" launched
         // torpedoes.
         const n = eng.fireAll(order.weaponType ?? 'all');
+        // And the guns stay working. `cease_fire` sets `autoFire` false and
+        // NOTHING anywhere set it back to true — not an order, not a phrase,
+        // only the button. A captain who said "hold fire" and then "weapons
+        // free" got one volley and then silence, with no way back except
+        // finding a toggle on the weapons panel. "Open fire" means keep
+        // firing; that is what the words are for.
+        if (eng) eng.autoFire = true;
         if (!n) audio.play('ui_deny');
         break;
       }

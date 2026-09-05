@@ -94,6 +94,11 @@ function findTargetSubsystem(text) {
   if (/\b(engine|engines|nacelle|nacelles|impulse)\b/.test(text)) return 'engines';
   if (/\b(warp core|core|reactor)\b/.test(text)) return 'warpcore';
   if (/\b(sensor|sensors)\b/.test(text)) return 'sensors';
+  // The seventh. SUBSYSTEM_KEYS has seven entries and this list had six, so
+  // `auxiliary` — which powers damage control, fire suppression and sensor
+  // quality — was the one subsystem in the game a captain could neither say
+  // nor tap. It is the natural called shot against a burning ship.
+  if (/\b(auxiliary|aux|auxiliary power)\b/.test(text)) return 'auxiliary';
   if (/\b(life support|lifesupport)\b/.test(text)) return 'lifesupport';
   return null;
 }
