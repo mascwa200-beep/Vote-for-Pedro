@@ -3276,6 +3276,59 @@ try {
   // screenshot taken after that would be a picture of the roster labelled
   // sickbay — which is the exact confusion this whole check exists to end.
 
+  // ---- The two boards that reported the hull ----
+  //
+  // `brig_control` and `bay_doors` both declared `panel: 'damage'`, which
+  // STATION_PANEL sends to the whole-ship screen — so a detention console and a
+  // pair of bay doors reported structural integrity and shield facings. Both
+  // now carry no panel and answer through `sim/consoles.js`, which is the path
+  // nothing in this harness had ever exercised.
+  //
+  // Walked and operated, like the ward above, and put back the same way.
+  const boards = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const was = { room: g.walk.roomId, screen: app.screen };
+    const out = {};
+    for (const [room, id] of [['brig', 'brig_control'], ['hangar', 'bay_doors']]) {
+      g.goToRoom(room);
+      for (let n = 0; n < 12000 && g.walkOrder; n++) g.update(1 / 30);
+      const station = (g.walk.room?.stations ?? []).find((s) => s.id === id);
+      if (station) {
+        [g.walk.x, g.walk.z] = station.at;
+        g.walk.atStation = g.walk.nearestStation();
+      }
+      const at = g.walk.atStation?.id ?? null;
+      app.useWhatIsInFront();
+      app.render();
+      out[id] = { arrived: g.walk.roomId, at, text: document.querySelector('.modal')?.innerText ?? '' };
+      app.closeModal?.();
+    }
+    g.goToRoom(was.room);
+    for (let n = 0; n < 12000 && g.walkOrder; n++) g.update(1 / 30);
+    app.go(was.screen);
+    app.render();
+    out.restored = g.walk.roomId === was.room && app.screen === was.screen;
+    return out;
+  });
+
+  const brig = boards.brig_control ?? {};
+  const bay = boards.bay_doors ?? {};
+  check('the detention console reports the brig, not the hull',
+    brig.arrived === 'brig' && brig.at === 'brig_control'
+      && /Detention/i.test(brig.text) && !/Structural integrity/i.test(brig.text),
+    JSON.stringify(brig).slice(0, 240));
+  check('and says whether anybody is being held',
+    /being held|INTRUDER/i.test(brig.text), JSON.stringify(brig.text).slice(0, 200));
+  check('the bay door control reports the bay, not the hull',
+    bay.arrived === 'hangar' && bay.at === 'bay_doors'
+      && /Shuttlebay/i.test(bay.text) && !/Structural integrity/i.test(bay.text),
+    JSON.stringify(bay).slice(0, 240));
+  check('and says whether those doors could open at all',
+    /orbit|under way|nowhere below/i.test(bay.text), JSON.stringify(bay.text).slice(0, 200));
+  check('and the board checks put the captain back where they were',
+    boards.restored === true, JSON.stringify({ restored: boards.restored }));
+
   // The same thing, said out loud.
   const spoken = await page.evaluate(async () => {
     const app = globalThis.__app;

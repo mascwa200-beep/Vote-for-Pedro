@@ -9,6 +9,24 @@
 // These tests are about what those four now say, and the property that makes a
 // readout worth walking to: it has to CHANGE. A console that prints the same
 // page whatever has happened to the ship is a picture of a console.
+//
+// Six now, not four. Two more stations were opening a panel that was wrong for
+// the room they stand in rather than opening none at all, which is the same
+// defect wearing a coat:
+//
+//   brig_control  the detention console, deck seven
+//   bay_doors     the bay door control, in the shuttlebay
+//
+// Both declared `panel: 'damage'`, and STATION_PANEL sends 'damage' to the
+// whole-ship screen. That is right for the bridge damage-control board, for the
+// intermix monitor and for the auxiliary damage board — and it meant a
+// detention console and a pair of bay doors reported hull integrity and shield
+// facings. The key was on them because there was no better one, not because
+// anybody meant it.
+//
+// Neither invents state the simulation does not have. There are no prisoners
+// and there are no shuttles, and both boards say so plainly rather than
+// pretending — "nobody is being held" is the answer to why the room is quiet.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -180,5 +198,77 @@ describe('the stations that answer', () => {
     const s = said(g, 'gravity');
     assert.match(s, /flutter|failing/, s);
     assert.match(said(ship(), 'gravity'), /Nobody has noticed a thing/);
+  });
+});
+
+describe('the two that opened the wrong panel rather than none', () => {
+  test('neither still declares a panel, so neither can be shadowed', () => {
+    // The invariant the top of this file rests on, applied to the change: a
+    // station either opens a panel or reports. If `panel` came back on one of
+    // these the panel would win in `useWhatIsInFront` and the report below
+    // would be dead code that every test here went on passing.
+    const find = (roomId, id) => (ROOMS[roomId].stations ?? []).find((s) => s.id === id);
+    assert.equal(find('brig', 'brig_control').panel, null);
+    assert.equal(find('hangar', 'bay_doors').panel, null);
+    assert.ok(REPORTING_STATIONS.includes('brig_control'));
+    assert.ok(REPORTING_STATIONS.includes('bay_doors'));
+  });
+
+  test('and neither says anything about the hull, which is what they used to', () => {
+    // The defect, stated as the thing that must not come back. `damage` sent
+    // both of these to the whole-ship screen: structural integrity, every
+    // subsystem, the shield diagram and the fitted console sets.
+    for (const id of ['brig_control', 'bay_doors']) {
+      const s = said(ship(beaten), id);
+      assert.doesNotMatch(s, /hull integrity|structural integrity|shield facing/i, `${id}: ${s}`);
+    }
+  });
+
+  test('the brig says who is aboard who should not be, and where', () => {
+    const quiet = said(ship(), 'brig_control');
+    assert.match(quiet, /Nobody is being held/, quiet);
+    assert.doesNotMatch(quiet, /INTRUDER/, quiet);
+
+    const boarded = said(ship((g) => { g.setAlert('red'); g.ship.boarders = 8; }), 'brig_control');
+    assert.match(boarded, /INTRUDER ALERT/, boarded);
+    assert.match(boarded, /8 hostile personnel/, boarded);
+    // The same reach the bridge security board uses, so the two cannot
+    // disagree about where the fight is.
+    const rooms = boardedRooms(8).filter((id) => id !== 'bridge');
+    assert.ok(rooms.length, 'the occupancy layer put eight boarders nowhere');
+    assert.match(boarded, /Contacts on:/, boarded);
+    // And the guard on the door doubles at red, which is why the room exists.
+    assert.notEqual(quiet.match(/(\d+) on the door/)?.[1],
+      boarded.match(/(\d+) on the door/)?.[1],
+      'the same guard is on the door at normal and at red');
+  });
+
+  test('the bay says whether those doors could open at all', () => {
+    // The question a board answers and a switch does not.
+    const parked = said(ship(), 'bay_doors');
+    assert.match(parked, /nowhere below to fly to/, parked);
+
+    const running = said(ship((g) => { g.mode = 'transit'; }), 'bay_doors');
+    assert.match(running, /Nothing launches from a ship at speed/, running);
+    assert.doesNotMatch(running, /nowhere below/, running);
+
+    // Pressure comes off life support, so a holed ship is a bay the deck
+    // should be in suits on.
+    const holed = said(ship((g) => { g.ship.subsystems.lifesupport = 0.3; }), 'bay_doors');
+    assert.match(holed, /30%/, holed);
+    assert.match(holed, /suits/, holed);
+    assert.doesNotMatch(parked, /suits/, parked);
+  });
+
+  test('and neither invents a prisoner or a shuttle', () => {
+    // The rule these two were written under. The simulation has neither, and a
+    // board that reports a shuttle complement is a board that will be wrong
+    // the first time anybody tries to fly one.
+    for (const state of [null, beaten]) {
+      for (const id of ['brig_control', 'bay_doors']) {
+        const s = said(ship(state), id);
+        assert.doesNotMatch(s, /shuttlecraft|shuttles ready|prisoner|inmate/i, `${id}: ${s}`);
+      }
+    }
   });
 });

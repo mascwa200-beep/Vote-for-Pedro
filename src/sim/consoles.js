@@ -141,6 +141,80 @@ const REPORTS = {
     }
     return { title: "Chief Medical Officer's Desk", lines };
   },
+
+  /**
+   * The detention console, on deck seven.
+   *
+   * It declared `panel: 'damage'`, and `STATION_PANEL` sends 'damage' to the
+   * whole-ship screen — which is right for the bridge damage-control board and
+   * for the intermix monitor, and is a detention console reporting hull
+   * integrity and shield facings. The key was there because there was no
+   * better one, not because anybody meant it.
+   *
+   * What a brig board actually knows is the same thing the bridge security
+   * station knows, seen from the deck it is happening on: who is aboard who
+   * should not be, where they are, and who is between them and the cells. It
+   * says the cells are empty when they are, because "nobody is being held" is
+   * the answer to why the room is quiet, and a board that says nothing at all
+   * is how this station spent its whole life.
+   */
+  brig_control: (g) => {
+    const s = g.ship;
+    const lines = [`Cells secured. Condition ${g.alert ?? 'normal'}.`];
+    if ((s.boarders ?? 0) > 0) {
+      lines.push(`INTRUDER ALERT. Approximately ${s.boarders} hostile personnel aboard.`);
+      const where = boardedRooms(s.boarders)
+        .filter((id) => occupantsOf(g, id).some((o) => o.intruder));
+      if (where.length) {
+        lines.push(`Contacts on: ${where.map((id) => LOCATION_NAME[id] ?? id).join(', ')}.`);
+      }
+      lines.push('Anyone taken alive is brought here. We have the room.');
+    } else {
+      // The honest answer. The simulation has no prisoners, and saying so is
+      // better than inventing one or than saying nothing.
+      lines.push('Nobody is being held. The cells have been empty since we sailed.');
+    }
+    const guard = occupantsOf(g, 'brig').filter((o) => !o.intruder).length;
+    const deck = occupantsOf(g, 'corridor_sec').filter((o) => !o.intruder).length;
+    lines.push(`${guard} on the door here, ${deck} more on the deck.`);
+    lines.push(g.alert === 'red'
+      ? 'The armoury is issuing sidearms two compartments forward.'
+      : 'The armoury is secured two compartments forward.');
+    return { title: 'Detention', lines };
+  },
+
+  /**
+   * The bay door control, in the shuttlebay.
+   *
+   * Same story as the brig: `panel: 'damage'` and therefore the whole-ship
+   * screen, from a console whose entire job is a pair of doors.
+   *
+   * There are no shuttles in this simulation and this does not pretend there
+   * are. What it reports is the bay itself — pressure off life support, the
+   * hands on the deck, whether the doors could be opened at all right now, and
+   * whether there is anything below worth flying to.
+   */
+  bay_doors: (g) => {
+    const s = g.ship;
+    const air = s.subsystems?.lifesupport ?? 1;
+    const hands = occupantsOf(g, 'hangar').filter((o) => !o.intruder).length;
+    const lines = [`Bay doors closed and locked. Deck pressure ${condition(air)} at ${pc(air)}.`];
+    // Whether they could be opened, which is a different question from whether
+    // they are — and the reason to have a board rather than a switch.
+    const flying = g.mode === 'transit' || g.mode === 'combat';
+    lines.push(flying
+      ? 'The doors stay shut while we are under way. Nothing launches from a ship at speed.'
+      : g.orbitLabel
+        ? `We are in orbit of ${g.orbitLabel}. The doors will open on your word.`
+        : 'We are not in orbit of anything. There is nowhere below to fly to.');
+    lines.push(hands > 0
+      ? `${hands} of the flight deck crew on watch.`
+      : 'The deck is clear. Nobody is working down here.');
+    if (air < 0.55) {
+      lines.push('Pressure is low enough that the deck should be in suits before those doors move.');
+    }
+    return { title: 'Shuttlebay', lines };
+  },
 };
 
 /** What a first-person room is called, for the security board. */
