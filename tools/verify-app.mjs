@@ -1626,6 +1626,51 @@ try {
   await page.waitForTimeout(250);
   await page.screenshot({ path: join(SHOTS, '10-aboard.png') });
 
+  // The busiest corridor on the ship, which is the view the crowd placement
+  // is about.
+  //
+  // The security corridor is 2.6 m across with FOUR doors on it and holds
+  // three people at red alert. Before the walking-lane rule they were all
+  // placed in its middle metre — the one metre the captain has to walk down —
+  // and the camera passed within 0.03 m of one of them, which is inside their
+  // body. Measured in the real page rather than in a probe, because the probe
+  // is the thing that got this wrong the first time.
+  const corridor = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const was = g.alert;
+    g.setAlert('red');
+    g.walk.enter('corridor_sec');
+    app.render();
+    return { was, room: g.walk.roomId, at: [g.walk.x, g.walk.z] };
+  });
+  const corridorClear = await page.evaluate(async () => {
+    const g = globalThis.__app.game;
+    const { occupantsOf } = await import('./src/sim/occupancy.js');
+    const { officerStandsAt } = await import('./src/gfx/room.js');
+    const { ROOMS } = await import('./src/world/interiors.data.js');
+    const room = ROOMS[g.walk.roomId];
+    const figures = [
+      ...(room.stations ?? []).filter((st) => st.crew).map((st) => officerStandsAt(st)),
+      ...occupantsOf(g, g.walk.roomId).map((w) => w.at),
+    ];
+    let min = Infinity;
+    for (const [x, z] of figures) min = Math.min(min, Math.hypot(x - g.walk.x, z - g.walk.z));
+    return { n: figures.length, min, x: g.walk.x };
+  });
+  check('the security corridor has people in it at red alert',
+    corridor.room === 'corridor_sec' && corridorClear.n >= 3, JSON.stringify(corridorClear));
+  check('and none of them is standing where the captain walks',
+    corridorClear.min >= 0.35, JSON.stringify(corridorClear));
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(SHOTS, '10b-corridor.png') });
+  await page.evaluate((was) => {
+    const app = globalThis.__app;
+    app.game.setAlert(was);
+    app.game.walk.enter('sickbay');
+    app.render();
+  }, corridor.was);
+
   // And back, by voice, to where the game normally sits.
   await page.fill('.orderbar input', 'back to the bridge');
   await page.press('.orderbar input', 'Enter');

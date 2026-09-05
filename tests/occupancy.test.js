@@ -23,7 +23,8 @@ import { Game } from '../src/core/state.js';
 import { Character } from '../src/rules/character.js';
 import { ROOMS } from '../src/world/interiors.data.js';
 import { occupantsOf, headcountOf } from '../src/sim/occupancy.js';
-import { officerMesh } from '../src/gfx/room.js';
+import { stepToward, route } from '../src/sim/walk.js';
+import { officerMesh, officerStandsAt } from '../src/gfx/room.js';
 
 const ship = (fn) => {
   const g = new Game({
@@ -200,5 +201,151 @@ describe('the ship has people in it', () => {
     }
     assert.equal(seen.size, 4,
       `four alert levels produced ${seen.size} different ships — one of them does nothing`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The captain walked through the crew.
+//
+// `resolve()` in walk.js keeps the captain out of the bulkheads and off the
+// furniture — `confine` then `avoidProps` — and people are neither. Nothing
+// has ever stopped the viewpoint passing straight through a person.
+//
+// Measured over every one of the 252 room-to-room routes the ship has, walked
+// with the game's own autopilot and sampled every tick:
+//
+//                                          before    after
+//     routes passing within 0.35 m            30        0
+//     closest pass of all                   0.03 m   0.53 m
+//     walking frames inside 0.35 m         1.4%      0.0%
+//
+// 0.35 is the figure's own radius: `officerMesh` builds a torso 0.40 wide with
+// arms out to ±0.315, so a camera closer than that is INSIDE the person.
+//
+// The cause was not the collision code. It was one number in the placement:
+// the wall inset was 0.8, subtracted flat from the half-extent, which is a
+// sensible standoff in a nine-metre room and a catastrophe in a 2.6-metre
+// corridor — half of 2.6 is 1.3, less 0.8 leaves 0.5, so every person in a
+// corridor was placed in its middle METRE. Which is the metre the captain has
+// to walk down, because a corridor's doors are at its ends.
+//
+// Fixed where it was caused. The two rejected alternatives are worth naming:
+// pushing people aside as the captain approaches would make the crowd move
+// thirty times a second (the hash in occupancy.js exists to stop exactly
+// that), and hiding a figure the camera is inside would leave the captain
+// still walking through them, with a person popping out of the world in a
+// 2.6-metre corridor where there is nowhere for the eye to miss it.
+// ---------------------------------------------------------------------------
+
+/** Every figure standing in the room the captain is in, camera-height. */
+function figuresIn(g, roomId) {
+  const room = ROOMS[roomId];
+  const out = [];
+  for (const st of room?.stations ?? []) {
+    if (st.crew) out.push({ at: officerStandsAt(st), what: `station:${st.id}` });
+  }
+  for (const who of occupantsOf(g, roomId)) out.push({ at: who.at, what: 'occupant' });
+  return out;
+}
+
+/**
+ * Walk the ship's own autopilot from one room to another, watching the crew.
+ *
+ * `stepToward` is the thing behind "go to sickbay" — it aims at the next door
+ * and presses forward with no idea what is between, which is the whole reason
+ * this can happen at all.
+ */
+function walkWatching(from, to) {
+  const g = ship();
+  if (!g.walk.enter(from).ok) return null;
+  if (!route(from, to)) return null;
+  const memory = {};
+  let min = Infinity;
+  let what = null;
+  let frames = 0;
+  for (let i = 0; i < 3000; i++) {
+    for (const f of figuresIn(g, g.walk.roomId)) {
+      const d = Math.hypot(f.at[0] - g.walk.x, f.at[1] - g.walk.z);
+      if (d < min) { min = d; what = `${g.walk.roomId}/${f.what}`; }
+    }
+    frames++;
+    const r = stepToward(g.walk, to, 1 / 30, memory);
+    if (r.arrived || r.blocked) break;
+  }
+  return { min, what, frames, arrived: g.walk.roomId === to };
+}
+
+describe('and the captain does not walk through them', () => {
+  const ids = Object.keys(ROOMS);
+
+  test('no route on the ship takes the camera inside a person', () => {
+    const walks = [];
+    for (const from of ids) {
+      for (const to of ids) {
+        if (from === to) continue;
+        const r = walkWatching(from, to);
+        if (r && r.min < Infinity) walks.push({ from, to, ...r });
+      }
+    }
+
+    // The denominator, stated before the clean result is believed. A sweep
+    // that walked nothing, or that never got near anybody, would pass this
+    // test by measuring nothing at all.
+    assert.ok(walks.length >= 200, `only ${walks.length} routes were walked`);
+    assert.ok(walks.reduce((n, w) => n + w.frames, 0) >= 15000,
+      'the walks ended immediately, so nothing was sampled');
+
+    const worst = walks.reduce((a, b) => (b.min < a.min ? b : a));
+    assert.ok(worst.min >= 0.35,
+      `${worst.from} to ${worst.to} passes within ${worst.min.toFixed(2)} m of `
+      + `${worst.what} — the camera is inside them`);
+  });
+
+  test('and the instrument above can see somebody at a known distance', () => {
+    // The positive case, so the clean result above is evidence rather than a
+    // measurement that was never taken. Engineering's machine shop puts an
+    // officer 0.52 m from where you arrive on the deck — the closest anyone
+    // stands to the captain anywhere on the ship, close enough to speak to and
+    // not close enough to be standing in.
+    const r = walkWatching('engineering', 'bridge');
+    assert.ok(r, 'engineering to the bridge is not a route, so this proves nothing');
+    assert.ok(r.min < 0.6 && r.min >= 0.35,
+      `the nearest figure measured ${r.min.toFixed(2)} m, not the 0.52 m expected`);
+    assert.match(r.what, /^engineering\/station:/, `it found ${r.what}`);
+  });
+
+  test('a corridor keeps its people, which is what the rule must not cost', () => {
+    // The security corridor is 2.6 m across with FOUR doors on it — twelve
+    // lanes over a width that holds one and a half — so every spot in it is
+    // somebody's way through. Requiring the lane took it from three people at
+    // red alert to one, silently. The bulkhead fallback is what buys them back,
+    // and this is the assertion that keeps it honest.
+    for (const level of ['normal', 'yellow', 'red', 'blue']) {
+      const g = ship((x) => x.setAlert(level));
+      for (const id of ids) {
+        assert.equal(crewIn(g, id), headcountOf(g, id).crew
+          - (ROOMS[id].stations ?? []).filter((s) => s.crew).length,
+        `${id} lost people at ${level} alert`);
+      }
+    }
+    const red = ship((x) => x.setAlert('red'));
+    assert.equal(crewIn(red, 'corridor_sec'), 3,
+      'the security corridor emptied at red alert, which is when it matters most');
+  });
+
+  test('and they stand along the walls of it rather than down the middle', () => {
+    // The picture this buys, stated as geometry: in a corridor, everybody is
+    // further out than the old 0.5 m half-width could ever have put them.
+    const g = ship((x) => x.setAlert('red'));
+    const room = ROOMS.corridor_sec;
+    const half = room.shape.width / 2;
+    const people = occupantsOf(g, 'corridor_sec');
+    assert.ok(people.length >= 2, `only ${people.length} people, so this proves nothing`);
+    for (const who of people) {
+      assert.ok(Math.abs(who.at[0]) > 0.5,
+        `somebody is standing ${who.at[0].toFixed(2)} m off the centreline of a `
+        + `${room.shape.width} m corridor`);
+      assert.ok(Math.abs(who.at[0]) < half, 'somebody is standing in the bulkhead');
+    }
   });
 });

@@ -29,6 +29,106 @@ import { ROOMS } from '../world/interiors.data.js';
 const CAP = 8;
 
 /**
+ * How far a standing person keeps off the bulkhead.
+ *
+ * It was 0.8, written inline, and 0.8 is a sensible number for a nine-metre
+ * box: it keeps people off the walls so they read as being IN the room rather
+ * than pressed against it. Subtracted flat from the half-extent, it is a
+ * disaster in a narrow one.
+ *
+ * The recreation corridor is 2.6 metres across. Half of that is 1.3, less 0.8
+ * leaves 0.5 — so every person in a 2.6-metre corridor was placed in its
+ * middle METRE, all three of them, in single file down the centreline. Which
+ * is the one metre the captain has to walk along, because a corridor's two
+ * doors are at its two ends.
+ *
+ * 0.4 is a person's own footprint plus a little air. In a nine-metre room it
+ * moves people from ±3.2 to ±3.6 and nobody will ever notice; in a corridor it
+ * gives them the width to stand ALONG the wall, which is where people stand in
+ * corridors.
+ */
+const WALL_CLEARANCE = 0.4;
+
+/**
+ * How far a standing person keeps out of the walking lane.
+ *
+ * The captain's radius (`WALKER_RADIUS`, 0.26) plus a person's own, which is
+ * about the same — so at 0.62 metres the two of you cannot both be there.
+ *
+ * A "lane" is the straight line between two of the room's doors, because that
+ * is precisely what the autopilot walks: `enter()` puts you just inside the
+ * door you came through and `stepToward` aims you at the next one and presses
+ * forward, with no idea what is between. Measured over all 252 room-to-room
+ * routes before this rule existed, the camera came within 0.35 m of a crew
+ * member — inside their body — on 30 of them, and the worst pass was 0.03 m:
+ * the captain walked clean through an ensign in the recreation corridor.
+ *
+ * Rejecting the lane at placement time is the layer that can fix it. Pushing
+ * people aside as the captain approaches cannot: `place` is called fresh every
+ * frame and is deliberately a pure function of the room and the ship's state,
+ * so anything that depended on where the captain is standing would make the
+ * crowd teleport thirty times a second — the exact failure the hash above
+ * exists to prevent.
+ */
+const LANE_CLEARANCE = 0.62;
+
+/** Distance from a point to a line segment. */
+function distToSegment(px, pz, ax, az, bx, bz) {
+  const vx = bx - ax;
+  const vz = bz - az;
+  const len = vx * vx + vz * vz;
+  // A door pair at the same point is a point, not a lane.
+  if (len < 1e-9) return Math.hypot(px - ax, pz - az);
+  let t = ((px - ax) * vx + (pz - az) * vz) / len;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(px - (ax + vx * t), pz - (az + vz * t));
+}
+
+/**
+ * Where you are standing a moment after coming through this door.
+ *
+ * `Walker.enter` puts you a metre inside it along the line toward the room's
+ * centre — arriving in the doorway itself would leave you half in the frame,
+ * and arriving at the origin would drop you on top of whatever is in the
+ * middle. Mirrored here rather than imported because `walk.js` imports this
+ * module's neighbours and the number is one line; if it moves, the test in
+ * `tests/occupancy.test.js` that walks a real route will notice.
+ */
+function stand(exit) {
+  const [dx, dz] = exit.at;
+  const len = Math.hypot(dx, dz) || 1;
+  return [dx - (dx / len) * 1.0, dz - (dz / len) * 1.0];
+}
+
+/**
+ * Is this spot in the middle of the way through?
+ *
+ * Every ORDERED pair of the room's doors — from where you stand on arriving
+ * through one, to the next one you are aiming at. So a room with one exit has
+ * no lane and the security corridor, with four, has twelve.
+ *
+ * Ordered and starting a metre in, rather than simply door-to-door, because
+ * door-to-door is not the path. Measured: an ensign in the recreation corridor
+ * sat 0.84 m off the door-to-door line and the captain still passed within
+ * 0.28 m of them, because the walk begins a metre inside the door and the two
+ * lines diverge by about half a metre at that end.
+ *
+ * Nothing is done about a room whose lanes cover all of it — the caller falls
+ * back to the bulkhead and, failing that, returns `null`.
+ */
+function inLane(room, x, z) {
+  const exits = room.exits ?? [];
+  for (const from of exits) {
+    const [ax, az] = stand(from);
+    for (const to of exits) {
+      if (to === from) continue;
+      if (distToSegment(x, z, ax, az, to.at[0], to.at[1]) < LANE_CLEARANCE) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * A small deterministic hash, for placing people.
  *
  * Not `RNG`: this must not consume a draw from anything the save depends on,
@@ -46,6 +146,24 @@ function spot(roomId, i, salt) {
 }
 
 /**
+ * Is this spot taken?
+ *
+ * Clear of the furniture, but not standing off from it: a recreation room is
+ * three tables in a nine-metre box, and half a metre of clearance around each
+ * of them left nowhere to put anybody — five people were asked for and three
+ * were placed, silently, which is the placement cap doing its job for the
+ * wrong reason.
+ *
+ * `respectLane` is off for the last resort only. See `place`.
+ */
+function blocked(room, x, z, respectLane) {
+  if ((room.props ?? []).some((p) => p.solid !== false
+    && Math.hypot(x - p.at[0], z - p.at[1]) < (p.radius ?? 0.6) * 0.8 + 0.34)) return true;
+  if ((room.stations ?? []).some((st) => Math.hypot(x - st.at[0], z - st.at[1]) < 0.9)) return true;
+  return respectLane && inLane(room, x, z);
+}
+
+/**
  * Somewhere in the room that is not inside the furniture or a bulkhead.
  *
  * Rejection against the room's own solid props and its stations, with a hard
@@ -54,20 +172,12 @@ function spot(roomId, i, salt) {
  * is not there.
  */
 function place(room, roomId, i, salt) {
-  const w = (room.shape?.width ?? 8) / 2 - 0.8;
-  const d = (room.shape?.depth ?? 8) / 2 - 0.8;
+  const w = (room.shape?.width ?? 8) / 2 - WALL_CLEARANCE;
+  const d = (room.shape?.depth ?? 8) / 2 - WALL_CLEARANCE;
   for (let attempt = 0; attempt < 12; attempt++) {
     const x = (spot(roomId, i, `${salt}x${attempt}`) * 2 - 1) * w;
     const z = (spot(roomId, i, `${salt}z${attempt}`) * 2 - 1) * d;
-    // Clear of the furniture, but not standing off from it: a recreation room
-    // is three tables in a nine-metre box, and half a metre of clearance
-    // around each of them left nowhere to put anybody — five people were
-    // asked for and three were placed, silently, which is the placement cap
-    // doing its job for the wrong reason.
-    const clash = (room.props ?? []).some((p) => p.solid !== false
-      && Math.hypot(x - p.at[0], z - p.at[1]) < (p.radius ?? 0.6) * 0.8 + 0.34)
-      || (room.stations ?? []).some((st) => Math.hypot(x - st.at[0], z - st.at[1]) < 0.9);
-    if (!clash) return [x, z];
+    if (!blocked(room, x, z, true)) return [x, z];
   }
 
   // Twelve throws of a dart, and then a look round the edge of the room.
@@ -91,11 +201,34 @@ function place(room, roomId, i, salt) {
       const theta = ((k + i * 5) % 16) / 16 * Math.PI * 2;
       const x = Math.cos(theta) * w * scale;
       const z = Math.sin(theta) * d * scale;
-      const clash = (room.props ?? []).some((p) => p.solid !== false
-        && Math.hypot(x - p.at[0], z - p.at[1]) < (p.radius ?? 0.6) * 0.8 + 0.34)
-        || (room.stations ?? []).some((st) => Math.hypot(x - st.at[0], z - st.at[1]) < 0.9);
-      if (!clash) return [x, z];
+      if (!blocked(room, x, z, true)) return [x, z];
     }
+  }
+
+  // And then, flat against the bulkhead.
+  //
+  // This is what keeps the lane rule from emptying a room. The security
+  // corridor is 2.6 metres across with FOUR doors on it, which is six lanes
+  // over a width that holds one and a half — so every spot in it is somebody's
+  // way through, and requiring the lane took it from three people at red alert
+  // to one. A corridor that empties the moment it gets interesting is the
+  // exact failure this whole module exists to undo.
+  //
+  // So the lane is a PREFERENCE, honoured wherever the room has room for it
+  // and given up at the wall — which is where you put yourself when a corridor
+  // is busy.
+  //
+  // The rectangle's side walls rather than the ellipse above, and that is not
+  // a tidy-up: an ellipse inscribed in a 0.9-by-6.1 corridor spends almost all
+  // of its perimeter along the LONG axis, where x is near zero. Falling back
+  // to it put the security corridor's crew back down the centreline — the
+  // thing this change is about — and measured worse than having no lane rule
+  // at all. The wall is the only place in a corridor that is out of the way.
+  for (let k = 0; k < 24; k++) {
+    const j = (k + i * 7) % 24;
+    const x = (j % 2 ? 1 : -1) * w;
+    const z = ((Math.floor(j / 2) + 0.5) / 12 * 2 - 1) * d;
+    if (!blocked(room, x, z, false)) return [x, z];
   }
   return null;
 }

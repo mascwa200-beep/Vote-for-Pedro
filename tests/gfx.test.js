@@ -1558,6 +1558,36 @@ describe('a crew that can look at you', () => {
     assert.ok(maxZ < 0.6, `the figure reaches ${maxZ.toFixed(2)} m off the origin in z`);
   });
 
+  test('a standing figure has two legs, with daylight between them', () => {
+    // The note in room.js justifies a LOW-POLYGON figure and it is right to:
+    // flat-shaded, untextured, unskinned, at phone size, a detailed figure
+    // reads worse rather than better. But that argument is about polygon
+    // COUNT, and a single box spanning both legs was one box instead of two —
+    // the cheapest silhouette cue there is, and the one that most decides
+    // whether a shape says "person" or "bollard" at a distance.
+    //
+    // Counted as DISTINCT x values below the hip, which is the measurement
+    // that works. The obvious test — "is there geometry on the centreline" —
+    // passes against the single box too, because a box has no vertex at its
+    // own centre: the old leg block spanned -0.12 to 0.12 and put vertices
+    // only at those two. One leg is two x values. Two legs are four.
+    const { data, vertexCount, stride } = officerMesh('helm', 'wall');
+    const floats = stride / 4;
+    const xs = new Set();
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * floats;
+      if (data[o + 1] < 0.45) xs.add(data[o].toFixed(3));
+    }
+    assert.ok(xs.size >= 4,
+      `the legs are cut from ${xs.size / 2} block(s): x at ${[...xs].join(', ')}`);
+
+    // And it is a gap in the middle rather than two blocks side by side with
+    // no daylight: the inner faces must be off the centreline, not on it.
+    const inner = Math.min(...[...xs].map((v) => Math.abs(Number(v))));
+    assert.ok(inner > 0.01 && inner < 0.08,
+      `the legs are ${(inner * 2).toFixed(3)} m apart at the inside`);
+  });
+
   test('the divisions do not wear the same colour', () => {
     // Scanned across the whole figure rather than off the first vertex: the
     // first box built is the legs, and every division wears the same trousers.
