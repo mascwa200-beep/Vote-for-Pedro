@@ -3803,6 +3803,99 @@ same family as everything else in §51–§53: **a check anchored to a position 
 file rather than to a construct is measuring the file, not the code.**
 
 
+## 54. The only defence against an ambush was a species
+
+An earlier pass found `surprise: true` set on every ambush and read by nothing,
+and gave it teeth: being jumped now costs a free volley, every gun a cycle
+behind. Two species sell a defence — the Caitian's Predator's Instinct cancels
+it, the Saurian's Wide Spectrum Vision halves it.
+
+And that was the whole of it. **Nothing a captain DID mattered.** Four ranks of
+Sensor Analysis and a fitted Multispectral Sensor Array — sold in those words as
+*"cloak detection"* and *"see cloaked ships sooner"* — bought exactly nothing in
+the one situation that is, definitionally, ships which were hiding. Ten of the
+twelve species had no answer at all.
+
+Alert level cannot be the answer, and this is worth writing down because it
+looks like the obvious one: `beginEncounter` sets red alert on **every** hostile
+encounter, two lines before anything else happens, so the alert is always red by
+the time the captain chooses. There is no posture to reward.
+
+### What was added
+
+A detection roll against `stealthDetect` when a `surprise` encounter begins, on
+a **derived** stream keyed by seed, system and visit — not `this.rng`, for the
+reason `encounterStream` records: drawing from the main stream shifts every
+seeded outcome downstream of it, and the balance suites depend on those. The
+full suite passed unchanged afterwards, which is the evidence that it did.
+
+| | `stealthDetect` | ambushes seen |
+| --- | --- | --- |
+| bought nothing | 1.150 | **4%** |
+| four ranks and the array | 2.912 | **66%** |
+
+A detected ambush costs no free volley, and offers a fourth choice — *"Take them
+first"* — which turns the volley round, symmetrical with the Klingon
+`first_strike` perk. Every hostile encounter had offered the same three buttons
+and returned early, so an ambush read exactly like an unfriendly patrol; this is
+the first thing that makes one read differently.
+
+Measured over 200 seeds, ambushed by a D7 and a Bird of Prey, with detection
+**forced** so the only thing varying is the mechanic:
+
+| | mean hull | outcome | lost |
+| --- | --- | --- | --- |
+| blind, surprise stands | 63.0% | 173 routed / 26 won | 1 |
+| seen it, engage | 65.8% | 175 / 25 | 0 |
+| seen it, spring it | 80.8% | 181 / 19 | 0 |
+
+The fight is still won either way. **What being ready buys is the damage** — and
+an ambush still costs real hull even when you spring it, so it remains a thing
+worth avoiding rather than a thing worth farming.
+
+### Two errors, both caught by things already written down
+
+**`game.firstStrike` is not what its name says.** The obvious way to give the
+player the free volley is `this.firstStrike = true`, and a comment two hundred
+lines below says exactly why not: *"NOT `game.firstStrike`, which is a different
+thing wearing the same name — that flag means the captain shot at somebody
+peaceful and costs 25% off every diplomacy roll."* Setting it would have
+**penalised** a captain for springing an ambush they were clever enough to see.
+§50's rule, paying off again: check whether the repo has already answered the
+question.
+
+**The phrase on the button did not parse.** `say: 'take them first'` resolved to
+`mission_choice`, so the words printed on the button routed to a different
+handler entirely — which is the precise failure the `encounter_choice` lexicon
+entry was written to fix, arriving again with a new choice. Added to the
+vocabulary; `fire first` and `hit them first` deliberately **not**, because the
+first already parses as `fire` and taking it would break a combat order to serve
+one encounter choice. A `say` nobody can parse is a lie printed in quotation
+marks, and there is now a test that reads the phrase off the choice and puts it
+through the parser.
+
+### A measurement that was wrong three times first
+
+Worth recording, because every version was plausible:
+
+1. **Two different captains.** Comparing an invested captain against an
+   uninvested one reported the sensor package making a captain *worse* in a
+   fight — true, and nothing to do with ambushes: the invested one spent twenty
+   points on science instead of gunnery. Fixed by forcing `detected` on **one**
+   captain.
+2. **Counting the wrong thing.** Win rates came out at 4–6% for a Constitution
+   against a single D7, which the same fight wins 60 times in 60 elsewhere.
+   Without `relentless`, hostiles break off and the outcome is `routed`, not
+   `victory` — the harness was counting a fraction of the wins as all of them.
+3. **A fight too lopsided to read.** Even corrected, win/loss barely moved,
+   because the outcome is nearly always `routed`. The metric that carries the
+   signal is **surviving hull**, and it is the honest one anyway: what a free
+   volley buys is not whether you win but what it costs you.
+
+The through-line with §51–§53 is the same: **assert what the measurement can
+see before believing what it says.**
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
