@@ -282,7 +282,7 @@ src/ui/       LCARS kit, screens, tactical and map renderers, order parser
 android/      WebView shell, manifest, resources for the APK
 ```
 
-**Content:** 43 star systems, 31 ship classes, 24 authored episodes, 12
+**Content:** 43 star systems, 31 ship classes, 25 authored episodes, 12
 species, 12 difficulties, 6 reputation tracks, 38 synthesized sound cues, and
 a command lexicon of 1512 phrasings tested against a 617-order corpus,
 and 31 procedurally generated hulls averaging 1058 triangles each.

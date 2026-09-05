@@ -81,7 +81,12 @@ const actsThatSet = (flag) =>
 describe('two more, and this time not both at the end', () => {
   test('the book is 24 over 23 systems, and both new ones are somewhere empty', () => {
     assert.equal(ECHO_EPISODES.length, 2);
-    assert.equal(EPISODES.length, 24);
+    // A ratchet, not a snapshot. Three separate files asserted the book was
+    // exactly 24 episodes long, so adding a twenty-fifth failed all three for
+    // no reason connected to what any of them tests. Each file already asserts
+    // that ITS OWN episodes are present, distinct and somewhere empty; the
+    // total only has to not go backwards.
+    assert.ok(EPISODES.length >= 25, `the book is ${EPISODES.length} episodes`);
     const by = Object.fromEntries(
       (Array.isArray(SYSTEMS) ? SYSTEMS : Object.values(SYSTEMS)).map((s) => [s.id, s]));
     for (const ep of ECHO_EPISODES) {
@@ -209,12 +214,13 @@ describe('and neither writes anything down that nobody reads', () => {
   });
 
   test('and the book is less forgetful again', () => {
-    // 13 before `consequences.js`, 18 after it, 24 now. A ratchet: it only
-    // moves one way, and if a later change makes it worse this says so.
+    // 13 before `consequences.js`, 18 after it, 24 after this file, 28 after
+    // `long_watch`. A ratchet: it only moves one way, and if a later change
+    // makes it worse this says so.
     const written = flagsWritten(EPISODES);
     const read = gateReads(EPISODES);
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.ok(gated >= 24,
-      `only ${gated} of ${written.size} recorded decisions gate anything; it was 18 before this`);
+    assert.ok(gated >= 28,
+      `only ${gated} of ${written.size} recorded decisions gate anything; it was 24 before long_watch`);
   });
 });

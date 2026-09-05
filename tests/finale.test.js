@@ -168,8 +168,13 @@ describe('the finale is still a finale', () => {
   test('every route through it ends the episode', () => {
     // Played, not read: each room, each choice that a maximal record opens.
     for (const [name, rec, flags] of [
-      ['commended', good, ['spared_warbird']],
-      ['questioned', () => {}, ['falsified_report', 'borg_weakness', 'kang_respects_you']],
+      ['commended', good, ['spared_warbird', 'the_watch_stood']],
+      // `logged_the_watch` is `long_watch`'s: the night on deck eight, written
+      // up honestly. Added here rather than to a new case because this list is
+      // "every flag that opens a choice at this stage", and a flag missing from
+      // it makes the loop below assert that a gated choice is unlocked for a
+      // captain who never earned it.
+      ['questioned', () => {}, ['falsified_report', 'borg_weakness', 'kang_respects_you', 'logged_the_watch', 'logged_a_fault']],
       ['censured', bad, ['dmz_accord', 'inquiry_resolved']],
     ]) {
       const room = convene(captain({ record: rec, flags })).stageId;

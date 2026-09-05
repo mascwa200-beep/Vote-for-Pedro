@@ -660,6 +660,14 @@ export const FRONTIER_EPISODES = [
             outcome: 'commended', requires: { flag: 'spared_warbird' },
             effects: { xp: 1600, standing: { federation: 22, romulan: 25 },
               flag: 'romulan_testimony' } },
+          // Two ratings stood a third's watches for a month so she could try
+          // to reach a hospital, and the captain wrote that down beside the
+          // breach instead of only the breach. A board that is being told the
+          // command was good should be told who made it good.
+          { id: 'watch', label: 'Name the two who stood her watches',
+            outcome: 'commended', requires: { flag: 'the_watch_stood' },
+            effects: { xp: 1700, standing: { federation: 20 },
+              flag: 'credited_the_crew' } },
         ],
       },
 
@@ -680,6 +688,21 @@ export const FRONTIER_EPISODES = [
           { id: 'kang', label: 'Ask that the Klingon letter be entered',
             outcome: 'commended', requires: { flag: 'kang_respects_you' },
             effects: { xp: 1600, standing: { federation: 16, klingon: 20 } } },
+          // The night on deck eight, written up honestly at the desk in your
+          // own quarters. A board reviewing a five-year command reads the log,
+          // and a captain who put a breach of his own ship's security into it
+          // under his own hand — with the reason standing beside it — is a
+          // captain whose other four years they can believe.
+          { id: 'watch', label: 'Let them read the entry you wrote at 0400 on deck eight',
+            outcome: 'commended', requires: { flag: 'logged_the_watch' },
+            effects: { xp: 1500, standing: { federation: 18 } } },
+          // The other version of that night, and the same shape as `correct`
+          // above: a captain who logged an intermittent fault in the auxiliary
+          // run has a chance to say what the fault actually was, four years
+          // late, before somebody else finds it.
+          { id: 'the_fault', label: 'Correct the auxiliary entry before they reach it',
+            outcome: 'reviewed', requires: { flag: 'logged_a_fault' },
+            effects: { xp: 1300, standing: { federation: 10 }, flag: 'came_clean' } },
         ],
       },
 
