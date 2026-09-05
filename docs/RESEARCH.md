@@ -3280,6 +3280,101 @@ sections running, and the count of times a probe has invented an API or a
 carrier this run is now five.
 
 
+## 48. A console slot, four skill points, and a science officer, all spent on nothing
+
+The plan finished at §47, so this is the continuous item: hunt defects at lower
+yield. The method that found this one was a sweep rather than a hunch — take
+every modifier the ship stores, and check that something, somewhere, asks for
+it.
+
+Eighteen stored. Seventeen read. The one that was not:
+
+| writes `stealthDetect` | |
+| --- | --- |
+| `ship.js:314` | the baseline, 1 |
+| `skills.js:58` | "Sensor Analysis — cloak detection and scan quality", a science node, +0.15 a rank to four |
+| `loadout.js:37` | "Multispectral Sensor Array — see cloaked ships sooner", tier two, **two slot value**, +0.4 |
+| `character.js:547` | the captain's Science ability, +6% a point |
+| `state.js:1539` | a watch officer's expertise, up to +10% |
+
+Nothing anywhere called `mod('stealthDetect')`. Measured over forty
+sixty-second runs against a Bird of Prey held cloaked throughout:
+
+| | before | after |
+| --- | --- | --- |
+| stealthDetect **1.150** | 1714 | 2172 |
+| stealthDetect **2.912** | 1714 | **2596** |
+
+Exactly 1714 both ways. **Two of the five contributors are things the player
+pays for with a limited resource**, and one of them costs two slot value on a
+ship that has few.
+
+I put the fifth of those five there myself, in §43, wiring the con — I copied
+the shape of the captain's contribution wholesale without checking that
+anything read it. The same defect as the write-only flags, committed while
+writing the PRs about them.
+
+### Where it goes
+
+`combat.js` had the seam already:
+
+    const evade = target.defenseRating + (target.cloaked ? 0.5 : 0) + decoy;
+
+A flat half, no matter how good the sensors are — which is exactly what "cloak
+detection" is about. The half is now divided by the attacker's `stealthDetect`,
+**floored at 1** so nothing can ever make a cloak worth *more* than the number
+that was tuned when nothing read it. This is a discount on the enemy's
+advantage, not a new axis.
+
+### The balance question, settled by measuring
+
+A captain who has bought nothing still carries about 1.12 from Science alone,
+so this could not be assumed to be a no-op. Against the heavy cloaking classes
+— warbird, vorcha, neghvar, which is where a cloak decides anything:
+
+    24 of 90 won before the change, 24 of 90 after
+
+Birds of Prey were tried first and are useless for this: 90 of 90 either way,
+which cannot tell the two apart. A captain with a little Science does land
+about a quarter more onto a cloaked hull, and it does not change who wins.
+
+### The console's other half was dead too
+
+`sensor_array` also declares `special: 'scan'`. Scan quality was
+`progress.scanBonus` — which comes from the **skill tree** — plus
+`sensorQuality`, which is the subsystem times its power. **A fitted array
+reached neither.** Both of the console's effects did nothing at all.
+
+There is now one `Game.scanQuality` that says what scan quality is made of, at
+the same 0.12 a rank the skill uses, against the console's own `value` — so a
+two-value console is worth two ranks of the node, in the same units, rather
+than two scales that happen to be added together. A test asserts that ratio.
+
+### The sixth invented API
+
+The first draft of the test harness fitted the console with
+`loadout.fit('science', 'sensor_array')`. There is no such method. The call was
+optional-chained, returned `undefined`, and the console was never aboard — so
+the "bought everything" captain measured 2.080 instead of 2.912, skills and
+Science only. The API is `equip`.
+
+That is the sixth time this run a probe has invented an API or a carrier —
+after `Game.load`, `PLAYER_SPECIES`, `eng.allShips`, `Mission.over`, and the
+Tellarite who never had `fieldRepair`. This one would have **understated the
+very defect the file was written to report**, which is the first time the error
+ran in that direction. The rule stands and is now cheap to state: *an
+optional-chained call that returns undefined is not a measurement.*
+
+### Cleared as negatives
+
+Two leads checked and found clean, recorded so they are not re-hunted: all 25
+reputation perks are read (`flag_authority` at `command.js:77`; the escort and
+passage perks through the `ESCORTS` and `PASSAGE_PERKS` tables), and no `mods:`
+block anywhere declares a key the ship does not have — 18 declared, 18 carried,
+no orphans. The note at `state.js:417` saying "exactly ONE was ever read"
+describes the state that was fixed, not the present one.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

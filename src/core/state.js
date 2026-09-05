@@ -1092,6 +1092,25 @@ export class Game {
   }
 
   /**
+   * What the ship is good at seeing with, from everything that contributes.
+   *
+   * The skill tree's "Sensor Analysis" node reaches this through
+   * `progress.scanBonus`. The Multispectral Sensor Array does not, and did not:
+   * it declares `special: 'scan'` and `stealthDetect: 0.4`, costs two slot
+   * value, is described as "See cloaked ships sooner" — and BOTH of its effects
+   * were read by nothing. `scanBonus` comes from the skill tree and
+   * `sensorQuality` is the subsystem times its power, so a fitted array
+   * contributed to neither.
+   *
+   * The same 0.12 a rank the skill uses, against the console's own `value`, so
+   * a two-value console is worth two ranks of the node and the two are in the
+   * same units rather than two scales that happen to be added together.
+   */
+  get scanQuality() {
+    return this.progress.scanBonus + this.loadout.special('scan') * 0.12;
+  }
+
+  /**
    * What the sensors make of the system the ship is sitting in.
    *
    * This lived in main.js and read no ship state at all: a ship with her
@@ -2402,7 +2421,7 @@ export class Game {
         // `sensorQuality` rather than the array's health alone: auxiliary is
         // the sensor channel, and at balanced power the two are identical, so
         // this is a nominal no-op that pays a captain who spends the power.
-        const quality = 0.5 + this.progress.scanBonus + this.sensorQuality * 0.3;
+        const quality = 0.5 + this.scanQuality + this.sensorQuality * 0.3;
         const success = this.rng.chance(quality);
         if (success) {
           this.ledger.record('anomaly_catalogued', {
@@ -2421,7 +2440,7 @@ export class Game {
       // anomaly and marks a system surveyed — a tender is neither.
       case 'observe': {
         const what = Game.PATROL_WATCH[enc.subtype] ?? Game.PATROL_WATCH.default;
-        const quality = 0.5 + this.progress.scanBonus + this.sensorQuality * 0.3;
+        const quality = 0.5 + this.scanQuality + this.sensorQuality * 0.3;
         if (this.rng.chance(quality)) {
           this.awardXP(90);
           out.messages.push(what.seen);

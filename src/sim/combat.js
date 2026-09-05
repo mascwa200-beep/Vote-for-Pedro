@@ -524,7 +524,28 @@ export class Engagement {
       * (0.7 + 0.3 * attacker.subsystems.sensors) * (1 - murk);
     // A decoy in the water only troubles the people shooting at us.
     const decoy = (target === this.player && this.decoyTimer > 0) ? 0.22 : 0;
-    const evade = target.defenseRating + (target.cloaked ? 0.5 : 0) + decoy;
+    // A cloak is worth less against somebody who is looking for it.
+    //
+    // `stealthDetect` was written by five things and read by none. The ship
+    // carried it in `mods`, the baseline set it to 1, a science skill node
+    // called "Cloak detection and scan quality" added 0.15 a rank, a tier-two
+    // console called "See cloaked ships sooner" added 0.4 for two slot value,
+    // the captain's Science ability added 6% a point, and a watch officer's
+    // expertise added up to 10%. Nothing anywhere called
+    // `mod('stealthDetect')`.
+    //
+    // Measured over forty sixty-second runs against a Bird of Prey held
+    // cloaked throughout: a captain at 1.150 and one at 2.080 — four skill
+    // points and the console — both landed a mean of **1714** damage. Exactly
+    // 1714. Two of the five contributors are things the player pays for.
+    //
+    // Floored at 1 so nothing can ever make a cloak worth MORE than the flat
+    // half it has always been: this is a discount on the enemy's advantage,
+    // not a new axis.
+    const cloakEvade = target.cloaked
+      ? 0.5 / Math.max(1, attacker.mod('stealthDetect'))
+      : 0;
+    const evade = target.defenseRating + cloakEvade + decoy;
     if (!this.rng.chance(Math.max(0.08, accuracy - evade))) {
       return { hit: false, reason: 'miss' };
     }

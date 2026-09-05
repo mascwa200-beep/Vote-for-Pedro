@@ -28180,7 +28180,28 @@ class Engagement {
       * (0.7 + 0.3 * attacker.subsystems.sensors) * (1 - murk);
     // A decoy in the water only troubles the people shooting at us.
     const decoy = (target === this.player && this.decoyTimer > 0) ? 0.22 : 0;
-    const evade = target.defenseRating + (target.cloaked ? 0.5 : 0) + decoy;
+    // A cloak is worth less against somebody who is looking for it.
+    //
+    // `stealthDetect` was written by five things and read by none. The ship
+    // carried it in `mods`, the baseline set it to 1, a science skill node
+    // called "Cloak detection and scan quality" added 0.15 a rank, a tier-two
+    // console called "See cloaked ships sooner" added 0.4 for two slot value,
+    // the captain's Science ability added 6% a point, and a watch officer's
+    // expertise added up to 10%. Nothing anywhere called
+    // `mod('stealthDetect')`.
+    //
+    // Measured over forty sixty-second runs against a Bird of Prey held
+    // cloaked throughout: a captain at 1.150 and one at 2.080 — four skill
+    // points and the console — both landed a mean of **1714** damage. Exactly
+    // 1714. Two of the five contributors are things the player pays for.
+    //
+    // Floored at 1 so nothing can ever make a cloak worth MORE than the flat
+    // half it has always been: this is a discount on the enemy's advantage,
+    // not a new axis.
+    const cloakEvade = target.cloaked
+      ? 0.5 / Math.max(1, attacker.mod('stealthDetect'))
+      : 0;
+    const evade = target.defenseRating + cloakEvade + decoy;
     if (!this.rng.chance(Math.max(0.08, accuracy - evade))) {
       return { hit: false, reason: 'miss' };
     }
@@ -36344,6 +36365,25 @@ class Game {
   }
 
   /**
+   * What the ship is good at seeing with, from everything that contributes.
+   *
+   * The skill tree's "Sensor Analysis" node reaches this through
+   * `progress.scanBonus`. The Multispectral Sensor Array does not, and did not:
+   * it declares `special: 'scan'` and `stealthDetect: 0.4`, costs two slot
+   * value, is described as "See cloaked ships sooner" — and BOTH of its effects
+   * were read by nothing. `scanBonus` comes from the skill tree and
+   * `sensorQuality` is the subsystem times its power, so a fitted array
+   * contributed to neither.
+   *
+   * The same 0.12 a rank the skill uses, against the console's own `value`, so
+   * a two-value console is worth two ranks of the node and the two are in the
+   * same units rather than two scales that happen to be added together.
+   */
+  get scanQuality() {
+    return this.progress.scanBonus + this.loadout.special('scan') * 0.12;
+  }
+
+  /**
    * What the sensors make of the system the ship is sitting in.
    *
    * This lived in main.js and read no ship state at all: a ship with her
@@ -37654,7 +37694,7 @@ class Game {
         // `sensorQuality` rather than the array's health alone: auxiliary is
         // the sensor channel, and at balanced power the two are identical, so
         // this is a nominal no-op that pays a captain who spends the power.
-        const quality = 0.5 + this.progress.scanBonus + this.sensorQuality * 0.3;
+        const quality = 0.5 + this.scanQuality + this.sensorQuality * 0.3;
         const success = this.rng.chance(quality);
         if (success) {
           this.ledger.record('anomaly_catalogued', {
@@ -37673,7 +37713,7 @@ class Game {
       // anomaly and marks a system surveyed — a tender is neither.
       case 'observe': {
         const what = Game.PATROL_WATCH[enc.subtype] ?? Game.PATROL_WATCH.default;
-        const quality = 0.5 + this.progress.scanBonus + this.sensorQuality * 0.3;
+        const quality = 0.5 + this.scanQuality + this.sensorQuality * 0.3;
         if (this.rng.chance(quality)) {
           this.awardXP(90);
           out.messages.push(what.seen);
