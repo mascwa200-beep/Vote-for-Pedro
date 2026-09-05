@@ -11153,6 +11153,68 @@ const DECKS = {
   19: 'Deck 19 — Hangar deck',
 };
 
+/** The deck numbers this plan uses, low to high. */
+const PLAN_DECKS = Object.keys(DECKS).map(Number).sort((a, b) => a - b);
+
+/**
+ * The same deck plan, renumbered for a hull that is not a Constitution.
+ *
+ * This plan is a Constitution's: eight decks between 1 and 19, on a ship with
+ * twenty-three. Every hull in the game wore it unaltered, because nothing read
+ * the published deck count — `DIMENSIONS.decks`, thirty-one records, written
+ * and never read. An Oberth has EIGHT decks and its captain walked to "Deck 11
+ * — Engineering" and "Deck 19 — Hangar deck"; the shipyard sells a runabout at
+ * tier one, twenty-three metres and a single deck, whose captain could ride a
+ * turbolift to fifteen rooms below a keel that is not there.
+ *
+ * Renumbering, not removal. A Defiant has an engine room, a transporter and an
+ * armoury — it simply does not have them on decks 11, 7 and 19. What was wrong
+ * was the NUMBER, and the number is the part the captain reads. Which
+ * facilities a small hull carries at all is a content question with a much
+ * wider blast radius (episode `where` gates, occupancy, the station panels,
+ * lift connectivity) and is deliberately not answered here.
+ *
+ * Order and grouping are preserved: the bridge is deck 1 on every ship, rooms
+ * that share a deck on a Constitution share one on every hull, and the order
+ * from top to bottom never changes. A hull with fewer decks than the plan has
+ * levels simply stacks them — which is what a small ship is.
+ *
+ * @param {number} hullDecks  the hull's published deck count
+ * @returns {Map<number, number>} plan deck -> deck on this hull
+ */
+function deckPlanFor(hullDecks) {
+  const plan = PLAN_DECKS;
+  const out = new Map();
+  const n = Math.max(1, Math.floor(hullDecks || 0));
+  // A hull with room for the plan as written keeps it. Only a hull that cannot
+  // reach deck 19 gets renumbered, so a Constitution, an Excelsior and a Galaxy
+  // are untouched and the numbers a player already knows do not move.
+  if (n >= plan[plan.length - 1]) {
+    for (const d of plan) out.set(d, d);
+    return out;
+  }
+  // Scaled by DEPTH, not by index. Spreading the eight levels evenly put a
+  // Miranda's engineering, a Constellation's and an Intrepid's all on deck 7 —
+  // three different hulls of twelve, fourteen and fifteen decks with an
+  // identical deck plan, which is the flatness this is meant to fix. Deck 11 of
+  // 19 is two thirds of the way down whatever the hull is, so that is what gets
+  // preserved: the hangar is on the keel, the bridge is on top, and everything
+  // else keeps its position between them.
+  const deepest = plan[plan.length - 1];
+  for (const d of plan) {
+    const depth = (d - 1) / (deepest - 1);
+    out.set(d, Math.min(n, 1 + Math.round(depth * (n - 1))));
+  }
+  return out;
+}
+
+/** The label for a deck once it has been renumbered onto a hull. */
+function deckLabelFor(planDeck, hullDecks) {
+  const actual = deckPlanFor(hullDecks).get(planDeck) ?? planDeck;
+  const name = (DECKS[planDeck] ?? `Deck ${planDeck}`).split('—')[1]?.trim();
+  return name ? `Deck ${actual} — ${name}` : `Deck ${actual}`;
+}
+
 /**
  * The ten stations documented on a Constitution bridge, in the order they ring
  * the room from the viewscreen round to port.
@@ -11731,6 +11793,9 @@ function findRoom(text) {
 // intent.
 
 __exports.DECKS = DECKS;
+__exports.PLAN_DECKS = PLAN_DECKS;
+__exports.deckPlanFor = deckPlanFor;
+__exports.deckLabelFor = deckLabelFor;
 __exports.BAY_COUNT = BAY_COUNT;
 __exports.BAY_ANGLE = BAY_ANGLE;
 __exports.VIEWER_BAY_ANGLE = VIEWER_BAY_ANGLE;
@@ -17658,7 +17723,7 @@ const SHIP_CLASSES = {
     id: 'constitution', name: 'Constitution class', faction: 'federation',
     tier: 3, role: 'cruiser',
     hull: 4200, shields: 3400, shieldRegen: 42,
-    crew: 430, mass: 1.0,
+    crew: 430, decks: 23, mass: 1.0,
     impulse: 0.72, turnRate: 9.0, maxWarp: 8.0, warpEfficiency: 1.0,
     powerCap: 200,
     weapons: [
@@ -17677,7 +17742,7 @@ const SHIP_CLASSES = {
     id: 'constitution_refit', name: 'Constitution class (Refit)', faction: 'federation',
     tier: 4, role: 'cruiser', refitOf: 'constitution',
     hull: 5100, shields: 4400, shieldRegen: 55,
-    crew: 430, mass: 1.05,
+    crew: 430, decks: 23, mass: 1.05,
     impulse: 0.78, turnRate: 9.5, maxWarp: 9.0, warpEfficiency: 1.15,
     powerCap: 220,
     weapons: [
@@ -17697,7 +17762,7 @@ const SHIP_CLASSES = {
     id: 'miranda', name: 'Miranda class', faction: 'federation',
     tier: 2, role: 'light cruiser',
     hull: 3100, shields: 2600, shieldRegen: 38,
-    crew: 220, mass: 0.8,
+    crew: 220, decks: 12, mass: 0.8,
     impulse: 0.8, turnRate: 12.0, maxWarp: 8.0, warpEfficiency: 1.1,
     powerCap: 180,
     weapons: [
@@ -17714,7 +17779,7 @@ const SHIP_CLASSES = {
     id: 'oberth', name: 'Oberth class', faction: 'federation',
     tier: 2, role: 'science vessel',
     hull: 2400, shields: 2900, shieldRegen: 62,
-    crew: 80, mass: 0.6,
+    crew: 80, decks: 8, mass: 0.6,
     impulse: 0.68, turnRate: 14.0, maxWarp: 7.5, warpEfficiency: 1.3,
     powerCap: 190, auxBonus: 25,
     weapons: [
@@ -17730,7 +17795,7 @@ const SHIP_CLASSES = {
     id: 'excelsior', name: 'Excelsior class', faction: 'federation',
     tier: 5, role: 'heavy cruiser',
     hull: 6400, shields: 5200, shieldRegen: 60,
-    crew: 750, mass: 1.35,
+    crew: 750, decks: 34, mass: 1.35,
     impulse: 0.75, turnRate: 7.5, maxWarp: 9.2, warpEfficiency: 1.25,
     powerCap: 240,
     weapons: [
@@ -17750,7 +17815,7 @@ const SHIP_CLASSES = {
     id: 'constellation', name: 'Constellation class', faction: 'federation',
     tier: 3, role: 'explorer',
     hull: 3800, shields: 3200, shieldRegen: 44,
-    crew: 535, mass: 1.0,
+    crew: 535, decks: 14, mass: 1.0,
     impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 1.35,
     powerCap: 200,
     weapons: [
@@ -17770,7 +17835,7 @@ const SHIP_CLASSES = {
     id: 'bird_of_prey', name: 'B’rel-class Bird-of-Prey', faction: 'klingon',
     tier: 3, role: 'raider',
     hull: 2600, shields: 2000, shieldRegen: 34,
-    crew: 36, mass: 0.55,
+    crew: 36, decks: 3, mass: 0.55,
     impulse: 0.95, turnRate: 18.0, maxWarp: 8.5, warpEfficiency: 1.0,
     powerCap: 190, cloak: true,
     weapons: [
@@ -17783,7 +17848,7 @@ const SHIP_CLASSES = {
     id: 'd7', name: 'D7-class Battlecruiser', faction: 'klingon',
     tier: 4, role: 'battlecruiser',
     hull: 4600, shields: 3600, shieldRegen: 40,
-    crew: 400, mass: 1.1,
+    crew: 400, decks: 18, mass: 1.1,
     impulse: 0.7, turnRate: 8.0, maxWarp: 8.5, warpEfficiency: 0.95,
     powerCap: 210,
     weapons: [
@@ -17799,7 +17864,7 @@ const SHIP_CLASSES = {
     id: 'warbird', name: 'D’deridex-class Warbird', faction: 'romulan',
     tier: 6, role: 'warbird',
     hull: 7800, shields: 6200, shieldRegen: 58,
-    crew: 1500, mass: 1.8,
+    crew: 1500, decks: 60, mass: 1.8,
     impulse: 0.62, turnRate: 5.5, maxWarp: 9.0, warpEfficiency: 1.0,
     powerCap: 250, cloak: true,
     weapons: [
@@ -17812,7 +17877,7 @@ const SHIP_CLASSES = {
     id: 'scoutship', name: 'Romulan Scout', faction: 'romulan',
     tier: 2, role: 'scout',
     hull: 1800, shields: 1600, shieldRegen: 44,
-    crew: 24, mass: 0.5,
+    crew: 24, decks: 3, mass: 0.5,
     impulse: 1.0, turnRate: 20.0, maxWarp: 8.0, warpEfficiency: 1.2,
     powerCap: 170, cloak: true,
     weapons: [
@@ -17826,7 +17891,7 @@ const SHIP_CLASSES = {
     id: 'galor', name: 'Galor-class Cruiser', faction: 'cardassian',
     tier: 4, role: 'cruiser',
     hull: 4400, shields: 3800, shieldRegen: 48,
-    crew: 300, mass: 1.05,
+    crew: 300, decks: 16, mass: 1.05,
     impulse: 0.74, turnRate: 9.0, maxWarp: 9.0, warpEfficiency: 1.05,
     powerCap: 205,
     weapons: [
@@ -17841,7 +17906,7 @@ const SHIP_CLASSES = {
     id: 'marauder', name: 'D’Kora-class Marauder', faction: 'ferengi',
     tier: 3, role: 'marauder',
     hull: 3400, shields: 3000, shieldRegen: 46,
-    crew: 450, mass: 1.0,
+    crew: 450, decks: 20, mass: 1.0,
     impulse: 0.78, turnRate: 10.0, maxWarp: 9.2, warpEfficiency: 1.2,
     powerCap: 195,
     weapons: [
@@ -17853,7 +17918,7 @@ const SHIP_CLASSES = {
     id: 'orion_raider', name: 'Orion Raider', faction: 'orion',
     tier: 2, role: 'raider',
     hull: 1900, shields: 1500, shieldRegen: 32,
-    crew: 60, mass: 0.6,
+    crew: 60, decks: 5, mass: 0.6,
     impulse: 0.92, turnRate: 16.0, maxWarp: 8.0, warpEfficiency: 1.0,
     powerCap: 170,
     weapons: [
@@ -17865,7 +17930,7 @@ const SHIP_CLASSES = {
     id: 'tholian_web_spinner', name: 'Tholian Web Spinner', faction: 'tholian',
     tier: 4, role: 'interceptor',
     hull: 2200, shields: 4200, shieldRegen: 70,
-    crew: 12, mass: 0.5,
+    crew: 12, decks: 4, mass: 0.5,
     impulse: 1.05, turnRate: 22.0, maxWarp: 8.0, warpEfficiency: 1.0,
     powerCap: 200, websAfter: 45,
     weapons: [
@@ -17877,7 +17942,7 @@ const SHIP_CLASSES = {
     id: 'jem_hadar_attack', name: 'Jem’Hadar Attack Ship', faction: 'dominion',
     tier: 5, role: 'attack ship',
     hull: 3000, shields: 2400, shieldRegen: 40,
-    crew: 50, mass: 0.7,
+    crew: 50, decks: 3, mass: 0.7,
     impulse: 1.1, turnRate: 19.0, maxWarp: 9.0, warpEfficiency: 1.0,
     powerCap: 220, ramsWhenDoomed: true,
     weapons: [
@@ -17890,7 +17955,7 @@ const SHIP_CLASSES = {
     id: 'borg_cube', name: 'Borg Cube', faction: 'borg',
     tier: 10, role: 'cube',
     hull: 42000, shields: 30000, shieldRegen: 260,
-    crew: 64000, mass: 12.0,
+    crew: 64000, decks: 0, mass: 12.0,
     impulse: 0.55, turnRate: 3.0, maxWarp: 9.6, warpEfficiency: 2.0,
     powerCap: 400, adapts: true, regenerates: 180,
     weapons: [
@@ -17905,7 +17970,7 @@ const SHIP_CLASSES = {
     id: 'ambassador', name: 'Ambassador class', faction: 'federation',
     tier: 5, role: 'explorer',
     hull: 6800, shields: 5600, shieldRegen: 62,
-    crew: 700, mass: 1.4,
+    crew: 700, decks: 36, mass: 1.4,
     impulse: 0.72, turnRate: 7.0, maxWarp: 9.2, warpEfficiency: 1.3,
     powerCap: 240,
     weapons: [
@@ -17924,7 +17989,7 @@ const SHIP_CLASSES = {
     id: 'galaxy', name: 'Galaxy class', faction: 'federation',
     tier: 6, role: 'explorer',
     hull: 9200, shields: 7600, shieldRegen: 78,
-    crew: 1014, mass: 2.0,
+    crew: 1014, decks: 42, mass: 2.0,
     impulse: 0.68, turnRate: 5.5, maxWarp: 9.6, warpEfficiency: 1.5,
     powerCap: 265, saucerSeparation: true,
     weapons: [
@@ -17944,7 +18009,7 @@ const SHIP_CLASSES = {
     id: 'nebula', name: 'Nebula class', faction: 'federation',
     tier: 6, role: 'science cruiser',
     hull: 7800, shields: 7200, shieldRegen: 96,
-    crew: 750, mass: 1.7,
+    crew: 750, decks: 30, mass: 1.7,
     impulse: 0.7, turnRate: 6.5, maxWarp: 9.5, warpEfficiency: 1.45,
     powerCap: 270, auxBonus: 35,
     weapons: [
@@ -17962,7 +18027,7 @@ const SHIP_CLASSES = {
     id: 'intrepid', name: 'Intrepid class', faction: 'federation',
     tier: 5, role: 'science vessel',
     hull: 5400, shields: 5800, shieldRegen: 104,
-    crew: 150, mass: 0.9,
+    crew: 150, decks: 15, mass: 0.9,
     impulse: 0.92, turnRate: 13.0, maxWarp: 9.975, warpEfficiency: 1.7,
     powerCap: 250, auxBonus: 30,
     weapons: [
@@ -17980,7 +18045,7 @@ const SHIP_CLASSES = {
     id: 'defiant', name: 'Defiant class', faction: 'federation',
     tier: 5, role: 'escort',
     hull: 4400, shields: 4600, shieldRegen: 58,
-    crew: 50, mass: 0.6,
+    crew: 50, decks: 4, mass: 0.6,
     impulse: 1.05, turnRate: 20.0, maxWarp: 9.5, warpEfficiency: 1.0,
     powerCap: 245, ablative: true,
     weapons: [
@@ -17999,7 +18064,7 @@ const SHIP_CLASSES = {
     id: 'sovereign', name: 'Sovereign class', faction: 'federation',
     tier: 6, role: 'heavy explorer',
     hull: 9800, shields: 8200, shieldRegen: 88,
-    crew: 855, mass: 1.9,
+    crew: 855, decks: 24, mass: 1.9,
     impulse: 0.82, turnRate: 8.0, maxWarp: 9.9, warpEfficiency: 1.6,
     powerCap: 285,
     weapons: [
@@ -18019,7 +18084,7 @@ const SHIP_CLASSES = {
     id: 'runabout', name: 'Danube-class Runabout', faction: 'federation',
     tier: 1, role: 'runabout',
     hull: 1200, shields: 1100, shieldRegen: 30,
-    crew: 4, mass: 0.25,
+    crew: 4, decks: 1, mass: 0.25,
     impulse: 1.0, turnRate: 24.0, maxWarp: 5.0, warpEfficiency: 0.9,
     powerCap: 140,
     weapons: [
@@ -18036,7 +18101,7 @@ const SHIP_CLASSES = {
     id: 'vorcha', name: 'Vor’cha-class Attack Cruiser', faction: 'klingon',
     tier: 5, role: 'attack cruiser',
     hull: 6200, shields: 5000, shieldRegen: 52,
-    crew: 1900, mass: 1.5,
+    crew: 1900, decks: 28, mass: 1.5,
     impulse: 0.76, turnRate: 7.5, maxWarp: 9.6, warpEfficiency: 1.1,
     powerCap: 245, cloak: true,
     weapons: [
@@ -18050,7 +18115,7 @@ const SHIP_CLASSES = {
     id: 'neghvar', name: 'Negh’Var-class Warship', faction: 'klingon',
     tier: 7, role: 'flagship',
     hull: 11000, shields: 8400, shieldRegen: 72,
-    crew: 2500, mass: 2.4,
+    crew: 2500, decks: 35, mass: 2.4,
     impulse: 0.64, turnRate: 4.5, maxWarp: 9.6, warpEfficiency: 1.0,
     powerCap: 300, cloak: true,
     weapons: [
@@ -18064,7 +18129,7 @@ const SHIP_CLASSES = {
     id: 'ktinga', name: 'K’t’inga-class Battlecruiser', faction: 'klingon',
     tier: 4, role: 'battlecruiser',
     hull: 5000, shields: 3900, shieldRegen: 42,
-    crew: 440, mass: 1.15,
+    crew: 440, decks: 18, mass: 1.15,
     impulse: 0.72, turnRate: 8.0, maxWarp: 9.0, warpEfficiency: 1.0,
     powerCap: 215,
     weapons: [
@@ -18077,7 +18142,7 @@ const SHIP_CLASSES = {
     id: 'keldon', name: 'Keldon-class Cruiser', faction: 'cardassian',
     tier: 5, role: 'heavy cruiser',
     hull: 5800, shields: 4800, shieldRegen: 56,
-    crew: 400, mass: 1.3,
+    crew: 400, decks: 18, mass: 1.3,
     impulse: 0.76, turnRate: 8.0, maxWarp: 9.2, warpEfficiency: 1.05,
     powerCap: 235,
     weapons: [
@@ -18091,7 +18156,7 @@ const SHIP_CLASSES = {
     id: 'jem_hadar_battleship', name: 'Jem’Hadar Battleship', faction: 'dominion',
     tier: 8, role: 'battleship',
     hull: 16000, shields: 12000, shieldRegen: 120,
-    crew: 900, mass: 3.2,
+    crew: 900, decks: 40, mass: 3.2,
     impulse: 0.62, turnRate: 4.0, maxWarp: 9.4, warpEfficiency: 1.1,
     powerCap: 330, ramsWhenDoomed: true,
     weapons: [
@@ -18104,7 +18169,7 @@ const SHIP_CLASSES = {
     id: 'bioship', name: 'Bioship', faction: 'borg',
     tier: 9, role: 'bioship',
     hull: 20000, shields: 14000, shieldRegen: 200,
-    crew: 1, mass: 2.6,
+    crew: 1, decks: 0, mass: 2.6,
     impulse: 1.2, turnRate: 14.0, maxWarp: 9.9, warpEfficiency: 2.0,
     powerCap: 360, adapts: true, regenerates: 120,
     weapons: [
@@ -18116,7 +18181,7 @@ const SHIP_CLASSES = {
     id: 'transport', name: 'Colony Transport', faction: 'independent',
     tier: 1, role: 'transport',
     hull: 2200, shields: 1200, shieldRegen: 20,
-    crew: 1400, mass: 1.6,
+    crew: 1400, decks: 6, mass: 1.6,
     impulse: 0.45, turnRate: 4.0, maxWarp: 6.0, warpEfficiency: 1.0,
     powerCap: 130, civilian: true,
     weapons: [],
@@ -18126,7 +18191,7 @@ const SHIP_CLASSES = {
     id: 'freighter', name: 'Civilian Freighter', faction: 'independent',
     tier: 1, role: 'freighter',
     hull: 1600, shields: 900, shieldRegen: 18,
-    crew: 14, mass: 1.2,
+    crew: 14, decks: 10, mass: 1.2,
     impulse: 0.5, turnRate: 5.0, maxWarp: 6.5, warpEfficiency: 1.0,
     powerCap: 120, civilian: true,
     weapons: [],
@@ -35381,7 +35446,7 @@ const { Galaxy, Transit, plotTransit } = __require("src/world/galaxy.js");
 // and not about the renderer.
 const { vista, worldLabel } = __require("src/gfx/vista.js");
 const { makeSurface, clearSurface, surfaceReport } = __require("src/world/surface.js");
-const { ROOMS } = __require("src/world/interiors.data.js");
+const { ROOMS, deckPlanFor, deckLabelFor } = __require("src/world/interiors.data.js");
 const { rollEncounter, environmentalHazard, SALVAGE_POOL } = __require("src/world/encounters.js");
 const { FACTIONS } = __require("src/world/factions.data.js");
 const { buildRoster, ERAS, STATIONS } = __require("src/world/crews.data.js");
@@ -36853,6 +36918,27 @@ class Game {
 
   /** Is the captain somewhere they can actually conn the ship from? */
   get atTheCon() { return Game.CON_ROOMS.has(this.walk.roomId); }
+
+  /**
+   * Which deck a room is on, ON THIS HULL.
+   *
+   * The deck plan aboard is a Constitution's, and every class wore its numbers
+   * unaltered because nothing read the published deck count. `deckPlanFor`
+   * renumbers it; this is the door the rest of the game asks through, so there
+   * is one answer to "which deck am I on" rather than one per screen.
+   */
+  deckOf(roomOrId) {
+    const room = typeof roomOrId === 'string' ? ROOMS[roomOrId] : roomOrId;
+    if (!room || room.deck == null) return null;
+    return deckPlanFor(this.ship?.cls?.decks ?? 0).get(room.deck) ?? room.deck;
+  }
+
+  /** The same, as the label a captain reads: "Deck 4 — Engineering". */
+  deckLabel(roomOrId) {
+    const room = typeof roomOrId === 'string' ? ROOMS[roomOrId] : roomOrId;
+    if (!room || room.deck == null) return null;
+    return deckLabelFor(room.deck, this.ship?.cls?.decks ?? 0);
+  }
 
   /**
    * What the ship gets from whoever is actually conning her.
@@ -40836,7 +40922,9 @@ const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
 const { commandReference } = __require("src/ui/orders.js");
 const { namesFor } = __require("src/sim/address.js");
-const { ROOMS, DECKS } = __require("src/world/interiors.data.js");
+// `DECKS` was imported here too and used only in a comment. The deck label is
+// `game.deckLabel` now, which is the one place that knows which hull this is.
+const { ROOMS } = __require("src/world/interiors.data.js");
 const { listBackups, downloadSave } = __require("src/core/save.js");
 const { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } = __require("src/sim/fabrication.js");
 const { DIVISIONS, SPECIALITIES, ASSIGNMENTS, availableAssignments, dutySlots } = __require("src/sim/duty.js");
@@ -41201,7 +41289,11 @@ function positionPanel(app) {
       ' — ',
       // Just the number: the deck names in DECKS already carry the room name
       // ("Deck 5 — Sickbay"), which read as "Sickbay — Deck 5 — Sickbay" here.
-      el('span', { class: 'muted', text: `Deck ${room.deck}` }),
+      //
+      // Through `deckOf`, because the plan is a Constitution's and this is the
+      // line that told an Oberth captain they were on deck 11 of an eight-deck
+      // ship.
+      el('span', { class: 'muted', text: `Deck ${g.deckOf(room) ?? room.deck}` }),
     ]),
   ];
 
@@ -44637,6 +44729,8 @@ class App {
       const r = w.room.lift ? { ok: false, needsDestination: true } : g.useExitAhead();
       if (r.ok) { audio.play('door'); haptic('confirm'); this.render(); return; }
       // A lift needs a deck. Offer the stops rather than guessing one.
+      // The lift asks "which deck" and then offered eight buttons with no deck
+      // on them. `deckOf` puts the number back, renumbered onto this hull.
       this.showMessage('Turbolift', ['Which deck, Captain?'],
         w.liftStops().map((e) => button(e.label ?? e.to, () => {
           this.closeModal();
@@ -44644,7 +44738,7 @@ class App {
           audio.play(ride.ok ? 'door' : 'ui_deny');
           if (!ride.ok && ride.reason) g.pushLog(ride.reason, 'computer');
           this.render();
-        }, { color: 'blue' })));
+        }, { color: 'blue', sub: `Deck ${g.deckOf(e.to) ?? e.deck}` })));
       return;
     }
 
@@ -44752,7 +44846,27 @@ class App {
         }
         break;
       }
-      case 'turbolift':
+      // The lift control panel, which is the ONE station inside the turbolift
+      // and the only reason the compartment has a console at all. It shared the
+      // `default` branch and answered "Working, Captain." — and it passed the
+      // audit in `tests/audit.test.js` for exactly that reason, because the
+      // guard harvested `case` labels and a case label is not a panel. Same
+      // failure as the sound-cue guard: a check satisfied by the shape of the
+      // source rather than by what it does.
+      case 'turbolift': {
+        const stops = g.walk.liftStops();
+        body.push(el('p', { class: 'muted', text: 'Turbolift control. Name a deck.' }));
+        for (const e of stops) {
+          body.push(button(e.label ?? e.to, () => {
+            this.closeModal();
+            const ride = g.useExitAhead(e.to);
+            audio.play(ride.ok ? 'door' : 'ui_deny');
+            if (!ride.ok && ride.reason) g.pushLog(ride.reason, 'computer');
+            this.render();
+          }, { color: 'blue', sub: g.deckLabel(e.to) ?? '' }));
+        }
+        break;
+      }
       default:
         body.push(el('p', { class: 'muted', text: 'Working, Captain.' }));
         break;

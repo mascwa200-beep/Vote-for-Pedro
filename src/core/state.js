@@ -37,7 +37,7 @@ import { Galaxy, Transit, plotTransit } from '../world/galaxy.js';
 // and not about the renderer.
 import { vista, worldLabel } from '../gfx/vista.js';
 import { makeSurface, clearSurface, surfaceReport } from '../world/surface.js';
-import { ROOMS } from '../world/interiors.data.js';
+import { ROOMS, deckPlanFor, deckLabelFor } from '../world/interiors.data.js';
 import { rollEncounter, environmentalHazard, SALVAGE_POOL } from '../world/encounters.js';
 import { FACTIONS } from '../world/factions.data.js';
 import { buildRoster, ERAS, STATIONS } from '../world/crews.data.js';
@@ -1513,6 +1513,27 @@ export class Game {
 
   /** Is the captain somewhere they can actually conn the ship from? */
   get atTheCon() { return Game.CON_ROOMS.has(this.walk.roomId); }
+
+  /**
+   * Which deck a room is on, ON THIS HULL.
+   *
+   * The deck plan aboard is a Constitution's, and every class wore its numbers
+   * unaltered because nothing read the published deck count. `deckPlanFor`
+   * renumbers it; this is the door the rest of the game asks through, so there
+   * is one answer to "which deck am I on" rather than one per screen.
+   */
+  deckOf(roomOrId) {
+    const room = typeof roomOrId === 'string' ? ROOMS[roomOrId] : roomOrId;
+    if (!room || room.deck == null) return null;
+    return deckPlanFor(this.ship?.cls?.decks ?? 0).get(room.deck) ?? room.deck;
+  }
+
+  /** The same, as the label a captain reads: "Deck 4 — Engineering". */
+  deckLabel(roomOrId) {
+    const room = typeof roomOrId === 'string' ? ROOMS[roomOrId] : roomOrId;
+    if (!room || room.deck == null) return null;
+    return deckLabelFor(room.deck, this.ship?.cls?.decks ?? 0);
+  }
 
   /**
    * What the ship gets from whoever is actually conning her.

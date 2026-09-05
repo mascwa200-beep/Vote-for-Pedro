@@ -21,7 +21,9 @@ import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { commandReference } from './orders.js';
 import { namesFor } from '../sim/address.js';
-import { ROOMS, DECKS } from '../world/interiors.data.js';
+// `DECKS` was imported here too and used only in a comment. The deck label is
+// `game.deckLabel` now, which is the one place that knows which hull this is.
+import { ROOMS } from '../world/interiors.data.js';
 import { listBackups, downloadSave } from '../core/save.js';
 import { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } from '../sim/fabrication.js';
 import {
@@ -388,7 +390,11 @@ export function positionPanel(app) {
       ' — ',
       // Just the number: the deck names in DECKS already carry the room name
       // ("Deck 5 — Sickbay"), which read as "Sickbay — Deck 5 — Sickbay" here.
-      el('span', { class: 'muted', text: `Deck ${room.deck}` }),
+      //
+      // Through `deckOf`, because the plan is a Constitution's and this is the
+      // line that told an Oberth captain they were on deck 11 of an eight-deck
+      // ship.
+      el('span', { class: 'muted', text: `Deck ${g.deckOf(room) ?? room.deck}` }),
     ]),
   ];
 
