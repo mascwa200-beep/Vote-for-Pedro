@@ -91,11 +91,11 @@ describe('two worlds that had a description and no episode', () => {
   });
 
   test('and the book is two episodes longer and one act less thin', () => {
-    assert.equal(EPISODES.length, 20);
+    assert.equal(EPISODES.length, 22);
     const byAct = {};
     for (const e of EPISODES) byAct[e.act] = (byAct[e.act] ?? 0) + 1;
     assert.ok(byAct[5] >= 2, `Act 5 still has ${byAct[5]} episode(s) in it`);
-    assert.equal(new Set(EPISODES.map((e) => e.system)).size, 19);
+    assert.equal(new Set(EPISODES.map((e) => e.system)).size, 21);
   });
 });
 

@@ -4565,6 +4565,121 @@ argument for building it and looking, not for planning harder.
 
 
 
+## 61. A game that records, and a game that remembers
+
+The combat plan finished, so the next stretch went to content. The check-in
+that carried the leads forward listed three; the first thing done with them was
+to check them, and one was already wrong.
+
+### The lead that was stale
+
+*"The seven patrol errands are pure prose over one identical outcome."* False.
+`Game.PATROL_WATCH` has a distinct result for every one of the seven plus a
+default, and has for some time. Recorded here because the lead had been carried
+forward across three check-ins unchallenged, and would have been built on.
+
+### The two that held, and the one underneath them
+
+**23 of 43 systems host no episode** — Vulcan, Andoria, Tellar, Bajor,
+Ferenginar, Risa, Betazed, the whole Gamma quadrant, all three DMZ systems.
+
+**`MissionBook.availableAt` implements five gates and three had never been used
+by anything:**
+
+| gate | episodes using it |
+| --- | --- |
+| `minRank` | 12 |
+| `requiresFlag` | 5 |
+| `blockedByFlag` | **0** |
+| `requiresCompleted` | **0** |
+| `minStanding` | **0** |
+
+But the number that decided what to build came from a third sweep, over every
+episode stage, choice and ending, and then over every other line in `src/`:
+
+| | |
+| --- | --- |
+| flags **written** by episodes | **63** |
+| of those, gated on by an episode or a stage | 13 |
+| named anywhere else in `src/` at all | 30 |
+| **written and read by nothing** | **33** |
+
+Thirty-three decisions the game asked the captain to make, wrote into the
+ledger, and never mentioned again. Four are excusable — `came_clean`,
+`credited_the_crew`, `commended_command` and `censured_command` are all set by
+`homecoming`, the finale, so there is nothing after them to do the reading. The
+other twenty-nine are a game that records rather than a game that remembers.
+
+That is a better thing to fix than an empty map. More episodes in more systems
+is more content; content that knows what you did in act one is a different
+game.
+
+### What was built
+
+Two episodes, in two of the empty systems, using all three unused gates.
+
+**Clean Hands**, Utopia Planitia, act 5. `requiresCompleted: ['court_martial']`
+and `blockedByFlag: 'deflected_blame'`. A fleet yard wants an outside captain
+to certify a hull, and asks you because your account at your own board of
+inquiry held up. **A captain who put it on somebody else is never asked, and
+never finds out they were not asked** — the first content in this game that a
+player can *lose* rather than fail.
+
+Requiring the episode and blocking on the flag is deliberate, and is not the
+same as requiring the opposite flag: `court_martial` sets `inquiry_resolved` on
+one branch and `deflected_blame` on the other, and gating on
+`inquiry_resolved` would have been the ordinary shape. Blocking says *you were
+there and it matters which way you went*, and it costs the player something
+real for having gone the other way.
+
+**The Long Peace**, Vulcan, act 5. `requiresCompleted: ['khitomer_accord']` and
+`minStanding: { klingon: 10 }`. Khitomer is itself gated on `qonos_upheld` from
+act 4, so the chain is three deep — and the last link is not a flag handed over
+but a relationship kept. Ten is `cordial`; the Klingons open at **-10**, so it
+is twenty points of work, which the episodes on the way there pay in lots of
+twelve to twenty.
+
+Between them the two read five flags that gated nothing before —
+`deflected_blame`, `second_stood`, `observed_organia`, and from the SHAKEDOWN,
+the very first episode in the game, `core_tuned` and `trials_by_the_book`. Eight
+ranks earlier, when nobody knew the captain's name. That is the payoff the
+thirty-three were missing: not a bigger number, but somebody bringing up what
+you did when it did not seem to matter.
+
+Written-and-gated decisions: **13 → 18**.
+
+### Three things the tests caught in my own work
+
+**I wrote two new inert flags.** `utopia_finding` and `long_peace_signed` were
+set by the new endings and read by nothing — the exact defect the file was
+written to complain about, committed in the file complaining about it, and
+caught only because the test asserts the rule against itself first.
+`long_peace_signed` got a real reader in `FACTION_MEMORY.klingon`, so Klingon
+hails now cite the accord. `utopia_finding` got no honest reader and was
+**deleted**; its consequence is the `commendation` on the service record, which
+the Starfleet review actually reads.
+
+**`adjustStanding` is a delta and nobody starts at zero.** The test helper
+handed the Klingons 15 and the gate at 10 still refused, because the Klingons
+open at -10 and 15 lands on 5. The gate was right; the harness was wrong. Worth
+recording because the failure looked exactly like a broken gate.
+
+**Two numbers that are not the same number.** The first draft asserted "19 of
+64 recorded decisions gate anything, it was 14 before". Nineteen flags *are*
+gated on — but one of them, `inquiry_summoned`, is set by the game rather than
+by any episode, so the count of *written* decisions that gate something is 18,
+up from 13. Both quantities are real and the draft conflated them, which is the
+same error as publishing a table before running the measurement, at one
+remove.
+
+### And the check that came first
+
+Before any of it: is the lead true? One of the three was not, and it had
+survived three check-ins by being repeated. A lead carried forward is not
+evidence; it is a note about something somebody once saw.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
