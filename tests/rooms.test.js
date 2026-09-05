@@ -140,6 +140,18 @@ describe('the scenes that ask you to get up', () => {
     // Its speaker has been 'Engineering' since it was written, and the scene is
     // a chief engineer standing at a core he does not want to run that hard.
     { ep: 'devron_anomaly', stage: 'inside', where: 'engineering', speaker: 'Engineering' },
+
+    // `long_watch` — the episode that happens aboard. Eight of its ten stages
+    // name a compartment, and five of those compartments had never hosted a
+    // scene in the whole book. It is the reason the room count moved.
+    { ep: 'long_watch', stage: 'the_draw', where: 'engineering', speaker: 'Chief engineer' },
+    { ep: 'long_watch', stage: 'dark_room', where: 'auxcontrol', speaker: 'Auxiliary control' },
+    { ep: 'long_watch', stage: 'manifest', where: 'cargo', speaker: 'Cargo manifest' },
+    { ep: 'long_watch', stage: 'the_bunk', where: 'crewquarters', speaker: 'Crew quarters' },
+    { ep: 'long_watch', stage: 'the_deck', where: 'rec', speaker: 'Recreation deck' },
+    { ep: 'long_watch', stage: 'middle_watch', where: 'auxcontrol', speaker: 'Petty Officer Ile Marchetti' },
+    { ep: 'long_watch', stage: 'the_cell', where: 'brig', speaker: 'Petty Officer Ile Marchetti' },
+    { ep: 'long_watch', stage: 'the_write_up', where: 'quarters', speaker: "Captain's quarters" },
   ];
 
   test('each is in the room its own speaker names', () => {

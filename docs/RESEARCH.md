@@ -5371,6 +5371,45 @@ whose every compartment is a menu is a menu with a corridor drawn on it; the
 walk between the rooms is what makes the rooms places. The occupancy layer
 already puts people in all three, which is what a corridor is for.
 
+### The other half: an episode that happens aboard
+
+Giving a room a board is only half an answer. The other half is that something
+has to HAPPEN there, and no relabelling of existing stages could do it: those
+episodes were written as things the ship arrives at, and the bridge is where a
+captain deals with a system, a border, a hearing or a hull. Moving one of them
+below decks would have been inventing a reason.
+
+`long_watch` is written the other way round. Its first stage is anchored to a
+star system and **every stage after it sets `system: null`** — a form
+`Mission.stageLocation` has supported since it was written and which no shipped
+stage had ever used. The ship goes on with its transit; the captain walks his
+own decks for six weeks.
+
+| | |
+| --- | --- |
+| compartments used | 7 — engineering, auxiliary control, cargo, crew quarters, the rec deck, the brig, the captain's quarters |
+| of those, never used before | **5** |
+| rooms hosting a scene, book-wide | 6 → **11 of 17** |
+| walking, measured end to end | 27.3 s of simulated transit over six decks |
+
+The route passes through all three corridors and the turbolift, which is the
+census's own answer about what corridors are for.
+
+Two details are read out of the simulation rather than invented: auxiliary
+control is dark and empty at normal alert because `sim/occupancy.js` says so in
+its own comment, and the rec deck holds more people at once than any other
+compartment aboard, which is why it is where the ship's own opinion lives.
+
+**And the same defect turned up while writing it.** The first draft set
+`sat_in_the_dark` from three routes and read it from none — an unread variable,
+in the episode written to stop things going unread. `tests/episodevars.test.js`
+caught it within a minute of the file being wired in. Then the test file for the
+episode made §69's other recurring mistake: it read `m.choices()` without
+walking to the stage's room first, so "the gated choice is absent" came off a
+list that was empty because every choice was locked by the room. Both are
+recorded here because the lesson is not that either was hard to see — it is that
+neither was visible without an instrument pointed at it.
+
 
 ## Attribution
 

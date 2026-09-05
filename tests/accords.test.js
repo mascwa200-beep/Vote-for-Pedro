@@ -91,11 +91,18 @@ describe('two worlds that had a description and no episode', () => {
   });
 
   test('and the book is two episodes longer and one act less thin', () => {
-    assert.equal(EPISODES.length, 24);
+    // A ratchet, not a snapshot. Three separate files asserted the book was
+    // exactly 24 episodes long, so adding a twenty-fifth failed all three for
+    // no reason connected to what any of them tests. Each file already asserts
+    // that ITS OWN episodes are present, distinct and somewhere empty; the
+    // total only has to not go backwards.
+    assert.ok(EPISODES.length >= 25, `the book is ${EPISODES.length} episodes`);
     const byAct = {};
     for (const e of EPISODES) byAct[e.act] = (byAct[e.act] ?? 0) + 1;
     assert.ok(byAct[5] >= 2, `Act 5 still has ${byAct[5]} episode(s) in it`);
-    assert.equal(new Set(EPISODES.map((e) => e.system)).size, 23);
+    // Distinct systems, ratcheted for the same reason as the count above.
+    assert.ok(new Set(EPISODES.map((e) => e.system)).size >= 24,
+      `${new Set(EPISODES.map((e) => e.system)).size} systems host an episode`);
   });
 });
 

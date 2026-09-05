@@ -91,8 +91,15 @@ function actsThatSet(flag) {
 describe('two more places, and both of them are somewhere', () => {
   test('the book is two longer and covers two more systems', () => {
     assert.equal(CONSEQUENCE_EPISODES.length, 2);
-    assert.equal(EPISODES.length, 24);
-    assert.equal(new Set(EPISODES.map((e) => e.system)).size, 23);
+    // A ratchet, not a snapshot. Three separate files asserted the book was
+    // exactly 24 episodes long, so adding a twenty-fifth failed all three for
+    // no reason connected to what any of them tests. Each file already asserts
+    // that ITS OWN episodes are present, distinct and somewhere empty; the
+    // total only has to not go backwards.
+    assert.ok(EPISODES.length >= 25, `the book is ${EPISODES.length} episodes`);
+    // Distinct systems, ratcheted for the same reason as the count above.
+    assert.ok(new Set(EPISODES.map((e) => e.system)).size >= 24,
+      `${new Set(EPISODES.map((e) => e.system)).size} systems host an episode`);
   });
 
   test('and both systems exist and hosted nothing before', () => {
