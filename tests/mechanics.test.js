@@ -110,7 +110,7 @@ describe('the sweep, and the instrument that produced it', () => {
     assert.equal(consumed().has('thisKeyIsDeclaredByNobodyAtAll'), false);
   });
 
-  test('the ratchet: no more than 24 declared mechanics are read by nothing', () => {
+  test('the ratchet: no more than 21 declared mechanics are read by nothing', () => {
     // It may go down — by wiring one, or by deleting one honestly — and it may
     // not go up. A new trait that declares a mechanic and forgets to wire it
     // fails here rather than shipping as a card that promises something.
@@ -118,14 +118,15 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     const dead = [...keys.keys()].filter((k) => !read.has(k)).sort();
     assert.ok(keys.size >= 55, `only ${keys.size} mechanics declared; has the sheet shrunk?`);
-    assert.ok(dead.length <= 24,
+    assert.ok(dead.length <= 21,
       `${dead.length} declared mechanics are read by nothing:\n  ${dead.join('\n  ')}`);
   });
 
   test('and everything wired so far is out of that set', () => {
     const read = consumed();
     for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty',
-      'accuracyBonus', 'hazardDisadvantage']) {
+      'accuracyBonus', 'hazardDisadvantage',
+      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage']) {
       assert.ok(read.has(k), `${k} is read by nothing again`);
     }
   });
@@ -375,5 +376,63 @@ describe('the trait the README quotes, which traded nothing', () => {
     const g = captain({ traits: ['reckless'] });
     const roll = g.buildAwayTeam().check(g.rng, 'science', { hazard: 'extreme' });
     assert.equal(roll.disadvantage, true, 'the roll did not come back marked');
+  });
+});
+
+describe('two more traits that did nothing, and a method nobody calls', () => {
+  // `Character.checkModifier` applied `hasTrait('haunted') ? +3` — the same 3
+  // the trait declares as `compensation`, hardcoded, and the FOURTH instance of
+  // that shape after `critSeverity`, `hazardScale` and `peaceGain`.
+  //
+  // It is also a method with no caller anywhere in `src/`. `AwayTeam.
+  // modifierFor` is what the game uses and it builds the modifier itself, so
+  // Haunted's +3 was dead code inside a dead method: a trait declared
+  // `positive: false` that cost nothing and gave nothing.
+  const team = (traits, hull = 1) => {
+    const g = captain({ traits });
+    g.ship.hull = g.ship.maxHull * hull;
+    return g;
+  };
+  const rate = (traits, checkType, hull, runs = 300) => {
+    let ok = 0;
+    for (let seed = 0; seed < runs; seed++) {
+      const g = captain({ traits, seed: BigInt(seed + 1) });
+      g.ship.hull = g.ship.maxHull * hull;
+      if (g.buildAwayTeam().check(g.rng, checkType, { hazard: 'elevated' }).success) ok++;
+    }
+    return ok / runs;
+  };
+
+  test('the +3 is no longer written out beside the number it copies', () => {
+    const code = readFileSync('src/rules/character.js', 'utf8')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    assert.doesNotMatch(code, /hasTrait\('haunted'\)/,
+      'the trait is hardcoded again instead of read');
+  });
+
+  test('and Haunted pays on everything except the check it charges', () => {
+    const plain = team([]).buildAwayTeam();
+    const hurt = team(['haunted']).buildAwayTeam();
+    assert.equal(hurt.modifierFor('science').total, plain.modifierFor('science').total + 3);
+    assert.equal(hurt.modifierFor('command').total, plain.modifierFor('command').total,
+      'the compensation is paid on the check it is meant to charge');
+    // Itemised, because `parts` exists so a captain can see which of his own
+    // history produced the number.
+    assert.ok(hurt.modifierFor('science').parts.some((p) => /ship you lost/i.test(p.source)));
+  });
+
+  test('and charges it only when the ship is nearly gone', () => {
+    assert.equal(rate(['haunted'], 'command', 1), rate([], 'command', 1),
+      'a whole ship panicked a haunted captain');
+    assert.ok(rate(['haunted'], 'command', 0.2) < rate([], 'command', 0.2) * 0.95,
+      'a quarter-hull ship did not');
+    // And the compensation still applies down there, on everything else.
+    assert.ok(rate(['haunted'], 'science', 0.2) > rate([], 'science', 0.2));
+  });
+
+  test('and Notorious is worse at diplomacy and nothing else', () => {
+    assert.ok(rate(['notorious'], 'diplomacy', 1) < rate([], 'diplomacy', 1) * 0.95,
+      'a captain hostiles fear negotiates just as well');
+    assert.equal(rate(['notorious'], 'science', 1), rate([], 'science', 1));
   });
 });
