@@ -300,10 +300,14 @@ export function salvageWreck(game, rng, { tier = 3 } = {}) {
   // negative tier would have *removed* materials from a wreck the player had
   // just stripped, and a NaN one would have made the whole hold unusable.
   const t = clamp(tier, 1, 10);
+  // "Tinkerer — you get more out of a wreck than anyone has a right to."
+  // `salvageBonus: 1` means one extra wreck's worth, so the haul doubles; it
+  // was declared on the trait and read by nothing.
+  const bonus = 1 + Math.max(0, game?.character?.mechanic('salvageBonus') ?? 0);
   const haul = {
-    duranium: Math.round(rng.range(4, 10) * t * 0.5),
-    isolinear: Math.round(rng.range(2, 7) * t * 0.4),
-    salvage: Math.round(rng.range(3, 9) * t * 0.5),
+    duranium: Math.round(rng.range(4, 10) * t * 0.5 * bonus),
+    isolinear: Math.round(rng.range(2, 7) * t * 0.4 * bonus),
+    salvage: Math.round(rng.range(3, 9) * t * 0.5 * bonus),
   };
   for (const [m, n] of Object.entries(haul)) game.stores[m] = (game.stores[m] ?? 0) + n;
   emit('salvage', haul);

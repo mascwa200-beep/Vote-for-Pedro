@@ -19618,7 +19618,7 @@ class Officer {
       * (1 - (this.expertise - 50) * 0.003) / (1 + Math.max(0, haste));
   }
 
-  update(dt) {
+  update(dt, recoveryRate = 1) {
     for (const k of Object.keys(this.cooldowns)) {
       if (this.cooldowns[k] > 0) this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
     }
@@ -19635,7 +19635,7 @@ class Officer {
     // Simulation seconds are converted to ship hours and handed to the one
     // rule that owns this. Getting hurt now costs you that officer until time
     // passes or the ship docks.
-    this.recover(dt / 3600);
+    this.recover(dt / 3600, recoveryRate);
   }
 
   /**
@@ -19645,9 +19645,15 @@ class Officer {
    * of a week to clear, which is slow enough that losing an officer to the
    * infirmary is a real cost and fast enough that it is not a death sentence.
    */
-  recover(hours) {
+  recover(hours, rate = 1) {
     if (!this.injured || !this.alive) return;
-    this.injurySeverity = Math.max(0, this.injurySeverity - hours / 120);
+    // `rate` is the captain's `recoveryRate` — the Denobulan's "you were a
+    // field medic before you were anything else" and the `beloved` trait both
+    // declare 2, and neither had ever been read. Passed in rather than reached
+    // for, because an Officer knows about itself and not about the character
+    // sheet of whoever is commanding the ship.
+    const scale = Number.isFinite(rate) && rate > 0 ? rate : 1;
+    this.injurySeverity = Math.max(0, this.injurySeverity - (hours * scale) / 120);
     if (this.injurySeverity <= 0) this.injured = false;
   }
 
@@ -19848,8 +19854,14 @@ class Crew {
     return this.officers.filter((o) => o.available);
   }
 
-  update(dt) {
-    for (const o of this.officers) o.update(dt);
+  /**
+   * @param {number} dt seconds
+   * @param {number} recoveryRate the captain's, threaded down rather than
+   *   reached for: an Officer knows about itself, not about the character
+   *   sheet of whoever is commanding the ship.
+   */
+  update(dt, recoveryRate = 1) {
+    for (const o of this.officers) o.update(dt, recoveryRate);
   }
 
   /** Every ability the standing crew can currently use. */
@@ -20766,10 +20778,14 @@ function salvageWreck(game, rng, { tier = 3 } = {}) {
   // negative tier would have *removed* materials from a wreck the player had
   // just stripped, and a NaN one would have made the whole hold unusable.
   const t = clamp(tier, 1, 10);
+  // "Tinkerer — you get more out of a wreck than anyone has a right to."
+  // `salvageBonus: 1` means one extra wreck's worth, so the haul doubles; it
+  // was declared on the trait and read by nothing.
+  const bonus = 1 + Math.max(0, game?.character?.mechanic('salvageBonus') ?? 0);
   const haul = {
-    duranium: Math.round(rng.range(4, 10) * t * 0.5),
-    isolinear: Math.round(rng.range(2, 7) * t * 0.4),
-    salvage: Math.round(rng.range(3, 9) * t * 0.5),
+    duranium: Math.round(rng.range(4, 10) * t * 0.5 * bonus),
+    isolinear: Math.round(rng.range(2, 7) * t * 0.4 * bonus),
+    salvage: Math.round(rng.range(3, 9) * t * 0.5 * bonus),
   };
   for (const [m, n] of Object.entries(haul)) game.stores[m] = (game.stores[m] ?? 0) + n;
   emit('salvage', haul);
@@ -31010,6 +31026,12 @@ function availableHails(factionId, context = {}) {
     // heard, not accepted. `resolveHail` still rolls it, and a Klingon who
     // hears an offer of latinum is not obliged to like it.
     if (o.requires === 'bribeable' && !faction.bribeable && !context.alwaysBribe) return false;
+    // And an offer you cannot cover is not an offer. `context.latinum` and
+    // `context.bribePrice` come from the game; when neither is supplied — a
+    // test, a tool, an older caller — the option behaves exactly as it always
+    // has rather than silently vanishing.
+    if (o.id === 'bribe' && context.bribePrice > 0
+      && Number.isFinite(context.latinum) && context.latinum < context.bribePrice) return false;
     if (o.id === 'demand_surrender' && !context.winning) return false;
     return true;
   });
@@ -35306,6 +35328,7 @@ const { Reputation, REP_TRACKS } = __require("src/rules/reputation.js");
 const { DifficultySettings, DEFAULT_DIFFICULTY } = __require("src/rules/difficulty.js");
 const { convene, findingFor } = __require("src/rules/inquiry.js");
 const { CampaignClock, absenceReport, COMMISSION_DAYS } = __require("src/campaign/clock.js");
+const { forcePower } = __require("src/sim/assess.js");
 
 /**
  * Ceiling on hostiles in one engagement. Beyond this the tactical display
@@ -37598,7 +37621,8 @@ class Game {
         const lives = enc.lives ?? 200;
         this.ledger.record('distress_answered', { text: `Assisted at ${enc.system.name}`, system: enc.system.id });
         this.ledger.record('lives_saved', { count: lives, system: enc.system.id });
-        this.awardXP(300 + lives / 6);
+        // "Refugee — you know what it is to be the one being rescued."
+        this.awardXP(Math.round((300 + lives / 6) * (this.character?.mechanic('rescueXP') ?? 1)));
         this.ledger.adjustStanding('federation', STANDING_EFFECTS.answered_distress, 'Answered a distress call');
         this.earnReputation('distress_answered');
         this.spendHours(14.4);
@@ -37765,7 +37789,13 @@ class Game {
 
       case 'escort': {
         this.ledger.adjustStanding(enc.factionId ?? 'independent', STANDING_EFFECTS.completed_escort, 'Escort completed');
-        this.latinum += Math.round((enc.escortReward ?? 300) * (this.perk('better_prices') ? 1.25 : 1));
+        // `tradeBonus` sits beside `better_prices` because they are the same
+        // thing said twice — "prices improve by a quarter, everywhere" is the
+        // perk, and 0.25 is what the civilian-transport origin declares. They
+        // stack, because one was bought and the other was where you grew up.
+        this.latinum += Math.round((enc.escortReward ?? 300)
+          * (this.perk('better_prices') ? 1.25 : 1)
+          * (1 + (this.character?.mechanic('tradeBonus') ?? 0)));
         this.earnReputation('escort_completed');
         this.awardXP(280);
         this.spendHours(19.2);
@@ -37884,6 +37914,36 @@ class Game {
     };
   }
 
+  /**
+   * What it costs to buy these people off.
+   *
+   * `HAIL_OPTIONS` has had an option called "Offer them latinum" since it was
+   * written, `resolveHail` returns `cost: 'latinum'` when it succeeds, and
+   * `Game.hail` never read that field. Measured over two hundred attempts
+   * against an Orion raider: **165 bribes accepted and not one strip of
+   * latinum changed hands.**
+   *
+   * It was worse than a free option. Latinum had exactly ONE income — escort
+   * contracts, at line 2538 — and no expenditure anywhere in the game, so the
+   * number started at 500, rose, and was guarded by an invariant that it stay
+   * non-negative, which it could not fail. This is the first thing that has
+   * ever spent any.
+   *
+   * The price is what you would otherwise have to fight. `forcePower` is the
+   * game's own measure of that, in Constitutions — a D7 is 1.0, three D7s are
+   * 8.9 because Lanchester's square law is already in it — so a lone raider is
+   * pocket change, a battlecruiser is most of a starting purse, and a squadron
+   * is out of reach until you have earned it. Nobody takes a derisory offer,
+   * hence the floor.
+   */
+  bribePrice() {
+    const eng = this.engagement && !this.engagement.over ? this.engagement : null;
+    const ships = eng ? eng.liveHostiles : (this.encounter?.ships ?? []);
+    if (!ships.length) return 0;
+    const power = forcePower(ships.map((s) => s.classId ?? s));
+    return Math.max(50, Math.round(power * 200));
+  }
+
   /** Resolve a hail during an encounter or engagement. */
   hail(optionId) {
     const enc = this.encounter;
@@ -37896,6 +37956,7 @@ class Game {
       : 1;
 
     const memory = this.factionMemory(factionId);
+    const price = this.bribePrice();
     const result = resolveHail(this.rng, optionId, {
       factionId,
       // The Diplomatic Corps signature forces a hearing from a faction whose
@@ -37923,6 +37984,19 @@ class Game {
     if (result.surrender) {
       this.ledger.record('surrender_accepted', { text: 'Accepted a surrender', faction: factionId });
       this.earnReputation('accepted_surrender');
+    }
+
+    // `result.cost` — the field `resolveHail` has been returning on a
+    // successful bribe since it was written, and which nothing read. Money
+    // now leaves the ship.
+    if (result.cost === 'latinum') {
+      const paid = Math.min(this.latinum, price);
+      this.latinum -= paid;
+      this.pushLog(`${paid} in latinum transferred. They are breaking off.`, 'comms');
+      this.ledger.record('bribe_paid', {
+        text: `Paid ${paid} to be let alone at ${this.location?.name ?? this.locationId}`,
+        system: this.locationId, faction: factionId,
+      });
     }
 
     if (result.endsCombat) {
@@ -39290,7 +39364,11 @@ class Game {
     // contracted engagement are both available again.
     this.klingonAnswered = false;
     this.marauderHired = false;
-    const yard = this.perk('free_refit') ? 0.5 : (damaged ? 2.5 : 0.5);
+    // "Tinkerer — half the time in the yard." Applied to the days, which is
+    // what the card is about; `free_refit` already collapses them to the
+    // alongside minimum, so the two do not fight over the same number.
+    const base = this.perk('free_refit') ? 0.5 : (damaged ? 2.5 : 0.5);
+    const yard = Math.max(0.25, base * (this.character?.mechanic('repairTime') ?? 1));
     this.spendHours(yard * 24);
     this.pushLog(`Docked at ${this.location.name}. Repairs and resupply complete.`
       + (this.perk('free_refit') && damaged ? ' Priority yard access — she was turned round overnight.' : ''),
@@ -39357,7 +39435,8 @@ class Game {
         this.pushLog(`${back.assignment.name} is back aboard. ${back.text}`, 'comms');
       }
     }
-    this.crew.update(dt * (1 + this.progress.officerCooldownBonus));
+    this.crew.update(dt * (1 + this.progress.officerCooldownBonus),
+      this.character?.mechanic('recoveryRate') ?? 1);
 
     // A ship lost where nobody was shooting is still a ship lost.
     //
@@ -40000,7 +40079,13 @@ class Game {
     // this is the only thing that does it under way, watched or not.
     if (ship.hullPct < 1 && !ship.destroyed) {
       const perHour = ship.maxHull / (14 * 24);
-      ship.repair(perHour * hours * ship.mod('repairRate'));
+      // `fieldRepair` belongs HERE and not on `ship.mod('repairRate')`, which
+      // is the in-combat damage-control path in `Ship.update`. A captain who
+      // grew up on a frontier colony is better at keeping a ship going between
+      // starbases; that is a different claim from being better at patching her
+      // while she is being shot at, and the card says the first one.
+      const field = this.character?.mechanic('fieldRepair') ?? 1;
+      ship.repair(perHour * hours * ship.mod('repairRate') * field);
     }
 
     if (!livedThrough) {
@@ -40014,7 +40099,12 @@ class Game {
 
       // The crew heals, and the dead stay dead.
       for (const officer of this.crew.officers) {
-        if (officer.alive && officer.injured) officer.recover?.(hours);
+        // The campaign-time half of sickbay. `recoveryRate` is the captain's,
+        // so it is handed in here rather than reached for from inside the
+        // officer.
+        if (officer.alive && officer.injured) {
+          officer.recover?.(hours, this.character?.mechanic('recoveryRate') ?? 1);
+        }
       }
     }
 
@@ -42679,7 +42769,10 @@ function hailOptions(app, factionId, onPick) {
   const winning = eng
     ? g.ship.hullPct > (eng.liveHostiles.reduce((n, s) => n + s.hullPct, 0) / Math.max(1, eng.liveHostiles.length))
     : false;
-  const options = availableHails(factionId, { winning, alwaysBribe: g.perk('always_bribe') });
+  const options = availableHails(factionId, {
+    winning, alwaysBribe: g.perk('always_bribe'),
+    latinum: g.latinum, bribePrice: g.bribePrice(),
+  });
   const faction = FACTIONS[factionId];
 
   return [

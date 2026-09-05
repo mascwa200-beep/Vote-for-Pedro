@@ -307,7 +307,7 @@ export class Officer {
       * (1 - (this.expertise - 50) * 0.003) / (1 + Math.max(0, haste));
   }
 
-  update(dt) {
+  update(dt, recoveryRate = 1) {
     for (const k of Object.keys(this.cooldowns)) {
       if (this.cooldowns[k] > 0) this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
     }
@@ -324,7 +324,7 @@ export class Officer {
     // Simulation seconds are converted to ship hours and handed to the one
     // rule that owns this. Getting hurt now costs you that officer until time
     // passes or the ship docks.
-    this.recover(dt / 3600);
+    this.recover(dt / 3600, recoveryRate);
   }
 
   /**
@@ -334,9 +334,15 @@ export class Officer {
    * of a week to clear, which is slow enough that losing an officer to the
    * infirmary is a real cost and fast enough that it is not a death sentence.
    */
-  recover(hours) {
+  recover(hours, rate = 1) {
     if (!this.injured || !this.alive) return;
-    this.injurySeverity = Math.max(0, this.injurySeverity - hours / 120);
+    // `rate` is the captain's `recoveryRate` — the Denobulan's "you were a
+    // field medic before you were anything else" and the `beloved` trait both
+    // declare 2, and neither had ever been read. Passed in rather than reached
+    // for, because an Officer knows about itself and not about the character
+    // sheet of whoever is commanding the ship.
+    const scale = Number.isFinite(rate) && rate > 0 ? rate : 1;
+    this.injurySeverity = Math.max(0, this.injurySeverity - (hours * scale) / 120);
     if (this.injurySeverity <= 0) this.injured = false;
   }
 
@@ -537,8 +543,14 @@ export class Crew {
     return this.officers.filter((o) => o.available);
   }
 
-  update(dt) {
-    for (const o of this.officers) o.update(dt);
+  /**
+   * @param {number} dt seconds
+   * @param {number} recoveryRate the captain's, threaded down rather than
+   *   reached for: an Officer knows about itself, not about the character
+   *   sheet of whoever is commanding the ship.
+   */
+  update(dt, recoveryRate = 1) {
+    for (const o of this.officers) o.update(dt, recoveryRate);
   }
 
   /** Every ability the standing crew can currently use. */
