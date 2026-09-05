@@ -1169,7 +1169,14 @@ export function dutyPanel(app) {
       app.render();
     }, 'computer_ack'), {
       color: already ? 'grey' : 'blue',
-      sub: already ? 'already under way' : `"send a ${a.name.toLowerCase()}" — ${hours}, wants a ${wants}`,
+      // The order phrase goes in `say`, which is the element built for it and
+      // what every other button in the game uses. It was being quoted by hand
+      // into `sub` instead, which left nowhere for the line that says what the
+      // job IS — so all ten `text` fields ("Plating, in vacuum, by hand.",
+      // "Take the intermix down and rebuild it while nobody is shooting.")
+      // were written and displayed nowhere.
+      say: already ? '' : `send a ${a.name.toLowerCase()}`,
+      sub: already ? 'already under way' : `${a.text} ${hours}, wants a ${wants}`,
     }));
   }
 

@@ -3720,6 +3720,89 @@ excludes the declaring file will call a field unread when its only reader is the
 line below it.**
 
 
+## 53. The sweep for guards that agree with themselves
+
+§51 and §52 each found a check that passed for the wrong reason, and they were
+the same failure: **a guard satisfied by the shape of the source rather than by
+what it does.** The sound-cue check matched any quoted occurrence in the UI
+sources and was contented by `case 'cloak':`; the station-panel check harvested
+`case '<id>':` labels and was contented by `case 'turbolift':` sharing the
+`default` branch. Two independent guards, both written specifically to catch
+dead ends. That is a pattern, not a coincidence, so it got a sweep of its own.
+
+This one is mostly negatives, which is what a low-yield pass is supposed to look
+like.
+
+| swept | result |
+| --- | --- |
+| case labels sharing `default:` | 76 bodyless labels, 4 share `default`, **all 4 legitimate** |
+| the reputation-perk guard | **loose; its answer held**; tightened |
+| encounter kinds | 10 kinds, 1,309 choices resolved, **0 failures** |
+| `ASSIGNMENTS` fields | 11 fields, **one unread** — found |
+| `absenceReport` options | 6 of 6 supplied by the caller |
+
+### The four that share `default:` are all correct
+
+`case 'withdraw': default:` — withdrawing is what happens when nothing else
+does. `case 'bridge': default:` — the bridge is the default screen. `case
+'identify': default:` — identifying yourself is the neutral hail. `case
+'anomaly': default:` — `buildAnomaly` is the fallback build. In each the
+labelled value genuinely *is* the default behaviour, which is the difference
+between this idiom and §52's turbolift, where it was not. The check is now
+standing, with the four reasons recorded and a second test that fails if one of
+the four stops being true — the `tractor_beam` lesson, that a recorded reason is
+a dated claim about the rest of the codebase.
+
+### A guard that was loose and right
+
+`tests/audit.test.js` counted a perk as read if its name appeared as a word
+anywhere in seven files — `\b<perk>\b` — **including inside a comment**. That
+guard is what "all 25 reputation perks read" in §49 rests on.
+
+Re-measured with comments stripped, the declaring file excluded, and only
+constructs that do work counted, the **answer held**: 25 of 25 genuinely read,
+none passing on a comment, none missing. Eighteen through `perk('id')` calls,
+two through `perk?.('id')` — optional-chained, which a first strict pass missed,
+the same blind spot as the ternary in §51 — and five through `Game.ESCORTS` and
+`Game.PASSAGE_PERKS`, both confirmed consumed so a dead table cannot launder a
+perk into looking alive.
+
+Worth stating plainly: **the finding was right and the guard was still wrong.** A
+loose check that happens to agree with reality is not a check; it is a coin that
+has been landing the same way. The control now demonstrates the difference —
+breaking one `perk()` call while leaving the name present in a comment at the
+same spot fails the new guard and would have passed the old one.
+
+### One thing written and never read
+
+Every one of the ten duty assignments carries a `text` — the line saying what
+the job is. *"Plating, in vacuum, by hand."* *"Take the intermix down and rebuild
+it while nobody is shooting."* *"Somebody at the table when you are not."* The
+duty screen showed the name, the hours and the wanted speciality, and never the
+description.
+
+It hid better than the others because `duty.js` also emits `text:` on the
+**result** of a completed detail, so the name is used twice for two unrelated
+things and any loose search finds the other one. My own first field sweep
+cleared it for exactly that reason.
+
+The fix was already sitting in the button helper. `button(label, onClick, {say,
+sub})` has `say` for the order phrase — the repo's rule that every button prints
+the words that do the same thing — and this one was quoting the phrase by hand
+into `sub`, which left nowhere for the description. Moving the phrase to the
+element built for it puts the line back and makes this button behave like every
+other one.
+
+### And a guard of mine that failed for the wrong reason, immediately
+
+The new test sliced a fixed 900 characters after the loop header to look for
+`a.text`. Adding the explanatory comment above that line pushed it past the
+window, and the guard failed — for a reason with nothing to do with the code it
+guards. It slices to the end of the loop now. Written down because it is the
+same family as everything else in §51–§53: **a check anchored to a position in a
+file rather than to a construct is measuring the file, not the code.**
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

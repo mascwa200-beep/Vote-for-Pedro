@@ -116,15 +116,46 @@ describe('four things that were checked and are clean', () => {
       for (const p of t.projects ?? []) if (p.grant?.perk) granted.add(p.grant.perk);
     }
     assert.ok(granted.size >= 20, `${granted.size} perks on sale`);
-    const all = ['src/core/state.js', 'src/main.js', 'src/ui/screens.js', 'src/sim/command.js',
-      'src/missions/engine.js', 'src/sim/diplomacy.js', 'src/sim/combat.js']
-      .map((f) => readFileSync(f, 'utf8')).join('\n');
-    // Read by name, or through the two tables that hold perk ids as data.
-    const tables = readFileSync('src/core/state.js', 'utf8');
+    // Rewritten, because the first version was loose in exactly the way §51 and
+    // §52 were. Its last clause was `\b<perk>\b` against seven whole files —
+    // any word, anywhere, INCLUDING IN A COMMENT. A guard that reports a perk
+    // as read because someone mentioned it in prose is not checking anything.
+    //
+    // Re-measured strictly, the ANSWER held: 25 of 25 are genuinely read, none
+    // passed on a comment, none were missing. The guard was loose and right,
+    // which is the kind that goes wrong silently later.
+    //
+    // Now: comments stripped, the declaring file excluded, and a perk counts as
+    // read only through a construct that does work — a `perk(...)` call
+    // (optional-chained or not, because `g.perk?.('ferengi_partner')` is how
+    // two of them are called and a first pass missed both), or membership in a
+    // perk table that is itself consumed.
+    const strip = (s) => s
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .split('\n').map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1')).join('\n');
+    const files = ['src/core/state.js', 'src/main.js', 'src/ui/screens.js', 'src/sim/command.js',
+      'src/missions/engine.js', 'src/sim/diplomacy.js', 'src/sim/combat.js'];
+    const raw = files.map((f) => readFileSync(f, 'utf8')).join('\n');
+    const all = strip(raw);
+    assert.ok(raw.length - all.length > 20000,
+      'comment stripping removed almost nothing, so this is the loose check wearing a strict label');
+
+    // The tables that hold perk ids as data, named explicitly rather than
+    // "anywhere in state.js" — and each is asserted to be consumed, so a table
+    // nothing reads cannot launder a perk into looking alive.
+    // A QUALIFIED reference can only be a read: both are declared as
+    // `static ESCORTS = [` / `static PASSAGE_PERKS = {`, so `Game.ESCORTS`
+    // appearing at all is the consumer and not the declaration.
+    for (const table of ['ESCORTS', 'PASSAGE_PERKS']) {
+      assert.ok(all.includes(`Game.${table}`),
+        `Game.${table} is declared but never read, so perks in it are not read either`);
+    }
+    const inTable = new Set();
+    for (const m of all.matchAll(/perk:\s*'([a-z_]+)'/g)) inTable.add(m[1]);
+    for (const m of all.matchAll(/^\s*[a-z]+:\s*'([a-z_]+)',\s*$/gm)) inTable.add(m[1]);
+
     const unread = [...granted].filter((p) =>
-      !new RegExp(`perk\\(['"]${p}['"]\\)`).test(all)
-      && !new RegExp(`['"]${p}['"]`).test(tables)
-      && !new RegExp(`\\b${p}\\b`).test(all));
+      !new RegExp(`perk\\??\\.?\\((['"\`])${p}\\1\\)`).test(all) && !inTable.has(p));
     assert.deepEqual(unread, [], 'perks the player can buy and nothing reads');
   });
 
