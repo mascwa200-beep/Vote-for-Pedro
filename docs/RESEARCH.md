@@ -4035,6 +4035,112 @@ saved mount damage is reconciled against a hull — **by id, never by index**, s
 save that predates a refit cannot resurrect a mount the ship no longer carries.
 
 
+## 56. A Bird-of-Prey and a Negh'Var flew exactly the same way
+
+The AI takes its doctrine from `FACTIONS[ship.faction].doctrine` and nothing
+else. Every threshold in `ai.js` — when to break off, what range to hold, how
+hard to commit to an elevation — was therefore identical for both, because both
+are Klingon:
+
+| | turn | mass | hull + shields |
+| --- | --- | --- | --- |
+| Bird-of-Prey | 18 | 0.55 | 4,600 |
+| Negh'Var | 4.5 | 2.4 | 19,400 |
+
+The same held for a Romulan scoutship against a warbird, and a runabout against
+a Galaxy. Nine factions, eight doctrines, and inside each one every hull flown
+the same.
+
+### Derived, not declared — and the `role` trap
+
+The obvious field to reach for is `cls.role`, and it is a trap this dossier
+should record because a future sweep will find it and see this repo's signature
+defect: a field on all 31 classes, read only by two display pills.
+
+It is **23 distinct free-text values over 31 hulls, 17 of them singletons** —
+"heavy explorer", "attack cruiser", "marauder", "cube", "runabout" — and it
+predicts nothing mechanical. Three hulls are `explorer`, spanning tier 3 to tier
+6 and two to four mounts. There is no partition of it that carves the fleet at a
+joint the numbers recognise. And everything it would grant is already hand-tuned
+per hull: the Defiant already turns at 15.0 and carries ablative plating, the
+Oberth already has `auxBonus: 25`. Wiring it would either double-count or
+require regenerating all 31 records from archetype multipliers — moving every
+number the balance suite measures, at once.
+
+**`role` is a caption, correctly used as a caption.** The same decision as
+`boffSeats` in §50, for the same reason, and it is now recorded in
+`tests/classfields.test.js` so the next sweep finds the reason rather than the
+field.
+
+`archetypeOf(cls)` computes instead, from two axes the data actually has — how
+fast a hull comes about for its size, and how much punishment it holds:
+
+| | count | examples |
+| --- | --- | --- |
+| skirmisher | 8 | Bird-of-Prey, scoutship, Defiant, Oberth |
+| line | 12 | Constitution, D7, Galor, Miranda |
+| capital | 11 | Negh'Var, warbird, Galaxy, Borg cube |
+
+**`line` is the identity case**, and that is the design, not an accident: twelve
+classes resolve to it and keep exactly the behaviour they have today. A taxonomy
+that changed every ship at once would be a rebalance of the whole game wearing
+the clothes of a feature.
+
+### What it changes, measured
+
+Break-off hull fraction, forty non-relentless fights per hull:
+
+| hull | archetype | before | after | |
+| --- | --- | --- | --- | --- |
+| Bird-of-Prey | skirmisher | 8% | **14%** | runs sooner |
+| D7 | line | 8% | 8% | untouched |
+| Galor | line | 15% | 15% | untouched |
+| Negh'Var | capital | 9% | **6%** | stands longer |
+| warbird | capital | 17% | **8%** | stands much longer |
+| Jem'Hadar attack | *fanatic* | never | never | preserved |
+
+The nerve figure is **multiplied, not replaced**, which is what keeps `fanatic`
+and `assimilate` at zero: a Borg cube and a Jem'Hadar attack ship do not acquire
+a survival instinct by being large or small. Zero times anything is zero, and
+that is the whole meaning of those two doctrines.
+
+The full balance suite passes unchanged.
+
+### Two levers built and removed, both for the same reason
+
+Neither survived measurement, and both failed in the same direction — they made
+the *capital* ships worse, which is the opposite of the point.
+
+**Elevation commitment.** The reasoning was that a hull taking twenty seconds to
+come about should hedge on a dorsal or ventral attack, because being wrong costs
+it more. But commitment in this AI is *how decisively a ship goes for the weaker
+facing*, so lowering it models indecision rather than inertia. Removed.
+
+**Capitals closing the range.** ×0.85 on preferred range, on the reasoning that
+a battleship closes. Measured: it moved ninety fights against warbirds, a
+Vor'cha and a Negh'Var from 66 player deaths to 60, and mean surviving hull from
+12.7% to 15.0% — **the capitals got worse.** Closing from 620 to 527 puts them
+inside the band the player's auto-fire is best in. Removed; capitals hold their
+range at 1.0 and only the skirmisher standoff (×1.18) remains.
+
+Isolating that took switching each lever off separately: nerve-only reproduced
+the baseline *exactly* (66 deaths, 12.7%), because `relentless: true` disables
+fleeing and every balance harness in the suite sets it. **A measurement taken
+inside `relentless` cannot see a break-off change at all** — which is why the
+figures above are from non-relentless fights, and why the first three probes
+said nothing was happening.
+
+### And a note on the two abandoned mechanics
+
+This is the second of the four planned combat PRs to survive; PR 2, per-shot
+weapon power drain, was built, measured and reverted — see the plan file. Both
+of the removed levers here and the whole of PR 2 failed the same test: **does it
+create a decision, and does it cost the right side?** A symmetric reduction in
+output slows a fight, and slowing a fight favours whoever was going to win it.
+That is worth stating as a general property of this simulation rather than
+rediscovering it a third time.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

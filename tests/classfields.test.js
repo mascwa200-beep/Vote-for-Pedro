@@ -25,7 +25,8 @@ import assert from 'node:assert/strict';
 
 import { Game } from '../src/core/state.js';
 import { Ship, ABLATIVE_RESIST } from '../src/sim/ship.js';
-import { SHIP_CLASSES, commandableAt } from '../src/world/ships.data.js';
+import { SHIP_CLASSES, SHIP_LIST, commandableAt } from '../src/world/ships.data.js';
+import { readFileSync } from 'node:fs';
 import { ABILITIES } from '../src/sim/officers.js';
 
 /** A ship of this class, power settled, so `factor` reads a real level. */
@@ -171,6 +172,40 @@ describe('three that are left alone, and why', () => {
       assert.ok(!commandable.some((o) => o.id === c.id),
         `${c.id} has no seats and is on sale anyway, so the flag is not the gate`);
     }
+  });
+
+  test('and `role` is a caption, which is why archetypeOf does not read it', () => {
+    // Recorded here because a later sweep will find `cls.role` on all 31
+    // classes, see it read only by two display pills in screens.js, and reach
+    // for it as this repo's signature defect. It is not one.
+    //
+    // 23 distinct free-text values over 31 hulls, 17 of them singletons —
+    // "heavy explorer", "attack cruiser", "marauder", "cube", "runabout". And
+    // it predicts nothing mechanical: three hulls are `explorer`, spanning
+    // tier 3 to tier 6 and two to four mounts; two are `science vessel`, one
+    // of them tier 2 with a single gun. There is no partition of this field
+    // that carves the fleet at a joint the numbers recognise.
+    //
+    // Everything role would grant is already hand-tuned per hull — the
+    // Defiant already turns at 15.0 and carries ablative plating, the Oberth
+    // already has `auxBonus: 25` wired at power.js. Wiring role would either
+    // double-count or require regenerating all 31 records from archetype
+    // multipliers, moving every number the balance suite measures at once.
+    //
+    // So `archetypeOf` in ships.data.js computes from turnRate, mass, hull and
+    // shields instead. Same decision as `boffSeats` above, for the same
+    // reason: the data does not map onto this game.
+    const roles = new Set(SHIP_LIST.map((c) => c.role).filter(Boolean));
+    assert.ok(roles.size >= 20, `${roles.size} distinct roles — the field consolidated, so revisit`);
+    const singletons = [...roles].filter((r) => SHIP_LIST.filter((c) => c.role === r).length === 1);
+    assert.ok(singletons.length >= 12,
+      `only ${singletons.length} roles are unique to one hull, so the field may have become a taxonomy`);
+
+    // And the classifier does not read it — the whole point.
+    const src = readFileSync('src/world/ships.data.js', 'utf8');
+    const fn = src.slice(src.indexOf('export function archetypeOf'),
+      src.indexOf('export function archetypeOf') + 500);
+    assert.doesNotMatch(fn, /\.role\b/, 'archetypeOf reads the prose role after all');
   });
 
   test('saucerSeparation is a feature, not an unread number', () => {
