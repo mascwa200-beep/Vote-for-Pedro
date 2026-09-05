@@ -1221,10 +1221,20 @@ export const INTENTS = [
       'make contact anyway', 'make contact',
       'use the device', 'everything to auxiliary', 'ride it out', 'sit it out',
       'observe them', 'watch them', 'watch what they are doing', 'keep an eye on them',
+      // Springing an ambush the sensors caught. Without these, "take them
+      // first" parsed as `mission_choice` and the phrase printed on the button
+      // routed to the wrong handler entirely — which is the failure this whole
+      // entry was written to fix, arriving again with a new choice.
+      // "fire first" and "hit them first" are deliberately NOT here: the
+      // first already parses as `fire`, which `executeOrder` routes to
+      // `engage` on an encounter, and taking it would break a combat order to
+      // serve one encounter choice.
+      'take them first', 'take them first, before they move',
+      'spring it', 'spring the trap',
     ],
     keywords: {
       assistance: 2.6, escort: 2.6, aid: 2, ignore: 2.4, board: 1.8,
-      alongside: 2.2, ride: 1.6, observe: 2.6,
+      alongside: 2.2, ride: 1.6, observe: 2.6, spring: 2.6,
     },
     veto: ['course for', 'warp', 'drill', 'mission', 'orders'],
     build: (c) => {
@@ -1239,6 +1249,10 @@ export const INTENTS = [
         [/\buse the device\b/, 'trap_device'],
         [/\beverything to\b/, 'trap_power'],
         [/\bride it out|sit it out\b/, 'trap_wait'],
+        // Before `fire first` can be read as anything else. An ambush the
+        // sensors caught is the only place this choice exists, and
+        // `executeOrder` refuses it anywhere else.
+        [/\btake them first|spring it|spring the trap\b/, 'spring'],
         // Watching a patrol rather than hailing it. Deliberately not `scan`,
         // which catalogues an anomaly; "watch" and "observe" are the words a
         // bridge uses for a ship going about its business.

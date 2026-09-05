@@ -2181,7 +2181,44 @@ export class Game {
     this.pushLog(encounter.text, encounter.from ?? 'science');
     if (encounter.hostile) this.setAlert('red');
     else if (encounter.kind === 'anomaly' || encounter.kind === 'derelict') this.setAlert('yellow');
+    if (encounter.surprise) this.rollAmbushDetection(encounter);
     emit('encounter:begin', encounter);
+  }
+
+  /**
+   * Did we see them before they moved?
+   *
+   * An ambush cost a free volley — `startCombat` puts every gun a cycle behind
+   * — and the ONLY defence was a species trait chosen at character creation.
+   * A captain who spent four ranks on Sensor Analysis and fitted a
+   * Multispectral Sensor Array was jumped exactly as hard as one who did
+   * neither, in the situation both of those things are sold for: "cloak
+   * detection", "see cloaked ships sooner". An ambush is ships that were
+   * hiding.
+   *
+   * Alert level cannot be the discriminator — `beginEncounter` sets red on
+   * every hostile encounter two lines above this, so it is red by the time
+   * anyone chooses anything.
+   *
+   * The stream is derived, not `this.rng`, for the reason `encounterStream`
+   * gives: drawing from the main stream shifts every seeded outcome
+   * downstream of it, and the balance suites depend on those. Keyed by system
+   * and visit so it is a fact about the ambush rather than the draw order.
+   */
+  rollAmbushDetection(encounter) {
+    const sensors = this.ship?.mod('stealthDetect') ?? 1;
+    // Baseline is 1.0 and a fully invested captain reaches about 2.9, so the
+    // ceiling is reached only by someone who bought all of it. Capped below 1
+    // because seeing it coming is a skill, not a guarantee.
+    const chance = Math.max(0, Math.min(0.7, (sensors - 1) * 0.36));
+    const rng = new RNG(hashSeed(
+      `ambush:${this.seed}:${this.locationId}:${this.galaxy.visitCount(this.locationId)}`));
+    encounter.detected = chance > 0 && rng.chance(chance);
+    if (encounter.detected) {
+      this.pushLog('Belay that — I have them. Two contacts holding station in the debris, '
+        + 'powered down. They are waiting for us.', 'science');
+    }
+    return encounter.detected;
   }
 
   /**
@@ -2232,11 +2269,25 @@ export class Game {
     const add = (id, label, say, sub = null, color = '') => out.push({ id, label, say, sub, color });
 
     if (enc.hostile) {
-      add('engage', 'Engage', 'engage them', 'Red alert. Bring weapons to bear.', 'red');
+      // Every hostile encounter offered the same three buttons and returned
+      // here, so an ambush read exactly like a patrol that happened to be
+      // unfriendly. It still does — UNLESS the sensors caught it, which is the
+      // one thing being jumped ought to turn on.
+      if (enc.surprise && enc.detected) {
+        add('spring', 'Take them first', 'take them first',
+          'They do not know we have them. The free volley is ours.', 'amber');
+      }
+      add('engage', 'Engage', 'engage them',
+        enc.surprise && !enc.detected
+          ? 'Red alert. We are late to this one.'
+          : 'Red alert. Bring weapons to bear.', 'red');
       if (enc.hailable !== false && FACTIONS[enc.factionId]?.hailable) {
         add('hail', 'Hail them', 'hail them', 'Talking is free until it is not.', 'lilac');
       }
-      add('withdraw', 'Withdraw', 'withdraw', 'Leave the system.', 'ghost');
+      add('withdraw', 'Withdraw', 'withdraw',
+        enc.surprise && enc.detected
+          ? 'Back out before they know we saw them.'
+          : 'Leave the system.', 'ghost');
       return out;
     }
 
@@ -2338,7 +2389,18 @@ export class Game {
     const out = { messages: [] };
 
     switch (choiceId) {
-      case 'engage':
+      case 'spring':
+      case 'engage': {
+        // An ambush the sensors caught is not an ambush any more. Springing it
+        // deliberately turns the free volley round; simply engaging a detected
+        // one at least costs nothing, because you saw them.
+        const sprung = choiceId === 'spring' && enc.surprise && enc.detected;
+        // NOT `this.firstStrike`, which is a different thing wearing the same
+        // name and is written down two hundred lines below: it means the
+        // captain shot at somebody peaceful and costs 25% off every diplomacy
+        // roll. Setting it here would have PENALISED a captain for springing
+        // an ambush they were clever enough to see. The free volley is
+        // `opts.sprung`, symmetrical with the `first_strike` perk.
         this.firstStrike = !enc.hostile;
         // The encounter is spent the moment it becomes a battle. Left set, the
         // next hail in the campaign was answered by whoever was in THIS one:
@@ -2348,13 +2410,18 @@ export class Game {
         this.startCombat(enc.ships ?? [], {
           name: enc.title,
           // What the encounter already knew about itself and never passed on.
-          surprise: enc.surprise ?? false,
+          surprise: (enc.surprise ?? false) && !enc.detected,
+          sprung,
           // The freighter in "a civilian freighter is under attack" was built,
           // given a name, and left out of the battle. `Engagement` has taken
           // `opts.allies` all along.
           allies: enc.victims ?? [],
         });
-        return { messages: ['Engaging.'], combat: true };
+        return {
+          messages: [sprung ? 'Firing as we come about.' : 'Engaging.'],
+          combat: true,
+        };
+      }
 
       case 'hail': {
         this.mode = MODES.ENCOUNTER;
@@ -2968,6 +3035,14 @@ export class Game {
     // NOT `game.firstStrike`, which is a different thing wearing the same
     // name — that flag means the captain shot at somebody peaceful and costs
     // 25% off every diplomacy roll.
+    // Springing an ambush the sensors caught, which is the same free volley
+    // from the other end: they set it, we saw it, and we open first. Here
+    // rather than anywhere else for the reason below — `scaleHostileFleet`
+    // clones hulls, and a clone made afterwards would arrive with warm guns.
+    if (opts.sprung) {
+      for (const s of fleet) for (const w of s.weapons) w.cooldown = w.cycle;
+      this.pushLog('They never got the word out. Firing as we come about.', 'tactical');
+    }
     if (this.perk('first_strike')) {
       for (const s of fleet) for (const w of s.weapons) w.cooldown = w.cycle;
       this.pushLog('Their gunnery is slow off the mark, Captain. Empire doctrine.', 'tactical');
