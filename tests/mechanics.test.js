@@ -110,7 +110,7 @@ describe('the sweep, and the instrument that produced it', () => {
     assert.equal(consumed().has('thisKeyIsDeclaredByNobodyAtAll'), false);
   });
 
-  test('the ratchet: no more than 19 declared mechanics are read by nothing', () => {
+  test('the ratchet: no more than 18 declared mechanics are read by nothing', () => {
     // It may go down — by wiring one, or by deleting one honestly — and it may
     // not go up. A new trait that declares a mechanic and forgets to wire it
     // fails here rather than shipping as a card that promises something.
@@ -118,7 +118,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     const dead = [...keys.keys()].filter((k) => !read.has(k)).sort();
     assert.ok(keys.size >= 55, `only ${keys.size} mechanics declared; has the sheet shrunk?`);
-    assert.ok(dead.length <= 19,
+    assert.ok(dead.length <= 18,
       `${dead.length} declared mechanics are read by nothing:\n  ${dead.join('\n  ')}`);
   });
 
@@ -126,7 +126,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty',
       'accuracyBonus', 'hazardDisadvantage',
-      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor']) {
+      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor', 'ignorePressure']) {
       assert.ok(read.has(k), `${k} is read by nothing again`);
     }
   });
@@ -507,5 +507,73 @@ describe('hostiles that break off sooner out of fear', () => {
     // doctrines.
     const cube = brokeOffAt(['notorious'], null, 'borg_cube', 'borg', 8);
     assert.equal(cube.ran, 0, 'a Borg cube ran away');
+  });
+});
+
+describe('a circumstance channel with no caller, and the trait that removed nothing', () => {
+  // `situational` has been a documented parameter of `AwayTeam.check` and
+  // `modifierFor` since both were written, plumbed all the way to an itemised
+  // "circumstance" line in `parts` — and NO CALLER anywhere ever supplied one.
+  // The same shape as `resolve()`'s `disadvantage`, which had none until three
+  // passes ago.
+  //
+  // "Cool Under Fire — no penalty from a breaching core, hull fires, or being
+  // outnumbered" therefore removed a penalty that did not exist.
+  const rate = (traits, fires, breaching, runs = 300) => {
+    let ok = 0;
+    for (let seed = 0; seed < runs; seed++) {
+      const g = captain({ traits, seed: BigInt(seed + 1) });
+      g.ship.fires = fires;
+      g.ship.breaching = breaching;
+      if (g.buildAwayTeam().check(g.rng, 'science', { hazard: 'elevated' }).success) ok++;
+    }
+    return ok / runs;
+  };
+
+  test('a burning ship makes its landing party worse at everything', () => {
+    const quiet = rate([], 0, false);
+    assert.ok(quiet > 0.5, `the control only manages ${quiet}`);
+    assert.ok(rate([], 2, false) < quiet * 0.9, 'two fires cost nothing');
+    assert.ok(rate([], 0, true) < quiet * 0.9, 'a breaching core costs nothing');
+    assert.ok(rate([], 3, true) < rate([], 2, false), 'the two do not compound');
+  });
+
+  test('and it is capped, because past a point the number stops meaning anything', () => {
+    assert.equal(rate([], 4, false), rate([], 3, false));
+    assert.equal(rate([], 9, false), rate([], 3, false));
+  });
+
+  test('and Cool Under Fire removes it entirely, and nothing else', () => {
+    const quiet = rate([], 0, false);
+    assert.equal(rate(['cool_under_fire'], 0, false), quiet,
+      'the trait is worth something on a ship with nothing wrong');
+    assert.equal(rate(['cool_under_fire'], 3, true), quiet,
+      'a ship coming apart still reached a cool captain’s landing party');
+  });
+
+  test('and the penalty is itemised, not folded into the total', () => {
+    // `parts` exists so a captain can see what produced the number. A modifier
+    // that moves for a reason nobody can read is a bug report waiting to be
+    // filed.
+    const g = captain();
+    g.ship.fires = 2;
+    const parts = g.buildAwayTeam().modifierFor('science').parts;
+    assert.ok(parts.some((p) => /ship above you/i.test(p.source) && p.value < 0),
+      JSON.stringify(parts));
+  });
+
+  test('and the two traits about being outnumbered are still counted, on purpose', () => {
+    // Away missions are refused in combat — "Not while we are under fire,
+    // Captain" — so a landing party is never outnumbered while it is working.
+    // Wiring `ignoreOutnumbered` or `outnumberedAdvantage` would mean inventing
+    // somewhere for them to happen, which is what §68 exists to prevent. They
+    // stay in the ratchet with this as the reason.
+    const read = consumed();
+    assert.equal(read.has('ignoreOutnumbered'), false);
+    assert.equal(read.has('outnumberedAdvantage'), false);
+    // And Cool Under Fire no longer promises relief from it either.
+    const trait = CHARACTER.TRAITS.find((t) => t.id === 'cool_under_fire');
+    assert.doesNotMatch(trait.text, /outnumbered/i,
+      'the card promises relief from a circumstance that cannot arise');
   });
 });

@@ -76,6 +76,9 @@ export class AwayTeam {
     this.locals = opts.locals ?? 0;
     // What the ship behind them is doing, for the one trait that asks.
     this.hullPct = opts.hullPct ?? 1;
+    /** Fires burning and a core breaching, for `pressure()`. */
+    this.fires = opts.fires ?? 0;
+    this.breaching = !!opts.breaching;
     this.casualties = [];
     this.rolls = [];                      // full audit trail for the UI
   }
@@ -151,6 +154,24 @@ export class AwayTeam {
     if (situational) {
       total += situational;
       parts.push({ source: 'circumstance', value: situational });
+    }
+    // The state of the ship they came off.
+    //
+    // `situational` has been a documented parameter of this method and of
+    // `check` since both were written, plumbed all the way to that itemised
+    // line above — and NO CALLER anywhere ever supplied one. The same shape as
+    // `resolve()`'s `disadvantage` argument, which had no caller until two
+    // changes ago.
+    //
+    // Three traits are about circumstance and none of them had one to work on:
+    // "Cool Under Fire — no penalty from a breaching core, hull fires, or being
+    // outnumbered" removed a penalty that did not exist. A landing party works
+    // worse while the ship above it is burning, and the away team already knows
+    // the ship's state because `desperate()` needed `hullPct`.
+    const pressure = this.pressure();
+    if (pressure) {
+      total += pressure;
+      parts.push({ source: 'the ship above you', value: pressure });
     }
 
     return { total, parts, officer, spec };
@@ -333,6 +354,27 @@ export class AwayTeam {
   desperate() {
     if (!this.character?.mechanic('desperateAdvantage')) return false;
     return (this.hullPct ?? 1) < 0.5;
+  }
+
+  /**
+   * What the ship's condition costs a landing party, as a check modifier.
+   *
+   * Small and countable rather than a curve: a fire is a fire and the party can
+   * hear about it. Capped, because at some point the ship is either coming back
+   * for them or it is not, and past that the number stops meaning anything.
+   *
+   * "Cool Under Fire" zeroes it, which is the whole of that trait.
+   *
+   * NOT outnumbered, and that is deliberate. Away missions are refused in
+   * combat — "Not while we are under fire, Captain" — so being outnumbered is
+   * not a circumstance a landing party can be in, and wiring it would mean
+   * inventing somewhere for it to happen. The two traits that name it stay in
+   * the count with this as the reason. See RESEARCH §70.
+   */
+  pressure() {
+    if (this.character?.mechanic('ignorePressure')) return 0;
+    const fires = Math.min(3, this.fires ?? 0);
+    return -(fires + ((this.breaching ?? false) ? 2 : 0));
   }
 
   /**

@@ -3723,6 +3723,12 @@ export class Game {
       // Veteran — advantage on checks made while your ship is below half
       // hull." This is the only caller that knows.
       hullPct: this.ship?.hullPct ?? 1,
+      // And the rest of the ship's condition, for `AwayTeam.pressure()`. The
+      // `situational` channel it feeds has been plumbed since the away team was
+      // written and had no caller at all; "Cool Under Fire — no penalty from a
+      // breaching core, hull fires" removed a penalty that did not exist.
+      fires: this.ship?.fires ?? 0,
+      breaching: !!this.ship?.breaching,
     });
     // A landing party is a mission, and the Human reroll is once per mission.
     // `Character.refresh` is called by `startCombat`, which is a different

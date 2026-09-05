@@ -309,7 +309,10 @@ export const TRAITS = [
   },
   {
     id: 'cool_under_fire', name: 'Cool Under Fire', positive: true,
-    text: 'No penalty from a breaching core, hull fires, or being outnumbered.',
+    // "or being outnumbered" removed, because away missions are refused in
+    // combat — a landing party is never outnumbered while it is working, and
+    // the card should not promise relief from a circumstance that cannot arise.
+    text: 'A breaching core and fires on the decks do not reach your landing parties.',
     mechanic: { ignorePressure: true },
   },
   {
