@@ -25859,6 +25859,30 @@ const INTENTS = [
     build: () => ({ action: 'effect_repairs' }),
   },
 
+  {
+    // The crew's half of `effect_repairs`, and the first order in the game that
+    // has to be given from a particular compartment. It is refused everywhere
+    // else with a reason rather than being absent, the way the transporter
+    // console refuses — "why can I not do this here" is a question the room
+    // should answer while you are standing in it.
+    //
+    // `doctor` and `surgeon` are NOT keywords: they are how a captain addresses
+    // the CMO, and weighting them here would pull every "doctor, report" at
+    // this instead of at the officer.
+    id: 'see_to_wounded',
+    help: 'See to the wounded (in sickbay)',
+    phrases: [
+      'see to the wounded', 'see to the injured', 'tend to the wounded',
+      'tend the wounded', 'attend to the wounded', 'treat the wounded',
+      'treat the injured', 'look after the wounded', 'sit with the wounded',
+      'give them the time', 'stay with them until they are fit',
+    ],
+    keywords: { wounded: 2, injured: 1.5 },
+    // A casualty REPORT is a question, not an order to spend a day on it.
+    veto: ['report', 'casualties', 'list', 'how many'],
+    build: () => ({ action: 'see_to_wounded' }),
+  },
+
   // ------------------------------------------------------------------
   // Alert and shields
   // ------------------------------------------------------------------
@@ -38324,6 +38348,61 @@ class Game {
   }
 
   /**
+   * Hours in sickbay, spent rather than waited out.
+   *
+   * `effectRepairs` for the crew, and deliberately built the same way: it costs
+   * commission hours and it does nothing the clock was not already going to do.
+   * `passTime` has healed injured officers at `hours * recoveryRate / 120`
+   * since the campaign-time sickbay was written — a bad injury is the better
+   * part of a week — so this adds NO healing path, no roll, and no new balance
+   * surface. It buys with the calendar what waiting already buys, and the
+   * commission is five years long, so the hours are the price.
+   *
+   * The room is the point. Sickbay is one of seventeen compartments a captain
+   * can walk to and, until this, the only thing any of them offered that could
+   * not be done from the chair was a scene in an episode. This is an order you
+   * have to be standing in a particular room to give.
+   *
+   * Tolerant of a game with no walker, for the reason `Mission.testWhere`
+   * gives: a half-built state is nowhere, not somewhere else.
+   *
+   * @returns {{ok: boolean, reason?: string, hours?: number, back?: string[],
+   *   still?: number, rate?: number}}
+   */
+  seeToTheWounded() {
+    const done = this.noLongerInCommand();
+    if (done) return { ok: false, reason: done.reason };
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, reason: 'Not while we are under fire, Captain.' };
+    }
+    const at = this.walk?.roomId;
+    if (at && at !== 'sickbay') {
+      return { ok: false, reason: 'That is done in sickbay, Captain.' };
+    }
+    const hurt = this.crew.officers.filter((o) => o.alive && o.injured);
+    if (!hurt.length) return { ok: false, reason: 'Nobody is on the sick list, Captain.' };
+
+    // Long enough to get the least badly hurt of them back on their feet, and
+    // never more than a day. The cap is what keeps this an order rather than a
+    // way to skip a week: a severe injury takes several of these.
+    const rate = this.character?.mechanic('recoveryRate') ?? 1;
+    const lightest = Math.min(...hurt.map((o) => o.injurySeverity ?? 1));
+    const needed = (lightest * 120) / (rate > 0 ? rate : 1);
+    const hours = Math.max(2, Math.min(24, Math.ceil(needed)));
+
+    this.spendHours(hours);
+    const back = hurt.filter((o) => o.alive && !o.injured).map((o) => o.name);
+    const still = hurt.filter((o) => o.alive && o.injured).length;
+    this.pushLog(
+      back.length
+        ? `${back.join(', ')} ${back.length === 1 ? 'is' : 'are'} released from sickbay and back on duty.`
+        : `${hours} hours in sickbay. Nobody is fit to return yet.`,
+      'medical',
+    );
+    return { ok: true, hours, back, still, rate };
+  }
+
+  /**
    * Record a captain's log entry. It goes into the ship's log like any other
    * line and, unlike any other line, it is yours.
    */
@@ -45018,6 +45097,73 @@ __exports.select = select;
  * chief engineer cannot build four things at once, and being made to choose
  * which one is the entire interest of the mechanic.
  */
+/**
+ * Sickbay, from the biobed or the medical laboratory.
+ *
+ * Both of those stations declared `panel: 'medical'`, and `STATION_PANEL`
+ * aliased 'medical' onto 'crew' — so standing at a biobed opened the crew
+ * ROSTER, which is a personnel screen and knows nothing about who is hurt.
+ * Three metres away the chief surgeon's desk gave a real sick list, because
+ * that station has no panel at all and falls to `sim/consoles.js`. One room,
+ * one station telling the truth and two opening a filing cabinet.
+ *
+ * The readout is the injury, in the words `severity` uses on the CMO's desk,
+ * and the hours between an officer and their post — which is a number the
+ * simulation has always had (`Officer.recover` is `hours * rate / 120`) and
+ * has never shown anybody.
+ */
+function sickbayPanel(app) {
+  const g = app.game;
+  const rate = g.character?.mechanic?.('recoveryRate') ?? 1;
+  const hurt = (g.crew?.officers ?? []).filter((o) => o.alive && o.injured);
+  const lost = (g.crew?.officers ?? []).filter((o) => !o.alive);
+
+  const body = [];
+  if (!hurt.length) {
+    body.push(el('p', { class: 'muted', text: 'No officer is on the sick list. The ward is quiet.' }));
+  } else {
+    for (const o of hurt) {
+      const hours = Math.ceil(((o.injurySeverity ?? 1) * 120) / (rate > 0 ? rate : 1));
+      // The bar is how far along they are, not how hurt they are, so it fills
+      // as they get better — the direction every other readout in the game
+      // fills in.
+      // The name alone. Rendered at 412 CSS px with the rank in front of it,
+      // "Commander Ashford Quill" wrapped a readout label onto three lines and
+      // pushed the bar into a column narrower than the words beside it. The
+      // rank is on the crew screen, which is where ranks live.
+      body.push(readout(o.name,
+        1 - (o.injurySeverity ?? 1),
+        hours < 24 ? `${hours} h to duty` : `${(hours / 24).toFixed(1)} d to duty`));
+    }
+    body.push(button('See to the wounded', tap(() => {
+      const r = g.seeToTheWounded();
+      if (!r.ok) { app.showMessage('Sickbay', [r.reason]); return; }
+      app.showMessage('Sickbay', [
+        `${r.hours} hours.`,
+        r.back.length
+          ? `${r.back.join(', ')} back on duty.`
+          : 'Nobody is fit to return yet.',
+        r.still ? `${r.still} still on the sick list.` : 'The ward is clear.',
+      ]);
+      app.render();
+    }), {
+      color: 'blue',
+      say: 'see to the wounded',
+      sub: 'Up to a day of the commission, at the ward rather than the chair',
+    }));
+  }
+
+  // The captain's own recovery rate, which two species traits and one
+  // background double and which had exactly one reader in the whole game.
+  if (rate !== 1) {
+    body.push(el('p', { class: 'hint', text: `Your own training has them on their feet ${rate}× as fast.` }));
+  }
+  if (lost.length) {
+    body.push(el('p', { class: 'hint', text: `We are without ${lost.map((o) => o.name).join(', ')}.` }));
+  }
+
+  return panel('Sickbay', body);
+}
 function machineShopPanel(app) {
   const g = app.game;
   const status = g.fabricationStatus;
@@ -45136,6 +45282,7 @@ __exports.missionScreen = missionScreen;
 __exports.hailOptions = hailOptions;
 __exports.newGameScreen = newGameScreen;
 __exports.gameOverScreen = gameOverScreen;
+__exports.sickbayPanel = sickbayPanel;
 __exports.machineShopPanel = machineShopPanel;
 __exports.kobayashiPanel = kobayashiPanel;
 
@@ -45885,7 +46032,8 @@ const NAV = [
 /** Which console panel a station opens when you walk up and use it. */
 const STATION_PANEL = {
   helm: 'helm', navigation: 'galaxy', comms: 'comms', power: 'power',
-  weapons: 'tactical', science: 'science', damage: 'ship', medical: 'crew',
+  // 'medical' opened the crew ROSTER until sickbay got a board of its own.
+  weapons: 'tactical', science: 'science', damage: 'ship', medical: 'medical',
   transport: 'transport', fabrication: 'shop', missions: 'missions',
   // Not a console anywhere on the ship — the panel a thing on a planet opens.
   survey: 'survey',
@@ -46674,6 +46822,12 @@ class App {
       // Captain." and a captain read his standing orders anywhere but the
       // room the ship keeps for reading them.
       case 'missions': body.push(screens.briefingPanel(this)); break;
+      // The biobed and the medical laboratory, which both declared 'medical'
+      // and both opened the crew roster — a personnel screen that does not know
+      // who is hurt — while the chief surgeon's desk two paces away gave a real
+      // sick list, because that station has no panel at all and falls through
+      // to sim/consoles.js.
+      case 'medical': body.push(screens.sickbayPanel(this)); break;
       case 'comms':
         // Hailing is an ORDER, not a console read-out: it goes through the same
         // dispatch a typed "open a channel" does, so there is one path.
@@ -47553,6 +47707,22 @@ class App {
           r.blue
             ? 'Fourteen hours, with the whole crew at maintenance stations.'
             : 'Nineteen hours. The chief says that is the best she can do without a starbase.',
+        ]);
+        break;
+      }
+      // The same call the sickbay board makes. Refused outside sickbay, with
+      // the reason, so the order is a reason to walk down there rather than a
+      // thing that quietly does not exist.
+      case 'see_to_wounded': {
+        const r = g.seeToTheWounded();
+        if (!r.ok) { audio.play('ui_deny'); ack('medical', r.reason); break; }
+        audio.play('computer_ack');
+        this.showMessage('Sickbay', [
+          `${r.hours} hours.`,
+          r.back.length
+            ? `${r.back.join(', ')} back on duty.`
+            : 'Nobody is fit to return yet.',
+          r.still ? `${r.still} still on the sick list.` : 'The ward is clear.',
         ]);
         break;
       }

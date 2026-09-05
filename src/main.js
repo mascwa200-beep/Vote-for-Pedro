@@ -63,7 +63,8 @@ const NAV = [
 /** Which console panel a station opens when you walk up and use it. */
 const STATION_PANEL = {
   helm: 'helm', navigation: 'galaxy', comms: 'comms', power: 'power',
-  weapons: 'tactical', science: 'science', damage: 'ship', medical: 'crew',
+  // 'medical' opened the crew ROSTER until sickbay got a board of its own.
+  weapons: 'tactical', science: 'science', damage: 'ship', medical: 'medical',
   transport: 'transport', fabrication: 'shop', missions: 'missions',
   // Not a console anywhere on the ship — the panel a thing on a planet opens.
   survey: 'survey',
@@ -852,6 +853,12 @@ class App {
       // Captain." and a captain read his standing orders anywhere but the
       // room the ship keeps for reading them.
       case 'missions': body.push(screens.briefingPanel(this)); break;
+      // The biobed and the medical laboratory, which both declared 'medical'
+      // and both opened the crew roster — a personnel screen that does not know
+      // who is hurt — while the chief surgeon's desk two paces away gave a real
+      // sick list, because that station has no panel at all and falls through
+      // to sim/consoles.js.
+      case 'medical': body.push(screens.sickbayPanel(this)); break;
       case 'comms':
         // Hailing is an ORDER, not a console read-out: it goes through the same
         // dispatch a typed "open a channel" does, so there is one path.
@@ -1731,6 +1738,22 @@ class App {
           r.blue
             ? 'Fourteen hours, with the whole crew at maintenance stations.'
             : 'Nineteen hours. The chief says that is the best she can do without a starbase.',
+        ]);
+        break;
+      }
+      // The same call the sickbay board makes. Refused outside sickbay, with
+      // the reason, so the order is a reason to walk down there rather than a
+      // thing that quietly does not exist.
+      case 'see_to_wounded': {
+        const r = g.seeToTheWounded();
+        if (!r.ok) { audio.play('ui_deny'); ack('medical', r.reason); break; }
+        audio.play('computer_ack');
+        this.showMessage('Sickbay', [
+          `${r.hours} hours.`,
+          r.back.length
+            ? `${r.back.join(', ')} back on duty.`
+            : 'Nobody is fit to return yet.',
+          r.still ? `${r.still} still on the sick list.` : 'The ward is clear.',
         ]);
         break;
       }

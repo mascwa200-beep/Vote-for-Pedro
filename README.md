@@ -91,12 +91,15 @@ read that as X — confirm?"*; when it is lost it says so and offers the nearest
 readings, rather than doing something you did not ask for.
 
 It is not a language model and it does not understand English — it recognises
-orders, from a lexicon of 1499 phrasings and 312 weighted keywords across
-69 intents. The honest
-measure is `tests/corpus/orders.txt`: 610 hand-written paraphrases, deliberately
+orders, from a lexicon of 1512 phrasings and 314 weighted keywords across
+70 intents. The honest
+measure is `tests/corpus/orders.txt`: 617 hand-written paraphrases, deliberately
 hostile — typos, phonetic spelling, panic, politeness — with CI failing below
-95%. It currently sits at 100%, and the fallback exists for the sentences the
-corpus has not thought of yet.
+95%. It currently sits at 98.7% — the remaining eight are lines where two
+readings are both defensible ("survey" as a scan or as the survey order, "beam
+down" as the transporter or as an away team), kept in the corpus precisely
+because they are hard. The fallback exists for the sentences the corpus has not
+thought of yet.
 
 Officers acknowledge in their own voice, argue when they disagree, and can
 refuse an order outright if it is bad enough.
@@ -281,7 +284,7 @@ android/      WebView shell, manifest, resources for the APK
 
 **Content:** 43 star systems, 31 ship classes, 24 authored episodes, 12
 species, 12 difficulties, 6 reputation tracks, 38 synthesized sound cues, and
-a command lexicon of 1499 phrasings tested against a 610-order corpus,
+a command lexicon of 1512 phrasings tested against a 617-order corpus,
 and 31 procedurally generated hulls averaging 1058 triangles each.
 
 ## Development
