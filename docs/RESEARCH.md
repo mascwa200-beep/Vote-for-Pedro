@@ -5664,6 +5664,47 @@ rest of the file uses, against which the player is destroyed before the D7 ever
 decides to run, and reported "too few break-offs to compare". The harness, not the
 mechanic. Ratchet **21 → 19**.
 
+### Sixth pass: a second channel with no caller
+
+`AwayTeam.check` and `modifierFor` have taken a `situational` argument since both
+were written, plumbed all the way to an itemised **"circumstance"** line in the
+breakdown a captain can read — and **no caller anywhere ever supplied one.** The
+same shape as `resolve()`'s `disadvantage` three passes earlier: a documented
+parameter, fully wired, with nothing at the other end.
+
+Which is why *"Cool Under Fire — no penalty from a breaching core, hull fires, or
+being outnumbered"* removed a penalty that **did not exist**. Three traits are
+about circumstance and none of them had one to work on.
+
+The away team already knows the ship's state — `desperate()` needed `hullPct`, and
+`buildAwayTeam` is the one caller that knows it — so fires and a breaching core
+travel the same road. Measured on an elevated Science check over 400 runs each:
+
+| the ship they came off | plain | Cool Under Fire |
+| --- | --- | --- |
+| quiet | 68.3% | 68.3% |
+| two fires | 56.0% | 68.3% |
+| four fires (capped at three) | 50.7% | 68.3% |
+| a breaching core | 56.0% | 68.3% |
+| three fires and a breach | **35.3%** | 68.3% |
+
+The trait is worth **nothing** on a ship with nothing wrong, which is right, and
+it is worth a great deal on one coming apart. And because fires burn out over
+hours and `effectRepairs` exists, a captain who puts them out before beaming down
+is unaffected — the penalty creates a decision rather than a tax.
+
+### And two that were deliberately left
+
+`ignoreOutnumbered` and `outnumberedAdvantage` both name a circumstance a landing
+party **cannot be in**: away missions are refused in combat — *"Not while we are
+under fire, Captain"* — so nobody is ever outnumbered while working. Wiring them
+would mean inventing somewhere for them to happen, which is the thing §68 exists
+to prevent.
+
+They stay in the ratchet with that as the recorded reason. What did change is
+that Cool Under Fire no longer *promises* relief from it: **a card should not
+offer protection against something that cannot arise.** Ratchet **19 → 18**.
+
 
 ## Attribution
 

@@ -3167,8 +3167,18 @@ try {
   // And the exclusion cannot quietly swallow the whole roster: a run where
   // every officer is dead or hurt would otherwise pass every assertion here
   // with nothing examined.
+  // Expressed as a RELATION, not a count. The absolute `>= 5` was tuned to the
+  // casualties one particular play-through happened to take, and the first
+  // change that made away missions harder — a landing party works worse while
+  // the ship above it is burning — dropped this run to 4 of 7 and turned a
+  // guard about pip COLOURS into a guard about how the fight went.
+  //
+  // What it is really for is that the exclusion above cannot swallow the
+  // roster. More than half the senior staff still on their feet says that, and
+  // says it whatever the harness has been through.
   check('and enough of them are on their feet for that to mean anything',
-    worn.length >= 5, `${worn.length} of ${pips.length} officers fit to be looked at`);
+    worn.length > pips.length / 2,
+    `${worn.length} of ${pips.length} officers fit to be looked at`);
   // Legibility, not decoration: black initials on the operations red are very
   // nearly invisible, so the ink is picked by luminance rather than fixed.
   //
