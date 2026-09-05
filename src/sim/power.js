@@ -58,8 +58,9 @@ export class PowerGrid {
   /**
    * @param {number} cap total distributable power (ship's powerCap)
    */
-  constructor(cap = 200) {
+  constructor(cap = 200, auxBonus = 0) {
     this.cap = cap;
+    this.auxBonus = Math.max(0, Number(auxBonus) || 0);
     this.levels = { ...PRESETS.balanced.levels };
     this.preset = 'balanced';
     // Rebalancing is not instant — the EPS grid takes a moment to settle.
@@ -164,7 +165,17 @@ export class PowerGrid {
 
   /** Effectiveness multiplier for a subsystem right now. */
   factor(subsystem) {
-    return effectiveness(this.levels[subsystem] ?? 50);
+    // `auxBonus` is a dedicated science package, not a bigger grid: three
+    // hulls declare it (25, 35, 30) and all three are science ships. It was
+    // written on the class and read by nothing, so an Oberth ran her sensors,
+    // her damage control and her fire suppression off exactly the same
+    // auxiliary any freighter had.
+    //
+    // It is added HERE rather than to `cap`, because a bigger cap is power the
+    // captain could put into the weapons — which is not what a science package
+    // is. This is auxiliary the ship has whatever else the grid is doing.
+    const bonus = subsystem === 'auxiliary' ? (this.auxBonus ?? 0) : 0;
+    return effectiveness((this.levels[subsystem] ?? 50) + bonus);
   }
 
   /** True once actual levels have caught up with the order. */
@@ -176,8 +187,10 @@ export class PowerGrid {
     return { cap: this.cap, levels: this.levels, target: this.target, preset: this.preset };
   }
 
-  static load(data, cap = 200) {
-    const g = new PowerGrid(data?.cap ?? cap);
+  static load(data, cap = 200, auxBonus = 0) {
+    // `auxBonus` is class data, not saved state — it comes back from the hull
+    // rather than the record, so an old save on a science ship still gets it.
+    const g = new PowerGrid(data?.cap ?? cap, auxBonus);
     if (data) {
       g.levels = { ...g.levels, ...data.levels };
       g.target = { ...g.target, ...data.target };
