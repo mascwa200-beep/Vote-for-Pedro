@@ -4290,6 +4290,166 @@ decide what it costs, and inventing that in the same PR that builds the
 mechanism would be guessing at content in a systems change.
 
 
+## 59. The captain walked through the crew
+
+The first deliberate play pass through the screenshots the harness takes, read
+as a playthrough record rather than as check output. Two things came out of it,
+one of which was not what I thought I was looking at.
+
+### What I thought I saw, and why it was wrong
+
+`10-aboard.png` is sickbay, and a medical officer fills the bottom-right of the
+frame — torso and the underside of a chin. I read that as the camera clipping
+into a solid, wrote a fix in the renderer that skipped any figure within 0.62 m
+of the viewpoint, and documented it as "entering sickbay put the viewpoint
+INSIDE a medical officer".
+
+Then I measured it, and the officer was **1.10 m away**. A person standing a
+metre in front of a first-person camera at eye height fills the bottom of the
+frame. That is what a metre looks like. There was nothing wrong with the
+picture at all, and the fix was written against a defect that did not exist.
+
+Two habits saved it from shipping. The first is that the fix had not been
+proven to fire — re-rendering showed the figure still there, and rather than
+raising the number until it disappeared I went to measure why. The second is
+that the first measurement was itself broken: the probe called `goToRoom`,
+which only sets a walk *order* for the autopilot to work through over the next
+several seconds, and then read positions immediately — so it measured distances
+from the bridge and reported them as sickbay's. It printed `room bridge` in its
+own output, which is the only reason it was caught.
+
+### What was actually there
+
+Walking the ship properly found something else. Every room-to-room route the
+ship has — 252 of them — walked with the game's own autopilot, sampling the
+distance from the camera to every figure on every tick:
+
+| | before |
+| --- | --- |
+| routes passing within 0.35 m of a person | **30 of 252** |
+| closest pass anywhere on the ship | **0.03 m** |
+| share of walking frames inside 0.35 m | **1.4%** |
+
+0.35 m is the figure's own radius — `officerMesh` builds a torso 0.40 m across
+with arms out to ±0.315 — so a camera closer than that is inside the person.
+0.03 m is not a near miss. The captain walked clean through an ensign in the
+recreation corridor, and did it on every route that used that corridor.
+
+### The cause was one number, in the last place I looked
+
+Not the collision code. `resolve()` in `walk.js` runs `confine` then
+`avoidProps`, and people are neither walls nor props — but adding them there
+would have been fixing the symptom.
+
+The cause is in `occupancy.js`, in the line that decides where people can
+stand:
+
+```js
+const w = (room.shape?.width ?? 8) / 2 - 0.8;
+```
+
+0.8 m is a sensible standoff from a bulkhead in a nine-metre room: it keeps
+people looking like they are *in* the room rather than pressed against its
+walls. Subtracted flat from the half-extent, it is a catastrophe in a corridor.
+The recreation corridor is **2.6 m across**. Half of that is 1.3. Less 0.8
+leaves **0.5** — so every person in a 2.6-metre corridor was placed in its
+middle metre, in single file down the centreline. Which is the metre the
+captain has to walk down, because a corridor's doors are at its two ends.
+
+A margin tuned for a room, applied unchanged to a corridor, put the crew in the
+one place the captain cannot avoid.
+
+### Three fixes, and why the other two were refused
+
+**Push people aside as the captain approaches.** Refused. `place()` is called
+fresh every frame and is deliberately a pure function of the room and the
+ship's state — the deterministic hash at the top of the file exists precisely
+so the crowd does not reshuffle thirty times a second. Anything reading the
+captain's position would undo that.
+
+**Hide a figure the camera is inside.** Refused, and this was my own first
+attempt. It leaves the captain still walking through people; it just stops them
+seeing it. In a 2.6-metre corridor a person popping out of the world is not
+subtle, and there is nowhere for the eye to miss it.
+
+**Do not put people in the way.** Taken. Three parts:
+
+1. The wall standoff drops from 0.8 to **0.4** — a person's own footprint plus
+   air. A nine-metre room moves people from ±3.2 to ±3.6, which nobody will
+   ever notice; a corridor gains the width to stand *along* it.
+2. A spot is rejected if it lies within **0.62 m** (the captain's radius plus a
+   person's) of a **walking lane** — the line from where you stand on arriving
+   through one door to the next door you are aiming at. That is the path the
+   autopilot actually takes: `stepToward` aims at a door and presses forward
+   with no idea what is between.
+3. When every spot in a room is somebody's way through, people stand **flat
+   against the bulkhead** instead of not existing.
+
+### The lane has to start a metre inside the door
+
+Door-to-door was the obvious segment and it was not enough. `Walker.enter` puts
+you a metre inside the door along the line toward the room's centre — arriving
+in the doorway would leave you half in the frame — so the walk and the
+door-to-door line diverge by about half a metre at that end. Measured: an
+ensign 0.84 m off the door-to-door line, and the captain still passed within
+**0.28 m** of them. Running each lane from the arrival point to the next door,
+over ordered pairs, closed it.
+
+### The third part is the one that had to be measured
+
+Requiring the lane alone emptied the security corridor. It is 2.6 m across with
+**four** doors on it — twelve lanes over a width that holds one and a half — so
+every spot in it is somebody's way through, and it went from three people at
+red alert to one. Silently, because a person who cannot be placed simply is not
+there. A corridor that empties the moment it gets interesting is the exact
+failure the occupancy module was written to undo, so the rule became a
+*preference*, given up at the wall.
+
+And the first bulkhead fallback measured **worse than having no rule at all**.
+It reused the existing perimeter walk, which is an ellipse inscribed in the
+room — and an ellipse in a 0.9-by-6.1 corridor spends almost all its perimeter
+along the long axis, where x is near zero. It put the crew straight back on the
+centreline. The fallback had to be the rectangle's side walls, because in a
+corridor the wall is the only place that is out of the way.
+
+### The result
+
+| | before | after |
+| --- | --- | --- |
+| routes passing within 0.35 m | 30 of 252 | **0** |
+| closest pass anywhere | 0.03 m | **0.53 m** |
+| walking frames inside 0.35 m | 1.4% | **0.0%** |
+| people in each room, at each alert | — | **unchanged, every room** |
+
+The last row is the one that matters most: the whole rule is worthless if it
+buys clear corridors by quietly having fewer people in them.
+
+The remaining 0.53 m is engineering's machine shop, where an officer stands
+half a metre from where you arrive on the deck. That one is not a defect — it
+is a person at their post, close enough to speak to and not close enough to be
+standing in — and it is used as the **positive control** for the sweep, because
+a test that walks the whole ship and finds nobody anywhere would pass the clean
+assertion by measuring nothing at all.
+
+### And a guard that a box defeated
+
+The other half of the pass was the figure itself: one box spanned both legs, so
+the silhouette had no gap in it. Two leg boxes, a two-part tapered torso and a
+neck took it from 60 triangles to 96, against a thousand for a starship hull.
+
+The obvious test — *is there geometry on the centreline below the hip?* —
+**passes against the old figure too**. A box has no vertex at its own centre:
+the single leg block spanned -0.12 to 0.12 and put vertices only at those two
+values, so scanning vertex positions for x near zero finds nothing either way.
+The measurement that works is counting *distinct* x values below the hip. One
+leg is two. Two legs are four.
+
+Same lesson as §57, arriving from the opposite direction: there, a check was
+satisfied by the comment saying the name it grepped for; here, a check was
+satisfied by the geometry of the very thing it was meant to catch.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

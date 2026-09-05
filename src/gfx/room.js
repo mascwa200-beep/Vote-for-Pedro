@@ -903,20 +903,51 @@ export function officerMesh(crew = 'ops', mounted = 'wall') {
   const hip = seated ? 0.46 : 0.50;
   const shoulder = seated ? 1.06 : 1.34;
   const mb = new MeshBuilder();
+  const dark = [0.16, 0.16, 0.18];
 
+  // TWO legs, not one block.
+  //
+  // The note above justifies a LOW-POLYGON figure, and it is right to: this
+  // renderer is flat-shaded with no textures and no skinning, and a detailed
+  // figure would read worse at phone size, not better. But that argument is
+  // about polygon COUNT, and a single box spanning both legs is not a
+  // legibility choice — it is one box instead of two. A gap between the legs
+  // is the cheapest silhouette cue there is and the one that most says
+  // "person" rather than "bollard" at a distance.
+  //
+  // Sixty triangles became ninety-six. A hull in this game is a thousand.
   if (!seated) {
-    box(mb, { center: vec3(0, hip / 2, 0), size: vec3(0.24, hip, 0.20), color: [0.16, 0.16, 0.18] });
+    for (const side of [-1, 1]) {
+      box(mb, {
+        center: vec3(side * 0.075, hip / 2, 0),
+        size: vec3(0.10, hip, 0.18),
+        color: dark,
+      });
+    }
   }
-  // Torso.
+
+  // The torso in two parts, narrower at the waist than at the shoulders.
+  // One box is a crate; two make a shape that has a direction to it.
+  const waist = hip + (shoulder - hip) * 0.42;
   box(mb, {
-    center: vec3(0, (hip + shoulder) / 2, 0),
-    size: vec3(0.40, shoulder - hip, 0.24), color: colour,
+    center: vec3(0, (hip + waist) / 2, 0),
+    size: vec3(0.30, waist - hip, 0.22), color: colour,
   });
+  box(mb, {
+    center: vec3(0, (waist + shoulder) / 2, 0),
+    size: vec3(0.40, shoulder - waist, 0.24), color: colour,
+  });
+
   // Arms, out to either side. At yaw 0 that is ±x, which is what makes the
   // whole figure rotatable by a single quaternion.
   box(mb, { center: vec3(0.26, shoulder - 0.16, 0), size: vec3(0.11, 0.34, 0.11), color: colour });
   box(mb, { center: vec3(-0.26, shoulder - 0.16, 0), size: vec3(0.11, 0.34, 0.11), color: colour });
-  box(mb, { center: vec3(0, shoulder + 0.14, 0), size: vec3(0.20, 0.24, 0.20), color: SKIN });
+
+  // A neck, so the head sits ON the shoulders instead of floating above a
+  // flat top. It is two centimetres of geometry and it is most of the
+  // difference between a figure and a stack of boxes.
+  box(mb, { center: vec3(0, shoulder + 0.03, 0), size: vec3(0.10, 0.06, 0.10), color: SKIN });
+  box(mb, { center: vec3(0, shoulder + 0.17, 0), size: vec3(0.19, 0.22, 0.20), color: SKIN });
 
   const built = mb.build();
   CREW_CACHE.set(key, built);
