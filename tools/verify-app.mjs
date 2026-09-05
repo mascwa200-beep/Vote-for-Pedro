@@ -1452,6 +1452,46 @@ try {
     boarded.modal === 1, `${boarded.modal} modals open`);
   await dismissModals(page);
 
+  // The report names the people it lost.
+  //
+  // It used to say "We lost 1." — while `report.casualties` carried
+  // `{ name, killed }` for every one of them and the ship's LOG already named
+  // them three lines away in state.js. A named bridge officer could be killed
+  // taking a Klingon bridge and the card the captain dismisses rendered them
+  // as a digit; an officer merely injured was not mentioned at all.
+  //
+  // Staged rather than waited for, because a casualty is a dice roll and a
+  // check that only fires when the dice cooperate is a check that reports
+  // clean by not running. `runAwayMission` renders straight off the report, so
+  // handing it one is the whole test.
+  const casualtyCard = await page.evaluate(() => {
+    const app = globalThis.__app;
+    app.closeModal?.();
+    const real = app.game.awayMission.bind(app.game);
+    app.game.awayMission = () => ({
+      ok: true, id: 'boarding_action', title: 'Board the hostile', outcome: 'partial',
+      steps: [{ text: 'Beam through their shields.', success: true, officer: 'Ayla Marchetti' }],
+      passed: 1, of: 3, captainWounded: false, lost: 1,
+      casualties: [
+        { name: 'Ravel Barrow', killed: true },
+        { name: 'Amara Novak', injured: true },
+        { name: 'Security crewman', killed: true },
+      ],
+    });
+    app.runAwayMission('boarding_action');
+    app.game.awayMission = real;
+    const text = document.querySelector('.modal')?.textContent ?? '';
+    return { text };
+  });
+  check('the away report names the officer it lost, not a number',
+    /We lost Ravel Barrow\./.test(casualtyCard.text), casualtyCard.text.slice(0, 200));
+  check('and says who came back hurt, which it never mentioned at all',
+    /Amara Novak is hurt\./.test(casualtyCard.text), casualtyCard.text.slice(0, 200));
+  check('and an unnamed crewman still reads as a sentence',
+    /We lost a security crewman\./.test(casualtyCard.text), casualtyCard.text.slice(0, 200));
+  await page.screenshot({ path: join(SHOTS, '19b-casualties.png') });
+  await dismissModals(page);
+
   // Leave the bridge as it was found. Everything after this checks the
   // first-person view and the chair, and neither is on the tactical plot.
   await page.evaluate(() => {
