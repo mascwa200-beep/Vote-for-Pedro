@@ -309,6 +309,18 @@ class App {
 
     // The countdown to losing the ship. There is one way out — eject the core —
     // and the warning tone existed in sfx.js and was played from nowhere.
+    // Two cues that existed and were played by nothing.
+    //
+    // `sfx.js` has synthesised `cloak` and `decloak` since it was written, and
+    // the cloak ORDER played `power_reroute` — the generic power hum — while a
+    // captain who had spent 130 Tokens of Regard on a cloaking device got the
+    // same sound as trimming the grid. Hostiles cloak far more often than the
+    // player ever will and made no sound at all.
+    //
+    // Throttled, because a wing decloaking together is one event to the ear.
+    on('ship:cloak', () => audio.play('cloak', { throttle: 200 }));
+    on('ship:decloak', () => audio.play('decloak', { throttle: 200 }));
+
     on('ship:breach', ({ ship, seconds }) => {
       if (!ship.isPlayer) return;
       audio.play('core_breach_warning');
@@ -1619,7 +1631,10 @@ class App {
             : 'We are not cloaked.');
           break;
         }
-        audio.play('power_reroute');
+        // No `audio.play` here: `Ship.cloak`/`decloak` emit, and the
+        // listener above plays the cue that was written for this. Playing one
+        // here as well would double it for the player and still leave every
+        // hostile cloak silent.
         ack('tactical', order.on ? 'Cloaking device engaged.' : 'Decloaking.');
         break;
       }
@@ -2113,7 +2128,12 @@ class App {
       }
       case 'salvage': {
         const r = g.stripWreck();
-        if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
+        // `tractor_beam`, which was synthesised and played by nothing. Duty.js
+        // calls this "tractoring in the floaters" and ship.js describes core
+        // recovery as getting a tractor beam on a live antimatter assembly —
+        // the two moments in the game that are a tractor beam both made a
+        // generic acknowledgement noise.
+        if (r.ok) { audio.play('tractor_beam'); haptic('confirm'); }
         else { audio.play('ui_deny'); ack('engineering', r.reason); }
         break;
       }
@@ -2146,7 +2166,7 @@ class App {
         break;
       case 'recover_core': {
         const r = g.recoverCore();
-        if (r.ok) { audio.play('ui_confirm'); haptic('confirm'); }
+        if (r.ok) { audio.play('tractor_beam'); haptic('confirm'); }
         else { audio.play('ui_deny'); ack('engineering', r.reason); }
         break;
       }

@@ -3531,6 +3531,92 @@ a scratch probe must destructure a dynamic import, assert the binding is not
 `undefined` before using it.
 
 
+## 51. Three sounds nobody could hear, and a guard that agreed with itself
+
+`src/audio/sfx.js` synthesises **38 cues** — the figure README publishes and
+`tests/docs.test.js` scrapes. Everything the game makes noise with is built from
+oscillators and noise at load time; there is not an audio file in the
+repository, and there cannot be, because CI fails on asset files.
+
+Counted through `.play(` in the UI sources, three of the 38 were reached by
+nothing:
+
+| cue | what it is for | what actually played |
+| --- | --- | --- |
+| `cloak` | the ship going quiet | `power_reroute` |
+| `decloak` | the ship coming back | nothing |
+| `tractor_beam` | a beam holding something | nothing |
+
+The `cloak` line is the one that matters. A cloaking device costs **130 Tokens
+of Regard** on the Romulan reputation track — the most expensive thing on it —
+and the order that fires it played the generic power hum, the same three notes
+a captain hears every time they shift power to the shields. The single
+most-earned item in the game sounded like moving a slider.
+
+Two corrections to the count before it was believed, both in the direction of
+accusing working code:
+
+- `panel_chirp` looked orphaned and is played at `engine.js:346`. The first
+  sweep read only `src/ui/`.
+- `phaser_heavy` and `ui_back` looked orphaned because the matcher wanted
+  `.play('name')` and both are played through a ternary —
+  `audio.play(heavy ? 'phaser_heavy' : 'phaser')`.
+
+### The guard that was already there
+
+`tests/wiring.test.js` has asserted "every sound cue is reachable" for a long
+time, with a `RESERVED` map for cues held for a mechanic that does not exist
+yet. It passed on `cloak` and `decloak` throughout. Its matcher was
+`['"\`]name['"\`]` — *any quoted occurrence* anywhere in the UI sources — and
+`src/ui/tactical.js:365-366` reads:
+
+```js
+      case 'cloak':
+      case 'decloak': {
+```
+
+Two `switch` labels in the order dispatcher. **Both cues passed the guard for
+four hundred lines of the wrong reason.** A test that asks "does this string
+appear in these files" is not asking the question its name claims.
+
+The matcher now harvests only the argument list of a `.play(` call, so a
+ternary is seen and a `case` label is not:
+
+```js
+for (const m of UI_SRC.matchAll(/\.play\(([^;]{0,160})/g))
+  for (const lit of m[1].matchAll(/['"`]([a-z_]+)['"`]/g)) out.add(lit[1]);
+```
+
+and both directions of the guard assert `played.size > 30` first, because a
+matcher that harvests nothing reports every cue as unreachable and a matcher
+that harvests everything reports none — §49's denominator rule, applied to the
+harness rather than the code.
+
+`tractor_beam`'s reservation had gone **stale rather than wrong**: it was
+reserved with the reason "there is no tractor beam mechanic", which was true
+when it was written and stopped being true when core recovery shipped — a
+mechanic whose own log line is *"tractor beam holds"*. The companion test,
+"nothing is reserved that is actually reachable", is what caught it. A
+reservation is a dated claim about the rest of the codebase and needs the guard
+pointing back at it.
+
+### What is wired
+
+`Ship.cloak()` and `decloak()` now emit `ship:cloak` / `ship:decloak`, and
+`main.js` plays the cue off the event with `{ throttle: 200 }`. Off the event
+rather than in the order handler, which is the part worth recording: **the AI
+cloaks constantly** — Birds of Prey and warbirds break off, vanish, and come
+back on a bearing — and none of it made a sound before. Wiring the order would
+have fixed the captain's own cloak and left the tactically important half
+silent. `tractor_beam` plays at `salvage` and `recover_core`, the two places the
+code's own text calls a tractor beam.
+
+The shape is §45's and §48's again, in the one department that had a guard
+written for it: **something declared, and nothing reading it.** The lesson here
+is narrower and worse — the guard existed, was specific, ran on every commit,
+and was satisfied by a substring.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

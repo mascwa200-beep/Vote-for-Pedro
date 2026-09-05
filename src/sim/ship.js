@@ -960,6 +960,11 @@ export class Ship {
     this.cloaked = true;
     this.shieldsUp = false;
     this.cloakCooldown = 6;
+    // Emitted for the same reason `ship:breach` and `ship:boarded` are: the
+    // screen wants to know, and the simulation must not reach into it. This is
+    // what makes a HOSTILE cloaking audible — the AI cloaks Birds of Prey and
+    // warbirds constantly and nothing about it ever made a sound.
+    emit('ship:cloak', { ship: this });
     return true;
   }
 
@@ -968,6 +973,7 @@ export class Ship {
     this.cloaked = false;
     this.shieldsUp = true;
     this.cloakCooldown = 4;
+    emit('ship:decloak', { ship: this });
     return true;
   }
 
