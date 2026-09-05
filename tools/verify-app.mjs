@@ -4790,6 +4790,82 @@ try {
   check('the character sheet lists all six abilities', sheetAbilities === 6, `${sheetAbilities}`);
   await page.screenshot({ path: join(SHOTS, '12-character-sheet.png') });
 
+  // The rank bar and the numbers beside it are the same quantity.
+  //
+  // They were not. The bar was `rankProgress` — measured from the CURRENT
+  // rank's floor — printed in the same row as `xp / nextRank.xp`, measured
+  // from zero, and they disagreed at every rank. And a new captain is
+  // commissioned at rank index 5 with zero experience against Captain's floor
+  // of 17,000, so the fraction went negative, clamped to nought, and the bar
+  // sat empty for the first seventeen thousand points while the numbers
+  // climbed. Read off the rendered element rather than recomputed, because
+  // recomputing it here would only prove this file agrees with itself.
+  // The rank bar lives on the service record (`captain`), not the character
+  // sheet the Captain tab opens.
+  await page.evaluate(() => globalThis.__app.go('captain'));
+  await page.waitForTimeout(250);
+  const rankBar = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.readout')]
+      .find((r) => /rank progress/i.test(r.querySelector('.label')?.textContent ?? ''));
+    if (!row) return null;
+    const fill = row.querySelector('.bar i');
+    const m = (row.querySelector('.val')?.textContent ?? '').match(/([\d.]+)\s*\/\s*([\d.]+)/);
+    const val = row.querySelector('.val');
+    return {
+      width: parseFloat(fill?.style.width ?? '0'),
+      // The RENDERED box, not the style attribute. A first draft asserted only
+      // `style.width` and passed while the bar was a few device pixels wide at
+      // phone scale — a property being set is not a thing being visible.
+      fillPx: Math.round(fill?.getBoundingClientRect().width ?? 0),
+      barPx: Math.round(row.querySelector('.bar')?.getBoundingClientRect().width ?? 0),
+      valLines: Math.round((val?.getBoundingClientRect().height ?? 0) / 14),
+      xp: m ? Number(m[1]) : null,
+      next: m ? Number(m[2]) : null,
+      val: val?.textContent ?? '',
+    };
+  });
+  check('the record shows a rank bar with numbers on it',
+    !!rankBar && rankBar.xp !== null && rankBar.next > 0, JSON.stringify(rankBar));
+  // `.val` was `flex: 0 0 48px`, which is right for "100%" and wrong for a
+  // pair: measured, "0 / 28000" wrapped onto two lines and "39413 / 66000"
+  // onto three, beside a one-line bar. Every other readout in the game — hull,
+  // shields, crew, antimatter, the ten faction standings — already fitted and
+  // still right-aligns to the same pixel.
+  check('and the numbers beside it fit on one line',
+    !!rankBar && rankBar.valLines <= 1, JSON.stringify(rankBar));
+  check('and the bar agrees with the numbers printed beside it',
+    !!rankBar && Math.abs(rankBar.width - (rankBar.xp / rankBar.next) * 100) < 1.5,
+    JSON.stringify(rankBar));
+
+  // The case the fix is really for, STAGED — this harness captain happens to
+  // be above their own rank's floor, so reading the bar as it stands would
+  // pass either way and prove nothing.
+  //
+  // A new captain is commissioned at rank index 5 with ZERO experience against
+  // Captain's floor of 17,000, and `rankIndex + 1` promotions grant a rank
+  // without the experience behind it. In both, the old fraction went negative
+  // and clamped to nought: thousands of points earned, and an empty bar.
+  const belowFloor = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const p = app.game.progress;
+    const was = p.xp;
+    p.xp = Math.max(0, p.rank.xp - 5000);   // below this rank's own floor
+    app.go('captain');
+    app.render();
+    const row = [...document.querySelectorAll('.readout')]
+      .find((r) => /rank progress/i.test(r.querySelector('.label')?.textContent ?? ''));
+    const out = {
+      width: parseFloat(row?.querySelector('.bar i')?.style.width ?? '0'),
+      xp: p.xp, floor: p.rank.xp, val: row?.querySelector('.val')?.textContent ?? '',
+    };
+    p.xp = was;
+    app.render();
+    return out;
+  });
+  check('a captain below their own rank floor still earned what the bar shows',
+    belowFloor.xp > 0 && belowFloor.xp < belowFloor.floor && belowFloor.width > 1,
+    JSON.stringify(belowFloor));
+
   // ------------------------------------------------ the board of inquiry
   //
   // Losing a ship printed "there will be a board of inquiry" and held none,

@@ -4929,6 +4929,81 @@ which is a more productive thing to go looking for than a missing feature.
 
 
 
+## 65. A bar and the numbers beside it, disagreeing
+
+`12b-board-of-inquiry.png`. The service record prints a rank-progress bar with
+its numbers to the right of it, and the two are not the same quantity.
+
+```js
+readout('Rank progress', p.rankProgress,
+  p.nextRank ? `${p.xp} / ${p.nextRank.xp}` : 'max'),
+```
+
+`rankProgress` is `(xp - thisRankFloor) / (nextFloor - thisRankFloor)`. The text
+is measured from zero. Printed in the same row, they disagree at every rank:
+
+| rank | xp | bar | the numbers beside it |
+| --- | --- | --- | --- |
+| Captain | 15,000 | **0%** | 15000 / 28000 — reads 54% |
+| Commodore | 51,000 | 32% | 51000 / 66000 — reads 77% |
+| Vice Admiral | 99,000 | 10% | 99000 / 135000 — reads 73% |
+
+### And at the start it does not move at all
+
+A captain is commissioned at **rank index 5 — Captain — with zero experience**,
+and Captain's floor is 17,000. So `rankProgress` is negative, clamps to nought,
+and **the bar sits empty for the first seventeen thousand points of a
+commission** while the numbers beside it climb from nothing to fifteen thousand.
+The same happens to any rank granted by `rankIndex + 1` without the experience
+behind it, which is how the screenshot came to show a Commodore on 39,413
+against a floor of 44,000.
+
+`rankProgress` has exactly one consumer in the repo, so the blast radius is that
+one line. The getter is left alone — as a concept it is right, and the day a
+captain starts at Ensign with no rank granted ahead of their record it will be
+true as well as right. The bar is now measured the way the numbers are:
+monotonic, never negative, and checkable by eye against the pair beside it,
+which is the only property that matters for two readings of one thing in one
+row.
+
+### The column was too narrow for a pair
+
+`.readout .val` was `flex: 0 0 48px`, which is exactly right for `100%` and
+wrong for `39413 / 66000`. Measured: the pair wrapped onto **three lines**
+beside a one-line bar, and even a fresh captain's `0 / 28000` took two. Now
+`flex: 0 0 auto` with a 48px floor and `nowrap` — every short value still
+right-aligns to **the same pixel, 425**, across all eight subsystem rows and
+all ten faction standings, and the bar gives up the width instead.
+
+### Two mistakes of mine, and the rule they change
+
+**I read the post-fix screenshot as still broken. Twice.** The fill was there —
+154 device pixels of amber out of 258 — and at the scale a full 1344-pixel phone
+screenshot is viewed, I could not resolve it against the trough and twice
+concluded the bar was empty. What settled it was cropping: a screenshot of the
+`.readout` element alone, where a 60% amber bar is unmistakable.
+
+**And my first guard asserted the wrong property.** It read `style.width` off
+the fill, which would have passed while the bar was a few pixels wide, or
+`display: none`, or transparent. The check now reads
+`getBoundingClientRect().width` — the rendered box — and the line count of the
+value beside it.
+
+So §59's rule gains a clause. *A visual feature is not done when the code runs;
+render it and look* — **and if the thing is small at phone scale, crop it, and
+assert the rendered box rather than the property you set.** A style attribute
+being present is not a thing being visible, and my own eyes on a downscaled
+screenshot are not a measurement.
+
+### Five for five
+
+The pattern from §64 holds again: the code already knew. Both the XP and the
+threshold were on the object and printed on the screen; what was wrong was that
+the bar beside them was computing something else and nobody had put the two
+numbers together.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

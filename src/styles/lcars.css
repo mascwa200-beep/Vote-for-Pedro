@@ -323,7 +323,14 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .readout .bar > i.mid { background: var(--lcars-amber); }
 .readout .bar > i.low { background: var(--lcars-red); }
 .readout .val {
-  flex: 0 0 48px; text-align: right;
+  /* Was `flex: 0 0 48px`, which is right for "100%" and wrong for a pair.
+     The service record prints "39413 / 66000" here and 48 pixels wrapped it
+     onto THREE lines beside a one-line bar. `auto` with a 48px floor keeps
+     every short value aligned exactly where it was — hull, shields, crew,
+     antimatter, torpedoes, ETA all still read as one right-aligned column —
+     and lets a long one take the width it needs off the bar instead of off
+     its own legibility. */
+  flex: 0 0 auto; min-width: 48px; white-space: nowrap; text-align: right;
   font-variant-numeric: tabular-nums; font-size: 0.82em; color: var(--lcars-ice);
 }
 

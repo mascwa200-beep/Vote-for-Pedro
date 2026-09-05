@@ -1381,7 +1381,30 @@ export function captainScreen(app) {
   root.append(panel('Service Record', [
     el('p', {}, [el('b', { text: `${p.rankName} ${g.captain.name}` })]),
     el('p', { class: 'muted', text: `${g.captain.species} · ${g.captain.serialNumber}` }),
-    readout('Rank progress', p.rankProgress,
+    // The bar and the number beside it have to be the same quantity.
+    //
+    // This passed `p.rankProgress`, which is (xp - thisRankFloor) / (nextFloor
+    // - thisRankFloor), next to the text `xp / nextRank.xp`, which is measured
+    // from zero. They are different fractions of different things, printed in
+    // the same row, and they disagreed at every rank: a Commodore on 51,000
+    // read "51000 / 66000" — plainly most of the way — beside a bar 32% full.
+    //
+    // Worse at the start. A new captain is commissioned at rank index 5 with
+    // ZERO experience, and Captain's floor is 17,000 — so `rankProgress` is
+    // negative, clamps to nought, and the bar sits EMPTY for the first
+    // seventeen thousand points of a commission while the numbers next to it
+    // climb. The same happens to any rank granted by `rankIndex + 1` without
+    // the experience behind it, which is how the board-of-inquiry screenshot
+    // came to show a Commodore on 39,413 against a floor of 44,000.
+    //
+    // So the bar is measured the way the numbers are. It is monotonic, never
+    // negative, and a player can check it against the pair beside it — which
+    // is the only property that matters for two readings of one thing sitting
+    // in the same row. `rankProgress` has no other consumer in the repo; the
+    // getter is left alone because as a concept it is fine, and the day a
+    // captain starts at Ensign with no rank granted ahead of their record it
+    // will be true as well as fine.
+    readout('Rank progress', p.nextRank ? p.xp / p.nextRank.xp : 1,
       p.nextRank ? `${p.xp} / ${p.nextRank.xp}` : 'max'),
     el('p', { class: 'hint', text: p.nextRank ? `Next: ${p.nextRank.name}` : 'Highest rank attained.' }),
     el('div', {}, [
