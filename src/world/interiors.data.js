@@ -401,7 +401,11 @@ export const ROOMS = {
     shape: { kind: 'box', width: 9.0, depth: 7.0, height: 2.6 },
     stations: [
       { id: 'rec_terminal', label: 'The wall terminal', crew: null, panel: 'crew', at: [0, 3.3], facing: 0, mounted: 'wall' },
-      { id: 'rec_food', label: 'The food synthesiser', crew: null, panel: 'shop', at: [-4.1, 0.6], facing: -Math.PI / 2, mounted: 'wall' },
+      // `panel: null`, and answered by sim/consoles.js. It declared 'shop',
+      // which is the MACHINE SHOP — hull patches, torpedo casings, graviton
+      // charges — from a food synthesiser, in the room this file's own comment
+      // four lines up calls the one room aboard that is not for working in.
+      { id: 'rec_food', label: 'The food synthesiser', crew: null, panel: null, at: [-4.1, 0.6], facing: -Math.PI / 2, mounted: 'wall' },
     ],
     props: [
       { id: 'rec_table_a', kind: 'table', label: 'A table', at: [-1.6, -0.4], facing: 0, radius: 0.85, solid: true },
