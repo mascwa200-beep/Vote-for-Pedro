@@ -406,6 +406,30 @@ export const INTENTS = [
     build: () => ({ action: 'effect_repairs' }),
   },
 
+  {
+    // The crew's half of `effect_repairs`, and the first order in the game that
+    // has to be given from a particular compartment. It is refused everywhere
+    // else with a reason rather than being absent, the way the transporter
+    // console refuses — "why can I not do this here" is a question the room
+    // should answer while you are standing in it.
+    //
+    // `doctor` and `surgeon` are NOT keywords: they are how a captain addresses
+    // the CMO, and weighting them here would pull every "doctor, report" at
+    // this instead of at the officer.
+    id: 'see_to_wounded',
+    help: 'See to the wounded (in sickbay)',
+    phrases: [
+      'see to the wounded', 'see to the injured', 'tend to the wounded',
+      'tend the wounded', 'attend to the wounded', 'treat the wounded',
+      'treat the injured', 'look after the wounded', 'sit with the wounded',
+      'give them the time', 'stay with them until they are fit',
+    ],
+    keywords: { wounded: 2, injured: 1.5 },
+    // A casualty REPORT is a question, not an order to spend a day on it.
+    veto: ['report', 'casualties', 'list', 'how many'],
+    build: () => ({ action: 'see_to_wounded' }),
+  },
+
   // ------------------------------------------------------------------
   // Alert and shields
   // ------------------------------------------------------------------

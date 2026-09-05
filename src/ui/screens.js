@@ -2394,6 +2394,74 @@ export { modal, field, textInput, select };
  * chief engineer cannot build four things at once, and being made to choose
  * which one is the entire interest of the mechanic.
  */
+/**
+ * Sickbay, from the biobed or the medical laboratory.
+ *
+ * Both of those stations declared `panel: 'medical'`, and `STATION_PANEL`
+ * aliased 'medical' onto 'crew' — so standing at a biobed opened the crew
+ * ROSTER, which is a personnel screen and knows nothing about who is hurt.
+ * Three metres away the chief surgeon's desk gave a real sick list, because
+ * that station has no panel at all and falls to `sim/consoles.js`. One room,
+ * one station telling the truth and two opening a filing cabinet.
+ *
+ * The readout is the injury, in the words `severity` uses on the CMO's desk,
+ * and the hours between an officer and their post — which is a number the
+ * simulation has always had (`Officer.recover` is `hours * rate / 120`) and
+ * has never shown anybody.
+ */
+export function sickbayPanel(app) {
+  const g = app.game;
+  const rate = g.character?.mechanic?.('recoveryRate') ?? 1;
+  const hurt = (g.crew?.officers ?? []).filter((o) => o.alive && o.injured);
+  const lost = (g.crew?.officers ?? []).filter((o) => !o.alive);
+
+  const body = [];
+  if (!hurt.length) {
+    body.push(el('p', { class: 'muted', text: 'No officer is on the sick list. The ward is quiet.' }));
+  } else {
+    for (const o of hurt) {
+      const hours = Math.ceil(((o.injurySeverity ?? 1) * 120) / (rate > 0 ? rate : 1));
+      // The bar is how far along they are, not how hurt they are, so it fills
+      // as they get better — the direction every other readout in the game
+      // fills in.
+      // The name alone. Rendered at 412 CSS px with the rank in front of it,
+      // "Commander Ashford Quill" wrapped a readout label onto three lines and
+      // pushed the bar into a column narrower than the words beside it. The
+      // rank is on the crew screen, which is where ranks live.
+      body.push(readout(o.name,
+        1 - (o.injurySeverity ?? 1),
+        hours < 24 ? `${hours} h to duty` : `${(hours / 24).toFixed(1)} d to duty`));
+    }
+    body.push(button('See to the wounded', tap(() => {
+      const r = g.seeToTheWounded();
+      if (!r.ok) { app.showMessage('Sickbay', [r.reason]); return; }
+      app.showMessage('Sickbay', [
+        `${r.hours} hours.`,
+        r.back.length
+          ? `${r.back.join(', ')} back on duty.`
+          : 'Nobody is fit to return yet.',
+        r.still ? `${r.still} still on the sick list.` : 'The ward is clear.',
+      ]);
+      app.render();
+    }), {
+      color: 'blue',
+      say: 'see to the wounded',
+      sub: 'Up to a day of the commission, at the ward rather than the chair',
+    }));
+  }
+
+  // The captain's own recovery rate, which two species traits and one
+  // background double and which had exactly one reader in the whole game.
+  if (rate !== 1) {
+    body.push(el('p', { class: 'hint', text: `Your own training has them on their feet ${rate}× as fast.` }));
+  }
+  if (lost.length) {
+    body.push(el('p', { class: 'hint', text: `We are without ${lost.map((o) => o.name).join(', ')}.` }));
+  }
+
+  return panel('Sickbay', body);
+}
+
 export function machineShopPanel(app) {
   const g = app.game;
   const status = g.fabricationStatus;

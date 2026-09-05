@@ -683,3 +683,14 @@ cloak | decloak
 cloak | uncloak
 cloak | drop the cloak
 cloak | take us out of cloak
+
+# --- Sickbay. The one order that has to be given from a particular room; the
+# --- refusal names the room, so the hostile cases here are about reaching the
+# --- intent at all, not about where the captain is standing.
+see_to_wounded | see to the wounded
+see_to_wounded | tend to the wounded
+see_to_wounded | see to the injured
+see_to_wounded | treat the wounded
+see_to_wounded | doctor, see to the wounded
+see_to_wounded | look after the wounded
+see_to_wounded | give them the time

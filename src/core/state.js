@@ -1306,6 +1306,61 @@ export class Game {
   }
 
   /**
+   * Hours in sickbay, spent rather than waited out.
+   *
+   * `effectRepairs` for the crew, and deliberately built the same way: it costs
+   * commission hours and it does nothing the clock was not already going to do.
+   * `passTime` has healed injured officers at `hours * recoveryRate / 120`
+   * since the campaign-time sickbay was written — a bad injury is the better
+   * part of a week — so this adds NO healing path, no roll, and no new balance
+   * surface. It buys with the calendar what waiting already buys, and the
+   * commission is five years long, so the hours are the price.
+   *
+   * The room is the point. Sickbay is one of seventeen compartments a captain
+   * can walk to and, until this, the only thing any of them offered that could
+   * not be done from the chair was a scene in an episode. This is an order you
+   * have to be standing in a particular room to give.
+   *
+   * Tolerant of a game with no walker, for the reason `Mission.testWhere`
+   * gives: a half-built state is nowhere, not somewhere else.
+   *
+   * @returns {{ok: boolean, reason?: string, hours?: number, back?: string[],
+   *   still?: number, rate?: number}}
+   */
+  seeToTheWounded() {
+    const done = this.noLongerInCommand();
+    if (done) return { ok: false, reason: done.reason };
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, reason: 'Not while we are under fire, Captain.' };
+    }
+    const at = this.walk?.roomId;
+    if (at && at !== 'sickbay') {
+      return { ok: false, reason: 'That is done in sickbay, Captain.' };
+    }
+    const hurt = this.crew.officers.filter((o) => o.alive && o.injured);
+    if (!hurt.length) return { ok: false, reason: 'Nobody is on the sick list, Captain.' };
+
+    // Long enough to get the least badly hurt of them back on their feet, and
+    // never more than a day. The cap is what keeps this an order rather than a
+    // way to skip a week: a severe injury takes several of these.
+    const rate = this.character?.mechanic('recoveryRate') ?? 1;
+    const lightest = Math.min(...hurt.map((o) => o.injurySeverity ?? 1));
+    const needed = (lightest * 120) / (rate > 0 ? rate : 1);
+    const hours = Math.max(2, Math.min(24, Math.ceil(needed)));
+
+    this.spendHours(hours);
+    const back = hurt.filter((o) => o.alive && !o.injured).map((o) => o.name);
+    const still = hurt.filter((o) => o.alive && o.injured).length;
+    this.pushLog(
+      back.length
+        ? `${back.join(', ')} ${back.length === 1 ? 'is' : 'are'} released from sickbay and back on duty.`
+        : `${hours} hours in sickbay. Nobody is fit to return yet.`,
+      'medical',
+    );
+    return { ok: true, hours, back, still, rate };
+  }
+
+  /**
    * Record a captain's log entry. It goes into the ship's log like any other
    * line and, unlike any other line, it is yours.
    */

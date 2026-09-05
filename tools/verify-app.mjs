@@ -3170,6 +3170,112 @@ try {
   const firstRow = page.locator('.officer').first();
   await firstRow.screenshot({ path: join(SHOTS, '07c-officer-row.png') });
 
+  // ---- The ward, from the biobed ----
+  //
+  // Both stations in sickbay used to open THIS screen — the personnel roster,
+  // which knows everybody's department and nobody's injuries — because
+  // `panel: 'medical'` was aliased onto 'crew'. So the check goes here, next to
+  // the screen it used to be.
+  //
+  // Staged and then PUT BACK, with the restore asserted. Two earlier stages in
+  // this harness displaced the checks after them (a boarding report broke two
+  // modal checks; a staged fight broke ten promotion checks), and the fix both
+  // times was to restore what was borrowed. `seeToTheWounded` is deliberately
+  // NOT pressed here: it spends commission hours, and hours cannot be handed
+  // back. Its refusals are asked for instead, which mutate nothing.
+  const ward = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    // Who is ALREADY hurt. By this point in the run the ship has been shot at,
+    // so the ward is not necessarily empty — and a restore that asserts "no
+    // officer is injured" would be asserting that the harness never hurt
+    // anybody, which is a different and false claim.
+    const was = {
+      room: g.walk.roomId,
+      screen: app.screen,
+      hurt: g.crew.officers.filter((o) => o.injured).map((o) => o.name).sort(),
+    };
+    const who = g.crew.officers.find((o) => o.alive && !o.injured);
+    if (!who) return { skipped: 'nobody fit to injure' };
+
+    // Refused from where the captain is standing now, which is not sickbay.
+    const elsewhere = g.seeToTheWounded();
+
+    who.injured = true;
+    who.injurySeverity = 0.5;
+    g.goToRoom('sickbay');
+    for (let n = 0; n < 8000 && g.walkOrder; n++) g.update(1 / 30);
+    const arrived = g.walk.roomId;
+
+    // Stand at the biobed and OPERATE it, rather than calling `openConsole`
+    // with the key by hand. The defect this check exists for lived in
+    // `STATION_PANEL` — the station's own key, 'medical', was aliased onto
+    // 'crew' — and a check that passes the console key in itself never touches
+    // that map, so it would have gone on passing with the bug put back.
+    const station = (g.walk.room.stations ?? []).find((s) => s.id === 'biobed');
+    if (station) {
+      [g.walk.x, g.walk.z] = station.at;
+      g.walk.atStation = g.walk.nearestStation();
+    }
+    const standingAt = g.walk.atStation?.id ?? null;
+    app.useWhatIsInFront();
+    app.render();
+
+    const modal = document.querySelector('.modal');
+    const text = modal?.innerText ?? '';
+    const bars = [...(modal?.querySelectorAll('.readout') ?? [])].map((r) => {
+      const box = r.getBoundingClientRect();
+      return { w: Math.round(box.width), h: Math.round(box.height), text: r.innerText };
+    });
+
+    // And put it all back.
+    app.closeModal?.();
+    who.injured = false;
+    who.injurySeverity = 0;
+    g.goToRoom(was.room);
+    for (let n = 0; n < 8000 && g.walkOrder; n++) g.update(1 / 30);
+    app.go(was.screen);
+    app.render();
+
+    const nowHurt = g.crew.officers.filter((o) => o.injured).map((o) => o.name).sort();
+    return {
+      elsewhere, arrived, standingAt, name: who.name, text, bars, was: was.hurt, nowHurt,
+      restored: g.walk.roomId === was.room && app.screen === was.screen
+        && nowHurt.join('|') === was.hurt.join('|'),
+    };
+  });
+
+  check('the captain is standing at the biobed',
+    ward.arrived === 'sickbay' && ward.standingAt === 'biobed',
+    JSON.stringify({ room: ward.arrived, at: ward.standingAt }));
+  check('and operating it opens the ward, not the personnel roster',
+    /Sickbay/i.test(ward.text) && !/Ship.s Company/i.test(ward.text),
+    JSON.stringify(ward.text).slice(0, 220));
+  // Case-insensitively: the panel headings are uppercased in CSS and
+  // `innerText` reports the transformed text, so a straight `includes` fails on
+  // a board that is displaying the name perfectly.
+  check('and it names the officer who is on the sick list',
+    ward.text.toLowerCase().includes(ward.name.toLowerCase()),
+    `${ward.name} not in ${JSON.stringify(ward.text).slice(0, 160)}`);
+  // A rendered box, not a style string: the last readout bug in this game was
+  // a bar asserted by `style.width` that would have passed while invisible.
+  check('and the hours between them and their post are drawn as a bar',
+    ward.bars.length >= 1 && ward.bars.every((b) => b.w > 40 && b.h > 4),
+    JSON.stringify(ward.bars));
+  check('and it says how long, in hours or days',
+    /\d+(\.\d+)?\s*(h|d) to duty/.test(ward.text), JSON.stringify(ward.text).slice(0, 160));
+  // The order exists and is refused off the ward, by name. This is what makes
+  // sickbay a room you have to walk to rather than a screen.
+  check('and the order is refused anywhere but sickbay, saying where',
+    ward.elsewhere?.ok === false && /sickbay/i.test(ward.elsewhere?.reason ?? ''),
+    JSON.stringify(ward.elsewhere));
+  check('and the ward check put the ship back the way it found it',
+    ward.restored === true,
+    JSON.stringify({ was: ward.was, now: ward.nowHurt }));
+  // No screenshot of the modal here: the restore above closes it, and a
+  // screenshot taken after that would be a picture of the roster labelled
+  // sickbay — which is the exact confusion this whole check exists to end.
+
   // The same thing, said out loud.
   const spoken = await page.evaluate(async () => {
     const app = globalThis.__app;
