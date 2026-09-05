@@ -17492,8 +17492,9 @@ class PowerGrid {
   /**
    * @param {number} cap total distributable power (ship's powerCap)
    */
-  constructor(cap = 200) {
+  constructor(cap = 200, auxBonus = 0) {
     this.cap = cap;
+    this.auxBonus = Math.max(0, Number(auxBonus) || 0);
     this.levels = { ...PRESETS.balanced.levels };
     this.preset = 'balanced';
     // Rebalancing is not instant — the EPS grid takes a moment to settle.
@@ -17598,7 +17599,17 @@ class PowerGrid {
 
   /** Effectiveness multiplier for a subsystem right now. */
   factor(subsystem) {
-    return effectiveness(this.levels[subsystem] ?? 50);
+    // `auxBonus` is a dedicated science package, not a bigger grid: three
+    // hulls declare it (25, 35, 30) and all three are science ships. It was
+    // written on the class and read by nothing, so an Oberth ran her sensors,
+    // her damage control and her fire suppression off exactly the same
+    // auxiliary any freighter had.
+    //
+    // It is added HERE rather than to `cap`, because a bigger cap is power the
+    // captain could put into the weapons — which is not what a science package
+    // is. This is auxiliary the ship has whatever else the grid is doing.
+    const bonus = subsystem === 'auxiliary' ? (this.auxBonus ?? 0) : 0;
+    return effectiveness((this.levels[subsystem] ?? 50) + bonus);
   }
 
   /** True once actual levels have caught up with the order. */
@@ -17610,8 +17621,10 @@ class PowerGrid {
     return { cap: this.cap, levels: this.levels, target: this.target, preset: this.preset };
   }
 
-  static load(data, cap = 200) {
-    const g = new PowerGrid(data?.cap ?? cap);
+  static load(data, cap = 200, auxBonus = 0) {
+    // `auxBonus` is class data, not saved state — it comes back from the hull
+    // rather than the record, so an old save on a science ship still gets it.
+    const g = new PowerGrid(data?.cap ?? cap, auxBonus);
     if (data) {
       g.levels = { ...g.levels, ...data.levels };
       g.target = { ...g.target, ...data.target };
@@ -18209,6 +18222,16 @@ function bearingToDirection(bearing) {
 /** Seconds for a grudge to halve. See `Ship.update`. */
 const THREAT_HALF_LIFE = 8;
 const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
+
+/**
+ * What ablative armour is worth.
+ *
+ * One number, named, because a hull that carries it is meant to shrug off what
+ * would cripple a comparable ship — and because the cap on total resistance is
+ * 0.85, so this has to be small enough to leave room for everything a captain
+ * fits on top of it.
+ */
+const ABLATIVE_RESIST = 0.12;
 const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /**
@@ -18411,7 +18434,7 @@ class Ship {
     this.velocity = { x: 0, y: 0, z: 0 };
 
     // ---- systems ----
-    this.power = new PowerGrid(cls.powerCap);
+    this.power = new PowerGrid(cls.powerCap, cls.auxBonus ?? 0);
     this.subsystems = Object.fromEntries(SUBSYSTEM_KEYS.map((k) => [k, 1.0])); // 1 = intact
     this.weapons = (cls.weapons ?? []).map((w) => ({ ...w, cooldown: 0, enabled: true }));
     this.torpedoes = cls.weapons?.some((w) => w.type === 'torpedo') ? 60 : 0;
@@ -18878,7 +18901,12 @@ class Ship {
     if (from && from !== this) {
       this.threat.set(from, (this.threat.get(from) ?? 0) + amount);
     }
-    let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist')));
+    // "Ablative armour", declared on one hull and read by nothing. Taken
+    // straight off the class, the way `cls.adapts` is: it is a property of the
+    // plating, not a modifier anybody fitted, so it must survive
+    // `applyAllMods` resetting the stack.
+    const plating = this.cls.ablative ? ABLATIVE_RESIST : 0;
+    let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist') + plating));
 
     // Borg-style adaptation: repeated damage of one type stops working.
     if (this.cls.adapts) {
@@ -19289,7 +19317,7 @@ class Ship {
       s.shields[f] = Math.max(0, Math.min(s.maxShield, s.shields[f] ?? s.maxShield));
     }
     s.subsystems = { ...s.subsystems, ...(data.subsystems ?? {}) };
-    s.power = PowerGrid.load(data.power, s.cls.powerCap);
+    s.power = PowerGrid.load(data.power, s.cls.powerCap, s.cls.auxBonus ?? 0);
     return s;
   }
 }
@@ -19301,6 +19329,7 @@ __exports.FACING_AXIS = FACING_AXIS;
 __exports.bearingToDirection = bearingToDirection;
 __exports.THREAT_HALF_LIFE = THREAT_HALF_LIFE;
 __exports.ADDITIVE_MODS = ADDITIVE_MODS;
+__exports.ABLATIVE_RESIST = ABLATIVE_RESIST;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
 __exports.CALLED_SHOT_HULL = CALLED_SHOT_HULL;
 __exports.DAMAGE_CONTROL_OFF_ACTION = DAMAGE_CONTROL_OFF_ACTION;
@@ -30567,6 +30596,31 @@ class ShipMastery {
   }
 
   get current() { return this.points[this.classId] ?? 0; }
+
+  /**
+   * `refitOf` is declared on the Constitution Refit, pointing at the
+   * Constitution, and is read by nothing. It was wired here — half the parent
+   * hull's mastery, on the argument that a refit is the same ship in the ways
+   * that matter to the people who fly her — and the wiring was WRONG, twice
+   * over.
+   *
+   * The game had already answered this question and answered it deliberately.
+   * `tests/wiring.test.js` asserts that taking a new command starts at tier 0
+   * with the shakedown penalty applied, under the heading "no shakedown on a
+   * hull nobody has flown". And the promotion from a Constitution offers
+   * exactly the Constitution Refit, so the two collide head-on rather than at
+   * some edge.
+   *
+   * The fiction agrees with the test and not with the wiring: the one famous
+   * refit in the franchise is the case where a veteran crew had to learn their
+   * own ship again from the beginning, which is most of what that story is
+   * about.
+   *
+   * So `refitOf` stays unread, on purpose, and this note is here so the next
+   * sweep finds the reason instead of the field. A cosmetic use — naming the
+   * parent hull in the yard report — would be honest and is not worth a
+   * mechanic.
+   */
 
   get tier() { return tierAt(this.current); }
 

@@ -65,6 +65,16 @@ export const THREAT_HALF_LIFE = 8;
 
 export const ADDITIVE_MODS = new Set(['critChance', 'critSeverity', 'damageResist', 'crewProtect']);
 
+/**
+ * What ablative armour is worth.
+ *
+ * One number, named, because a hull that carries it is meant to shrug off what
+ * would cripple a comparable ship — and because the cap on total resistance is
+ * 0.85, so this has to be small enough to leave room for everything a captain
+ * fits on top of it.
+ */
+export const ABLATIVE_RESIST = 0.12;
+
 export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /**
@@ -268,7 +278,7 @@ export class Ship {
     this.velocity = { x: 0, y: 0, z: 0 };
 
     // ---- systems ----
-    this.power = new PowerGrid(cls.powerCap);
+    this.power = new PowerGrid(cls.powerCap, cls.auxBonus ?? 0);
     this.subsystems = Object.fromEntries(SUBSYSTEM_KEYS.map((k) => [k, 1.0])); // 1 = intact
     this.weapons = (cls.weapons ?? []).map((w) => ({ ...w, cooldown: 0, enabled: true }));
     this.torpedoes = cls.weapons?.some((w) => w.type === 'torpedo') ? 60 : 0;
@@ -735,7 +745,12 @@ export class Ship {
     if (from && from !== this) {
       this.threat.set(from, (this.threat.get(from) ?? 0) + amount);
     }
-    let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist')));
+    // "Ablative armour", declared on one hull and read by nothing. Taken
+    // straight off the class, the way `cls.adapts` is: it is a property of the
+    // plating, not a modifier anybody fitted, so it must survive
+    // `applyAllMods` resetting the stack.
+    const plating = this.cls.ablative ? ABLATIVE_RESIST : 0;
+    let incoming = amount * (1 - Math.min(0.85, this.mod('damageResist') + plating));
 
     // Borg-style adaptation: repeated damage of one type stops working.
     if (this.cls.adapts) {
@@ -1146,7 +1161,7 @@ export class Ship {
       s.shields[f] = Math.max(0, Math.min(s.maxShield, s.shields[f] ?? s.maxShield));
     }
     s.subsystems = { ...s.subsystems, ...(data.subsystems ?? {}) };
-    s.power = PowerGrid.load(data.power, s.cls.powerCap);
+    s.power = PowerGrid.load(data.power, s.cls.powerCap, s.cls.auxBonus ?? 0);
     return s;
   }
 }

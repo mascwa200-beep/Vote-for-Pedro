@@ -165,6 +165,31 @@ export class ShipMastery {
 
   get current() { return this.points[this.classId] ?? 0; }
 
+  /**
+   * `refitOf` is declared on the Constitution Refit, pointing at the
+   * Constitution, and is read by nothing. It was wired here — half the parent
+   * hull's mastery, on the argument that a refit is the same ship in the ways
+   * that matter to the people who fly her — and the wiring was WRONG, twice
+   * over.
+   *
+   * The game had already answered this question and answered it deliberately.
+   * `tests/wiring.test.js` asserts that taking a new command starts at tier 0
+   * with the shakedown penalty applied, under the heading "no shakedown on a
+   * hull nobody has flown". And the promotion from a Constitution offers
+   * exactly the Constitution Refit, so the two collide head-on rather than at
+   * some edge.
+   *
+   * The fiction agrees with the test and not with the wiring: the one famous
+   * refit in the franchise is the case where a veteran crew had to learn their
+   * own ship again from the beginning, which is most of what that story is
+   * about.
+   *
+   * So `refitOf` stays unread, on purpose, and this note is here so the next
+   * sweep finds the reason instead of the field. A cosmetic use — naming the
+   * parent hull in the yard report — would be honest and is not worth a
+   * mechanic.
+   */
+
   get tier() { return tierAt(this.current); }
 
   /** The tiers actually earned, worst-first. */

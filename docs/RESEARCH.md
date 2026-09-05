@@ -3437,6 +3437,100 @@ first — `phrases.length > 200`, `actions.size > 40`, `evaluated > 300`,
 fails on the count before it can pass on the emptiness.
 
 
+## 50. Five fields on the ship classes, and only two should be wired
+
+The §48 sweep pointed at the world data, denominator asserted first:
+
+| | records | fields | orphans |
+| --- | --- | --- | --- |
+| `SYSTEMS` | 43 | 16 | **0** |
+| `SHIP_CLASSES` | 31 | 29 | **5** |
+
+The five appear nowhere else in `src/` at all: `boffSeats` (13 classes),
+`auxBonus` (3), `saucerSeparation` (1), `ablative` (1), `refitOf` (1).
+
+**Two are wired. Three are deliberately left**, and the reasons are the point —
+a sweep whose only output is "wire everything you find" will eventually break
+something.
+
+### auxBonus
+
+Three hulls declare it — 25, 35, 30 — and all three are science ships. An
+Oberth ran her sensors, her damage control and her fire suppression off exactly
+the auxiliary a freighter had.
+
+It goes into `PowerGrid.factor`, **not** into `cap`: a bigger cap is power the
+captain could put into the weapons, which is not what a science package is.
+Auxiliary effectiveness at the same setting, before and after:
+
+    miranda   auxBonus  0    0.940  ->  0.940
+    oberth    auxBonus 25    0.940  ->  1.230
+    nebula    auxBonus 35    0.940  ->  1.350
+    intrepid  auxBonus 30    0.940  ->  1.300
+
+### ablative
+
+One hull. Taken straight off the class the way `cls.adapts` is, because it is a
+property of the plating rather than a modifier anybody fitted — read through
+`mods` it would be erased every time `applyAllMods` reset the stack, which
+happens on a refit, a promotion or a console change. A Defiant now takes **880**
+of a 1,000-point hit where an Intrepid takes 1,000, and the 0.85 total-resistance
+ceiling still holds.
+
+### boffSeats — measured, and left
+
+This looked like the richest of the five: a bridge-officer seat layout on 13
+hulls that nothing read. Then the naive wiring was measured:
+
+    galaxy   seats {command:4, engineering:4, science:4, tactical:3}
+             would block 8: medical:casualty_teams(r1), medical:stimulants(r2),
+                            medical:back_to_duty(r2), medical:surgical_bay(r3)...
+    miranda  would block 15: ... command:evasive_maneuvers(r1) ...
+
+The seat lists name **three or four** departments. This game's bridge has
+**six**. A Galaxy with 1,014 crew and a full sickbay would lose every medical
+ability; a Miranda would lose `evasive_maneuvers`, which is rank one. The data
+is an STO tactical/engineering/science/universal station layout and does not map
+onto a six-department bridge, and inventing a mapping is the guessing §40
+forbids.
+
+### refitOf — wired, and the wiring was wrong
+
+This one is worth recording in full because the mistake was mine and the game
+caught it.
+
+It was wired as half the parent hull's mastery, on the argument that a refit is
+the same ship in the ways that matter to the people who fly her. Two things
+disagreed. `tests/wiring.test.js` asserts that taking a new command starts at
+tier 0 with the shakedown penalty applied, under the heading *"no shakedown on a
+hull nobody has flown"* — a deliberate design decision, already made. And the
+promotion from a Constitution offers **exactly the Constitution Refit**, so the
+two collided head-on rather than at some edge.
+
+The fiction agrees with the test: the one famous refit in the franchise is the
+case where a veteran crew had to learn their own ship again from the beginning.
+The 50% was a guess dressed as a reading. Reverted, and the reason left in
+`mastery.js` where the field is, so the next sweep finds the argument instead of
+the gap.
+
+### Static imports fail loudly; dynamic ones fail silently
+
+The eighth invented binding this run was `SYSTEMS_UNUSED`, imported into the new
+test file and never used. It threw at module load, named itself, and cost
+nothing.
+
+That is the contrast worth keeping. §49's `ORDERS` was the *same* mistake — a
+binding the module does not export — and it produced `undefined`, was swallowed
+by `?? []`, and printed a clean bill of health from a scan of nothing. The
+difference is that probes use `await import()` and destructure a namespace
+object, which yields `undefined`, while test files use static
+`import { X } from ...`, which is a link-time error.
+
+**The probes have been the things going wrong all run, and this is why.** Where
+a scratch probe must destructure a dynamic import, assert the binding is not
+`undefined` before using it.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
