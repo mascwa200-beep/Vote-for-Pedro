@@ -3103,6 +3103,48 @@ try {
     company.saysWhereTheyWent, JSON.stringify(company.team));
   await page.screenshot({ path: join(SHOTS, '07b-ships-company.png') });
 
+  // The roster wears the division, the way the figure at that console does.
+  //
+  // Seven departments and one blue disc, while `DIVISION_COLOUR` in
+  // gfx/room.js had been painting the person at each of those consoles gold,
+  // red or blue all along — and gfx.test.js asserts those are not all the
+  // same. Read off the rendered pips, and asserted as a COUNT OF DISTINCT
+  // colours: hardcoding the expected rgb here would only prove this file
+  // agrees with a constant, and the point is that the discs differ from one
+  // another the way the uniforms do.
+  const pips = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.officer')];
+    return rows.map((r) => ({
+      who: r.querySelector('.who b')?.textContent ?? '',
+      bg: getComputedStyle(r.querySelector('.pip')).backgroundColor,
+      ink: getComputedStyle(r.querySelector('.pip')).color,
+    }));
+  });
+  const shirts = new Set(pips.map((p) => p.bg));
+  check('the roster lists the senior staff', pips.length >= 7, `${pips.length} officers`);
+  check('and they do not all wear the same shirt',
+    shirts.size >= 3, `${shirts.size} colours over ${pips.length} officers`);
+  // Legibility, not decoration: black initials on the operations red are very
+  // nearly invisible, so the ink is picked by luminance rather than fixed.
+  //
+  // Asserted as a RELATION between the two colours, not as a list of allowed
+  // inks. A first draft checked only that the ink was black or white, which
+  // the old uniform-blue disc with its fixed black text satisfied too — a
+  // guard that passes in both states measures nothing.
+  const lum = (css) => {
+    const [r, g, b] = (css.match(/\d+/g) ?? [0, 0, 0]).map(Number);
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  };
+  const unreadable = pips.filter((p) => {
+    const wantsBlack = lum(p.bg) > 0.45;
+    return wantsBlack !== (lum(p.ink) > 0.5 === false);
+  });
+  check('and the initials are the readable colour for the shirt underneath',
+    unreadable.length === 0,
+    JSON.stringify(unreadable.map((p) => `${p.who}: ${p.ink} on ${p.bg}`)));
+  const firstRow = page.locator('.officer').first();
+  await firstRow.screenshot({ path: join(SHOTS, '07c-officer-row.png') });
+
   // The same thing, said out loud.
   const spoken = await page.evaluate(async () => {
     const app = globalThis.__app;

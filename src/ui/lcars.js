@@ -1,5 +1,7 @@
 // LCARS primitives — small DOM helpers so screens read like layout, not markup.
 
+import { divisionInk } from '../gfx/room.js';
+
 /** Create an element. `props` handles class/text/html/attrs/events uniformly. */
 export function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
@@ -193,11 +195,29 @@ export function select(options, value, onChange) {
 export function officerRow(officer, onClick = null) {
   const initials = officer.name.split(/\s+/).map((s) => s[0]).join('').slice(0, 2).toUpperCase();
   const cls = !officer.alive ? 'dead' : officer.injured ? 'injured' : '';
+  // The disc wears the division, the way the figure at that console does.
+  //
+  // Every officer's initials were drawn on the same blue, across seven
+  // departments, while `DIVISION_COLOUR` in gfx/room.js has been painting the
+  // person at each of those consoles in gold, red or blue all along — and
+  // gfx.test.js asserts those are not all the same. The note on that table
+  // calls the uniform "the one thing about a crewman you are supposed to be
+  // able to read across a room".
+  //
+  // Only for an officer who is neither dead nor in sickbay: those two states
+  // have their own colours in the stylesheet, they are more urgent than which
+  // shirt somebody wears, and an inline style would beat the class rules that
+  // carry them.
+  const tint = officer.alive && !officer.injured ? divisionInk(officer.station) : null;
   return el('div', {
     class: `officer ${cls}`.trim(),
     onclick: onClick ? () => onClick(officer) : null,
   }, [
-    el('div', { class: 'pip', text: initials }),
+    el('div', {
+      class: 'pip',
+      text: initials,
+      style: tint ? { background: tint.bg, color: tint.ink } : null,
+    }),
     el('div', { class: 'who' }, [
       el('b', { text: officer.name }),
       el('small', {

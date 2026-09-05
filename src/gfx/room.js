@@ -844,6 +844,56 @@ const DIVISION_COLOUR = {
 const SKIN = [0.78, 0.62, 0.50];
 
 /**
+ * Which division a bridge officer's POST belongs to.
+ *
+ * `officer.station` names the job — `first_officer`, `helm`, `comms` — and
+ * `DIVISION_COLOUR` above is keyed by what the person standing at a console is
+ * doing. Every name matches but one, so this is a one-entry map with six
+ * pass-throughs; it exists so that the roster and the figure at that console
+ * cannot drift apart.
+ *
+ * NOT taken from `STATIONS[].dept` in crews.data.js, which is the other
+ * candidate and is wrong for this purpose: it files helm under `operations`
+ * alongside communications, and in the 1966 palette a helmsman wears command
+ * gold while communications wears operations red. `dept` is right for what it
+ * is for — which department's officers are competent at a check — and would
+ * have put the helmsman in the wrong shirt.
+ */
+const STATION_DIVISION = {
+  first_officer: 'command',
+  tactical: 'tactical',
+  engineering: 'engineering',
+  science: 'science',
+  medical: 'medical',
+  helm: 'helm',
+  comms: 'comms',
+};
+
+/**
+ * A division's colour for the parts of the interface that are DOM, not GL.
+ *
+ * The crew roster drew every officer's initials on the same blue disc —
+ * command, tactical, engineering, science, medical, helm and communications,
+ * seven departments, one colour — while the figure standing at each of those
+ * consoles in the first-person view was already painted from the table above,
+ * and `tests/gfx.test.js` asserts that those do not all match. The note on
+ * `DIVISION_COLOUR` calls the uniform "the one thing about a crewman you are
+ * supposed to be able to read across a room", and the screen that lists the
+ * crew was throwing it away.
+ *
+ * `ink` is chosen by luminance rather than fixed: black reads on gold and is
+ * nearly invisible on the red.
+ */
+export function divisionInk(stationOrCrew) {
+  const key = STATION_DIVISION[stationOrCrew] ?? stationOrCrew;
+  const c = DIVISION_COLOUR[key];
+  if (!c) return null;
+  const rgb = c.map((v) => Math.round(v * 255));
+  const lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  return { bg: `rgb(${rgb.join(', ')})`, ink: lum > 0.45 ? '#000' : '#fff' };
+}
+
+/**
  * Where an officer stands to work a station.
  *
  * On the near side of the console, which is the side away from the bulkhead it

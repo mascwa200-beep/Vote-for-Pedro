@@ -5004,6 +5004,85 @@ numbers together.
 
 
 
+## 66. Seven departments, one blue disc
+
+`07b-ships-company.png`. The crew roster draws each officer's initials on a
+coloured disc, and every disc is the same blue — first officer, tactical, chief
+engineer, science, medical, helm, communications. Seven departments, one colour.
+
+Meanwhile, in `gfx/room.js`:
+
+```js
+const DIVISION_COLOUR = {
+  command: [0.86, 0.72, 0.18],       // gold
+  helm: [0.86, 0.72, 0.18],
+  comms: [0.68, 0.16, 0.16],         // red
+  engineering: [0.68, 0.16, 0.16],
+  science: [0.20, 0.42, 0.72],       // blue
+  medical: [0.20, 0.42, 0.72],
+  tactical: [0.86, 0.72, 0.18],
+};
+```
+
+— which has been painting the person standing at each of those consoles in the
+first-person view all along, and which `tests/gfx.test.js` already asserts are
+not all the same colour. The note above that table says the uniform is *"the one
+thing about a crewman you are supposed to be able to read across a room"*, and
+the screen whose entire job is listing the crew was throwing it away.
+
+### The wrong source of truth was the obvious one
+
+`STATIONS` in `crews.data.js` carries a `dept` on every post and looks like
+exactly what this needs. It is not:
+
+| post | `STATIONS[].dept` | `DIVISION_COLOUR` |
+| --- | --- | --- |
+| helm | `operations` | **gold** |
+| comms | `operations` | **red** |
+
+`dept` files helm and communications together, and in the 1966 palette a
+helmsman wears command gold while communications wears operations red. `dept` is
+right for what it is for — which department's officers are competent at a check
+— and colouring from it would have put the helmsman in the wrong shirt while
+looking perfectly reasonable in the diff.
+
+So the colour comes from the table that already paints the figure, through a
+six-pass-through, one-entry map (`first_officer` → `command`). The roster disc
+and the person at that console cannot drift apart, because there is one table.
+
+### And the ink
+
+`.pip` had `color: #000` fixed. Black on gold reads; black on the operations red
+does not, and black on the old mid-blue was not good either. `divisionInk`
+returns the background and an ink chosen by luminance.
+
+The dead and the injured keep their own colours — grey and amber, from the
+stylesheet — because those states are more urgent than which shirt somebody
+wears, and an inline style would have beaten the class rules carrying them.
+
+### Two guards, and one of them had to be rewritten
+
+The first version asserted *the ink is black or white*. The old uniform-blue
+disc with its fixed black text satisfies that too — **a guard that passes in
+both states measures nothing**, which is the rule this project keeps paying for.
+It now asserts the RELATION: that the ink is the readable choice for the
+background under it, whatever those two colours are. Against the control it
+fails with all seven officers listed as `rgb(0, 0, 0) on rgb(46, 109, 180)`.
+
+The other counts DISTINCT disc colours rather than checking for a specific rgb.
+Hardcoding the expected gold would only prove the harness agrees with a
+constant; the property that matters is that the discs differ from one another
+the way the uniforms do. Against the control: *"1 colours over 7 officers"*.
+
+### Six for six
+
+The pattern from §64 again, and this is the clearest instance of it yet. Nothing
+was missing. The colour existed, was correct, was already applied to the 3D
+figures, and was already protected by a test — and the roster, the one screen
+built to tell you who your officers are, painted them all the same.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
