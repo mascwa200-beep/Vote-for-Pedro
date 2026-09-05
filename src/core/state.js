@@ -11,7 +11,7 @@ import { CaptainProgress, combatXP, SKILLS } from '../sim/skills.js';
 import { Loadout, startingLoadout, CONSOLES } from '../sim/loadout.js';
 import {
   Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES, romanNumeral, stripSuffix,
-  MAX_FORCE_HULLS,
+  MAX_FORCE_HULLS, OBJECTIVES,
 } from '../sim/combat.js';
 import { buildArena } from '../sim/arena.js';
 import { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } from '../sim/away.js';
@@ -673,6 +673,10 @@ export class Game {
     if (fightId != null) this.missionFightSeq = Math.max(this.missionFightSeq, fightId);
     this.pendingCombat = {
       ships, canWarpOut: spec.canWarpOut, shieldsAt: spec.shieldsAt, fightId: id,
+      // What the episode wants out of this fight, rather than "kill them all".
+      // Plain data, like everything else in this record, so it survives a save
+      // — see the note on `effects.combat` in missions/engine.js.
+      objective: spec.objective, objectiveTime: spec.objectiveTime,
     };
     return id;
   }
@@ -3260,6 +3264,17 @@ export class Game {
         'report');
     }
 
+    // An objective the ship failed is not a defeat and is not a win. Said
+    // plainly, because the alternative is a captain who lost the freighter
+    // being told the engagement concluded and given experience for it.
+    if (outcome === 'failed') {
+      this.pushLog('The engagement is over and we did not do what we came to do.', 'captain');
+      this.ledger.record('objective_failed', {
+        text: `Failed to ${OBJECTIVES[eng.objective]?.label?.toLowerCase() ?? 'complete the objective'} at ${this.location?.name ?? 'an engagement'}`,
+        system: this.locationId,
+      });
+    }
+
     if (outcome === 'victory' || outcome === 'routed') {
       const xp = combatXP(eng.hostiles) * this.difficulty.scale('xpRate');
       // The Empire respects a captain who kept fighting while losing.
@@ -4495,12 +4510,16 @@ export class Game {
 
     // A mission stage queued a fight; start it once the UI has caught up.
     if (this.pendingCombat && this.mode !== MODES.COMBAT) {
-      const { ships, canWarpOut, shieldsAt, fightId } = this.pendingCombat;
+      const {
+        ships, canWarpOut, shieldsAt, fightId, objective, objectiveTime,
+      } = this.pendingCombat;
       this.pendingCombat = null;
       const eng = this.startCombat(ships, {
         name: 'Engagement',
         ...(canWarpOut === false ? { canWarpOut: false } : {}),
         ...(shieldsAt != null ? { shieldsAt } : {}),
+        ...(objective ? { objective } : {}),
+        ...(objectiveTime != null ? { objectiveTime } : {}),
       });
       // The fight now on the screen answers for the episode only if the
       // episode's enemies are actually in it. `startCombat` does not always

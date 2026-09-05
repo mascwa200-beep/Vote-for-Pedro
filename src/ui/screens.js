@@ -22,6 +22,7 @@ import { chairPanel } from './chair.js';
 import { commandReference } from './orders.js';
 import { namesFor } from '../sim/address.js';
 import { inArc, SUBSYSTEM_KEYS } from '../sim/ship.js';
+import { OBJECTIVES } from '../sim/combat.js';
 
 /** What each targetable subsystem is called on a button, and out loud. */
 const SUBSYSTEM_TARGET_LABEL = {
@@ -695,6 +696,24 @@ export function tacticalScreen(app) {
       ? button('Next target', tap(() => { eng.cycleTarget(); app.render(); }), { say: 'next target', color: 'ice' })
       : null,
   ], 'danger'));
+
+  // --- What this fight is for ---
+  //
+  // Shown only when it is not the default, because "destroy them" on every
+  // ordinary engagement is a line of furniture. `Engagement.objective` was
+  // declared and documented and read by nothing, so an episode that wanted a
+  // ship crippled rather than killed had to ask in prose and hope.
+  if (eng.objective && eng.objective !== 'destroy') {
+    side.append(panel('Orders', [
+      el('p', { text: OBJECTIVES[eng.objective]?.line ?? '' }),
+      eng.objective === 'protect' && eng.allies?.length
+        ? el('p', {
+          class: 'hint',
+          text: `${eng.allies.filter((a) => !a.destroyed).length} of ${eng.allies.length} still with us.`,
+        })
+        : null,
+    ], 'accent'));
+  }
 
   // --- How the fight stands ---
   //

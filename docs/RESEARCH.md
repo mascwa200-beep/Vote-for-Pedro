@@ -4219,6 +4219,77 @@ That is a PR, not a sweep, and bundling it with six one-line fixes would have
 made both harder to review and to revert.
 
 
+## 58. Every battle was won by emptying the board
+
+`Engagement.objective` has been declared since the class was written, named in
+the constructor's own JSDoc, and **read by nothing**. So there was no way to
+express *"cripple her, do not kill her"* or *"whatever else happens, the
+freighter lives"*. The mission book has wanted both for a long time and had to
+settle for saying so in prose while the fight underneath resolved the only way
+it could.
+
+| | |
+| --- | --- |
+| `destroy` | the default; nothing changes |
+| `disable` | won when every hostile is destroyed **or disarmed** |
+| `protect` | an escortee in `allies`; losing it fails the fight |
+| `survive` | won by lasting, not by killing |
+
+**Two of the four are only possible because of what landed first.** `disable`
+needs per-mount knockout (§55), so that "no working guns" is a state a hostile
+can be *put into* short of killing it — before that it was unreachable. And
+`protect` needs hull archetypes that differ (§56), so that some hostiles
+genuinely go for the escortee rather than every ship in the fleet flying at the
+player. Sequencing these three was not bookkeeping; the last one does not exist
+without the first two.
+
+### A third kind of ending
+
+`failed` is the first outcome in this game that is neither a win nor a loss.
+`state.js` computes `won = victory || routed` and `lost = destroyed`; a captain
+who came through the fight and lost the ship they were escorting is **neither**,
+and there was previously no way to say it.
+
+Adding it looked expensive and was not, for a reason worth recording: **every
+existing consumer tests a specific outcome for equality**, so a new value falls
+through all of them and earns exactly what it should — no experience, no
+reputation, and not the ship-loss path. And the three test files that iterate
+`OUTCOMES` are written *generically* — they end a fight with each value and
+assert the invariants hold and `lastCombat.outcome` round-trips — so the new
+member flowed through with no per-outcome handling at all. The suite went from
+1,680 to 1,686 tests without a line being written for it.
+
+That is what a well-shaped vocabulary buys, and it is the opposite of the
+`OUTCOMES` blast radius I had feared when splitting this out of §57. Reading it
+before building was right; the conclusion was simply the good one.
+
+### Two things the tests got wrong first, both instructive
+
+**Flipping `enabled` does not disarm a ship.** The first draft disarmed a
+hostile with `for (const w of ship.weapons) w.enabled = false` and the fight
+refused to end. The cause is the passive repair pass working correctly:
+integrity was still 1, so the bank was re-enabled on the very next tick.
+`enabled` is *derived* state and `integrity` is the authoritative one — which is
+exactly how §55 designed it, demonstrated here by a test that forgot.
+
+**`queueMissionCombat` does not exist.** The real name is
+`orderTheStagesFight`, and the optional chain `g.queueMissionCombat?.({...})`
+swallowed the mistake in silence. Caught only because the assertion below it
+stated its own denominator — *"no fight was queued, so this proves nothing"* —
+rather than trusting that the call had done something. Eleventh time this run
+that an invented binding has cost a wrong answer, and the first time the
+denominator rule caught one on the first attempt.
+
+### What is deliberately not here
+
+`disable` ends the fight when every hostile is disarmed; it does **not** stop
+the player continuing to shoot a helpless ship, and there is no penalty for
+destroying what you were asked to cripple. That is a real gap and it is left
+open on purpose: a penalty needs a mission that asks for one and an author to
+decide what it costs, and inventing that in the same PR that builds the
+mechanism would be guessing at content in a systems change.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

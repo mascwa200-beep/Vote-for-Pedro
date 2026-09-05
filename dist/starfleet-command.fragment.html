@@ -14656,7 +14656,50 @@ const ARENA_RADIUS = 2600;
 // used to happen. The engagement was simply not serialised, so the enemy
 // stopped existing while the hull kept every point of damage the fight had
 // cost, at normal alert, with no record that a battle had been fought at all.
-const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed', 'interrupted'];
+/**
+ * Every way a fight can end.
+ *
+ * `failed` is the newest and the only one that is neither a win nor a loss: the
+ * ship came through it and the thing the fight was FOR did not. Losing the
+ * freighter you were escorting is not a defeat by the reckoning everything
+ * downstream uses — `state.js` computes `won = victory || routed` and
+ * `lost = destroyed`, and a failed escort is neither — but it is emphatically
+ * not a victory either, and before objectives existed there was no way to say
+ * so. Every existing consumer tests a specific outcome for equality, so this
+ * falls through all of them and earns exactly what it should: no credit, and
+ * no loss of the ship.
+ */
+const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed', 'interrupted', 'failed'];
+
+/**
+ * What a fight is FOR.
+ *
+ * `Engagement.objective` has been declared, documented in the constructor's own
+ * JSDoc, and read by nothing since it was written — so every battle in the game
+ * was won by emptying the board and there was no way to express "cripple her,
+ * do not kill her" or "the freighter has to live". The mission book has wanted
+ * both for a long time and has had to settle for prose.
+ *
+ * Two of these are only meaningful because of work that landed first:
+ * `disable` needs per-mount knockout to be a state a ship can actually be in,
+ * and `protect` needs hull archetypes that differ enough that some hostiles
+ * genuinely go after the escortee rather than all going for the player.
+ */
+const OBJECTIVES = {
+  destroy: { label: 'Destroy them', line: 'Destroy the hostiles.' },
+  disable: { label: 'Disable them', line: 'Disable them. Do not destroy them.' },
+  protect: { label: 'Protect the escort', line: 'Whatever else happens, they live.' },
+  survive: { label: 'Survive', line: 'Hold on. Help is coming.' },
+};
+
+/** A hostile that can no longer shoot: destroyed, or every gun out. */
+function disarmed(ship) {
+  if (!ship) return true;
+  if (ship.destroyed || ship.withdrawn) return true;
+  if ((ship.subsystems?.weapons ?? 1) <= 0.05) return true;
+  const guns = ship.weapons ?? [];
+  return guns.length > 0 && guns.every((w) => w.enabled === false || (w.damage ?? 0) <= 0);
+}
 
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
@@ -14705,7 +14748,10 @@ class Engagement {
     this.allies = opts.allies ?? [];
     this.rng = rng;
     this.name = opts.name ?? 'Engagement';
-    this.objective = opts.objective ?? 'destroy';
+    this.objective = OBJECTIVES[opts.objective] ? opts.objective : 'destroy';
+    // How long `survive` has to be survived for. Zero on every other
+    // objective, which is what keeps the check in `settle` inert for them.
+    this.objectiveTime = Math.max(0, Number(opts.objectiveTime) || 0);
     this.time = 0;
     this.over = false;
     this.outcome = null;
@@ -15422,6 +15468,37 @@ class Engagement {
   settle() {
     if (this.over) return true;
     if (this.player.destroyed) { this.end('destroyed'); return true; }
+
+    // What the fight was FOR, checked before what is left on the board.
+    //
+    // Losing the escort ends it whatever else is happening — there is no
+    // recovering an objective whose whole content was that somebody survived,
+    // and letting the player go on to kill every hostile and be told they won
+    // would be the game reporting the opposite of what happened.
+    if (this.objective === 'protect') {
+      const escort = this.allies.filter((s) => s && !s.withdrawn);
+      if (escort.length && escort.every((s) => s.destroyed)) {
+        this.pushLog('They are gone, Captain. That was what we were here for.', 'tactical');
+        this.end('failed');
+        return true;
+      }
+    }
+    // Lasting is winning. `objectiveTime` is set by whoever staged the fight.
+    if (this.objective === 'survive' && this.objectiveTime > 0 && this.time >= this.objectiveTime) {
+      this.end('victory');
+      return true;
+    }
+    // Disabled is as good as destroyed, and is the point of the order. Only
+    // reachable because a mount can be knocked out one bank at a time — before
+    // that, "no working weapons" was a state no hostile could be put into
+    // short of killing it.
+    if (this.objective === 'disable' && this.liveHostiles.length
+      && this.liveHostiles.every((s) => disarmed(s))) {
+      this.pushLog('They are disarmed, Captain. Every gun on that hull is out.', 'tactical');
+      this.end('victory');
+      return true;
+    }
+
     if (!this.liveHostiles.length) {
       // An empty board is a win only if you emptied it. Anyone who withdrew
       // under their own power was routed, not destroyed, and the ledger cares
@@ -15962,6 +16039,8 @@ __exports.POINT_DEFENCE_RANGE = POINT_DEFENCE_RANGE;
 __exports.POINT_DEFENCE_PER_SECOND = POINT_DEFENCE_PER_SECOND;
 __exports.ARENA_RADIUS = ARENA_RADIUS;
 __exports.OUTCOMES = OUTCOMES;
+__exports.OBJECTIVES = OBJECTIVES;
+__exports.disarmed = disarmed;
 __exports.DISENGAGE_RANGE = DISENGAGE_RANGE;
 __exports.stillEngaged = stillEngaged;
 __exports.rangeFactor = rangeFactor;
@@ -36054,7 +36133,7 @@ const { Ship, FACINGS, SHIELD_OVERCHARGE } = __require("src/sim/ship.js");
 const { Crew, Officer, ABILITIES, ABILITY_LIST } = __require("src/sim/officers.js");
 const { CaptainProgress, combatXP, SKILLS } = __require("src/sim/skills.js");
 const { Loadout, startingLoadout, CONSOLES } = __require("src/sim/loadout.js");
-const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES, romanNumeral, stripSuffix, MAX_FORCE_HULLS } = __require("src/sim/combat.js");
+const { Engagement, ARENA_RADIUS, hostileName, HOSTILE_NAMES, romanNumeral, stripSuffix, MAX_FORCE_HULLS, OBJECTIVES } = __require("src/sim/combat.js");
 const { buildArena } = __require("src/sim/arena.js");
 const { AwayTeam, AWAY_TEMPLATES, HAZARD_LEVEL, awayHours } = __require("src/sim/away.js");
 const { Walker, stepToward, findRoom, resolve: resolveIn } = __require("src/sim/walk.js");
@@ -36706,6 +36785,10 @@ class Game {
     if (fightId != null) this.missionFightSeq = Math.max(this.missionFightSeq, fightId);
     this.pendingCombat = {
       ships, canWarpOut: spec.canWarpOut, shieldsAt: spec.shieldsAt, fightId: id,
+      // What the episode wants out of this fight, rather than "kill them all".
+      // Plain data, like everything else in this record, so it survives a save
+      // — see the note on `effects.combat` in missions/engine.js.
+      objective: spec.objective, objectiveTime: spec.objectiveTime,
     };
     return id;
   }
@@ -39293,6 +39376,17 @@ class Game {
         'report');
     }
 
+    // An objective the ship failed is not a defeat and is not a win. Said
+    // plainly, because the alternative is a captain who lost the freighter
+    // being told the engagement concluded and given experience for it.
+    if (outcome === 'failed') {
+      this.pushLog('The engagement is over and we did not do what we came to do.', 'captain');
+      this.ledger.record('objective_failed', {
+        text: `Failed to ${OBJECTIVES[eng.objective]?.label?.toLowerCase() ?? 'complete the objective'} at ${this.location?.name ?? 'an engagement'}`,
+        system: this.locationId,
+      });
+    }
+
     if (outcome === 'victory' || outcome === 'routed') {
       const xp = combatXP(eng.hostiles) * this.difficulty.scale('xpRate');
       // The Empire respects a captain who kept fighting while losing.
@@ -40528,12 +40622,16 @@ class Game {
 
     // A mission stage queued a fight; start it once the UI has caught up.
     if (this.pendingCombat && this.mode !== MODES.COMBAT) {
-      const { ships, canWarpOut, shieldsAt, fightId } = this.pendingCombat;
+      const {
+        ships, canWarpOut, shieldsAt, fightId, objective, objectiveTime,
+      } = this.pendingCombat;
       this.pendingCombat = null;
       const eng = this.startCombat(ships, {
         name: 'Engagement',
         ...(canWarpOut === false ? { canWarpOut: false } : {}),
         ...(shieldsAt != null ? { shieldsAt } : {}),
+        ...(objective ? { objective } : {}),
+        ...(objectiveTime != null ? { objectiveTime } : {}),
       });
       // The fight now on the screen answers for the episode only if the
       // episode's enemies are actually in it. `startCombat` does not always
@@ -41631,6 +41729,7 @@ const { chairPanel } = __require("src/ui/chair.js");
 const { commandReference } = __require("src/ui/orders.js");
 const { namesFor } = __require("src/sim/address.js");
 const { inArc, SUBSYSTEM_KEYS } = __require("src/sim/ship.js");
+const { OBJECTIVES } = __require("src/sim/combat.js");
 
 /** What each targetable subsystem is called on a button, and out loud. */
 const SUBSYSTEM_TARGET_LABEL = {
@@ -42300,6 +42399,24 @@ function tacticalScreen(app) {
       ? button('Next target', tap(() => { eng.cycleTarget(); app.render(); }), { say: 'next target', color: 'ice' })
       : null,
   ], 'danger'));
+
+  // --- What this fight is for ---
+  //
+  // Shown only when it is not the default, because "destroy them" on every
+  // ordinary engagement is a line of furniture. `Engagement.objective` was
+  // declared and documented and read by nothing, so an episode that wanted a
+  // ship crippled rather than killed had to ask in prose and hope.
+  if (eng.objective && eng.objective !== 'destroy') {
+    side.append(panel('Orders', [
+      el('p', { text: OBJECTIVES[eng.objective]?.line ?? '' }),
+      eng.objective === 'protect' && eng.allies?.length
+        ? el('p', {
+          class: 'hint',
+          text: `${eng.allies.filter((a) => !a.destroyed).length} of ${eng.allies.length} still with us.`,
+        })
+        : null,
+    ], 'accent'));
+  }
 
   // --- How the fight stands ---
   //
