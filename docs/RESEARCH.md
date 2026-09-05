@@ -3896,6 +3896,145 @@ The through-line with §51–§53 is the same: **assert what the measurement can
 see before believing what it says.**
 
 
+## 55. Guns you can lose, and arcs you can see
+
+`subsystems.weapons` has always been **one number for the whole battery**. It
+scales every mount's damage and recharge together and gates firing at 0.05, so a
+called shot at the weapons took the guns down as a group and there was no such
+thing as losing your forward tubes.
+
+Meanwhile `weapon.enabled` was written `true` at construction and read in exactly
+two places — `combat.js` before firing, `ai.js` when deciding whether a hull is
+still a threat — and **nothing anywhere ever set it `false`**. A constant wearing
+the shape of per-mount state, for the whole life of the file. §45's shape again,
+in the middle of the combat loop.
+
+And the firing arcs, which decide every shot in the game and have been simulated
+as real three-dimensional cones since the third axis went in, **had never once
+been drawn**. The single most important tactical fact in the simulation was
+invisible, which is why "come about" was a mood rather than an instruction.
+
+These two are worth far more together than apart: an arc that never changes state
+is a decorative diagram, and a knocked-out gun the player cannot see is silent
+difficulty.
+
+### The property that made it safe to do first
+
+**It adds no RNG draw.** The hook sits inside the `if (hullDamage > 0)` block
+that already exists, in both branches that already compute their fraction, and
+which mount takes the hit is a *pure function of the bearing* — not a roll.
+
+Proved rather than asserted: seventy-five fights across three matchups were
+fingerprinted by outcome, tick count, hull and all six shield facings to six
+decimal places, against the **pre-change tree** recovered with `git stash`, and
+came back **identical**. Against a determinism-critical codebase where the
+balance suites depend on seeded outcomes, that is the difference between a change
+that can be reasoned about and one that cannot.
+
+### Three measurements that each corrected the one before
+
+**1. The first version was inert.** Reusing the subsystem's own fractions
+unchanged — on the argument that it added no tuning knob — produced a mechanic
+that never fired: over 120 fights the lowest integrity any mount reached anywhere
+was **0.777**, against a threshold of 0.2, and not one bank went out on either
+side. The arithmetic is why: the array accumulates every hit that rolls it, while
+a given mount accumulates only when the roll picks the weapons *and* that mount
+is bearing. Sharing the array's number spreads it thinner the more guns a hull
+has, which is backwards. Concentration is the whole idea, and it needed a named
+constant with a measured table.
+
+Note what the determinism result meant at that moment: byte-identical fights
+proved only that **nothing had changed at all**. A clean result is not evidence
+until you have shown the instrument can see a positive case.
+
+**2. The first *rule* looked broken and wasn't.** Narrowest-arc-wins meant a
+90° torpedo tube beat a 250° phaser bank wherever both bore, and the histogram
+said 24 of 38 hull-and-mount pairs never went out. That reading was wrong in this
+repo's most familiar way: **it counted mounts that were never shot at alongside
+mounts that were shot at and held.** Separated:
+
+| rule | went out | hit but held | never touched |
+| --- | --- | --- | --- |
+| narrowest first | 14 | 7 | 17 |
+| soundest first | 16 | 8 | 14 |
+
+So the honest gap was three more mounts taking damage, not ten immune ones. The
+rule changed anyway — soundest-first spreads a battering across the guns sharing
+a facing, which is what being shot in the nose does — but on its own merits, not
+because the first was broken. **The denominator lesson, applied to my own
+conclusion rather than to the code's.**
+
+**3. The tests passed with the mechanic switched off.** Nineteen of them, all
+green against a control with the concentration at zero — because every one
+reached for `damageMount` directly and so proved the machinery worked while
+proving nothing about whether it was *connected*. Two more were added that play
+real fights; those fail against the control, for their own reasons.
+
+### What it costs and what it buys
+
+Balance, 60 seeds per matchup, mechanic on against off: **win rates identical
+across all six matchups, mean surviving hull within one point, median fight
+length within one second.** Exposure is real — hostiles lose a bank in 13 to 15
+fights of 60 in the winnable matchups.
+
+What changed is that a tactical choice now pays. Calling your shots at the guns,
+measured over 60 seeds:
+
+| | surviving hull | median fight |
+| --- | --- | --- |
+| aim anywhere, vs Galor | 71% | 66 s |
+| **call the guns**, vs Galor | **79%** | 103 s |
+| aim anywhere, vs D7 | 77% | 63 s |
+| **call the guns**, vs D7 | **84%** | 97 s |
+
+Disarm them and take less damage, but take much longer doing it. That trade did
+not exist before, because there was nothing per-mount to disarm.
+
+### The last gun, and a bug my own invariant caught
+
+Six hulls carry exactly one mount — `oberth`, `scoutship`, `marauder`,
+`orion_raider`, `tholian_web_spinner` and `bioship`, the last a tier-nine Borg
+boss. **A hull's last enabled mount cannot be knocked out**: per-mount knockout
+is about *which* guns, and a ship with one gun has no "which"; total disarmament
+is what the array-wide gate is already for.
+
+That guard is a **state** rule, not an event one, and the difference was a real
+bug found within a minute of the invariant being written: the guard spared a
+wrecked tube because it was the only gun standing, a sibling then repaired past
+the restore threshold so it was no longer the last, and nothing re-examined it.
+The checker found the Enterprise firing a torpedo tube at **0.029 integrity**.
+It is settled after damage *and* after repair now.
+
+### Drawing it took four attempts, and three were invisible
+
+Worth recording because each failed differently and only the screenshot showed
+it:
+
+1. **A filled pie slice at low alpha.** A Constitution's 250° and 200° banks
+   overlapped into a faint disc round the hull — it read as fog, not as arcs.
+2. **A band at the range limit.** 88–100% of 620 units is far outside the frame
+   at any zoom a captain fights at. Nothing on screen.
+3. **Correct geometry, single winding.** `gl.js` enables `CULL_FACE`, and a flat
+   wedge lying in the ship's plane has exactly one visible side — so the wrong
+   winding drew nothing from any camera position. Both faces are emitted now,
+   which is also right because a captain can orbit under their own ship.
+4. **Only the arcs that constrain.** A 250° bank overlapping a 200° one is a
+   ring, and a ring is not information. Mounts of 180° or less — the torpedo
+   tube, a Defiant's cannons — are the ones that make "come about" specific.
+
+The general lesson, and it is not a rendering one: **a visual feature is not
+done when the code runs.** Three of those four passed every test and all 356
+browser checks while displaying nothing whatsoever. The only instrument that
+could tell was looking at the picture.
+
+Two orphans are consumed on the way: `FACING_LABEL`, whose declaration in
+`ship.js` was the only occurrence of its own name in `src/` or `tests/`, gets its
+first reader in the line that names a lost bank by the arc it covered; and
+`weapon.id`, whose only reader was one assertion in `sim.test.js`, becomes how
+saved mount damage is reconciled against a hull — **by id, never by index**, so a
+save that predates a refit cannot resurrect a mount the ship no longer carries.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

@@ -21,6 +21,7 @@ import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { commandReference } from './orders.js';
 import { namesFor } from '../sim/address.js';
+import { inArc } from '../sim/ship.js';
 // `DECKS` was imported here too and used only in a comment. The deck label is
 // `game.deckLabel` now, which is the one place that knows which hull this is.
 import { ROOMS } from '../world/interiors.data.js';
@@ -708,11 +709,26 @@ export function tacticalScreen(app) {
 
   // --- Weapons ---
   side.append(panel('Weapons', [
-    ...g.ship.weapons.map((w) => readout(
-      w.name.replace(/^(Forward|Aft)\s+/, ''),
-      w.cooldown > 0 ? 1 - w.cooldown / w.cycle : 1,
-      w.cooldown > 0 ? `${w.cooldown.toFixed(1)}s` : 'ready',
-    )),
+    // Per mount: whether it is shot out, and whether it BEARS on the target.
+    //
+    // "Bears" is the readout that makes "come about" a specific instruction
+    // instead of a mood. Firing arcs have decided every shot in this game since
+    // the third axis went in — `inArc` is the same function the gunnery calls —
+    // and until now nothing on any screen said which way a mount pointed or
+    // whether the ship it was aimed at was inside it.
+    ...g.ship.weapons.map((w) => {
+      const dead = w.enabled === false;
+      const bears = eng?.target ? inArc(g.ship.directionTo(eng.target), w) : null;
+      const value = dead ? 'out'
+        : w.cooldown > 0 ? `${w.cooldown.toFixed(1)}s`
+        : bears === false ? 'no solution'
+        : 'ready';
+      return readout(
+        w.name.replace(/^(Forward|Aft)\s+/, ''),
+        dead ? 0 : (w.cooldown > 0 ? 1 - w.cooldown / w.cycle : 1),
+        value,
+      );
+    }),
     el('div', { class: 'btn-row' }, [
       button('Fire', tap(() => {
         const n = eng.fireAll();

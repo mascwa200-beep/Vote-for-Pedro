@@ -10,7 +10,9 @@
 // character sheet, not to whether a phaser connects.
 
 import { emit } from '../core/events.js';
-import { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection } from './ship.js';
+import {
+  Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection, FACING_LABEL,
+} from './ship.js';
 import { chooseAction } from './ai.js';
 import { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } from './arena.js';
 import { assessEngagement, classPower, forcePower } from './assess.js';
@@ -194,6 +196,10 @@ export class Engagement {
     // Ships whose destruction has already been announced. A death is a
     // one-time event and the sweep that finds it runs every tick.
     this.mourned = new Set();
+    // Gun mounts whose loss has already been announced, the same way. A bank
+    // sits below the threshold for as long as it takes to repair, and the
+    // sweep that notices runs every tick.
+    this.saidMount = new Set();
 
     this.placeCombatants();
     // Metreon gas will not let a warp field form. Read AFTER the arena is
@@ -643,7 +649,41 @@ export class Engagement {
   }
 
   /** Everything that died since the last tick, reported once each. */
+  /**
+   * Say when a gun goes out, and when it comes back.
+   *
+   * The player's own mounts and the current target's only. Announcing every
+   * bank on every hostile in a five-ship engagement is not information, it is
+   * a wall — the same judgement `saidPointDefence` and `saidBlocked` above
+   * already make about their own one-off lines.
+   *
+   * Keyed on the mount object in a Set, so a bank that sits below the
+   * threshold for the thirty seconds it takes to repair is announced once, not
+   * nine hundred times. Removed from the set when it is restored, so the pair
+   * can happen again later in the same fight.
+   */
+  reportMounts() {
+    const watched = [this.player, this.target].filter(Boolean);
+    for (const s of watched) {
+      const mine = s === this.player;
+      for (const w of s.weapons ?? []) {
+        if (w.enabled === false && !this.saidMount.has(w)) {
+          this.saidMount.add(w);
+          this.pushLog(mine
+            ? `We have lost the ${mountName(w).toLowerCase()}.`
+            // "tubes", "cannons", "banks" — the label is always plural, so
+            // the verb is too. It read "Their forward tubes is out."
+            : `Their ${mountName(w).toLowerCase()} are out.`, 'tactical');
+        } else if (w.enabled !== false && this.saidMount.has(w)) {
+          this.saidMount.delete(w);
+          if (mine) this.pushLog(`The ${mountName(w).toLowerCase()} are back, Captain.`, 'engineering');
+        }
+      }
+    }
+  }
+
   reportDeaths() {
+    this.reportMounts();
     for (const s of this.allShips) {
       if (s.destroyed) this.onDestroyed(s, null);
     }
@@ -1131,6 +1171,11 @@ export class Engagement {
     const shieldLines = FACINGS
       .map((f) => `${f} ${Math.round(p.shieldPctOf(f) * 100)}%`)
       .join(', ');
+    // Which banks are out, so the mechanic has a voice through an order the
+    // captain already has. No new intent and no new phrasing — `status` has
+    // always existed and this rides it, which is why this whole change touches
+    // none of the counts README states and docs.test.js scrapes.
+    const out = p.weapons.filter((w) => w.enabled === false);
     return {
       hull: Math.round(p.hullPct * 100),
       shields: shieldLines,
@@ -1138,8 +1183,30 @@ export class Engagement {
       casualties: p.maxCrew - p.crew,
       hostiles: this.liveHostiles.length,
       condition: p.condition,
+      weapons: out.length
+        ? `${out.map((w) => mountName(w)).join(' and ')} out of action`
+        : 'all banks answering',
     };
   }
+}
+
+/**
+ * What a gun mount is called, out loud.
+ *
+ * `FACING_LABEL` in ship.js has existed for a long time and its declaration was
+ * the ONLY occurrence of its own name anywhere in src/ or tests/ — six labels
+ * written down and read by nothing. This is its first reader: the arc a mount
+ * covers is exactly what a bridge crew would name it by.
+ *
+ * Falls back to the mount's own `name` for anything whose facing is not one of
+ * the six, and to the id for anything with neither.
+ */
+function mountName(w) {
+  if (!w) return 'mount';
+  const label = FACING_LABEL[facingForBearing(w.facing ?? 0)];
+  const kind = w.type === 'torpedo' ? 'tubes'
+    : w.type === 'cannon' ? 'cannons' : 'banks';
+  return label ? `${label} ${kind}` : (w.name ?? String(w.id ?? 'mount'));
 }
 
 /** Build a hostile group appropriate to a faction and difficulty. */

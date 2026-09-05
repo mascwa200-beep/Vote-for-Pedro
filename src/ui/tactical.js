@@ -196,6 +196,39 @@ export class TacticalView {
     ctx.save();
     ctx.translate(ship.x, ship.y);
 
+    // Weapon arcs, for the player's own narrow mounts, beneath the shields.
+    //
+    // The flat plot is the real WebGL-failure fallback, so it must not be the
+    // view where a feature is quietly missing — a captain whose phone dropped
+    // the 3D context should still be able to see which way the tubes point.
+    //
+    // The honest caveat, in the same voice this file uses about drawing rocks
+    // at full radius rather than at their z=0 cross-section: A PLAN VIEW
+    // FLATTENS THE CONE'S ELEVATION. `inArc` tests a real three-dimensional
+    // cone, so a target well above or below the plane can sit inside the wedge
+    // drawn here and outside the arc the gunnery actually checks.
+    //
+    // Only mounts of 180 degrees or less, for the reason the 3D view gives:
+    // a 250-degree bank overlapping a 200-degree one is a ring, and a ring is
+    // not information.
+    if (isPlayer) {
+      const r = 26 * scale;
+      for (const w of ship.weapons ?? []) {
+        const deg = w.degrees ?? 360;
+        if (deg > 180) continue;
+        const half = deg / 2;
+        const dead = w.enabled === false;
+        ctx.fillStyle = dead ? 'rgba(190,70,60,0.10)' : 'rgba(110,170,255,0.13)';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, r,
+          (ship.heading + (w.facing ?? 0) - half) * Math.PI / 180,
+          (ship.heading + (w.facing ?? 0) + half) * Math.PI / 180);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
     // Shield arcs, drawn only where there is shield left to draw.
     if (ship.shieldsUp && !ship.cloaked) {
       const radius = 30 * scale;

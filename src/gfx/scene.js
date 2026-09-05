@@ -607,9 +607,78 @@ export function dropLineMesh() {
   });
 }
 
+/**
+ * The wedge a gun mount covers, in the ship's own plane.
+ *
+ * A FLAT wedge, not a solid cone, for the reason tactical3d.js already records
+ * about the shield shell: a large bright volume dominates the frame and hides
+ * the ship it belongs to. A 250-degree phaser bank drawn as a solid cone is
+ * that failure several times over — it would swallow the hull, the target and
+ * most of the arena. On the ground plane it says where the guns bear and
+ * occludes nothing.
+ *
+ * Built out to unit radius so the caller scales it to the mount's real range,
+ * and memoised on a ten-degree bucket so the thirty-one classes in the game
+ * collapse to a handful of meshes rather than one per mount.
+ *
+ * The honest limit, stated because the plan view has the same one: a wedge in
+ * the plane does not show the cone's ELEVATION restriction. A target far above
+ * the plane can sit inside the drawn wedge and outside the real arc, which
+ * `inArc` tests in three dimensions.
+ */
+export function arcMesh(degrees = 90) {
+  const deg = Math.max(10, Math.min(360, Math.round(degrees / 10) * 10));
+  return memo(`arc:${deg}`, () => {
+    const mb = new MeshBuilder();
+    const half = (deg / 2) * (Math.PI / 180);
+    const steps = Math.max(3, Math.round(deg / 5));
+    const color = [0.45, 0.72, 1.0];
+    // A BAND at the range limit and two rays down its edges — not a filled
+    // pie. The first cut was a filled slice at low alpha, and on a
+    // Constitution, whose banks cover 250 and 200 degrees, the two of them
+    // overlapped into a faint disc round the hull: it read as fog, not as
+    // arcs, and said nothing about where the guns pointed. An outline is what
+    // makes an arc an arc, and it leaves the middle of the board clear.
+    const R0 = 0.88;
+    const RAY = 0.012;
+    // BOTH windings for every triangle. The renderer culls back faces
+    // (gl.js enables CULL_FACE), and a flat wedge lying in the ship's plane
+    // has exactly one visible side — so a single winding drew nothing at all
+    // from half the camera positions, and nothing from ANY of them if the
+    // winding was the wrong way round. It was the wrong way round, which is
+    // why the first two attempts at this rendered an empty frame. A captain
+    // can orbit under their own ship, so the arc has to exist from below too.
+    const face = (a, b, c) => { mb.tri(a, b, c, color); mb.tri(c, b, a, color); };
+    for (let i = 0; i < steps; i++) {
+      const a0 = -half + (i / steps) * half * 2;
+      const a1 = -half + ((i + 1) / steps) * half * 2;
+      const p = (a, r) => vec3(Math.cos(a) * r, 0, Math.sin(a) * r);
+      face(p(a0, R0), p(a1, 1), p(a0, 1));
+      face(p(a0, R0), p(a1, R0), p(a1, 1));
+    }
+    // The two bounding rays, as slim quads from the hull to the range limit,
+    // which is the line a captain actually steers to put a target inside.
+    for (const edge of [-half, half]) {
+      const n = edge + Math.PI / 2;
+      const ox = Math.cos(n) * RAY;
+      const oz = Math.sin(n) * RAY;
+      const ex = Math.cos(edge);
+      const ez = Math.sin(edge);
+      face(vec3(-ox, 0, -oz), vec3(ex - ox, 0, ez - oz), vec3(ex + ox, 0, ez + oz));
+      face(vec3(-ox, 0, -oz), vec3(ex + ox, 0, ez + oz), vec3(ox, 0, oz));
+    }
+    return mb;
+  });
+}
+
 /** Every mesh the scene can draw, for the harness and the triangle budget. */
 export function sceneMeshes() {
   return {
+    // Two buckets stand in for the family: the narrowest arc any mount carries
+    // and the widest. Missing from here, the triangle budget would be measured
+    // against a scene that does not include the arcs at all.
+    arcNarrow: arcMesh(90),
+    arcWide: arcMesh(250),
     starfield: starfield(),
     grid: gridMesh(),
     beam: beamMesh(),

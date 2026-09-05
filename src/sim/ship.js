@@ -102,6 +102,62 @@ export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'wa
 export const CALLED_SHOT_HULL = 0.7;
 
 /**
+ * When a single gun mount stops firing, and when it comes back.
+ *
+ * `subsystems.weapons` has always been ONE number for the whole battery: it
+ * scales every mount's damage and recharge together and gates firing at 0.05.
+ * So a called shot at the weapons took the guns down as a group, and
+ * `weapon.enabled` — written `true` at construction, read by `combat.js` and
+ * `ai.js` — was never set `false` by anything, anywhere. It was a constant
+ * wearing the shape of per-mount state.
+ *
+ * TWO thresholds, not one, for the reason `RETARGET_MARGIN` in ai.js has its
+ * hysteresis: a bank sitting exactly on the line would otherwise flicker on and
+ * off thirty times a second and fill the log with it. Between the two, either
+ * flag is legal — that IS the hysteresis, and the invariants state it as two
+ * implications rather than one equivalence for exactly that reason.
+ */
+export const MOUNT_DISABLED_AT = 0.2;
+export const MOUNT_RESTORED_AT = 0.35;
+
+/**
+ * How much harder a hit lands on ONE mount than on the battery as a whole.
+ *
+ * The first cut of this reused the subsystem's own fractions unchanged — 3.2
+ * for a called shot, 1.8 for a stray — on the argument that it added no tuning
+ * knob. Measured over 120 fights, that produced a mechanic that never once
+ * fired: the lowest integrity any mount reached anywhere was 0.777, against a
+ * threshold of 0.2, and not a single bank went out on either side.
+ *
+ * The reason is arithmetic. `subsystems.weapons` accumulates every hit that
+ * rolls it; a given MOUNT only accumulates when the roll picks the weapons AND
+ * that mount is the one bearing, so on a four-mount hull it collects a small
+ * share of a one-in-seven chance. Sharing the array's number spreads it thinner
+ * every time a hull carries more guns, which is backwards.
+ *
+ * Concentration is the whole idea: a shot that comes in on the forward arc is
+ * in the forward bank, not distributed politely around the ship. Measured
+ * across 120 fights on four matchups:
+ *
+ *     multiplier   fights where a bank went out, of 120 (player / hostile)
+ *     1.0 (shared)                0 / 0        the mechanic never fires
+ *     3.0                         0 / 10
+ *     6.0                         5 / 32
+ *     9.0                         8 / 42
+ *    12.0                        10 / 48
+ *
+ * 6.0 is where losing a bank is a thing that happens in a hard fight rather
+ * than in every fight or in none.
+ *
+ * The two columns are far apart and that is not the multiplier's doing: the
+ * player wins most of these fights, so the player is hit less. The share is
+ * closest against a Galor, whose doctrine calls its shots at the weapons — see
+ * the per-matchup table in tests/mounts.test.js, which is where the case that
+ * matters is measured rather than the average of four.
+ */
+export const MOUNT_CONCENTRATION = 6.0;
+
+/**
  * How much better the crew fight a fire when nobody is shooting at them.
  *
  * During an action the damage-control parties are whoever can be spared while
@@ -280,7 +336,13 @@ export class Ship {
     // ---- systems ----
     this.power = new PowerGrid(cls.powerCap, cls.auxBonus ?? 0);
     this.subsystems = Object.fromEntries(SUBSYSTEM_KEYS.map((k) => [k, 1.0])); // 1 = intact
-    this.weapons = (cls.weapons ?? []).map((w) => ({ ...w, cooldown: 0, enabled: true }));
+    // `integrity` is the authoritative state and `enabled` is written when it
+    // crosses a threshold — the same shape as `shieldsUp` against
+    // `subsystems.shields`, so there is one number to reason about and a
+    // derived flag the hot paths can read without recomputing it.
+    this.weapons = (cls.weapons ?? []).map((w) => ({
+      ...w, cooldown: 0, integrity: 1, enabled: true,
+    }));
     this.torpedoes = cls.weapons?.some((w) => w.type === 'torpedo') ? 60 : 0;
     this.maxTorpedoes = this.torpedoes;
     this.antimatter = MAX_ANTIMATTER;
@@ -684,6 +746,26 @@ export class Ship {
     for (const k of SUBSYSTEM_KEYS) {
       if (this.subsystems[k] < 1) this.subsystems[k] = Math.min(1, this.subsystems[k] + repair);
     }
+    // The gun crews work at the same rate the damage parties do, off the same
+    // auxiliary power — a wrecked bank comes back mid-fight if the ship can
+    // spare the power for it, which is what makes the auxiliary slider a
+    // gunnery decision as well as a repair one.
+    for (const w of this.weapons) {
+      if (w.integrity < 1) w.integrity = Math.min(1, w.integrity + repair);
+      // The restore check runs whatever the integrity is, NOT only on a mount
+      // that is still repairing. Skipping a whole mount on `integrity >= 1`
+      // left any bank that reached full while disabled disabled for ever — it
+      // cannot arise from `settleMounts`, which only disables below the low
+      // threshold, but it is one edited save away and it costs nothing to be
+      // robust about.
+      if (!w.enabled && w.integrity > MOUNT_RESTORED_AT) {
+        w.enabled = true;
+        emit('ship:mount-restored', { ship: this, weapon: w });
+      }
+    }
+    // A restore can promote a spared last mount out of being the last one, so
+    // the guard has to be re-read after repairs as well as after damage.
+    this.settleMounts();
 
     // Warp core breach countdown.
     //
@@ -812,10 +894,26 @@ export class Ship {
 
     // Subsystem damage: targeted, or randomly from a hull hit.
     if (hullDamage > 0) {
+      // A hit on the weapons wrecks the BANK THAT WAS POINTING THAT WAY as
+      // well as the battery as a whole. The fractions are the ones already
+      // here, unchanged, so the mount and the array degrade together and this
+      // introduces no new tuning knob. `rng.pick` was already being called;
+      // nothing below adds a draw, which is what keeps the seeded stream
+      // byte-identical to before this change.
+      const where = direction ?? bearing;
       if (subsystem) {
         this.damageSubsystem(subsystem, (hullDamage / this.maxHull) * 3.2);
+        if (subsystem === 'weapons') {
+          this.damageMount(this.mountFacing(where),
+            (hullDamage / this.maxHull) * 3.2 * MOUNT_CONCENTRATION);
+        }
       } else if (rng && rng.chance(Math.min(0.6, hullDamage / this.maxHull * 5))) {
-        this.damageSubsystem(rng.pick(SUBSYSTEM_KEYS), (hullDamage / this.maxHull) * 1.8);
+        const key = rng.pick(SUBSYSTEM_KEYS);
+        this.damageSubsystem(key, (hullDamage / this.maxHull) * 1.8);
+        if (key === 'weapons') {
+          this.damageMount(this.mountFacing(where),
+            (hullDamage / this.maxHull) * 1.8 * MOUNT_CONCENTRATION);
+        }
       }
       // Hard hits start fires.
       if (rng && hullDamage > this.maxHull * 0.04 && rng.chance(0.35)) this.fires++;
@@ -827,6 +925,110 @@ export class Ship {
     if (this.hull <= 0 && !this.breaching) this.beginBreach();
 
     return { shieldDamage, hullDamage, facing, penetrated: hullDamage > 0, crewKilled };
+  }
+
+  /**
+   * Which gun mount takes a hit that came in on this bearing.
+   *
+   * NOT a roll. The mount whose arc the shot came through is the mount that
+   * gets hit, which makes the rule learnable — shoot a Galor in the nose and
+   * you take its forward bank; come round the back and you get the aft tubes —
+   * and, more importantly here, adds NO draw to the seeded stream. Every
+   * existing fixture in the suite stays byte-comparable because of this.
+   *
+   * Among the mounts that bear, the SOUNDEST one takes it — not the narrowest.
+   *
+   * Narrowest-arc-wins was the first rule: a 90-degree torpedo tube beats a
+   * 250-degree phaser bank on every bearing where the tube bears at all, which
+   * makes wide banks hard to reach. The first reading of that looked damning —
+   * 24 of 38 hull-and-mount pairs never went out — but the reading was wrong,
+   * and wrong in this repo's most familiar way: it counted mounts that were
+   * NEVER SHOT AT alongside mounts that were shot at and held. Separating the
+   * two, over the same 38 pairs:
+   *
+   *     rule              went out   hit but held   never touched
+   *     narrowest first        14          7             17
+   *     soundest first         16          8             14
+   *
+   * So the honest gap is three more mounts taking damage at all, not ten
+   * immune ones. Soundest-first is kept because it is the better rule on its
+   * own terms and measures slightly better, not because the first was broken.
+   *
+   * Soundest-first spreads a battering across the guns that share a facing —
+   * the forward battery degrades together, which is what being shot in the nose
+   * does — while keeping the concentration that makes the rule learnable, since
+   * only mounts that actually bear are ever candidates. Shoot a Galor in the
+   * nose and you are working through its forward guns; come round the back and
+   * you are working through the aft ones.
+   *
+   * Ties fall to the narrower arc, then the heavier gun, then `id`, so the
+   * order is total and cannot depend on the order of the table.
+   *
+   * Nothing bearing at all — a hit through a blind spot — still has to land
+   * somewhere, so it goes to the soundest live mount.
+   *
+   * @param {number[]|number} direction  local direction vector, or a bearing
+   * @returns {object|null} the mount, or null on a hull with no guns
+   */
+  mountFacing(direction) {
+    const live = this.weapons.filter((w) => w.integrity > 0);
+    if (!live.length) return null;
+    const bearing = live.filter((w) => inArc(direction, w));
+    const pool = bearing.length ? bearing : live;
+    return pool.slice().sort((a, b) => b.integrity - a.integrity
+      || (a.degrees ?? 360) - (b.degrees ?? 360)
+      || (b.damage ?? 0) - (a.damage ?? 0)
+      || String(a.id).localeCompare(String(b.id)))[0];
+  }
+
+  /**
+   * Wreck one gun mount.
+   *
+   * Clamped through the NaN-safe `clamp` for the reason `damageSubsystem`
+   * records: the API fuzzer calls every public method with rubbish, and a save
+   * file is a thing a person can edit.
+   *
+   * A hull's LAST enabled mount cannot be knocked out. That is a principle
+   * rather than a fudge: per-mount knockout is about WHICH guns are gone, and a
+   * ship with one gun has no "which" — total disarmament is already what the
+   * array-wide `subsystems.weapons <= 0.05` gate is for. Six hulls carry
+   * exactly one mount (oberth, scoutship, marauder, orion_raider,
+   * tholian_web_spinner and bioship, the last a tier-nine Borg boss), so
+   * without this a single lucky called shot turns a boss into a punching bag.
+   *
+   * The cost, stated rather than hidden: `ai.js`'s "a ship with no working
+   * weapons is an errand, not a threat" is now reachable only through the
+   * `w.damage > 0` half of that same test.
+   */
+  damageMount(weapon, amount) {
+    if (!weapon || !this.weapons.includes(weapon)) return null;
+    weapon.integrity = clamp(weapon.integrity - clamp(amount, 0, 1), 0, 1);
+    this.settleMounts();
+    return weapon;
+  }
+
+  /**
+   * Bring every mount's `enabled` flag into line with its integrity.
+   *
+   * This is a STATE rule, not an event one, and the difference was a real bug
+   * the new invariant caught within a minute of being written: the last-mount
+   * guard spared a wrecked tube because it was the only gun still standing,
+   * then a sibling repaired past the restore threshold and the tube was no
+   * longer the last — but nothing re-examined it. The checker found the
+   * Enterprise firing a torpedo tube at 0.029 integrity.
+   *
+   * So it is settled wherever mounts change: after damage, and after repair.
+   * The guard is evaluated against the CURRENT set of working guns, which is
+   * the only reading of "its last one" that stays true over a whole fight.
+   */
+  settleMounts() {
+    for (const w of this.weapons) {
+      if (w.enabled && w.integrity <= MOUNT_DISABLED_AT) {
+        if (this.weapons.filter((x) => x.enabled).length <= 1) continue;
+        w.enabled = false;
+        emit('ship:mount-disabled', { ship: this, weapon: w });
+      }
+    }
   }
 
   damageSubsystem(key, amount) {
@@ -1028,6 +1230,12 @@ export class Ship {
     for (const k of SUBSYSTEM_KEYS) {
       this.subsystems[k] = Math.min(1, this.subsystems[k] + healed / this.maxHull);
     }
+    // Patching the hull patches the gun mounts in it, on the same scale as the
+    // subsystems, so a hull patch is not a repair that leaves the guns out.
+    for (const w of this.weapons) {
+      w.integrity = Math.min(1, w.integrity + healed / this.maxHull);
+      if (w.integrity > MOUNT_RESTORED_AT) w.enabled = true;
+    }
     if (this.subsystems.shields > 0.05) this.shieldsUp = true;
     if (this.hull > 0) { this.breaching = false; this.breachTimer = 0; }
     return this.hull;
@@ -1043,6 +1251,8 @@ export class Ship {
     this.hull = this.maxHull;
     for (const f of FACINGS) this.shields[f] = this.maxShield;
     for (const k of SUBSYSTEM_KEYS) this.subsystems[k] = 1;
+    // A yard fixes the guns.
+    for (const w of this.weapons) { w.integrity = 1; w.enabled = true; }
     this.shieldsUp = true;
     this.fires = 0;
     this.boarders = 0;
@@ -1072,6 +1282,13 @@ export class Ship {
       hull: this.hull, shields: this.shields, shieldsUp: this.shieldsUp,
       crew: this.crew, injured: this.injured,
       subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
+      // Gun mounts, BY ID rather than by position. This is the second consumer
+      // `weapon.id` has ever had — until now the only thing in the repo that
+      // read it was one test — and it is what makes a save survive a refit: an
+      // index would resurrect whatever mount happens to sit in slot two on a
+      // hull the captain no longer commands. `cooldown` is deliberately absent:
+      // that is fight state, and a fight is not resumed from a save.
+      weapons: this.weapons.map((w) => ({ id: w.id, integrity: w.integrity, enabled: w.enabled })),
       // `boarders` alongside `fires` for the same reason: it is a fight in
       // progress, and a save taken during one used to come back with the
       // intruders gone, the alert cleared and the crew no longer dying.
@@ -1108,6 +1325,22 @@ export class Ship {
     if (data.mods) {
       s.mods = { ...s.mods, ...data.mods };
       s.recomputeDerived();
+    }
+
+    // Gun mounts, matched by id against the hull the save names. A mount in
+    // the save that this class does not carry is dropped; a mount the class
+    // carries that the save does not mention comes back whole. Both cases are
+    // real: a save that predates a refit, and a save that predates this field.
+    if (Array.isArray(data.weapons)) {
+      const saved = new Map(data.weapons.filter((w) => w && w.id != null).map((w) => [w.id, w]));
+      for (const w of s.weapons) {
+        const was = saved.get(w.id);
+        if (!was) continue;
+        w.integrity = Number.isFinite(was.integrity) ? clamp(was.integrity, 0, 1) : 1;
+        // Derived from integrity rather than trusted from the file, so an
+        // edited save cannot hand back a mount that is wrecked and firing.
+        w.enabled = w.integrity > MOUNT_DISABLED_AT;
+      }
     }
 
     Object.assign(s, {
