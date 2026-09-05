@@ -47023,10 +47023,33 @@ class App {
       r.captainWounded
         ? el('p', { class: 'muted', text: 'You were hit. The party broke off and brought you back.' })
         : null,
-      el('p', {}, [el('b', {
-        text: `${r.passed} of ${r.of} objectives.`
-          + (r.lost ? ` We lost ${r.lost}.` : ''),
-      })]),
+      el('p', {}, [el('b', { text: `${r.passed} of ${r.of} objectives.` })]),
+      // Who, not how many.
+      //
+      // This said `We lost 1.` — and `report.casualties` has been on the
+      // object the whole time, carrying `{ name, killed }` or
+      // `{ name, injured }` for every person the party lost or brought back
+      // hurt. The ship's LOG already names them, three lines away in
+      // state.js: `We lost ${r.killed.name}.` and `${r.injured.name} is
+      // hurt.` So a named bridge officer could be killed taking a Klingon
+      // bridge and the report the captain reads and dismisses would render
+      // them as the digit 1 — and an officer merely injured, who goes to
+      // sickbay and whose regard for the captain drops, was not mentioned at
+      // all.
+      //
+      // At most three steps in any template, so at most a handful of lines;
+      // no cap is needed and one would only hide a name.
+      ...(r.casualties ?? []).map((c) => {
+        // `away.js` writes the literal 'Security crewman' for the unnamed,
+        // which needs an article to sit in a sentence; a real name does not.
+        const anon = c.name === 'Security crewman';
+        return el('p', {
+          class: c.killed ? '' : 'muted',
+          text: c.killed
+            ? `We lost ${anon ? 'a security crewman' : c.name}.`
+            : `${anon ? 'A security crewman' : c.name} is hurt.`,
+        });
+      }),
     ], [button('Acknowledged', () => this.closeModal(), {
       color: r.outcome === 'failure' ? 'red' : 'green',
     })]);

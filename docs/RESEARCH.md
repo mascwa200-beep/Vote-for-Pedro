@@ -4842,6 +4842,93 @@ should have been reading it.
 
 
 
+## 64. "We lost 1."
+
+Same play pass, next screenshot. `19-boarding.png` is the card a captain reads
+after sending a party onto a Klingon bridge:
+
+    BOARD THE HOSTILE
+    ✓ Beam through their shields.  — Ayla Marchetti
+    ✗ Take the bridge.             — Amara Novak
+    ✗ Persuade the survivors.      — Ravel Barrow
+    1 of 3 objectives. We lost 1.
+
+Three officers named for three objectives, and the person who died rendered as
+the digit **1**.
+
+### The code already knew
+
+`report.casualties` has been on the object the whole time. `away.js` pushes
+`{ name, killed: true }` or `{ name, injured: true }` for every person the
+party loses or brings back hurt, using `officer.name` for a bridge officer and
+the literal `'Security crewman'` for the rest. `awayMission` copies the whole
+array onto the report:
+
+```js
+const report = { ..., casualties: team.casualties.slice(), lost };
+```
+
+And the ship's **log** already names them, three lines away in the same file:
+
+```js
+if (r.killed) this.pushLog(`We lost ${r.killed.name}.`, 'medical');
+else if (r.injured) this.pushLog(`${r.injured.name} is hurt.`, 'medical');
+```
+
+So the names existed, reached the report, and were printed in the log — and the
+one surface the player actually reads and dismisses summed them to a count.
+
+**And the injured were not mentioned at all.** `lost` is
+`casualties.filter((c) => c.killed).length`, so an officer who came back hurt —
+who goes to sickbay, and whose regard for the captain drops by five — appeared
+nowhere on the card.
+
+### What it says now
+
+    1 of 3 objectives.
+    We lost Ravel Barrow.
+    Amara Novak is hurt.
+    We lost a security crewman.
+
+The injured line is muted, the losses are not. An unnamed casualty gets an
+article — "a security crewman" — because `away.js` stores a label, not a name,
+and a label needs one to sit in a sentence. At most three steps in any
+template, so at most a handful of lines; no cap is needed and one would only
+hide a name.
+
+### The guard, and why it is staged
+
+A casualty is a dice roll. A check that waits for one is a check that reports
+clean by not running, so this one hands `runAwayMission` a report with a killed
+officer, an injured officer and an unnamed crewman in it, and reads the three
+sentences off the rendered card. Confirmed against a control that reproduces
+the original string exactly — `1 of 3 objectives. We lost 1.` — and fails all
+three.
+
+The staging displaced the real boarding modal and broke two later checks that
+needed it, so the block moved to after them. Same lesson as the close-pass
+staging in §60: **the harness keeps playing this captain for another two
+hundred checks**, and anything staged has to be put back or placed where it
+cannot displace anything.
+
+### Four for four
+
+§59, §61, §63 and now this. Every one was a value already present in the data,
+read by fewer places than should have read it:
+
+| | already knew | did not use it |
+| --- | --- | --- |
+| §59 | a wall standoff tuned for a room | in a 2.6 m corridor |
+| §61 | five mission gates | three of them |
+| §63 | a surface-feature discriminator | the label and the subtitle |
+| §64 | every casualty by name | the card the captain reads |
+
+None of the four needed new information. Four times running, the defect was a
+fact the program had and did not carry all the way to the person playing it —
+which is a more productive thing to go looking for than a missing feature.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
