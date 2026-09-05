@@ -4687,6 +4687,22 @@ class AwayTeam {
     const advantage = (this.character?.hasAdvantageOn(spec.ability) ?? false)
       || this.desperate()
       || this.disciplineCovers(spec.ability);
+    // And one way to have the worse of it, which had never been asked at all.
+    //
+    // `resolve()` has documented a `disadvantage` argument since it was
+    // written and no caller anywhere in the game had ever passed one — the
+    // whole downside half of the resolution system was unreachable. "Reckless —
+    // your landing parties pay for it" is its first user: an away mission is
+    // the one thing that resolves a check and the one place a captain is
+    // personally at risk, which is this game's saving throw.
+    // Only where the check IS a saving throw. A saving throw is a reaction to
+    // something dangerous, not every skilled action, and applying it to routine
+    // scans as well took away-team success from 68.3% to 49.5% and casualties
+    // from 4.5% to 7.2% — measured over 400 checks, and too much for a
+    // complication a player takes alongside one advantage. At `dangerous` and
+    // `extreme` it is the same trade against the same odds it was written for.
+    const disadvantage = !!this.character?.mechanic('hazardDisadvantage')
+      && (hazard === 'dangerous' || hazard === 'extreme');
     // Training damps the swing rather than only shifting it. A veteran is not
     // merely better on average; they are more *consistent*, which is the thing
     // a flat die could never express and the reason this is not a d20 any more.
@@ -4697,6 +4713,7 @@ class AwayTeam {
       capability: modifier,
       difficulty: targetDC,
       advantage,
+      disadvantage,
       steady,
       luck: this.difficulty?.luck ?? 0,
       label: label || spec.label,
@@ -36343,8 +36360,23 @@ const TRAITS = [
   },
   {
     id: 'reckless', name: 'Reckless', positive: false,
-    text: 'Advantage on every attack. Disadvantage on every saving throw.',
-    mechanic: { attackAdvantage: true, saveDisadvantage: true },
+    text: 'Your ship shoots straighter — and your landing parties pay for it.',
+    // Said in the currency this game actually has.
+    //
+    // It declared `attackAdvantage` and `saveDisadvantage` — an attack roll and
+    // a saving throw — and the README quoted this trait as its example of a
+    // genuine mechanical trade. Gameplay stopped rolling a d20 when
+    // `rules/resolve.js` replaced the die with a margin: there is no attack
+    // roll and no saving throw to attach to, and both keys were read by
+    // nothing. RESEARCH §70 counted 32 like them.
+    //
+    // The promise is kept, in the two places this game puts it. Shooting is the
+    // ship's `accuracy`, which `shipMods` already contributes to from the
+    // captain. The saving throw is the away team: the one thing that resolves a
+    // check, and the one place a captain is personally at risk. `resolve()` has
+    // taken a `disadvantage` argument since it was written and NOTHING has ever
+    // passed one — this is its first caller.
+    mechanic: { accuracyBonus: 0.1, hazardDisadvantage: true },
   },
   {
     id: 'idealist', name: 'Idealist', positive: false,
@@ -36569,6 +36601,11 @@ class Character {
     // would have changed what the card promised and not what the ship did.
     const critSeverity = this.mechanic('critSeverity');
     if (critSeverity) bump('critSeverity', critSeverity);
+    // "Reckless — your ship shoots straighter." Read here for the same reason
+    // the two lines above are: the number is on the card, and writing it out a
+    // second time is how a promise drifts from what the game does.
+    const accuracyBonus = this.mechanic('accuracyBonus');
+    if (accuracyBonus) add('accuracy', 1 + accuracyBonus);
     if (this.species.mechanic?.critBonus) bump('critChance', this.species.mechanic.critBonus * 0.1);
     return mods;
   }

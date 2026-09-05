@@ -339,8 +339,23 @@ export const TRAITS = [
   },
   {
     id: 'reckless', name: 'Reckless', positive: false,
-    text: 'Advantage on every attack. Disadvantage on every saving throw.',
-    mechanic: { attackAdvantage: true, saveDisadvantage: true },
+    text: 'Your ship shoots straighter — and your landing parties pay for it.',
+    // Said in the currency this game actually has.
+    //
+    // It declared `attackAdvantage` and `saveDisadvantage` — an attack roll and
+    // a saving throw — and the README quoted this trait as its example of a
+    // genuine mechanical trade. Gameplay stopped rolling a d20 when
+    // `rules/resolve.js` replaced the die with a margin: there is no attack
+    // roll and no saving throw to attach to, and both keys were read by
+    // nothing. RESEARCH §70 counted 32 like them.
+    //
+    // The promise is kept, in the two places this game puts it. Shooting is the
+    // ship's `accuracy`, which `shipMods` already contributes to from the
+    // captain. The saving throw is the away team: the one thing that resolves a
+    // check, and the one place a captain is personally at risk. `resolve()` has
+    // taken a `disadvantage` argument since it was written and NOTHING has ever
+    // passed one — this is its first caller.
+    mechanic: { accuracyBonus: 0.1, hazardDisadvantage: true },
   },
   {
     id: 'idealist', name: 'Idealist', positive: false,
@@ -568,6 +583,11 @@ export class Character {
     // would have changed what the card promised and not what the ship did.
     const critSeverity = this.mechanic('critSeverity');
     if (critSeverity) bump('critSeverity', critSeverity);
+    // "Reckless — your ship shoots straighter." Read here for the same reason
+    // the two lines above are: the number is on the card, and writing it out a
+    // second time is how a promise drifts from what the game does.
+    const accuracyBonus = this.mechanic('accuracyBonus');
+    if (accuracyBonus) add('accuracy', 1 + accuracyBonus);
     if (this.species.mechanic?.critBonus) bump('critChance', this.species.mechanic.critBonus * 0.1);
     return mods;
   }

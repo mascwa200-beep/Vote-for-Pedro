@@ -110,7 +110,7 @@ describe('the sweep, and the instrument that produced it', () => {
     assert.equal(consumed().has('thisKeyIsDeclaredByNobodyAtAll'), false);
   });
 
-  test('the ratchet: no more than 26 declared mechanics are read by nothing', () => {
+  test('the ratchet: no more than 24 declared mechanics are read by nothing', () => {
     // It may go down — by wiring one, or by deleting one honestly — and it may
     // not go up. A new trait that declares a mechanic and forgets to wire it
     // fails here rather than shipping as a card that promises something.
@@ -118,13 +118,14 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     const dead = [...keys.keys()].filter((k) => !read.has(k)).sort();
     assert.ok(keys.size >= 55, `only ${keys.size} mechanics declared; has the sheet shrunk?`);
-    assert.ok(dead.length <= 26,
+    assert.ok(dead.length <= 24,
       `${dead.length} declared mechanics are read by nothing:\n  ${dead.join('\n  ')}`);
   });
 
   test('and everything wired so far is out of that set', () => {
     const read = consumed();
-    for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty']) {
+    for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty',
+      'accuracyBonus', 'hazardDisadvantage']) {
       assert.ok(read.has(k), `${k} is read by nothing again`);
     }
   });
@@ -315,5 +316,64 @@ describe('what the card says about standing, and what the ledger did', () => {
     assert.equal(g.character.mechanic('noRefusal'), undefined);
     // And it is the key `powers.js` actually asks for.
     assert.match(readFileSync('src/sim/powers.js', 'utf8'), /mechanic\('noObjection'\)/);
+  });
+});
+
+describe('the trait the README quotes, which traded nothing', () => {
+  // "Reckless gives advantage on every attack and disadvantage on every saving
+  // throw" — the README's own example of a genuine mechanical trade, declaring
+  // `attackAdvantage` and `saveDisadvantage`, both read by nothing. Gameplay
+  // stopped rolling a d20 when `resolve.js` replaced the die with a margin:
+  // there is no attack roll and no saving throw to attach to.
+  test('the d20 vocabulary is gone from it', () => {
+    const keys = declared();
+    assert.equal(keys.has('attackAdvantage'), false);
+    assert.equal(keys.has('saveDisadvantage'), false);
+    assert.ok(keys.has('accuracyBonus'));
+    assert.ok(keys.has('hazardDisadvantage'));
+  });
+
+  test('and the ship really does shoot straighter', () => {
+    const acc = (traits) => {
+      const g = captain({ traits });
+      return g.ship.accuracy ?? g.ship.mods?.accuracy ?? null;
+    };
+    const plain = acc([]);
+    const wild = acc(['reckless']);
+    assert.ok(plain !== null, 'accuracy is not on the ship, so this measures nothing');
+    assert.ok(wild > plain, `${wild} against ${plain}`);
+  });
+
+  test('and the landing party pays for it, but only against a real hazard', () => {
+    // The narrowing, and the reason it is not "disadvantage on everything":
+    // measured over 400 checks, applying it to routine scans as well took away
+    // success from 68.3% to 49.5% — too much for a complication a player takes
+    // alongside a single advantage. A saving throw is a reaction to danger.
+    const rate = (traits, hazard, runs = 300) => {
+      let ok = 0;
+      for (let seed = 0; seed < runs; seed++) {
+        const g = captain({ traits, seed: BigInt(seed + 1) });
+        if (g.buildAwayTeam().check(g.rng, 'science', { hazard }).success) ok++;
+      }
+      return ok / runs;
+    };
+    // Unaffected where the work is ordinary.
+    assert.equal(rate([], 'routine'), rate(['reckless'], 'routine'));
+    assert.equal(rate([], 'elevated'), rate(['reckless'], 'elevated'));
+    // And clearly worse where it is not.
+    assert.ok(rate(['reckless'], 'dangerous') < rate([], 'dangerous') * 0.8,
+      'a dangerous hazard is no worse for a reckless captain');
+    assert.ok(rate(['reckless'], 'extreme') < rate([], 'extreme') * 0.8);
+  });
+
+  test('and this is the first thing in the game to use disadvantage at all', () => {
+    // `resolve()` has documented a `disadvantage` argument since it was written
+    // and no caller anywhere had ever passed one — the whole downside half of
+    // the resolution system was unreachable code.
+    const src = sourceText();
+    assert.match(src, /disadvantage,/, 'nothing passes disadvantage to resolve');
+    const g = captain({ traits: ['reckless'] });
+    const roll = g.buildAwayTeam().check(g.rng, 'science', { hazard: 'extreme' });
+    assert.equal(roll.disadvantage, true, 'the roll did not come back marked');
   });
 });

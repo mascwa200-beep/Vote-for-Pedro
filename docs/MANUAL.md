@@ -517,7 +517,10 @@ array is one tap if you would rather not do arithmetic.
 **Traits** — up to two, and each is a real trade rather than a bonus:
 
 - *Maverick*: advantage on anything the regulations forbid — Prime Directive violations cost double.
-- *Reckless*: advantage on every attack, disadvantage on every saving throw.
+- *Reckless*: your ship shoots straighter — and your landing parties pay for it.
+  A flat accuracy bonus in a fight, and disadvantage on any away-team check made
+  against a **dangerous** or **extreme** hazard. Routine and elevated work is
+  unaffected: a saving throw is a reaction to danger, not every skilled action.
 - *Haunted*: disadvantage on Command below 25% hull — and +3 on everything else.
 - *Idealist*: double reputation from peace, double standing loss from kills.
 - *Notorious*: enemies break off sooner out of fear; every Diplomacy check is at disadvantage.
