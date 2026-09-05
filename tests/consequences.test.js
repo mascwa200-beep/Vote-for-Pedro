@@ -91,8 +91,8 @@ function actsThatSet(flag) {
 describe('two more places, and both of them are somewhere', () => {
   test('the book is two longer and covers two more systems', () => {
     assert.equal(CONSEQUENCE_EPISODES.length, 2);
-    assert.equal(EPISODES.length, 22);
-    assert.equal(new Set(EPISODES.map((e) => e.system)).size, 21);
+    assert.equal(EPISODES.length, 24);
+    assert.equal(new Set(EPISODES.map((e) => e.system)).size, 23);
   });
 
   test('and both systems exist and hosted nothing before', () => {
