@@ -1996,7 +1996,7 @@ export class Game {
     }
     const plan = plotTransit(
       this.galaxy, this.locationId, destinationId, warpFactor,
-      this.ship, this.progress.warpEfficiency,
+      this.ship, this.progress.warpEfficiency, this.difficulty.scale('fuelUse'),
     );
     if (plan.error) {
       this.officerSays('helm', plan.error, 'object');
@@ -3128,6 +3128,16 @@ export class Game {
     // it ends. See Engagement.end.
     this.engagement = new Engagement(this.ship, fleet, this.rng, {
       ...opts, allies, hazard, arenaRng, onEnd: () => this.resolveCombat(),
+      // `enemyRelentless` — declared on the top three rungs and, until now,
+      // read by nothing at all. `Engagement.relentless` has existed the whole
+      // time and disables breaking off; the only thing that ever set it was
+      // the Kobayashi Maru. At Vice Admiral and above nobody runs, which is
+      // what the flag says and what those rungs are for.
+      //
+      // The caller still wins where it asks explicitly, so the simulator and
+      // any scenario that sets it keep their own answer.
+      relentless: opts.relentless === true
+        || this.difficulty.def.enemyRelentless === true,
     });
     if (this.engagement.arena.features.length) {
       this.engagement.pushLog(
@@ -3473,6 +3483,7 @@ export class Game {
       for (let factor = top; factor >= 1; factor--) {
         const plan = plotTransit(
           this.galaxy, here, dest.id, factor, this.ship, this.progress.warpEfficiency,
+          this.difficulty.scale('fuelUse'),
         );
         if (plan.error) { why = plan.error; continue; }
         const result = this.setCourse(dest.id, factor);
@@ -3936,8 +3947,14 @@ export class Game {
 
     if (result.success) {
       this.stores = this.stores ?? {};
+      // `resourceRate` — declared on all twelve rungs (1.5 at Story down to
+      // 0.35 at Fleet Admiral) and, until now, read by nothing. Floored at one
+      // unit: a survey that succeeded and put nothing in the hold reads as a
+      // bug however the arithmetic got there.
+      const rate = this.difficulty.scale('resourceRate');
       for (const [material, amount] of Object.entries(feature.yield ?? {})) {
-        this.stores[material] = (this.stores[material] ?? 0) + amount;
+        const got = amount > 0 ? Math.max(1, Math.round(amount * rate)) : 0;
+        this.stores[material] = (this.stores[material] ?? 0) + got;
       }
       this.pushLog(`${feature.label}: ${feature.found}`, 'science');
       this.ledger.record('anomaly_catalogued', {
@@ -4651,8 +4668,12 @@ export class Game {
     // and this runs on a tick.
     if (this.ship.antimatter > Game.STRANDED_FUEL) return false;
 
+    // The same scale as the other two, so "are we stranded?" is answered with
+    // the fuel the ship would actually burn rather than the fuel it would burn
+    // at Lieutenant.
     return !this.galaxy.neighbors(this.locationId).some((n) => !plotTransit(
       this.galaxy, this.locationId, n.id, 1, this.ship, this.progress.warpEfficiency,
+      this.difficulty.scale('fuelUse'),
     ).error);
   }
 
