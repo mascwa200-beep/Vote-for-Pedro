@@ -73,6 +73,8 @@ export class Ledger {
     this.inquiryOpen = false;
     /** Set by the Game from the character sheet. See `openInquiry`. */
     this.inquiryImmune = false;
+    /** Flat bonus on Federation standing GAINS. Set by the Game. */
+    this.federationGain = 0;
     // What the board is about, so it can be named on the screen and in its own
     // finding. A board with no subject was a flag, not a proceeding.
     this.inquiryReason = null;
@@ -199,7 +201,13 @@ export class Ledger {
   adjustStanding(factionId, delta, reason = '') {
     if (!(factionId in this.standing)) return;
     const before = this.standing[factionId];
-    const after = Math.max(-100, Math.min(100, before + delta));
+    // "By the Book — +2 to Federation standing gains." Declared on the trait
+    // and read by nothing. On GAINS only, which is what the card says: a
+    // captain who follows regulations is not also insulated from the cost of
+    // breaking them. Set by the Game from the character sheet; a ledger does
+    // not know whose it is.
+    const bonus = factionId === 'federation' && delta > 0 ? (this.federationGain ?? 0) : 0;
+    const after = Math.max(-100, Math.min(100, before + delta + bonus));
     this.standing[factionId] = after;
     const tierBefore = standingTier(before).id;
     const tierAfter = standingTier(after).id;
