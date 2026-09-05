@@ -5587,6 +5587,45 @@ seeds.
 one to be a promise nobody kept.** The ratchet moves 26 → 24, and both the
 README and the manual now describe what the game does.
 
+### Fourth pass: two more traits that did nothing, and a dead method
+
+`Haunted` reads *"disadvantage on Command checks below 25% hull — but +3 to all
+others"*, and both halves were absent. The penalty was a `mechanic` nothing read.
+The compensation was worse: `Character.checkModifier` applied
+`hasTrait('haunted') ? +3` — **the same 3 the trait declares**, hardcoded, and
+the fourth instance of that shape after `critSeverity`, `hazardScale` and
+`peaceGain`.
+
+And `checkModifier` **has no caller anywhere in `src/`**. `AwayTeam.modifierFor`
+is what the game uses and it builds the modifier itself, so the +3 was dead code
+inside a dead method. Measured: an away-team modifier of 6 with the trait and 6
+without.
+
+**A trait declared `positive: false` that cost nothing and gave nothing.** The
+mechanic sweep could not see this half at all — `hasTrait('haunted')` is not a
+`mechanic` key, so `compensation` showed as dead while a line that looked to a
+human like its reader sat two files away doing nothing.
+
+Wired at the live path, and measured:
+
+| | plain | haunted |
+| --- | --- | --- |
+| Science modifier | 6 | **9** |
+| Command modifier | 7 | 7 |
+| Command check, full hull | 85.3% | 85.3% |
+| Command check, 20% hull | 85.3% | **74.0%** |
+| Science check, 20% hull | 67.3% | **87.7%** |
+
+The compensation is on everything that is *not* Command, because the penalty is
+on Command: a trait that paid on the same check it charged would net to nothing
+where it matters and to a free bonus everywhere else.
+
+`Notorious` — *"every Diplomacy check is at disadvantage"* — went with it, since
+the machinery was now there: 74.3% to 61.7% on diplomacy, and science untouched.
+
+The ratchet moves **24 → 21**, and `resolve()`'s disadvantage argument, which had
+no caller at all two passes ago, now has three.
+
 
 ## Attribution
 

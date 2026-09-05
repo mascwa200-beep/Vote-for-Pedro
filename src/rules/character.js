@@ -504,8 +504,34 @@ export class Character {
   checkModifier(abilityId, { situational = 0 } = {}) {
     let total = this.mod(abilityId) + situational;
     if (this.isProficient(abilityId)) total += this.proficiencyBonus;
-    if (this.hasTrait('haunted')) total += 3;
+    // Read from the mechanic, not written out again.
+    //
+    // This was `if (this.hasTrait('haunted')) total += 3` — the same 3 the
+    // trait declares as `compensation`, hardcoded, and the fourth instance of
+    // that shape in this codebase after `critSeverity`, `hazardScale` and
+    // `peaceGain`.
+    //
+    // It was also in a method with NO CALLER. `AwayTeam.modifierFor` is what
+    // the game actually uses, and it builds the modifier itself, so Haunted's
+    // +3 was dead code inside a dead method — a trait declared `positive:
+    // false` that cost nothing and gave nothing. The live wiring is in
+    // `sim/away.js`; this stays consistent with it so the two cannot disagree
+    // if anything ever calls this.
+    total += this.compensationOn(abilityId);
     return total;
+  }
+
+  /**
+   * "Haunted — disadvantage on Command below 25% hull, and +3 to all others."
+   *
+   * The "all others" half, and it is deliberately not every ability: the
+   * penalty is on Command, so the compensation is on everything that is not
+   * Command. A trait that paid on the same check it charged would net to
+   * nothing on the check that matters and to a bonus everywhere else.
+   */
+  compensationOn(abilityId) {
+    if (abilityId === 'command') return 0;
+    return this.mechanic('compensation') ?? 0;
   }
 
   /**

@@ -115,6 +115,14 @@ export class AwayTeam {
         total += 2;
         parts.push({ source: 'captain leading', value: 2 });
       }
+      // "Haunted — you have lost a ship before. +3 to all others." Itemised
+      // like everything else in this list, because the whole point of `parts`
+      // is that a captain can see which of his own history produced the number.
+      const compensation = this.character.compensationOn?.(spec.ability) ?? 0;
+      if (compensation) {
+        total += compensation;
+        parts.push({ source: 'a ship you lost before', value: compensation });
+      }
     }
 
     if (officer) {
@@ -188,8 +196,21 @@ export class AwayTeam {
     // from 4.5% to 7.2% — measured over 400 checks, and too much for a
     // complication a player takes alongside one advantage. At `dangerous` and
     // `extreme` it is the same trade against the same odds it was written for.
-    const disadvantage = !!this.character?.mechanic('hazardDisadvantage')
-      && (hazard === 'dangerous' || hazard === 'extreme');
+    // Three ways to have the WORSE of a check, where until this file's last
+    // change there were none at all.
+    //
+    //   hazardDisadvantage      Reckless, and only against a real hazard.
+    //   panicBelowQuarter       Haunted, "disadvantage on Command checks below
+    //                           25% hull" — the exact mirror of the Bajoran's
+    //                           `desperateAdvantage` above, and the same
+    //                           `hullPct` that one needed.
+    //   diplomacyDisadvantage   Notorious. A captain hostiles are afraid of is
+    //                           not one they negotiate comfortably with.
+    const disadvantage = (!!this.character?.mechanic('hazardDisadvantage')
+        && (hazard === 'dangerous' || hazard === 'extreme'))
+      || this.panicking(spec.ability)
+      || (spec.ability === 'diplomacy'
+        && !!this.character?.mechanic('diplomacyDisadvantage'));
     // Training damps the swing rather than only shifting it. A veteran is not
     // merely better on average; they are more *consistent*, which is the thing
     // a flat die could never express and the reason this is not a d20 any more.
@@ -312,6 +333,19 @@ export class AwayTeam {
   desperate() {
     if (!this.character?.mechanic('desperateAdvantage')) return false;
     return (this.hullPct ?? 1) < 0.5;
+  }
+
+  /**
+   * "Haunted — disadvantage on Command checks below 25% hull."
+   *
+   * The mirror of `desperate()` above and deliberately built the same way:
+   * the away team is the only thing that resolves a check, and `hullPct` is
+   * handed in by `Game.buildAwayTeam`, the only caller that knows it.
+   */
+  panicking(abilityId) {
+    if (abilityId !== 'command') return false;
+    if (!this.character?.mechanic('panicBelowQuarter')) return false;
+    return (this.hullPct ?? 1) < 0.25;
   }
 
   /**
