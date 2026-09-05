@@ -546,7 +546,17 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
     // — a Borg cube and a Jem'Hadar attack ship never run whatever shape they
     // are, and that is the whole meaning of those two doctrines.
     const shape = ARCHETYPE_NERVE[archetype] ?? 1;
-    const breakPoint = base * shape;
+    // And the captain they are facing. "Hostiles break off sooner out of fear"
+    // — Notorious, and the Living Legend feat.
+    //
+    // Added only where `base` is already above zero, which keeps `fanatic` and
+    // `assimilate` at exactly nought: a Borg cube and a Jem'Hadar attack ship
+    // do not care what your reputation is, and that is the whole meaning of
+    // those two doctrines. Multiplying would have been the lazier way to
+    // preserve the zeros and would also have scaled fear by nerve, so a raider
+    // would fear you more than a battleship does for no reason.
+    const fear = engagement.fear ?? 0;
+    const breakPoint = base > 0 ? base * shape + fear : 0;
     if (hullPct < breakPoint && ship.crew > 0) {
       ship.fleeing = true;
       engagement.pushLog(`${ship.name} is breaking off.`, 'tactical');

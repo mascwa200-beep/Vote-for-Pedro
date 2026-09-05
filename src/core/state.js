@@ -3230,6 +3230,11 @@ export class Game {
       // any scenario that sets it keep their own answer.
       relentless: opts.relentless === true
         || this.difficulty.def.enemyRelentless === true,
+      // "Hostiles break off sooner out of fear" — Notorious, and the Living
+      // Legend feat's second clause. Handed to the engagement the same way
+      // `relentless` is, because `ai.js` decides who runs and does not know
+      // whose ship it is fighting.
+      fear: this.character?.mechanic('fearFactor') ?? 0,
     });
     if (this.engagement.arena.features.length) {
       this.engagement.pushLog(

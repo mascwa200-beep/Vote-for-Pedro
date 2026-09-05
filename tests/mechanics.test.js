@@ -110,7 +110,7 @@ describe('the sweep, and the instrument that produced it', () => {
     assert.equal(consumed().has('thisKeyIsDeclaredByNobodyAtAll'), false);
   });
 
-  test('the ratchet: no more than 21 declared mechanics are read by nothing', () => {
+  test('the ratchet: no more than 19 declared mechanics are read by nothing', () => {
     // It may go down — by wiring one, or by deleting one honestly — and it may
     // not go up. A new trait that declares a mechanic and forgets to wire it
     // fails here rather than shipping as a card that promises something.
@@ -118,7 +118,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     const dead = [...keys.keys()].filter((k) => !read.has(k)).sort();
     assert.ok(keys.size >= 55, `only ${keys.size} mechanics declared; has the sheet shrunk?`);
-    assert.ok(dead.length <= 21,
+    assert.ok(dead.length <= 19,
       `${dead.length} declared mechanics are read by nothing:\n  ${dead.join('\n  ')}`);
   });
 
@@ -126,7 +126,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty',
       'accuracyBonus', 'hazardDisadvantage',
-      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage']) {
+      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor']) {
       assert.ok(read.has(k), `${k} is read by nothing again`);
     }
   });
@@ -142,10 +142,13 @@ describe('the sweep, and the instrument that produced it', () => {
   });
 });
 
-const captain = ({ difficulty = 'lieutenant', traits = [], seed = 4n } = {}) => new Game({
+const captain = ({
+  difficulty = 'lieutenant', traits = [], seed = 4n,
+  shipClass = 'constitution', speciesId = 'human', careerId = 'command',
+} = {}) => new Game({
   seed, crewMode: 'original', difficulty,
-  character: new Character({ speciesId: 'human', careerId: 'command', traits }),
-  shipClass: 'constitution',
+  character: new Character({ speciesId, careerId, traits }),
+  shipClass,
 });
 
 describe('the difficulty card promised XP ×2.6 and granted ×1', () => {
@@ -434,5 +437,75 @@ describe('two more traits that did nothing, and a method nobody calls', () => {
     assert.ok(rate(['notorious'], 'diplomacy', 1) < rate([], 'diplomacy', 1) * 0.95,
       'a captain hostiles fear negotiates just as well');
     assert.equal(rate(['notorious'], 'science', 1), rate([], 'science', 1));
+  });
+});
+
+describe('hostiles that break off sooner out of fear', () => {
+  // Notorious's other half, wired one pass after its Diplomacy penalty. And a
+  // second duplicate folded into it: the Living Legend feat said "enemies
+  // hesitate" through `enemyHesitation`, which is the same thing `fearFactor`
+  // says, and a second knob doing one job is what §68 deleted `hazardScale`
+  // for. The feat declares the working key now, at a smaller number.
+  const brokeOffAt = (traits, feats, classId, faction, runs = 40) => {
+    const at = [];
+    for (let seed = 0; seed < runs; seed++) {
+      // An Excelsior with a tactical captain, not the Constitution the rest of
+      // this file uses. Against a Constitution the player is destroyed in most
+      // of these fights before the D7 ever decides to run, and the first draft
+      // of this test measured "too few break-offs to compare" for exactly that
+      // reason — the harness, not the mechanic.
+      const g = captain({
+        traits, seed: BigInt(seed + 1), shipClass: 'excelsior',
+        speciesId: 'andorian', careerId: 'tactical',
+      });
+      for (const f of feats ?? []) g.character.feats.push(f);
+      const foe = new Ship(classId, { faction, name: 'T' });
+      g.startCombat([foe]);
+      let hull = null;
+      for (let i = 0; i < 40000 && g.engagement && !g.engagement.over; i++) {
+        g.engagement.update(1 / 30);
+        if (foe.fleeing && hull === null) hull = foe.hullPct;
+      }
+      if (hull !== null) at.push(hull);
+    }
+    return { ran: at.length, mean: at.length ? at.reduce((a, b) => a + b, 0) / at.length : null };
+  };
+
+  test('the duplicate is gone and the feat declares the working key', () => {
+    const keys = declared();
+    assert.equal(keys.has('enemyHesitation'), false,
+      'enemyHesitation is back; it is fearFactor under another name');
+    assert.ok(keys.has('fearFactor'));
+  });
+
+  test('a Klingon breaks off with more hull left against a captain they fear', () => {
+    // Measured at the moment the flag flips, not from the outcome: a fleeing
+    // D7 is nearly dead either way, so survival barely moves and the duel is
+    // too coarse an instrument to see this at all. The first attempt used it
+    // and read 30% against 33%.
+    const plain = brokeOffAt([], null, 'd7', 'klingon');
+    const feared = brokeOffAt(['notorious'], null, 'd7', 'klingon');
+    assert.ok(plain.ran > 20 && feared.ran > 20, 'too few break-offs to compare');
+    assert.ok(feared.mean > plain.mean * 1.5,
+      `${(feared.mean * 100).toFixed(1)}% against ${(plain.mean * 100).toFixed(1)}%`);
+  });
+
+  test('and the feat is worth less than the trait, which is what it costs', () => {
+    // Notorious pays for its 0.15 with disadvantage on every Diplomacy check.
+    // The feat's 0.08 is a rank-five second clause.
+    const legend = brokeOffAt([], ['legend'], 'd7', 'klingon');
+    const plain = brokeOffAt([], null, 'd7', 'klingon');
+    const feared = brokeOffAt(['notorious'], null, 'd7', 'klingon');
+    assert.ok(legend.mean > plain.mean, 'the feat does nothing');
+    assert.ok(legend.mean < feared.mean, 'the feat is worth as much as the trait');
+  });
+
+  test('and nothing frightens a Borg cube', () => {
+    // The zero-preservation, and the reason fear is ADDED where the base is
+    // above nought rather than multiplied into it. `fanatic` and `assimilate`
+    // break off at exactly zero, and that is the whole meaning of those two
+    // doctrines.
+    const cube = brokeOffAt(['notorious'], null, 'borg_cube', 'borg', 8);
+    assert.equal(cube.ran, 0, 'a Borg cube ran away');
   });
 });

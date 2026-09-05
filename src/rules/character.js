@@ -415,7 +415,18 @@ export const FEATS = [
     mechanic: { extraProficiencies: 2 } },
   { id: 'legend', name: 'Living Legend', minRank: 5,
     text: 'Every faction\'s reputation gains are increased by half. Enemies hesitate.',
-    mechanic: { repGain: 1.5, enemyHesitation: true } },
+    // `fearFactor`, not `enemyHesitation`. "Enemies hesitate" and "hostiles
+    // break off sooner out of fear" are one thing, and only one of the two keys
+    // was ever going to be wired — a second knob doing the same job is what §68
+    // deleted `hazardScale` for. Smaller than Notorious's 0.15, which is that
+    // trait's whole upside and is paid for with disadvantage on every
+    // Diplomacy check; this is a rank-five feat's second clause.
+    //
+    // They do not stack: `mechanic()` returns the first source that defines a
+    // key, and a trait is consulted before a feat. A notorious captain who
+    // becomes a legend keeps the higher of the two, which is the right way
+    // round.
+    mechanic: { repGain: 1.5, fearFactor: 0.08 } },
 ];
 
 export const FEAT_BY_ID = Object.fromEntries(FEATS.map((f) => [f.id, f]));
