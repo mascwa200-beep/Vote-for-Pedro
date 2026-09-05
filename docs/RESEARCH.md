@@ -4680,6 +4680,79 @@ evidence; it is a note about something somebody once saw.
 
 
 
+## 62. The longest reach in the book, and two more things nobody reads
+
+Second instalment of §61. That one took written-and-gated decisions from 13 to
+18; this one goes after the two largest seams left.
+
+| flag | set by | act | read by |
+| --- | --- | --- | --- |
+| `vega_saved`, `vega_grid_restored` | `vega_raid` | **1** | nothing |
+| `borg_warned`, `borg_data`, `borg_hurt` | `the_cube` | **4** | nothing |
+
+`vega_raid` is the **second episode in the game** and has no rank gate at all.
+Whether the colonists got medical teams and whether the defence grid came back
+up were recorded in the first hour of a five-year commission and never
+mentioned again.
+
+### The correction to the last instalment
+
+§61 put both of its episodes in act 5. That was right for what they were and it
+left the book bottom-heavy — act 1 had two episodes and act 5 had four. **A
+consequence does not have to wait for the end of the commission; it only has to
+come after the thing it reads.**
+
+So *The Vega Line* is **act 3**, at Starbase 1, and a captain meets it while the
+raid is still recent. Acts now run 2 / 5 / 7 / 5 / 5, and a test asserts the
+spread rather than leaving it to taste.
+
+*What the Cube Left* is act 5, at Beta Reticuli — a system whose catalogue entry
+is four lines filed by a survey ship that never came back to correct anything,
+which is a description that had been sitting there waiting for an episode.
+
+### The chain
+
+The two are linked to each other, which is new: *The Vega Line* writes
+`grid_doctrine` — the standing order for colony defence that you either put your
+name to or let a committee write clean — and *What the Cube Left* reads it, four
+acts later, at the far end of the frontier. A captain who wrote the order can
+leave a Borg scout filing its survey and put a grid on the colony instead.
+
+A flag written by new content and read by new content is the shape the whole
+exercise is for, so the test does not merely assert the two ends exist: it
+builds a captain without the flag, checks the choice is not offered, sets the
+flag, and checks it appears. A `requires` the engine ignored would leave the
+choice on screen for everybody and every other assertion would still pass.
+
+**Written-and-gated decisions: 18 → 24.**
+
+### And the repo caught me again, one layer down
+
+`tests/episodevars.test.js` failed on `beta_reticuli:knew_the_signature` — a
+mission variable set by a choice and routed on by nothing. Exactly the defect
+§61 is about, one layer beneath flags, in the second instalment of the work
+complaining about it.
+
+That is twice in two instalments: `utopia_finding` in §61, `knew_the_signature`
+here. Both deleted rather than given an invented reader, and both caught by a
+test rather than by me reading my own draft. The pattern is worth naming:
+**writing a value down feels like doing something, and is not**. The instinct
+that produced thirty-three orphan flags in the first place is the same instinct
+that produced two more while removing them, and the only reliable defence is a
+test that asserts the rule against the file that states it.
+
+### The probe that started lying
+
+One more, because it is §57 again in my own instrument. The sweep for orphan
+flags counts "named more than once anywhere in `src/`" — and `consequences.js`
+**names four `homecoming` flags in its header comment** while explaining that
+they are the excusable ones. So the probe reported 24 orphans where the truth
+was 28: it had been satisfied by the comment saying the name means nothing.
+
+The same trap, in the same shape, one section after documenting it.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

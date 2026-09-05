@@ -59,6 +59,7 @@ const PRECACHE = [
   './src/missions/episodes/capitals.js',
   './src/missions/episodes/accords.js',
   './src/missions/episodes/consequences.js',
+  './src/missions/episodes/echoes.js',
   './src/audio/synth.js',
   './src/audio/sfx.js',
   './src/audio/engine.js',
