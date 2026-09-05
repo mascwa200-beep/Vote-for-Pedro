@@ -83,7 +83,50 @@ export const ARENA_RADIUS = 2600;
 // used to happen. The engagement was simply not serialised, so the enemy
 // stopped existing while the hull kept every point of damage the fight had
 // cost, at normal alert, with no record that a battle had been fought at all.
-export const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed', 'interrupted'];
+/**
+ * Every way a fight can end.
+ *
+ * `failed` is the newest and the only one that is neither a win nor a loss: the
+ * ship came through it and the thing the fight was FOR did not. Losing the
+ * freighter you were escorting is not a defeat by the reckoning everything
+ * downstream uses — `state.js` computes `won = victory || routed` and
+ * `lost = destroyed`, and a failed escort is neither — but it is emphatically
+ * not a victory either, and before objectives existed there was no way to say
+ * so. Every existing consumer tests a specific outcome for equality, so this
+ * falls through all of them and earns exactly what it should: no credit, and
+ * no loss of the ship.
+ */
+export const OUTCOMES = ['victory', 'routed', 'escaped', 'parley', 'destroyed', 'interrupted', 'failed'];
+
+/**
+ * What a fight is FOR.
+ *
+ * `Engagement.objective` has been declared, documented in the constructor's own
+ * JSDoc, and read by nothing since it was written — so every battle in the game
+ * was won by emptying the board and there was no way to express "cripple her,
+ * do not kill her" or "the freighter has to live". The mission book has wanted
+ * both for a long time and has had to settle for prose.
+ *
+ * Two of these are only meaningful because of work that landed first:
+ * `disable` needs per-mount knockout to be a state a ship can actually be in,
+ * and `protect` needs hull archetypes that differ enough that some hostiles
+ * genuinely go after the escortee rather than all going for the player.
+ */
+export const OBJECTIVES = {
+  destroy: { label: 'Destroy them', line: 'Destroy the hostiles.' },
+  disable: { label: 'Disable them', line: 'Disable them. Do not destroy them.' },
+  protect: { label: 'Protect the escort', line: 'Whatever else happens, they live.' },
+  survive: { label: 'Survive', line: 'Hold on. Help is coming.' },
+};
+
+/** A hostile that can no longer shoot: destroyed, or every gun out. */
+export function disarmed(ship) {
+  if (!ship) return true;
+  if (ship.destroyed || ship.withdrawn) return true;
+  if ((ship.subsystems?.weapons ?? 1) <= 0.05) return true;
+  const guns = ship.weapons ?? [];
+  return guns.length > 0 && guns.every((w) => w.enabled === false || (w.damage ?? 0) <= 0);
+}
 
 /** Beyond this, nobody can do anything to anybody and the fight is decided. */
 export const DISENGAGE_RANGE = MAX_WEAPON_RANGE * 1.6;
@@ -133,7 +176,10 @@ export class Engagement {
     this.allies = opts.allies ?? [];
     this.rng = rng;
     this.name = opts.name ?? 'Engagement';
-    this.objective = opts.objective ?? 'destroy';
+    this.objective = OBJECTIVES[opts.objective] ? opts.objective : 'destroy';
+    // How long `survive` has to be survived for. Zero on every other
+    // objective, which is what keeps the check in `settle` inert for them.
+    this.objectiveTime = Math.max(0, Number(opts.objectiveTime) || 0);
     this.time = 0;
     this.over = false;
     this.outcome = null;
@@ -850,6 +896,37 @@ export class Engagement {
   settle() {
     if (this.over) return true;
     if (this.player.destroyed) { this.end('destroyed'); return true; }
+
+    // What the fight was FOR, checked before what is left on the board.
+    //
+    // Losing the escort ends it whatever else is happening — there is no
+    // recovering an objective whose whole content was that somebody survived,
+    // and letting the player go on to kill every hostile and be told they won
+    // would be the game reporting the opposite of what happened.
+    if (this.objective === 'protect') {
+      const escort = this.allies.filter((s) => s && !s.withdrawn);
+      if (escort.length && escort.every((s) => s.destroyed)) {
+        this.pushLog('They are gone, Captain. That was what we were here for.', 'tactical');
+        this.end('failed');
+        return true;
+      }
+    }
+    // Lasting is winning. `objectiveTime` is set by whoever staged the fight.
+    if (this.objective === 'survive' && this.objectiveTime > 0 && this.time >= this.objectiveTime) {
+      this.end('victory');
+      return true;
+    }
+    // Disabled is as good as destroyed, and is the point of the order. Only
+    // reachable because a mount can be knocked out one bank at a time — before
+    // that, "no working weapons" was a state no hostile could be put into
+    // short of killing it.
+    if (this.objective === 'disable' && this.liveHostiles.length
+      && this.liveHostiles.every((s) => disarmed(s))) {
+      this.pushLog('They are disarmed, Captain. Every gun on that hull is out.', 'tactical');
+      this.end('victory');
+      return true;
+    }
+
     if (!this.liveHostiles.length) {
       // An empty board is a win only if you emptied it. Anyone who withdrew
       // under their own power was routed, not destroyed, and the ledger cares
