@@ -2737,6 +2737,7 @@ export class Game {
       { flag: 'archanis_massacre', weight: -0.30, line: 'They remember Archanis, Captain. All of it.' },
       { flag: 'khitomer_signed', weight: 0.15, line: 'Our name is on the Khitomer accord, Captain.' },
       { flag: 'kang_owes_you', weight: 0.20, line: 'Kang said what he said at Qo\'noS because of us, Captain.' },
+      { flag: 'long_peace_signed', weight: 0.18, line: 'We put our name to the widened accord at Vulcan, Captain.' },
     ],
     romulan: [
       { flag: 'spared_warbird', weight: 0.15, line: 'We let one of theirs go home once, Captain.' },
