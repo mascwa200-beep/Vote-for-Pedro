@@ -4,6 +4,49 @@
 // willing to do to you: whether officers can die permanently, whether saves
 // can be reloaded, how hard the dice are, and how much the galaxy pushes back.
 //
+// -------------------------------------------------------------------------
+// SIX KNOBS THIS TABLE DECLARED AND THE GAME DID NOT READ
+//
+// Swept by name across `src/`, counting the accessors in this file as readers
+// — the first version of the sweep excluded this file and reported eight,
+// because `enemyMods()` and `playerMods()` live here and read four of them.
+//
+// Two are now wired:
+//
+//   fuelUse        0.6 -> 2.2. Threaded into `plotTransit` as its own scale,
+//                  NOT folded into `efficiency`: efficiency also divides
+//                  `travelHours`, so that would have made the top rungs
+//                  slower as well as thirstier.
+//   resourceRate   1.5 -> 0.35. Survey yields and salvage hauls, floored at
+//                  one unit so a successful survey never returns nothing.
+//
+// Three are DELETED, each for a different reason, and the reasons are the
+// point — a sweep whose only output is "wire everything you find" will
+// eventually break something:
+//
+//   hazardScale    0.4 -> 2.7, and a DUPLICATE. `crewLossScale` spans 0.3 to
+//                  2.7 and is already multiplied into both the death and the
+//                  injury chance in away.js, at exactly the line hazardScale
+//                  would have attached to. Wiring both would have multiplied
+//                  casualties by 7.3 at Fleet Admiral while looking like two
+//                  reasonable numbers.
+//   autoSave       `true` on all twelve rungs. A constant dressed as a
+//                  setting; there is no difficulty at which it differs.
+//   advantageOn-   true on Story alone — which already carries `luck: 2`, two
+//   FirstFail      rerolls, wired and strictly more generous. The freebie was
+//                  already granted by a knob that works.
+//
+// And one is KEPT, unread, on purpose:
+//
+//   allowReload    false from Commodore up, with a getter on the class and no
+//                  caller. "Saves cannot be reloaded at the top five rungs" is
+//                  a real policy and a real promise, and enforcing it means
+//                  changing what the load screen offers — a change about the
+//                  save system, not about this table. Left declared and
+//                  exposed so the next sweep finds the promise rather than
+//                  quietly losing it.
+// -------------------------------------------------------------------------
+//
 // Naming note: this is the real commissioned-officer progression — Cadet,
 // Ensign, Lieutenant, Lieutenant Commander, Commander, Captain, Commodore,
 // Rear Admiral, Vice Admiral, Admiral, Fleet Admiral. Story sits below all of
@@ -22,13 +65,13 @@ export const DIFFICULTIES = [
     enemyDamage: 0.45, enemyHull: 0.65, enemyCount: 0.7, enemyAccuracy: 0.75,
     playerDamage: 1.35, shieldRegen: 1.6, repairRate: 1.8,
     // --- dice ---
-    dcShift: -3, luck: 2, advantageOnFirstFail: true,
+    dcShift: -3, luck: 2,
     // --- stakes ---
     permadeath: false, shipLoss: false, crewLossScale: 0.3,
     // --- economy ---
     xpRate: 1.25, fuelUse: 0.6, resourceRate: 1.5,
     // --- systems ---
-    autoSave: true, allowReload: true, hazardScale: 0.4,
+    allowReload: true,
   },
   {
     id: 'cadet', name: 'Cadet', order: 1,
@@ -39,10 +82,10 @@ export const DIFFICULTIES = [
       + 'A good place to learn what the power grid actually does.',
     enemyDamage: 0.62, enemyHull: 0.78, enemyCount: 0.85, enemyAccuracy: 0.85,
     playerDamage: 1.2, shieldRegen: 1.3, repairRate: 1.4,
-    dcShift: -2, luck: 1, advantageOnFirstFail: false,
+    dcShift: -2, luck: 1,
     permadeath: false, shipLoss: false, crewLossScale: 0.5,
     xpRate: 1.15, fuelUse: 0.75, resourceRate: 1.3,
-    autoSave: true, allowReload: true, hazardScale: 0.6,
+    allowReload: true,
   },
   {
     id: 'ensign', name: 'Ensign', order: 2,
@@ -53,10 +96,10 @@ export const DIFFICULTIES = [
       + 'because you are new and everyone knows it.',
     enemyDamage: 0.8, enemyHull: 0.9, enemyCount: 1.0, enemyAccuracy: 0.93,
     playerDamage: 1.08, shieldRegen: 1.1, repairRate: 1.15,
-    dcShift: -1, luck: 0, advantageOnFirstFail: false,
+    dcShift: -1, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 0.8,
     xpRate: 1.05, fuelUse: 0.9, resourceRate: 1.1,
-    autoSave: true, allowReload: true, hazardScale: 0.85,
+    allowReload: true,
   },
   {
     id: 'lieutenant', name: 'Lieutenant', order: 3,
@@ -67,10 +110,10 @@ export const DIFFICULTIES = [
       + 'fair dice, real losses, and a galaxy that does not care how your week is going.',
     enemyDamage: 1.0, enemyHull: 1.0, enemyCount: 1.0, enemyAccuracy: 1.0,
     playerDamage: 1.0, shieldRegen: 1.0, repairRate: 1.0,
-    dcShift: 0, luck: 0, advantageOnFirstFail: false,
+    dcShift: 0, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.0,
     xpRate: 1.0, fuelUse: 1.0, resourceRate: 1.0,
-    autoSave: true, allowReload: true, hazardScale: 1.0,
+    allowReload: true,
   },
   {
     id: 'lt_commander', name: 'Lieutenant Commander', order: 4,
@@ -81,10 +124,10 @@ export const DIFFICULTIES = [
       + 'and the difference between a good power routing and a lazy one starts to show.',
     enemyDamage: 1.04, enemyHull: 1.03, enemyCount: 1.05, enemyAccuracy: 1.02,
     playerDamage: 1.0, shieldRegen: 0.9, repairRate: 0.9,
-    dcShift: 1, luck: 0, advantageOnFirstFail: false,
+    dcShift: 1, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.15,
     xpRate: 1.1, fuelUse: 1.15, resourceRate: 0.9,
-    autoSave: true, allowReload: true, hazardScale: 1.15,
+    allowReload: true,
   },
   {
     id: 'commander', name: 'Commander', order: 5,
@@ -95,10 +138,10 @@ export const DIFFICULTIES = [
       + 'Away missions start costing people.',
     enemyDamage: 1.08, enemyHull: 1.06, enemyCount: 1.15, enemyAccuracy: 1.04,
     playerDamage: 0.99, shieldRegen: 0.85, repairRate: 0.8,
-    dcShift: 2, luck: 0, advantageOnFirstFail: false,
+    dcShift: 2, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.3,
     xpRate: 1.2, fuelUse: 1.25, resourceRate: 0.8,
-    autoSave: true, allowReload: true, hazardScale: 1.3,
+    allowReload: true,
   },
   {
     id: 'captain', name: 'Captain', order: 6,
@@ -109,10 +152,10 @@ export const DIFFICULTIES = [
       + 'and there is no comfortable route through a contested sector.',
     enemyDamage: 1.12, enemyHull: 1.09, enemyCount: 1.25, enemyAccuracy: 1.06,
     playerDamage: 0.99, shieldRegen: 0.8, repairRate: 0.72,
-    dcShift: 3, luck: 0, advantageOnFirstFail: false,
+    dcShift: 3, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.5,
     xpRate: 1.35, fuelUse: 1.35, resourceRate: 0.72,
-    autoSave: true, allowReload: true, hazardScale: 1.5,
+    allowReload: true,
   },
   {
     id: 'commodore', name: 'Commodore', order: 7,
@@ -123,10 +166,10 @@ export const DIFFICULTIES = [
       + 'was designed for, and resupply is a luxury.',
     enemyDamage: 1.16, enemyHull: 1.12, enemyCount: 1.4, enemyAccuracy: 1.08,
     playerDamage: 0.98, shieldRegen: 0.72, repairRate: 0.62,
-    dcShift: 4, luck: 0, advantageOnFirstFail: false,
+    dcShift: 4, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.7,
     xpRate: 1.5, fuelUse: 1.5, resourceRate: 0.62,
-    autoSave: true, allowReload: false, hazardScale: 1.7,
+    allowReload: false,
   },
   {
     id: 'rear_admiral', name: 'Rear Admiral', order: 8,
@@ -137,10 +180,10 @@ export const DIFFICULTIES = [
       + 'they simply stop arriving one at a time.',
     enemyDamage: 1.2, enemyHull: 1.15, enemyCount: 1.55, enemyAccuracy: 1.1,
     playerDamage: 0.98, shieldRegen: 0.65, repairRate: 0.55,
-    dcShift: 5, luck: 0, advantageOnFirstFail: false,
+    dcShift: 5, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.9,
     xpRate: 1.7, fuelUse: 1.65, resourceRate: 0.55,
-    autoSave: true, allowReload: false, hazardScale: 1.9,
+    allowReload: false,
   },
   {
     id: 'vice_admiral', name: 'Vice Admiral', order: 9,
@@ -151,10 +194,10 @@ export const DIFFICULTIES = [
       + 'engagement. Plan the war, not the battle.',
     enemyDamage: 1.24, enemyHull: 1.18, enemyCount: 1.7, enemyAccuracy: 1.12,
     playerDamage: 0.97, shieldRegen: 0.58, repairRate: 0.48,
-    dcShift: 6, luck: 0, advantageOnFirstFail: false,
+    dcShift: 6, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 2.1,
     xpRate: 1.9, fuelUse: 1.8, resourceRate: 0.48,
-    autoSave: true, allowReload: false, hazardScale: 2.1,
+    allowReload: false,
     enemyRelentless: true,
   },
   {
@@ -166,10 +209,10 @@ export const DIFFICULTIES = [
       + 'The record is what survives, not the ship.',
     enemyDamage: 1.28, enemyHull: 1.21, enemyCount: 1.85, enemyAccuracy: 1.14,
     playerDamage: 0.97, shieldRegen: 0.5, repairRate: 0.4,
-    dcShift: 7, luck: 0, advantageOnFirstFail: false,
+    dcShift: 7, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 2.4,
     xpRate: 2.2, fuelUse: 2.0, resourceRate: 0.4,
-    autoSave: true, allowReload: false, hazardScale: 2.4,
+    allowReload: false,
     enemyRelentless: true,
   },
   {
@@ -181,10 +224,10 @@ export const DIFFICULTIES = [
       + 'There is no reload, because there is nothing to reload to.',
     enemyDamage: 1.32, enemyHull: 1.24, enemyCount: 2.0, enemyAccuracy: 1.16,
     playerDamage: 0.96, shieldRegen: 0.45, repairRate: 0.35,
-    dcShift: 8, luck: 0, advantageOnFirstFail: false,
+    dcShift: 8, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 2.7,
     xpRate: 2.6, fuelUse: 2.2, resourceRate: 0.35,
-    autoSave: true, allowReload: false, hazardScale: 2.7,
+    allowReload: false,
     enemyRelentless: true, ironman: true,
   },
 ];

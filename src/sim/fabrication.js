@@ -309,6 +309,15 @@ export function salvageWreck(game, rng, { tier = 3 } = {}) {
     isolinear: Math.round(rng.range(2, 7) * t * 0.4 * bonus),
     salvage: Math.round(rng.range(3, 9) * t * 0.5 * bonus),
   };
+  // Difficulty's `resourceRate`, the same knob the survey yields read. Applied
+  // to the finished haul rather than inside the three expressions above, so it
+  // consumes no extra draw and the seeded roll order is unchanged.
+  const rate = game?.difficulty?.scale?.('resourceRate') ?? 1;
+  if (rate !== 1) {
+    for (const m of Object.keys(haul)) {
+      haul[m] = haul[m] > 0 ? Math.max(1, Math.round(haul[m] * rate)) : 0;
+    }
+  }
   for (const [m, n] of Object.entries(haul)) game.stores[m] = (game.stores[m] ?? 0) + n;
   emit('salvage', haul);
   return haul;

@@ -757,6 +757,7 @@ try {
     const reaching = g.walk.looking?.id ?? null;
 
     const before = { ...g.stores };
+    const rate = g.difficulty.scale('resourceRate');
     const r = g.surveyFeature(f.id);
     const again = g.surveyFeature(f.id);
     return {
@@ -765,8 +766,15 @@ try {
       ok: r.ok,
       resolved: typeof r.result?.success === 'boolean',
       itemised: (r.result?.parts ?? []).length,
+      // Scaled by the difficulty's `resourceRate`, which this harness runs at
+      // 0.8 (Commander). This asserted `>= n` — the rule before that knob was
+      // wired — and correctly went red when it was. Pinned to the exact
+      // expected number rather than loosened to `> 0`: `>=` would have passed
+      // on a yield that was too generous, and `> 0` on one unit of anything.
+      rate,
       paid: r.result?.success
-        ? Object.entries(f.yield).every(([m, n]) => (g.stores[m] ?? 0) >= (before[m] ?? 0) + n)
+        ? Object.entries(f.yield).every(([m, n]) =>
+          (g.stores[m] ?? 0) === (before[m] ?? 0) + Math.max(1, Math.round(n * rate)))
         : true,
       twice: again.ok,
     };

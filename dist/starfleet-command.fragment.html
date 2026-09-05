@@ -25367,6 +25367,15 @@ function salvageWreck(game, rng, { tier = 3 } = {}) {
     isolinear: Math.round(rng.range(2, 7) * t * 0.4 * bonus),
     salvage: Math.round(rng.range(3, 9) * t * 0.5 * bonus),
   };
+  // Difficulty's `resourceRate`, the same knob the survey yields read. Applied
+  // to the finished haul rather than inside the three expressions above, so it
+  // consumes no extra draw and the seeded roll order is unchanged.
+  const rate = game?.difficulty?.scale?.('resourceRate') ?? 1;
+  if (rate !== 1) {
+    for (const m of Object.keys(haul)) {
+      haul[m] = haul[m] > 0 ? Math.max(1, Math.round(haul[m] * rate)) : 0;
+    }
+  }
   for (const [m, n] of Object.entries(haul)) game.stores[m] = (game.stores[m] ?? 0) + n;
   emit('salvage', haul);
   return haul;
@@ -33733,7 +33742,13 @@ class Transit {
 }
 
 /** Build a Transit from an order, or an explanation of why it cannot be flown. */
-function plotTransit(galaxy, fromId, toId, warpFactor, ship, efficiency = 1) {
+/**
+ * @param {number} fuelScale  the difficulty's `fuelUse`. SEPARATE from
+ *   `efficiency`, which is the ship's own — efficiency also divides
+ *   `travelHours`, so folding the difficulty into it would have made the top
+ *   rungs SLOWER as well as thirstier, which is not what the knob says.
+ */
+function plotTransit(galaxy, fromId, toId, warpFactor, ship, efficiency = 1, fuelScale = 1) {
   const from = galaxy.get(fromId);
   const to = galaxy.get(toId);
   if (!to) return { error: 'No such system in the charts.' };
@@ -33747,7 +33762,10 @@ function plotTransit(galaxy, fromId, toId, warpFactor, ship, efficiency = 1) {
   const route = galaxy.plotCourse(fromId, toId);
   const eff = (ship.cls.warpEfficiency ?? 1) * efficiency;
   const hours = travelHours(route.lightYears, factor, eff);
-  const fuel = fuelCost(route.lightYears, factor, eff);
+  // Scaled after the ship's own efficiency and BEFORE the affordability check
+  // below, so a course the difficulty has made unaffordable is refused at the
+  // helm rather than stranding the ship halfway.
+  const fuel = fuelCost(route.lightYears, factor, eff) * clamp(fuelScale, 0.1, 5);
 
   if (fuel > ship.antimatter) {
     return {
@@ -36127,6 +36145,49 @@ __define("src/rules/difficulty.js", function (__exports, __require) {
 // willing to do to you: whether officers can die permanently, whether saves
 // can be reloaded, how hard the dice are, and how much the galaxy pushes back.
 //
+// -------------------------------------------------------------------------
+// SIX KNOBS THIS TABLE DECLARED AND THE GAME DID NOT READ
+//
+// Swept by name across `src/`, counting the accessors in this file as readers
+// — the first version of the sweep excluded this file and reported eight,
+// because `enemyMods()` and `playerMods()` live here and read four of them.
+//
+// Two are now wired:
+//
+//   fuelUse        0.6 -> 2.2. Threaded into `plotTransit` as its own scale,
+//                  NOT folded into `efficiency`: efficiency also divides
+//                  `travelHours`, so that would have made the top rungs
+//                  slower as well as thirstier.
+//   resourceRate   1.5 -> 0.35. Survey yields and salvage hauls, floored at
+//                  one unit so a successful survey never returns nothing.
+//
+// Three are DELETED, each for a different reason, and the reasons are the
+// point — a sweep whose only output is "wire everything you find" will
+// eventually break something:
+//
+//   hazardScale    0.4 -> 2.7, and a DUPLICATE. `crewLossScale` spans 0.3 to
+//                  2.7 and is already multiplied into both the death and the
+//                  injury chance in away.js, at exactly the line hazardScale
+//                  would have attached to. Wiring both would have multiplied
+//                  casualties by 7.3 at Fleet Admiral while looking like two
+//                  reasonable numbers.
+//   autoSave       `true` on all twelve rungs. A constant dressed as a
+//                  setting; there is no difficulty at which it differs.
+//   advantageOn-   true on Story alone — which already carries `luck: 2`, two
+//   FirstFail      rerolls, wired and strictly more generous. The freebie was
+//                  already granted by a knob that works.
+//
+// And one is KEPT, unread, on purpose:
+//
+//   allowReload    false from Commodore up, with a getter on the class and no
+//                  caller. "Saves cannot be reloaded at the top five rungs" is
+//                  a real policy and a real promise, and enforcing it means
+//                  changing what the load screen offers — a change about the
+//                  save system, not about this table. Left declared and
+//                  exposed so the next sweep finds the promise rather than
+//                  quietly losing it.
+// -------------------------------------------------------------------------
+//
 // Naming note: this is the real commissioned-officer progression — Cadet,
 // Ensign, Lieutenant, Lieutenant Commander, Commander, Captain, Commodore,
 // Rear Admiral, Vice Admiral, Admiral, Fleet Admiral. Story sits below all of
@@ -36144,13 +36205,13 @@ const DIFFICULTIES = [
     enemyDamage: 0.45, enemyHull: 0.65, enemyCount: 0.7, enemyAccuracy: 0.75,
     playerDamage: 1.35, shieldRegen: 1.6, repairRate: 1.8,
     // --- dice ---
-    dcShift: -3, luck: 2, advantageOnFirstFail: true,
+    dcShift: -3, luck: 2,
     // --- stakes ---
     permadeath: false, shipLoss: false, crewLossScale: 0.3,
     // --- economy ---
     xpRate: 1.25, fuelUse: 0.6, resourceRate: 1.5,
     // --- systems ---
-    autoSave: true, allowReload: true, hazardScale: 0.4,
+    allowReload: true,
   },
   {
     id: 'cadet', name: 'Cadet', order: 1,
@@ -36161,10 +36222,10 @@ const DIFFICULTIES = [
       + 'A good place to learn what the power grid actually does.',
     enemyDamage: 0.62, enemyHull: 0.78, enemyCount: 0.85, enemyAccuracy: 0.85,
     playerDamage: 1.2, shieldRegen: 1.3, repairRate: 1.4,
-    dcShift: -2, luck: 1, advantageOnFirstFail: false,
+    dcShift: -2, luck: 1,
     permadeath: false, shipLoss: false, crewLossScale: 0.5,
     xpRate: 1.15, fuelUse: 0.75, resourceRate: 1.3,
-    autoSave: true, allowReload: true, hazardScale: 0.6,
+    allowReload: true,
   },
   {
     id: 'ensign', name: 'Ensign', order: 2,
@@ -36175,10 +36236,10 @@ const DIFFICULTIES = [
       + 'because you are new and everyone knows it.',
     enemyDamage: 0.8, enemyHull: 0.9, enemyCount: 1.0, enemyAccuracy: 0.93,
     playerDamage: 1.08, shieldRegen: 1.1, repairRate: 1.15,
-    dcShift: -1, luck: 0, advantageOnFirstFail: false,
+    dcShift: -1, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 0.8,
     xpRate: 1.05, fuelUse: 0.9, resourceRate: 1.1,
-    autoSave: true, allowReload: true, hazardScale: 0.85,
+    allowReload: true,
   },
   {
     id: 'lieutenant', name: 'Lieutenant', order: 3,
@@ -36189,10 +36250,10 @@ const DIFFICULTIES = [
       + 'fair dice, real losses, and a galaxy that does not care how your week is going.',
     enemyDamage: 1.0, enemyHull: 1.0, enemyCount: 1.0, enemyAccuracy: 1.0,
     playerDamage: 1.0, shieldRegen: 1.0, repairRate: 1.0,
-    dcShift: 0, luck: 0, advantageOnFirstFail: false,
+    dcShift: 0, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.0,
     xpRate: 1.0, fuelUse: 1.0, resourceRate: 1.0,
-    autoSave: true, allowReload: true, hazardScale: 1.0,
+    allowReload: true,
   },
   {
     id: 'lt_commander', name: 'Lieutenant Commander', order: 4,
@@ -36203,10 +36264,10 @@ const DIFFICULTIES = [
       + 'and the difference between a good power routing and a lazy one starts to show.',
     enemyDamage: 1.04, enemyHull: 1.03, enemyCount: 1.05, enemyAccuracy: 1.02,
     playerDamage: 1.0, shieldRegen: 0.9, repairRate: 0.9,
-    dcShift: 1, luck: 0, advantageOnFirstFail: false,
+    dcShift: 1, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.15,
     xpRate: 1.1, fuelUse: 1.15, resourceRate: 0.9,
-    autoSave: true, allowReload: true, hazardScale: 1.15,
+    allowReload: true,
   },
   {
     id: 'commander', name: 'Commander', order: 5,
@@ -36217,10 +36278,10 @@ const DIFFICULTIES = [
       + 'Away missions start costing people.',
     enemyDamage: 1.08, enemyHull: 1.06, enemyCount: 1.15, enemyAccuracy: 1.04,
     playerDamage: 0.99, shieldRegen: 0.85, repairRate: 0.8,
-    dcShift: 2, luck: 0, advantageOnFirstFail: false,
+    dcShift: 2, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.3,
     xpRate: 1.2, fuelUse: 1.25, resourceRate: 0.8,
-    autoSave: true, allowReload: true, hazardScale: 1.3,
+    allowReload: true,
   },
   {
     id: 'captain', name: 'Captain', order: 6,
@@ -36231,10 +36292,10 @@ const DIFFICULTIES = [
       + 'and there is no comfortable route through a contested sector.',
     enemyDamage: 1.12, enemyHull: 1.09, enemyCount: 1.25, enemyAccuracy: 1.06,
     playerDamage: 0.99, shieldRegen: 0.8, repairRate: 0.72,
-    dcShift: 3, luck: 0, advantageOnFirstFail: false,
+    dcShift: 3, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.5,
     xpRate: 1.35, fuelUse: 1.35, resourceRate: 0.72,
-    autoSave: true, allowReload: true, hazardScale: 1.5,
+    allowReload: true,
   },
   {
     id: 'commodore', name: 'Commodore', order: 7,
@@ -36245,10 +36306,10 @@ const DIFFICULTIES = [
       + 'was designed for, and resupply is a luxury.',
     enemyDamage: 1.16, enemyHull: 1.12, enemyCount: 1.4, enemyAccuracy: 1.08,
     playerDamage: 0.98, shieldRegen: 0.72, repairRate: 0.62,
-    dcShift: 4, luck: 0, advantageOnFirstFail: false,
+    dcShift: 4, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.7,
     xpRate: 1.5, fuelUse: 1.5, resourceRate: 0.62,
-    autoSave: true, allowReload: false, hazardScale: 1.7,
+    allowReload: false,
   },
   {
     id: 'rear_admiral', name: 'Rear Admiral', order: 8,
@@ -36259,10 +36320,10 @@ const DIFFICULTIES = [
       + 'they simply stop arriving one at a time.',
     enemyDamage: 1.2, enemyHull: 1.15, enemyCount: 1.55, enemyAccuracy: 1.1,
     playerDamage: 0.98, shieldRegen: 0.65, repairRate: 0.55,
-    dcShift: 5, luck: 0, advantageOnFirstFail: false,
+    dcShift: 5, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 1.9,
     xpRate: 1.7, fuelUse: 1.65, resourceRate: 0.55,
-    autoSave: true, allowReload: false, hazardScale: 1.9,
+    allowReload: false,
   },
   {
     id: 'vice_admiral', name: 'Vice Admiral', order: 9,
@@ -36273,10 +36334,10 @@ const DIFFICULTIES = [
       + 'engagement. Plan the war, not the battle.',
     enemyDamage: 1.24, enemyHull: 1.18, enemyCount: 1.7, enemyAccuracy: 1.12,
     playerDamage: 0.97, shieldRegen: 0.58, repairRate: 0.48,
-    dcShift: 6, luck: 0, advantageOnFirstFail: false,
+    dcShift: 6, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 2.1,
     xpRate: 1.9, fuelUse: 1.8, resourceRate: 0.48,
-    autoSave: true, allowReload: false, hazardScale: 2.1,
+    allowReload: false,
     enemyRelentless: true,
   },
   {
@@ -36288,10 +36349,10 @@ const DIFFICULTIES = [
       + 'The record is what survives, not the ship.',
     enemyDamage: 1.28, enemyHull: 1.21, enemyCount: 1.85, enemyAccuracy: 1.14,
     playerDamage: 0.97, shieldRegen: 0.5, repairRate: 0.4,
-    dcShift: 7, luck: 0, advantageOnFirstFail: false,
+    dcShift: 7, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 2.4,
     xpRate: 2.2, fuelUse: 2.0, resourceRate: 0.4,
-    autoSave: true, allowReload: false, hazardScale: 2.4,
+    allowReload: false,
     enemyRelentless: true,
   },
   {
@@ -36303,10 +36364,10 @@ const DIFFICULTIES = [
       + 'There is no reload, because there is nothing to reload to.',
     enemyDamage: 1.32, enemyHull: 1.24, enemyCount: 2.0, enemyAccuracy: 1.16,
     playerDamage: 0.96, shieldRegen: 0.45, repairRate: 0.35,
-    dcShift: 8, luck: 0, advantageOnFirstFail: false,
+    dcShift: 8, luck: 0,
     permadeath: true, shipLoss: true, crewLossScale: 2.7,
     xpRate: 2.6, fuelUse: 2.2, resourceRate: 0.35,
-    autoSave: true, allowReload: false, hazardScale: 2.7,
+    allowReload: false,
     enemyRelentless: true, ironman: true,
   },
 ];
@@ -38895,7 +38956,7 @@ class Game {
     }
     const plan = plotTransit(
       this.galaxy, this.locationId, destinationId, warpFactor,
-      this.ship, this.progress.warpEfficiency,
+      this.ship, this.progress.warpEfficiency, this.difficulty.scale('fuelUse'),
     );
     if (plan.error) {
       this.officerSays('helm', plan.error, 'object');
@@ -40027,6 +40088,16 @@ class Game {
     // it ends. See Engagement.end.
     this.engagement = new Engagement(this.ship, fleet, this.rng, {
       ...opts, allies, hazard, arenaRng, onEnd: () => this.resolveCombat(),
+      // `enemyRelentless` — declared on the top three rungs and, until now,
+      // read by nothing at all. `Engagement.relentless` has existed the whole
+      // time and disables breaking off; the only thing that ever set it was
+      // the Kobayashi Maru. At Vice Admiral and above nobody runs, which is
+      // what the flag says and what those rungs are for.
+      //
+      // The caller still wins where it asks explicitly, so the simulator and
+      // any scenario that sets it keep their own answer.
+      relentless: opts.relentless === true
+        || this.difficulty.def.enemyRelentless === true,
     });
     if (this.engagement.arena.features.length) {
       this.engagement.pushLog(
@@ -40372,6 +40443,7 @@ class Game {
       for (let factor = top; factor >= 1; factor--) {
         const plan = plotTransit(
           this.galaxy, here, dest.id, factor, this.ship, this.progress.warpEfficiency,
+          this.difficulty.scale('fuelUse'),
         );
         if (plan.error) { why = plan.error; continue; }
         const result = this.setCourse(dest.id, factor);
@@ -40835,8 +40907,14 @@ class Game {
 
     if (result.success) {
       this.stores = this.stores ?? {};
+      // `resourceRate` — declared on all twelve rungs (1.5 at Story down to
+      // 0.35 at Fleet Admiral) and, until now, read by nothing. Floored at one
+      // unit: a survey that succeeded and put nothing in the hold reads as a
+      // bug however the arithmetic got there.
+      const rate = this.difficulty.scale('resourceRate');
       for (const [material, amount] of Object.entries(feature.yield ?? {})) {
-        this.stores[material] = (this.stores[material] ?? 0) + amount;
+        const got = amount > 0 ? Math.max(1, Math.round(amount * rate)) : 0;
+        this.stores[material] = (this.stores[material] ?? 0) + got;
       }
       this.pushLog(`${feature.label}: ${feature.found}`, 'science');
       this.ledger.record('anomaly_catalogued', {
@@ -41550,8 +41628,12 @@ class Game {
     // and this runs on a tick.
     if (this.ship.antimatter > Game.STRANDED_FUEL) return false;
 
+    // The same scale as the other two, so "are we stranded?" is answered with
+    // the fuel the ship would actually burn rather than the fuel it would burn
+    // at Lieutenant.
     return !this.galaxy.neighbors(this.locationId).some((n) => !plotTransit(
       this.galaxy, this.locationId, n.id, 1, this.ship, this.progress.warpEfficiency,
+      this.difficulty.scale('fuelUse'),
     ).error);
   }
 

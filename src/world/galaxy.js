@@ -366,7 +366,13 @@ export class Transit {
 }
 
 /** Build a Transit from an order, or an explanation of why it cannot be flown. */
-export function plotTransit(galaxy, fromId, toId, warpFactor, ship, efficiency = 1) {
+/**
+ * @param {number} fuelScale  the difficulty's `fuelUse`. SEPARATE from
+ *   `efficiency`, which is the ship's own — efficiency also divides
+ *   `travelHours`, so folding the difficulty into it would have made the top
+ *   rungs SLOWER as well as thirstier, which is not what the knob says.
+ */
+export function plotTransit(galaxy, fromId, toId, warpFactor, ship, efficiency = 1, fuelScale = 1) {
   const from = galaxy.get(fromId);
   const to = galaxy.get(toId);
   if (!to) return { error: 'No such system in the charts.' };
@@ -380,7 +386,10 @@ export function plotTransit(galaxy, fromId, toId, warpFactor, ship, efficiency =
   const route = galaxy.plotCourse(fromId, toId);
   const eff = (ship.cls.warpEfficiency ?? 1) * efficiency;
   const hours = travelHours(route.lightYears, factor, eff);
-  const fuel = fuelCost(route.lightYears, factor, eff);
+  // Scaled after the ship's own efficiency and BEFORE the affordability check
+  // below, so a course the difficulty has made unaffordable is refused at the
+  // helm rather than stranding the ship halfway.
+  const fuel = fuelCost(route.lightYears, factor, eff) * clamp(fuelScale, 0.1, 5);
 
   if (fuel > ship.antimatter) {
     return {

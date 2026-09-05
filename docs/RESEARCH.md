@@ -5150,6 +5150,117 @@ tell you how a power feels about you printed one number and not the other.
 
 
 
+## 68. Seven knobs the difficulty table declared and the game did not read
+
+A sweep for the marker that found §67 — a field written into an object literal
+and read by nothing — pointed at `src/rules/difficulty.js`. Twelve rungs, each
+declaring twenty-odd mechanical knobs.
+
+### The instrument lied first, exactly as in §62
+
+The first sweep excluded the declaring file from the "reads" corpus and reported
+**eight dead knobs**, including `enemyDamage` and `playerDamage` — which would
+have meant a difficulty setting that does not change damage.
+
+It is wrong. `difficulty.js` contains its own accessors:
+
+```js
+enemyMods() {
+  return {
+    damage: this.scale('enemyDamage'),
+    hullMax: this.scale('enemyHull'),
+    accuracy: this.scale('enemyAccuracy'),
+  };
+}
+```
+
+Four of the eight are read there and called from outside. **The file that
+declares a thing is often the file that reads it**, and a sweep that skips it to
+avoid counting the declaration also skips the reader. Corrected: **seven**, not
+eight, and none of them combat damage.
+
+A second false positive in the same sweep: `enemyHull` appeared to have three
+readers elsewhere, all of which were a local variable of that name in the hail
+code.
+
+### The seven
+
+| knob | spread | what it was |
+| --- | --- | --- |
+| `fuelUse` | 0.6 → 2.2 | unwired → **wired** |
+| `resourceRate` | 1.5 → 0.35 | unwired → **wired** |
+| `enemyRelentless` | top three rungs | unwired → **wired** |
+| `hazardScale` | 0.4 → 2.7 | **duplicate** → deleted |
+| `autoSave` | `true` on all twelve | **constant** → deleted |
+| `advantageOnFirstFail` | Story alone | **subsumed** → deleted |
+| `allowReload` | false from Commodore | unenforced → **kept, unread, on purpose** |
+
+### The deletions matter more than the wirings
+
+`hazardScale` is the one that would have done damage. It spans 0.4 to 2.7 and
+looks exactly like an away-mission risk multiplier waiting to be plugged in.
+`crewLossScale` spans 0.3 to 2.7 and is **already** multiplied into both the
+death chance and the injury chance in `away.js`, at precisely the line
+`hazardScale` would have attached to. Wiring both would have multiplied
+casualties by **7.3** at Fleet Admiral, out of two numbers that each look
+reasonable.
+
+`autoSave` is `true` on every rung — a constant dressed as a setting.
+`advantageOnFirstFail` is true only on Story, which already carries `luck: 2`:
+two rerolls, wired, and strictly more generous than one free retry.
+
+`allowReload` is kept precisely because it is a real promise the game does not
+keep: false from Commodore up, with a getter on the class and no caller.
+Enforcing "saves cannot be reloaded at the top five rungs" means changing what
+the load screen offers — a change about the save system, not about this table.
+Left declared and exposed so the next sweep finds the promise rather than
+quietly losing it.
+
+### The wirings, measured
+
+| rung | fuel per leg | legs per tank | survey haul |
+| --- | --- | --- | --- |
+| Story | 5.6 | 17.8 | 21 |
+| Lieutenant | 9.4 | 10.7 | 14 |
+| Fleet Admiral | 20.6 | **4.9** | **5** |
+
+`fuelUse` is threaded into `plotTransit` as **its own parameter**, not folded
+into `efficiency`. Efficiency divides `travelHours` as well as `fuelCost`, so
+the obvious one-word change would have made the top rungs slower as well as
+thirstier, which is not what the knob says — and a test asserts the hours are
+unchanged. It is applied *before* the affordability check, so a course the
+difficulty has made unaffordable is refused at the helm rather than stranding
+the ship halfway.
+
+`enemyRelentless` was the quietest of the seven and is the biggest change:
+`Engagement.relentless` has existed all along, disables breaking off, and was
+set by exactly one thing — the Kobayashi Maru. At Vice Admiral and above nobody
+runs now. The caller still wins where it asks explicitly, so the simulator keeps
+its own answer, and a test asserts every rung below is untouched: this is a
+property of three rungs, not a rebalance of the game.
+
+### And the harness caught the change, correctly
+
+`verify-app` went red on *"a successful survey puts something in the hold, and
+only once"*. The check asserted the hold gained **at least** the feature's
+declared yield — which was the rule before `resourceRate` was wired, and the
+harness runs at Commander, where the rate is 0.8. A 14-unit outcrop now pays 11.
+
+The check was stating the old rule, so it was updated to the new one and
+**pinned to the exact expected number** rather than loosened. `>=` would pass a
+yield that was too generous; `> 0` would pass one unit of anything. Weakening an
+assertion to accommodate a change is how a change stops being tested.
+
+### The rule this adds
+
+A sweep whose only output is "wire everything you find" is a sweep that will
+eventually break something. Three of these seven should not be wired, each for a
+different reason, and one of the three would have been actively harmful. The
+useful question is not *is this read?* but *is this read, and if not, is that
+because something else already does its job?*
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
