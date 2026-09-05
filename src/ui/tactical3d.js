@@ -878,6 +878,24 @@ export class TacticalView3D {
 
     const forward = this.cameraMode === 'forward';
 
+    // Where a name has already been written this frame.
+    //
+    // The plot draws hulls about 260 times oversized against the distances
+    // between them, and it has to — at true scale a 289-metre ship 600 km away
+    // is a fraction of a pixel. The bill comes due at close quarters, and the
+    // worst of it is not the hulls: two contacts fifty kilometres apart project
+    // to nearly the same point, and their two names were written on the SAME
+    // PIXEL, one over the other, both illegible. Measured over twelve seeded
+    // duels per matchup, ships pass close enough for that on 3% (Constitution
+    // against a D7) to 11% (Excelsior against a Negh'Var) of combat ticks.
+    //
+    // Moving a label is not moving a ship. It sits 32 pixels above the hull
+    // already, so it is an annotation with an implied leader, and nothing about
+    // where either contact IS changes — which is the whole reason the fix is
+    // here and not in the geometry. See RESEARCH §60 for the three fixes to
+    // the hulls themselves that were built, measured and thrown away.
+    const taken = [];
+
     for (const ship of this.lastShips) {
       if (ship.destroyed) continue;
       if (forward && ship.isPlayer) continue;
@@ -920,18 +938,36 @@ export class TacticalView3D {
         ctx.stroke();
       }
 
+      // Lifted clear of any name already written near this spot. Upward, so a
+      // label never ends up between its own hull and the grid, and capped —
+      // eight contacts stacked on one pixel is a picture no amount of nudging
+      // rescues, and a runaway loop is worse than an overlap.
+      let ly = sy - 32;
+      for (let i = 0; i < 8; i++) {
+        if (!taken.some((t) => Math.abs(t.x - sx) < 46 && Math.abs(t.y - ly) < 15)) break;
+        ly -= 15;
+      }
+      // `anchor` is where the name WOULD have gone. Kept because it is the
+      // only way to tell "these two labels do not collide" from "these two
+      // labels were never near each other" — which is the difference between
+      // a test and a test that passes for the wrong reason. Read by
+      // tools/verify-app.mjs.
+      taken.push({ name: ship.name, x: sx, y: ly, anchor: sy - 32 });
+
       ctx.fillStyle = accent;
       ctx.font = '600 11px ui-monospace, monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(ship.name, sx, sy - 32);
+      ctx.fillText(ship.name, sx, ly);
 
-      // Hull bar.
+      // Hull bar, which travels with the name it belongs to.
       const w = 34;
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillRect(sx - w / 2, sy - 28, w, 3);
+      ctx.fillRect(sx - w / 2, ly + 4, w, 3);
       ctx.fillStyle = ship.hullPct > 0.5 ? '#7ed957' : ship.hullPct > 0.25 ? '#d9a441' : '#e5533d';
-      ctx.fillRect(sx - w / 2, sy - 28, w * clamp(ship.hullPct, 0, 1), 3);
+      ctx.fillRect(sx - w / 2, ly + 4, w * clamp(ship.hullPct, 0, 1), 3);
     }
+
+    this.lastLabels = taken;
   }
 
   /**
