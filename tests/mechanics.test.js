@@ -8,6 +8,12 @@
 //     29 read by something
 //     32 read by NOTHING
 //
+// 60 / 34 / 26 after the second pass, which wired three more and DELETED one:
+// `noRefusal` on `by_the_book` was a second name for `noObjection`, which
+// `powers.js` already reads, so the trait promised "officers never refuse your
+// orders" through a key nothing looked at while the working key sat on a
+// different card. §68's `hazardScale` again.
+//
 // The instrument is built and controlled below, because three separate probes
 // lied earlier in this work and a clean number is worth nothing until the thing
 // producing it has been shown to see a positive case. It classifies six keys
@@ -43,6 +49,7 @@ import * as CHARACTER from '../src/rules/character.js';
 import { Game } from '../src/core/state.js';
 import { Character } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
+import { Ship } from '../src/sim/ship.js';
 
 /** Every .js file under src/, as one string. */
 function sourceText() {
@@ -103,7 +110,7 @@ describe('the sweep, and the instrument that produced it', () => {
     assert.equal(consumed().has('thisKeyIsDeclaredByNobodyAtAll'), false);
   });
 
-  test('the ratchet: no more than 32 declared mechanics are read by nothing', () => {
+  test('the ratchet: no more than 26 declared mechanics are read by nothing', () => {
     // It may go down — by wiring one, or by deleting one honestly — and it may
     // not go up. A new trait that declares a mechanic and forgets to wire it
     // fails here rather than shipping as a card that promises something.
@@ -111,14 +118,25 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     const dead = [...keys.keys()].filter((k) => !read.has(k)).sort();
     assert.ok(keys.size >= 55, `only ${keys.size} mechanics declared; has the sheet shrunk?`);
-    assert.ok(dead.length <= 32,
+    assert.ok(dead.length <= 26,
       `${dead.length} declared mechanics are read by nothing:\n  ${dead.join('\n  ')}`);
   });
 
-  test('and the two this change wired are out of that set', () => {
+  test('and everything wired so far is out of that set', () => {
     const read = consumed();
-    assert.ok(read.has('xpRate'), 'experience does not scale again');
-    assert.ok(read.has('inquiryImmune'), 'the one upside of insubordinate is gone again');
+    for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty']) {
+      assert.ok(read.has(k), `${k} is read by nothing again`);
+    }
+  });
+
+  test('and the duplicate that was deleted is gone', () => {
+    // `noRefusal` and `noObjection` were two names for one effect. Deleting the
+    // unread name is the fix; declaring both again would put the trait back to
+    // promising something through a key nobody reads.
+    const keys = declared();
+    assert.equal(keys.has('noRefusal'), false,
+      'noRefusal is back; powers.js reads noObjection and nothing reads this');
+    assert.ok(keys.has('noObjection'));
   });
 });
 
@@ -214,5 +232,88 @@ describe('a negative trait whose one upside did not exist', () => {
     const back = Game.load(JSON.parse(JSON.stringify(g.save())));
     assert.equal(back.ledger.inquiryImmune, true);
     assert.equal(back.ledger.openInquiry('the loss of a ship'), false);
+  });
+});
+
+describe('what the card says about standing, and what the ledger did', () => {
+  // Four promises on three cards, none of them kept, and two of them were
+  // duplicates of mechanics that already worked under a different name.
+  const rep = (g) => Object.values(g.reputation.tracks).reduce((n, t) => n + t.xp, 0);
+
+  test('By the Book adds to Federation GAINS and not to losses', () => {
+    // "+2 to Federation standing gains." Gains only, which is what the card
+    // says: a captain who follows regulations is not also insulated from the
+    // cost of breaking them.
+    const move = (traits, delta) => {
+      const g = captain({ traits });
+      // From 50, because a Starfleet captain starts at 100 and a gain clamps.
+      // The first draft of this measurement read "no effect" off that clamp.
+      g.ledger.standing.federation = 50;
+      g.ledger.adjustStanding('federation', delta, 'test');
+      return g.ledger.standing.federation - 50;
+    };
+    assert.equal(move([], 6), 6);
+    assert.equal(move(['by_the_book'], 6), 8);
+    assert.equal(move([], -6), -6);
+    assert.equal(move(['by_the_book'], -6), -6, 'the trait softened a loss');
+  });
+
+  test('and it does not reach other factions', () => {
+    const g = captain({ traits: ['by_the_book'] });
+    g.ledger.standing.klingon = 0;
+    g.ledger.adjustStanding('klingon', 6, 'test');
+    assert.equal(g.ledger.standing.klingon, 6);
+  });
+
+  test('the Idealist really does get double from a peaceful outcome', () => {
+    const plain = captain();
+    const ideal = captain({ traits: ['idealist'] });
+    plain.earnReputation('first_contact');
+    ideal.earnReputation('first_contact');
+    assert.ok(rep(plain) > 0, 'the control earned nothing, so this proves nothing');
+    assert.equal(rep(ideal), rep(plain) * 2);
+  });
+
+  test('and the multiplier is the one the trait declares, not a copy of it', () => {
+    // The correction this change is about: `earnReputation` used to say
+    // `hasTrait('idealist') ? 2 : 1`, duplicating the number on the card, so
+    // editing the trait would have changed the promise and not the game.
+    // Comments stripped first. The first draft of this assertion matched the
+    // COMMENT that explains what the old code was, which is a guard tripped by
+    // prose rather than by code — the same class of instrument error as every
+    // other one this file records, one layer up.
+    const code = readFileSync('src/core/state.js', 'utf8')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    assert.doesNotMatch(code, /hasTrait\('idealist'\)/,
+      'the trait is hardcoded again instead of read');
+    assert.match(code, /mechanic\('peaceGain'\)/);
+  });
+
+  test('and pays for it when it destroys something', () => {
+    // "Destroying a ship costs double standing." The other half, and both
+    // halves ship together — wiring only the bonus would make a trait declared
+    // `positive: false` into a free one.
+    const cost = (traits) => {
+      const g = captain({ traits });
+      g.ledger.standing.klingon = 0;
+      const foe = new Ship('d7', { faction: 'klingon', name: 'K' });
+      const eng = g.startCombat([foe], {});
+      foe.hull = 0; foe.destroyed = true;
+      eng.end('victory');
+      g.settleCombat?.('victory');
+      return g.ledger.standing.klingon;
+    };
+    const plain = cost([]);
+    const ideal = cost(['idealist']);
+    assert.ok(plain < 0, `the control lost no standing (${plain})`);
+    assert.equal(ideal, plain * 2, `${ideal} against ${plain}`);
+  });
+
+  test('and a bridge that does not argue is one mechanic, not two names', () => {
+    const g = captain({ traits: ['by_the_book'] });
+    assert.equal(g.character.mechanic('noObjection'), true);
+    assert.equal(g.character.mechanic('noRefusal'), undefined);
+    // And it is the key `powers.js` actually asks for.
+    assert.match(readFileSync('src/sim/powers.js', 'utf8'), /mechanic\('noObjection'\)/);
   });
 });

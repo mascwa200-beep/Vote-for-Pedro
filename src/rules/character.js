@@ -292,7 +292,13 @@ export const TRAITS = [
   {
     id: 'by_the_book', name: 'By the Book', positive: true,
     text: 'Regulations are there for a reason. +2 to Federation standing gains; officers never refuse your orders.',
-    mechanic: { federationGain: 2, noRefusal: true },
+    // `noObjection`, not `noRefusal`. Both names meant the same thing — a
+    // bridge that does not argue — and only one of them was ever read:
+    // `powers.js` asks for `noObjection`, which the Inspiring Presence feat
+    // declares. So this trait promised "officers never refuse your orders" and
+    // a second key with no reader anywhere. §68's `hazardScale` again: two
+    // names for one effect, one of them wired.
+    mechanic: { federationGain: 2, noObjection: true },
     conflicts: ['maverick'],
   },
   {

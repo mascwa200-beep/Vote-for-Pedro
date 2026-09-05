@@ -5519,6 +5519,36 @@ wiring or by honest deletion, and it may not go up. A new trait that declares a
 mechanic and forgets to wire it now fails a test rather than shipping as a card
 that promises something.
 
+### Second pass: 32 to 26, and two of them were duplicates
+
+Before wiring anything else, each remaining key was checked for whether the
+CONCEPT exists — and that probe was wrong twice before it was right, which is
+worth as much as the result. A `grep -E` with `\|` for alternation matches a
+literal pipe, so every multi-alternative pattern returned nothing and the first
+run concluded the game has no Prime Directive, in a codebase whose ledger opens
+a board of inquiry for "a pattern of Prime Directive violations". A negative
+control — a string that cannot exist — now runs beside it.
+
+With a working probe, most of the remaining keys have a live system to attach
+to. Four were wired, and two of those were **duplicates rather than gaps**:
+
+| key | card | what it was |
+| --- | --- | --- |
+| `noRefusal` | "officers never refuse your orders" | a second name for `noObjection`, which `powers.js` already reads. **Deleted**; the trait now declares the working key |
+| `peaceGain` | "double reputation from peaceful outcomes" | duplicated as a hardcoded `hasTrait('idealist') ? 2 : 1` in `earnReputation` — the same 2, written twice, so editing the card would change the promise and not the game |
+| `killPenalty` | "destroying a ship costs double standing" | the other half of that trait, unwired. Applied at the one place ships are destroyed, not inside `adjustStanding`: it is about killing, and crossing the Neutral Zone should not cost an idealist more than anybody else |
+| `federationGain` | "+2 to Federation standing gains" | unwired. On gains only, through `adjustStanding` — the one door all fourteen callers use |
+
+The `peaceGain` duplication is the third instance in this dossier of the same
+shape: a number on a card, written out again at the site that uses it.
+`shipMods` records the first (`critSeverity`), §68 the second (`hazardScale`).
+**A constant that appears in two files is a promise that can drift.**
+
+And the measurement of each was wrong before it was right, both times for the
+same reason: Federation standing starts at **100**, so a gain clamps and reads
+as "no effect", and reputation tracks store `xp` rather than `points`. A probe
+that returns zero is not evidence of zero.
+
 
 ## Attribution
 

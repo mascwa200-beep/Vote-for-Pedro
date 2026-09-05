@@ -243,6 +243,10 @@ export class Game {
     // worse still. Derived rather than serialised: the character is saved, so
     // recomputing is one source of truth instead of two.
     this.ledger.inquiryImmune = !!this.character?.mechanic('inquiryImmune');
+    // "+2 to Federation standing gains." Held on the ledger for the same reason
+    // as the line above: `adjustStanding` is the one door all fourteen callers
+    // go through, and a ledger does not know whose it is.
+    this.ledger.federationGain = this.character?.mechanic('federationGain') ?? 0;
     this.missions = new MissionBook(EPISODES);
     this.locationId = options.startAt ?? 'sol';
     this.galaxy.markVisited(this.locationId);
@@ -849,8 +853,16 @@ export class Game {
    */
   earnReputation(event) {
     if (!this.reputation) return;
-    const mult = (this.character?.mechanic('repGain') ?? 1)
-      * (this.character?.hasTrait('idealist') && PEACEFUL_EVENTS.has(event) ? 2 : 1);
+    // Read from the mechanic rather than written out a second time.
+    //
+    // This was `hasTrait('idealist') ? 2 : 1` — the same 2 the trait declares
+    // as `peaceGain`, duplicated, so editing the trait table would have changed
+    // what the card promised and not what the game did. Exactly the correction
+    // `shipMods` already records about `critSeverity`, which had the same shape.
+    const peace = PEACEFUL_EVENTS.has(event)
+      ? (this.character?.mechanic('peaceGain') ?? 1)
+      : 1;
+    const mult = (this.character?.mechanic('repGain') ?? 1) * peace;
     for (const up of this.reputation.recordEvent(event, mult)) {
       this.pushLog(
         `${REP_TRACKS[up.track]?.name ?? up.track} standing advanced to ${up.name}.`,
@@ -3332,9 +3344,17 @@ export class Game {
     const killed = eng.hostiles.filter((s) => s.destroyed);
     for (const s of killed) {
       this.ledger.destroyShip(s, { system: this.locationId, stardate: this.clock.stardate });
+      // "Destroying a ship costs double standing" — the Idealist's other half,
+      // and the price of its doubled reputation from peaceful outcomes. Applied
+      // HERE rather than inside `adjustStanding`, because it is about killing
+      // and not about every standing loss: crossing the Neutral Zone should not
+      // cost an idealist more than it costs anybody else.
+      const cost = s.civilian
+        ? STANDING_EFFECTS.destroyed_civilian
+        : STANDING_EFFECTS.destroyed_their_ship;
       this.ledger.adjustStanding(
         s.faction,
-        s.civilian ? STANDING_EFFECTS.destroyed_civilian : STANDING_EFFECTS.destroyed_their_ship,
+        Math.round(cost * (this.character?.mechanic('killPenalty') ?? 1)),
         'Ship destroyed in combat',
       );
     }
@@ -5502,6 +5522,7 @@ export class Game {
     // Recomputed on load rather than read out of the record, for the reason
     // the constructor gives: the character is already saved.
     g.ledger.inquiryImmune = !!g.character?.mechanic('inquiryImmune');
+    g.ledger.federationGain = g.character?.mechanic('federationGain') ?? 0;
     g.reputation = Reputation.load(data.reputation);
     g.difficulty = DifficultySettings.load(data.difficulty);
     g.galaxy.load(data.galaxy);
