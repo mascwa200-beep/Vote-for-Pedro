@@ -5411,6 +5411,115 @@ recorded here because the lesson is not that either was hard to see — it is th
 neither was visible without an instrument pointed at it.
 
 
+## 70. The character sheet, and a pill that multiplied nothing
+
+§69 ended a run of four defects with the same shape — a field present and
+correct in the data, read by fewer places than should read it. This is the same
+sweep pointed at the game's headline feature, and it found something bigger than
+expected, plus a hole in the instrument §68 built to find exactly this.
+
+### The measurement
+
+Every `mechanic` object declared by a species, origin, career, trait or feat,
+swept by name across the whole of `src/`:
+
+| | |
+| --- | --- |
+| mechanic keys declared | **61** |
+| read by something | 29 |
+| **read by nothing** | **32** |
+
+The instrument counts BOTH consumption paths, which matters: the ordinary one is
+`character.mechanic('key')` by string literal, but `shipMods` also does
+`species.mechanic?.critBonus` and `hasAdvantageOn` iterates `m.advantageOn`. A
+literal-only sweep calls those dead. It is controlled six ways positive and once
+negative before the number is believed — the rule this dossier keeps paying for.
+
+### They are not all the same thing
+
+A sweep whose only output is "wire everything you find" is a sweep that will
+eventually break something (§68). At least two kinds are in the 32:
+
+**Leftovers.** `reckless` declares `attackAdvantage` and `saveDisadvantage`, and
+the README quotes that trait as its example of a *genuine mechanical trade*:
+"advantage on every attack and disadvantage on every saving throw." Gameplay no
+longer rolls a d20. `rules/resolve.js` replaced the die with a margin, and
+`rules/dice.js`'s `save()` has no caller outside its own file. There is no attack
+roll and no saving throw to attach to. That is not an unwired feature — it is
+card text describing a design the game deliberately moved away from, and the
+honest fix is words, not code.
+
+**Real gaps.** `xpRate` and `inquiryImmune`, below.
+
+### The pill that multiplied nothing
+
+`xpRate` spans 1.25 at Story to 2.6 at Fleet Admiral and is printed on the
+difficulty card as `XP ×2.6`. Measured:
+
+```
+rung            card says   awardXP(1000) actually granted
+story             ×1.25       1000
+lieutenant        ×1          1000
+admiral           ×2.2        1000
+fleet_admiral     ×2.6        1000
+```
+
+**Experience was identical at every one of the twelve rungs.**
+
+### Why §68's sweep passed it
+
+§68 swept the difficulty table for knobs nothing reads and reported seven. It
+did not report this one, and the reason is a hole worth recording:
+
+> the sweep asks whether a key is READ, and `charscreens.js` does `d.xpRate` to
+> print the pill.
+
+**A display read counted as a reader.** §67 had already named that exact failure
+in another file — "standing, without the reason", a field read only to be shown
+— and it then hid inside the instrument built two sections later to find its
+siblings. The lesson is not "check for display reads"; it is that *is this read?*
+is the wrong question, and *does this change what happens?* is the right one. The
+fix here was measured by awarding experience and comparing, not by grepping.
+
+### What was wired, and why those two
+
+`Game.awardXP` is the one door — one `progress.addXP` call in the whole of
+`src/`, and `officers.js` says why — so the rung's rate and the character's
+multiply there. A test now pins that there is still exactly one door, because a
+second caller would silently bypass both.
+
+`inquiryImmune` had to go with it. `insubordinate` reads "start with a reprimand
+on file and slower promotion — but immune to a board of inquiry", and declares
+three mechanics of which only `startingReprimand` was read. So the trait
+delivered both penalties and no compensation, and **wiring its `xpRate: 0.9`
+alone would have made a pure-downside trait worse.** Two halves of one promise
+are one change.
+
+### The ladder afterwards
+
+Awards of 1000 experience needed to reach the top rank:
+
+| rung | awards | against Lieutenant |
+| --- | --- | --- |
+| Story | 108 | 0.80× |
+| Lieutenant | 135 | **1.00×** |
+| Captain | 100 | 0.74× |
+| Fleet Admiral | 52 | 0.39× |
+
+Lieutenant lands exactly on 1.00, which is what the table means by "the intended
+experience, no thumb on the scale either way". The commission is measured in real
+time rather than in experience, so ranking faster does not shorten the game — it
+brings the later acts within reach of a captain playing a much harder one, which
+is what the card was offering all along.
+
+### The rest stay counted
+
+`tests/mechanics.test.js` holds the 32 as a **ratchet**: it may go down, by
+wiring or by honest deletion, and it may not go up. A new trait that declares a
+mechanic and forgets to wire it now fails a test rather than shipping as a card
+that promises something.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

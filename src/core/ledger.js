@@ -71,6 +71,8 @@ export class Ledger {
     this.commendations = [];
     this.reprimands = [];
     this.inquiryOpen = false;
+    /** Set by the Game from the character sheet. See `openInquiry`. */
+    this.inquiryImmune = false;
     // What the board is about, so it can be named on the screen and in its own
     // finding. A board with no subject was a flag, not a proceeding.
     this.inquiryReason = null;
@@ -146,6 +148,12 @@ export class Ledger {
 
   /** @returns {boolean} true if this opened one that was not already open. */
   openInquiry(reason, detail = {}) {
+    // "Immune to a board of inquiry" — the one thing `insubordinate` offers in
+    // exchange for a reprimand on file and slower promotion. The flag is set by
+    // the Game from the character sheet, because a ledger does not know whose
+    // it is; both callers come through this door, so this is the only place it
+    // has to be asked.
+    if (this.inquiryImmune) return false;
     if (this.inquiryOpen) return false;
     this.inquiryOpen = true;
     this.inquiryReason = reason;
