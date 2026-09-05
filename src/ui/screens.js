@@ -1467,12 +1467,36 @@ export function captainScreen(app) {
   ]));
 
   // --- Reputation ---
+  // Standing, and WHY.
+  //
+  // This printed a bar and a tier and nothing else, while `Game.factionMemory`
+  // has been computing a second, separate number all along: up to ±0.4 on
+  // every hail with that faction, from specific things the captain did. Its
+  // own note says the strongest single memory "is worth about as much as
+  // shooting first costs". A captain sitting at Cordial with the Klingons
+  // while carrying `fired_first_archanis` had a permanent penalty on every
+  // Klingon channel and no way to find out short of opening one.
+  //
+  // Said here as well as at the hail, because they are different moments. The
+  // hail says the loudest one at the instant it matters — "A captain who is
+  // refused wants to know it was Archanis and not the weather" — and this is
+  // where you look to find out what you are carrying before you decide whether
+  // to open the channel at all.
   root.append(panel('Standing', Object.values(FACTIONS)
     .filter((f) => f.id !== 'federation')
-    .map((f) => {
+    .flatMap((f) => {
       const v = g.ledger.standingOf(f.id);
       const tier = standingTier(v);
-      return readout(f.short, (v + 100) / 200, tier.label);
+      const rows = [readout(f.short, (v + 100) / 200, tier.label)];
+      // Most factions remember nothing for most of a commission, and a list of
+      // empty headings would be worse than the bar alone.
+      for (const r of g.factionMemory(f.id).reasons) {
+        rows.push(el('p', {
+          class: 'hint',
+          text: `${r.weight >= 0 ? '+' : '−'} ${r.line}`,
+        }));
+      }
+      return rows;
     })));
 
   // --- Ledger ---

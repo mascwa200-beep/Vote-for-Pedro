@@ -2775,7 +2775,12 @@ export class Game {
     return {
       weight: Math.max(-0.4, Math.min(0.4, weight)),
       line: loudest.line,
-      reasons: held.map((e) => e.flag),
+      // The entries, not just their flag ids. `reasons` returned bare flags
+      // and was read by nothing at all — which is what you would expect of a
+      // field whose contents nobody could do anything with. The standing
+      // screen can now say what these people remember, and it needs the words
+      // to do it.
+      reasons: held.map((e) => ({ flag: e.flag, line: e.line, weight: e.weight })),
     };
   }
 

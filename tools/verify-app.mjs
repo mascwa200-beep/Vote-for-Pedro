@@ -5007,6 +5007,47 @@ try {
   check('the reputation screen renders every track', repPanels >= 6, `${repPanels} panels`);
   await page.screenshot({ path: join(SHOTS, '13-reputation.png') });
 
+  // Standing says WHY, not just how much.
+  //
+  // The panel printed a bar and a tier while `Game.factionMemory` computed a
+  // second, separate number — up to ±0.4 on every hail with that faction, from
+  // specific things the captain did — and its `reasons` field was returned and
+  // read by nothing. A captain at Cordial with the Klingons while carrying
+  // `fired_first_archanis` had a permanent penalty on every Klingon channel
+  // and no way to find out short of opening one.
+  //
+  // STAGED, because a fresh harness captain remembers nothing with anybody and
+  // reading the panel as it stands would pass whether or not this works.
+  const memoryLines = await page.evaluate(() => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const before = [...g.ledger.flags];
+    g.ledger.setFlag('fired_first_archanis');   // negative, Klingon
+    g.ledger.setFlag('kang_respects_you');      // positive, Klingon
+    // The RECORD screen, not the Rep tab. The Rep tab is the reputation
+    // TRACKS — a separate progression — and says so itself: "Standing —
+    // whether they are shooting at you this week — is tracked separately on
+    // the Record screen." A first draft of this check navigated to the wrong
+    // one and reported the panel missing.
+    app.go('captain');
+    app.render();
+    const text = document.querySelector('.screen')?.textContent ?? '';
+    g.ledger.flags = new Set(before);
+    app.render();
+    return {
+      archanis: /fired first at Archanis/i.test(text),
+      kang: /Kang has spoken for us/i.test(text),
+      signed: /[+−]\s/.test(text),
+      restored: !g.ledger.has('fired_first_archanis'),
+    };
+  });
+  check('the standing panel says what a faction remembers, not only the tier',
+    memoryLines.archanis && memoryLines.kang, JSON.stringify(memoryLines));
+  check('and which way each memory cuts',
+    memoryLines.signed, JSON.stringify(memoryLines));
+  check('and staging it put the ledger back',
+    memoryLines.restored === true, JSON.stringify(memoryLines));
+
   // Earn enough reputation to unlock and buy a project through the real UI.
   const repFlow = await page.evaluate(() => {
     const g = globalThis.__app.game;

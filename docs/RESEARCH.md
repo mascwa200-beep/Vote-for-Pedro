@@ -5083,6 +5083,73 @@ built to tell you who your officers are, painted them all the same.
 
 
 
+## 67. Standing, without the reason
+
+The Record screen's Standing panel prints a bar and a tier for each power, and
+nothing else. Meanwhile `Game.factionMemory` computes a second, entirely
+separate number:
+
+```js
+return {
+  weight: Math.max(-0.4, Math.min(0.4, weight)),
+  line: loudest.line,
+  reasons: held.map((e) => e.flag),     // read by nothing
+};
+```
+
+`weight` moves **every hail** with that faction by up to ±0.4, and the method's
+own note says the strongest single memory "is worth about as much as shooting
+first costs". A captain sitting at Cordial with the Klingons while carrying
+`fired_first_archanis` had a permanent penalty on every Klingon channel and no
+way to find out short of opening one.
+
+`factionMemory` has exactly one caller — `hail` — and `reasons` had none at all,
+which is what you would expect of a field returning bare flag ids that nobody
+could do anything with.
+
+### What was already right, and stays
+
+The **loudest** memory is already said at the moment of a hail, and the comment
+beside it is the reason not to move it:
+
+> Said before the reply, because it is the reason for the reply. A captain who
+> is refused wants to know it was Archanis and not the weather.
+
+That is correct and untouched. The standing panel is a different moment: it is
+where you look to find out what you are carrying **before** deciding whether to
+open the channel at all. So `reasons` now carries the words as well as the flag,
+and each memory appears under its faction's bar with the sign it cuts in.
+
+Factions remember nothing for most of a commission, and a list of empty headings
+would be worse than the bar alone — so a power with no memories still shows just
+the bar.
+
+### The check had to be staged, and pointed at the right screen
+
+A fresh harness captain remembers nothing with anybody, so reading the panel as
+it stands would pass whether or not this works. The check sets
+`fired_first_archanis` and `kang_respects_you`, renders, reads the two lines
+back, and puts the ledger the way it found it — with a third check asserting the
+restore rather than trusting it.
+
+And the first draft navigated to the **Rep** tab, which is the wrong screen and
+reported the panel missing. The Rep tab is the reputation TRACKS, a separate
+progression, and it says so itself:
+
+> Standing — whether they are shooting at you this week — is tracked separately
+> on the Record screen.
+
+Two things named alike, doing different jobs, both correct. Worth recording
+because the mistake looked exactly like a bug in the change.
+
+### Seven for seven
+
+Same shape. Nothing was missing: the weight was computed, the words were
+written, the mechanic was live on every hail — and the screen that exists to
+tell you how a power feels about you printed one number and not the other.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
