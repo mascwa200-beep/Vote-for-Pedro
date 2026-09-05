@@ -483,7 +483,11 @@ export const ROOMS = {
     deck: 7,
     shape: { kind: 'box', width: 5.6, depth: 5.2, height: 2.4 },
     stations: [
-      { id: 'brig_control', label: 'The detention console', crew: 'security', panel: 'damage', at: [0, -2.3], facing: Math.PI, mounted: 'wall' },
+      // `panel: null`, and answered by sim/consoles.js. It declared 'damage',
+      // which STATION_PANEL sends to the whole-ship screen — so a detention
+      // console reported hull integrity and shield facings. The key was there
+      // because there was no better one.
+      { id: 'brig_control', label: 'The detention console', crew: 'security', panel: null, at: [0, -2.3], facing: Math.PI, mounted: 'wall' },
     ],
     props: [
       // Three cells along the far bulkhead. The force fields are drawn as
@@ -535,7 +539,9 @@ export const ROOMS = {
     shape: { kind: 'box', width: 16.0, depth: 20.0, height: 6.5 },
     stations: [
       { id: 'flight_control', label: 'Flight control', crew: 'shuttlebay', panel: 'galaxy', at: [-7.6, 4.0], facing: -Math.PI / 2, mounted: 'wall' },
-      { id: 'bay_doors', label: 'The bay door control', crew: 'shuttlebay', panel: 'damage', at: [7.6, 4.0], facing: Math.PI / 2, mounted: 'wall' },
+      // As the brig: 'damage' and therefore the whole-ship screen, from a
+      // console whose entire job is a pair of doors.
+      { id: 'bay_doors', label: 'The bay door control', crew: 'shuttlebay', panel: null, at: [7.6, 4.0], facing: Math.PI / 2, mounted: 'wall' },
     ],
     props: [
       // Two shuttlecraft on the deck, parked square to the doors. Boxes rather

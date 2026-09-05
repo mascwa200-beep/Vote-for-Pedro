@@ -5261,6 +5261,117 @@ because something else already does its job?*
 
 
 
+## 69. Seventeen rooms, and what is actually in them
+
+The standing question, asked in the user's own words: *how many rooms can you
+actually DO something in, versus walk through?*
+
+### The lead that was false, and why it is here
+
+The measurement started from a strong-looking finding: six `panel` keys are
+declared on stations aboard — `damage`, `weapons`, `medical`, `fabrication`,
+`navigation`, `record` — and `openConsole` in `main.js` has a `case` for none of
+them, so eleven stations across seven rooms fall through to
+`default: 'Working, Captain.'`
+
+**It is false.** `STATION_PANEL` (`src/main.js`) aliases all six, and
+`tests/wiring.test.js` already asserts that no alias resolves to a missing
+console. The four stations that carry `panel: null` are likewise already
+answered, by `src/sim/consoles.js`.
+
+The lead had been carried forward across a context boundary and was never
+re-checked against the file. It is recorded because the correction is the
+recurring one in this dossier: **roughly one carried-forward lead in three is
+stale, and checking costs a single grep.** §62 and §68 are the same mistake in
+the instrument; this is the same mistake in the premise.
+
+### What was true instead
+
+`stage.where` names the compartment a scene happens in. `Mission.testWhere`
+enforces it — one gate, in one place, with the panel asking the engine rather
+than answering for itself. It defaults to `bridge`.
+
+| `stage.where` | stages |
+| --- | --- |
+| absent → defaults to `bridge` | 71 |
+| `anywhere` | 41 |
+| a named compartment | **7** |
+
+Seven of a hundred and nineteen stages, across twenty-four episodes. Ten of the
+seventeen walkable rooms had never hosted a scene.
+
+The finale was among the defaults. `homecoming` is a board of review at Earth —
+a casualty list on the table, nobody offering you a chair — and all four of its
+stages were therefore gated to the bridge of your own ship. `court_martial` had
+exactly this defect, was fixed, and was given a test called *"a hearing at a
+starbase is not held on your own bridge"*. **That test names one episode instead
+of the rule**, which is why the finale kept the bug. A guard written about an
+instance does not cover the class.
+
+### The room census
+
+Every room, what it has, and what its stations open:
+
+| room | scenes | stations that open something room-specific |
+| --- | --- | --- |
+| bridge | 0 | 10 — the ship's whole interface |
+| sickbay | 1 | 3 (was 1) |
+| engineering | 2 | 1 of 3 |
+| brig | 3 | 1 (was 0) |
+| briefing | 2 | 2 |
+| armoury | 1 | 0 of 2 |
+| transporter | 1 | 1 |
+| hangar | 0 | 1 of 2 (was 0) |
+| quarters, crewquarters, rec, cargo, auxcontrol, turbolift | 0 | 0 |
+| corridor_a, corridor_rec, corridor_sec | 0 | **no stations at all** |
+
+### The defect the census actually found
+
+Not "no console", but **the wrong console**. Four stations opened a general
+screen that is wrong for the room they stand in:
+
+| station | room | declared | opened |
+| --- | --- | --- | --- |
+| `biobed` | sickbay | `medical` → `crew` | the personnel roster |
+| `medlab` | sickbay | `medical` → `crew` | the personnel roster |
+| `brig_control` | brig | `damage` → `ship` | the whole-ship screen |
+| `bay_doors` | hangar | `damage` → `ship` | the whole-ship screen |
+
+Sickbay was the sharpest: `cmo_desk`, three metres away, gave a real sick list
+because it carries no panel at all and falls through to the report layer. One
+station in the ward told the truth and two opened a filing cabinet.
+
+`damage → ship` is *correct* for the other three stations that declare it — the
+bridge damage-control board, the intermix monitor, the auxiliary damage board. A
+key that is right three times out of five is exactly the kind of thing a sweep
+records as fine.
+
+### Two different repairs, and the reason they differ
+
+- **Sickbay got a console**, because there is something to DO there. The board
+  shows the hours between an injured officer and their post — a number
+  `Officer.recover` has computed since the campaign-time sickbay was written and
+  which nothing ever printed — and carries the first order in the game that must
+  be given from a particular compartment.
+- **The brig and the shuttlebay got reports**, because there is nothing to do
+  there. The simulation has no prisoners and no shuttles, and both boards say so
+  plainly. Setting `panel: null` and adding them to `REPORTS` kept every
+  existing invariant untouched: a station either opens a panel or reports, never
+  both.
+
+Inventing prisoner state to justify a console would have been the same error as
+wiring `hazardScale` in §68 — doing something because the shape of the code
+invited it rather than because the game needed it.
+
+### The corridors, left as corridors
+
+`corridor_a`, `corridor_rec` and `corridor_sec` have no stations, only
+`wallpanel` and `locker` props. They are left that way deliberately. A ship
+whose every compartment is a menu is a menu with a corridor drawn on it; the
+walk between the rooms is what makes the rooms places. The occupancy layer
+already puts people in all three, which is what a corridor is for.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
