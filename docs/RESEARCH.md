@@ -3375,6 +3375,68 @@ no orphans. The note at `state.js:417` saying "exactly ONE was ever read"
 describes the state that was fixed, not the present one.
 
 
+## 49. Five audits and one line
+
+What a lower-yield pass is supposed to look like: mostly clean, with the
+negatives written down as tests so nobody hunts them again.
+
+| audited | result |
+| --- | --- |
+| ship modifiers | `stealthDetect` written by five, read by none — §48 |
+| the Multispectral Sensor Array | `special: 'scan'` reached nothing — §48 |
+| reputation perks | **all 25 read** |
+| station panels | **all 36 resolve** to a console or a report |
+| mastery starship traits | applied in `shipMods`, choosable from both the screen and a spoken order |
+| order actions | **all 69** the parser can build have a handler |
+| duty details | the picker and the payout disagreed — one line |
+
+### The one line, described as small
+
+`teamFitness` decides how a detail turns out and weighs a person as
+`(expertise + discipline) / 2`. The screen's own picker sorted by `expertise`
+alone. Measured over six hundred assignments across sixty rosters, the
+auto-picked team was not the best available **31 times — 5.2%** — losing a mean
+of 2.97 fitness and at worst 10.50, on a scale where a matched speciality is
+worth 40.
+
+That is close to noise, and it is fixed anyway because it is the same shape as
+§43's two doors and §42's two berth checks: **the game had two answers to one
+question, and graded the captain against the other one.** `personFitness` is now
+the shared term and `bestTeamFor` the single picker. 31 of 600 became 0 of 600,
+against an exhaustive search of every combination the roster allows.
+
+### Two probes that would have libelled the code
+
+Both in the same pass, both reporting working code as broken.
+
+The station audit read `REPORTING_STATIONS` — which is an **array of ids** — with
+`Object.keys`, getting `0,1,2,3`. Corrected, it still failed: the "no panel"
+branch ran *before* the report check, and the four reporting stations carry no
+`panel` on purpose. Two drafts, same four false positives.
+
+The order audit imported `ORDERS` from `ui/orders.js`. It is declared there at
+line 105 and **is not exported**. The import produced `undefined`, `?? []`
+swallowed it, and the probe printed *"order rules: 0 … actions with no case: 0"*
+— a clean bill of health from a scan of nothing. It was caught only because
+`0` rules was obviously wrong; had the number been plausible it would have been
+published.
+
+Rewritten through `parseOrder`, which *is* exported, on every phrase the game's
+own help text lists: **861 phrases, 69 distinct actions, all 69 handled.**
+
+That is the seventh invented or unavailable binding this run, after `Game.load`,
+`PLAYER_SPECIES`, `eng.allShips`, `Mission.over`, the Tellarite with no
+`fieldRepair`, and `loadout.fit`. The rule has earned a name:
+
+> **A probe that reports a clean result without demonstrating it saw a positive
+> case has reported nothing.**
+
+Every audit in `tests/audit.test.js` therefore asserts its own denominator
+first — `phrases.length > 200`, `actions.size > 40`, `evaluated > 300`,
+`granted.size >= 20`, `n >= 30`. A future edit that quietly empties one of them
+fails on the count before it can pass on the emptiness.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

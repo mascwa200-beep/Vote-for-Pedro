@@ -4,7 +4,7 @@
 // graph is built on the first tap, and the first frame is the game.
 
 import { el, clear, button, modal } from './ui/lcars.js';
-import { ASSIGNMENTS, SPECIALITIES, beginAssignment } from './sim/duty.js';
+import { ASSIGNMENTS, beginAssignment, bestTeamFor } from './sim/duty.js';
 import { haptic, configureTouch, requestWakeLock, releaseWakeLock, trackViewportInsets } from './ui/touch.js';
 import { audio } from './audio/engine.js';
 import { TacticalView } from './ui/tactical.js';
@@ -1080,16 +1080,12 @@ class App {
       return null;
     }
 
-    const wanted = SPECIALITIES[assignment.wants];
-    const free = (g.dutyRoster ?? []).filter((p) => p.available);
-    // Best suited first: the matched speciality, then anybody from the same
-    // division, then whoever is left.
-    const ranked = [...free].sort((a, b) => {
-      const rank = (p) => (p.speciality === assignment.wants ? 2
-        : p.division === wanted?.division ? 1 : 0);
-      return (rank(b) - rank(a)) || ((b.expertise ?? 0) - (a.expertise ?? 0));
-    });
-    const team = ranked.slice(0, Math.max(1, assignment.team ?? 1));
+    // `bestTeamFor`, which is the same function the OUTCOME is graded with.
+    // This used to be a second ranking written out here — speciality, then
+    // division, then `expertise` — and `teamFitness` weighs a person as
+    // `(expertise + discipline) / 2`. Two answers to one question, and the
+    // captain was graded against the other one.
+    const team = bestTeamFor(assignment, g.dutyRoster);
 
     const r = beginAssignment(g, assignmentId, team.map((p) => p.id));
     if (r.ok) { audio.play('computer_ack'); haptic('confirm'); }
