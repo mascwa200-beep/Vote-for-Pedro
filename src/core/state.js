@@ -236,6 +236,13 @@ export class Game {
     this.galaxy = new Galaxy(this.rng);
     this.ledger = new Ledger();
     this.ledger.stardate = eraDef?.stardate ?? 4523.3;
+    // `insubordinate` promises "immune to a board of inquiry" and declared
+    // `inquiryImmune`, which nothing read. It is the whole compensation on a
+    // trait whose other two effects are penalties, so the trait was pure
+    // downside — and wiring its `xpRate: 0.9` without this would have made it
+    // worse still. Derived rather than serialised: the character is saved, so
+    // recomputing is one source of truth instead of two.
+    this.ledger.inquiryImmune = !!this.character?.mechanic('inquiryImmune');
     this.missions = new MissionBook(EPISODES);
     this.locationId = options.startAt ?? 'sol';
     this.galaxy.markVisited(this.locationId);
@@ -869,7 +876,25 @@ export class Game {
    * of the game not happening.
    */
   awardXP(amount, { silent = false } = {}) {
-    const promo = this.progress.addXP(amount, { ledger: this.ledger });
+    // Experience scales with the rung, which the difficulty card has promised
+    // since it was written and nothing did.
+    //
+    // "XP x2.6" is printed on the Fleet Admiral card and "XP x1.25" on Story,
+    // and MEASURED, `awardXP(1000)` granted exactly 1000 at every one of the
+    // twelve. The knob survived §68's dead-knob sweep because that sweep asks
+    // whether a key is READ, and `charscreens.js` reads `d.xpRate` to print the
+    // pill — a display read counted as a reader. §67 had already named that
+    // failure ("a field read only for display") in another file; this is the
+    // same thing hiding inside the instrument built to find it.
+    //
+    // Applied HERE because `Game.awardXP` is the one door: there is exactly one
+    // `progress.addXP` call in the whole of src/, and officers.js says why.
+    //
+    // The character's own rate multiplies with the rung's. `insubordinate`
+    // declares 0.9 and promises "slower promotion" in its own card text.
+    const rate = (this.difficulty?.scale('xpRate') ?? 1)
+      * (this.character?.mechanic('xpRate') ?? 1);
+    const promo = this.progress.addXP(amount * rate, { ledger: this.ledger });
     // A promotion earned and held is worth saying. `addXP` has always returned
     // {blocked: true} and nobody read it, so a captain under inquiry simply saw
     // his rank stop moving with no explanation offered anywhere.
@@ -5474,6 +5499,9 @@ export class Game {
     g.progress = CaptainProgress.load(data.progress);
     g.loadout = Loadout.load(data.loadout, g.ship.cls.slots);
     g.ledger = Ledger.load(data.ledger);
+    // Recomputed on load rather than read out of the record, for the reason
+    // the constructor gives: the character is already saved.
+    g.ledger.inquiryImmune = !!g.character?.mechanic('inquiryImmune');
     g.reputation = Reputation.load(data.reputation);
     g.difficulty = DifficultySettings.load(data.difficulty);
     g.galaxy.load(data.galaxy);
