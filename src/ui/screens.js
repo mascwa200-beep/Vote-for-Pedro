@@ -21,7 +21,13 @@ import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { commandReference } from './orders.js';
 import { namesFor } from '../sim/address.js';
-import { inArc } from '../sim/ship.js';
+import { inArc, SUBSYSTEM_KEYS } from '../sim/ship.js';
+
+/** What each targetable subsystem is called on a button, and out loud. */
+const SUBSYSTEM_TARGET_LABEL = {
+  weapons: 'Weapons', shields: 'Shields', engines: 'Engines', warpcore: 'Warp core',
+  sensors: 'Sensors', lifesupport: 'Life support', auxiliary: 'Auxiliary',
+};
 // `DECKS` was imported here too and used only in a comment. The deck label is
 // `game.deckLabel` now, which is the one place that knows which hull this is.
 import { ROOMS } from '../world/interiors.data.js';
@@ -690,10 +696,37 @@ export function tacticalScreen(app) {
       : null,
   ], 'danger'));
 
+  // --- How the fight stands ---
+  //
+  // `Engagement.assess()` has existed with its own JSDoc explaining that it is
+  // the LIVE reading, as against `this.assessment` which is the opening one —
+  // and nothing has ever called it. Only the opening line was pushed to the
+  // log, once, before a shot was fired, so a fight that stopped being
+  // outmatched three ships ago still read as outmatched, and the number that
+  // knew better was computed on request by nobody.
+  //
+  // Drawn as the balance of force it is, which is what `ratio` means: above
+  // half the bar is the player ahead.
+  {
+    const now = eng.assess();
+    const share = now.ours / Math.max(1, now.ours + now.theirs);
+    side.append(panel('The Fight', [
+      readout(now.label ?? 'even', share, `${(now.ratio ?? 1).toFixed(2)}:1`),
+      el('p', { class: 'hint', text: now.line ?? '' }),
+    ]));
+  }
+
   // --- Subsystem targeting ---
-  const subs = [
-    ['weapons', 'Weapons'], ['shields', 'Shields'], ['engines', 'Engines'], ['warpcore', 'Warp core'],
-  ];
+  // All seven, from SUBSYSTEM_KEYS rather than a hand-written four.
+  //
+  // The list had four of the seven the simulation models, so sensors, life
+  // support and auxiliary could be called by voice but not tapped, and
+  // `auxiliary` could not be reached at all by either — the one subsystem in
+  // the game with no route to it. Iterating the key list is what stops that
+  // happening again: a subsystem added to the simulation appears here, and a
+  // label missing from the table below is a visible gap rather than a silent
+  // omission.
+  const subs = SUBSYSTEM_KEYS.map((key) => [key, SUBSYSTEM_TARGET_LABEL[key] ?? key]);
   side.append(panel('Target Subsystem', [
     el('div', { class: 'grid-2' }, [
       ...subs.map(([key, label]) => button(label, tap(() => {
@@ -704,7 +737,7 @@ export function tacticalScreen(app) {
         say: `target their ${label.toLowerCase()}`,
       })),
     ]),
-    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor.' }),
+    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor, auxiliary to keep a fire burning.' }),
   ]));
 
   // --- Weapons ---
@@ -735,10 +768,17 @@ export function tacticalScreen(app) {
         if (n) { audio.play('phaser', { throttle: 120 }); haptic('hit_light'); }
         else { audio.play('ui_deny'); }
       }, 'ui_tap'), { say: 'fire phasers', color: 'red' }),
+      // The one button on this panel with no phrase on it, which is the rule
+      // this game is built on. Both directions are sayable already —
+      // "hold fire" is the `cease_fire` order and "weapons free" is `fire`,
+      // which now leaves auto-fire on rather than firing once into silence.
       button(eng.autoFire ? 'Auto: on' : 'Auto: off', tap(() => {
         eng.autoFire = !eng.autoFire;
         app.render();
-      }), { color: eng.autoFire ? 'green' : 'ghost' }),
+      }), {
+        color: eng.autoFire ? 'green' : 'ghost',
+        say: eng.autoFire ? 'hold fire' : 'weapons free',
+      }),
     ]),
     g.ship.maxTorpedoes > 0
       ? readout('Torpedoes', g.ship.torpedoes / g.ship.maxTorpedoes, `${g.ship.torpedoes}`)

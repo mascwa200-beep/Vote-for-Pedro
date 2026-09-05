@@ -4141,6 +4141,84 @@ That is worth stating as a general property of this simulation rather than
 rediscovering it a third time.
 
 
+## 57. A guard defeated by the comment explaining the thing it guards
+
+`tests/wiring.test.js` carries a check called *"every ability special has
+something that reads it"*. Its own comment says it is **"the guard that would
+have caught Fire at Will years earlier"** — the rank-one tactical order that
+declared `special: 'multitarget'`, had no implementation anywhere, and so
+charged the captain its 20% damage penalty for a benefit that never arrived.
+
+The guard has been passing on `multitarget` ever since it was written.
+
+It works by asking whether the string appears anywhere in `src/` outside the
+file that declares it. And it does appear — at `combat.js:868`, inside the
+JSDoc paragraph **explaining that `multitarget` is inert**:
+
+```js
+   * spreading fire, and `special: 'multitarget'`, which nothing anywhere
+   * implemented. So the cost landed and the benefit did not: measured over 40
+```
+
+So the check written specifically to catch a dead tag was satisfied by the
+prose documenting that the tag was dead. Comments are stripped before the
+search now, and with that one change the guard immediately named `multitarget`
+— which was then removed, because what Fire at Will actually does is point
+defence and `combat.js` reaches for that by the **buff id**, not by the tag.
+
+This is the third time this pattern has appeared — §51's sound cues matched a
+`case` label, §52's station panels matched another, §53's reputation perks
+matched a word in prose — and the first where **the comment doing the
+satisfying was written by the same hand as the guard**. The general form is
+worth stating once more, plainly: *a check that greps for a name will be
+satisfied by anything that says the name, including the note recording that the
+name means nothing.*
+
+### The other small lies, all verified before fixing
+
+| | |
+| --- | --- |
+| `auxiliary` | one of seven subsystems, targetable by **neither** button nor voice |
+| the buttons | covered **four** of seven; sensors and life support were sayable but not tappable |
+| `opts.escapeAt` | named in `Engagement`'s JSDoc; no such option exists |
+| the ion pod | runs **14 seconds**; two separate lines promised "about a minute" |
+| auto-fire | `cease_fire` set it false and **nothing** ever set it true again |
+| `Engagement.assess()` | documented as the LIVE reading, called by nothing |
+
+`auxiliary` is the one that mattered most in play: it powers damage control,
+fire suppression and sensor quality, which makes it the natural called shot
+against a burning ship, and it was the single subsystem in the game with no
+route to it at all. The button list is built by mapping `SUBSYSTEM_KEYS` over a
+label table now, so a subsystem added to the simulation appears on the panel
+instead of being quietly absent — and the test that checks those phrases asserts
+**seven**, not "at least four", which is the difference between a denominator
+and a floor.
+
+Auto-fire is the same shape as the deck numbers in §52: a captain who said
+"hold fire" and then "weapons free" got one volley and then silence, with no way
+back except finding a toggle. "Open fire" leaves the guns working now, and the
+toggle carries a phrase in both directions, which it never had — the one button
+on the weapons panel that printed no words at all.
+
+And the live assessment is §45's shape once more. `assess()` exists with a
+JSDoc explaining it is the live reading *as against* the opening one, and only
+the opening line was ever pushed to the log — once, before a shot was fired. A
+fight that stopped being outmatched three ships ago still read as outmatched,
+while the number that knew better was computed on request by nobody. It is a
+panel now: **THE FIGHT — FAVOURABLE, 2.66:1**.
+
+### On splitting the capstone
+
+This was to have been one PR with objectives — `Engagement.objective`, also
+documented and read by nothing, wired to destroy / disable / protect / survive.
+Reading the blast radius stopped that: the outcome vocabulary is load-bearing
+(`won = victory || routed`, `lost = destroyed` in `state.js`, and three test
+files iterate `OUTCOMES`), so a *failed protect* needs a third category and
+touches `endCombat`, the ledger, the after-action report and the mission engine.
+That is a PR, not a sweep, and bundling it with six one-line fixes would have
+made both harder to review and to revert.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

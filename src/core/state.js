@@ -1330,7 +1330,12 @@ export class Game {
     }
     this.podJettisoned = true;
     this.engagement.deployDecoy(14);
-    this.officerSays('engineering', 'Ion pod away. It will read like us for a minute or so.', 'report');
+    // Fourteen seconds, and it used to say "a minute or so" — in two places,
+    // this line and the button subtitle in ui/chair.js. A decoy the captain
+    // believes will cover a withdrawal for a minute is a decoy that gets them
+    // killed at the fifteen-second mark. The number is the tuned one; the
+    // prose was what was wrong.
+    this.officerSays('engineering', 'Ion pod away. It will read like us for about fifteen seconds.', 'report');
     return { ok: true };
   }
 

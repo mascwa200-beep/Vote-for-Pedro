@@ -125,7 +125,7 @@ export class Engagement {
    * @param {Ship} player
    * @param {Ship[]} hostiles
    * @param {RNG} rng
-   * @param {object} opts { allies, objective, escapeAt, name }
+   * @param {object} opts { allies, objective, name, onEnd }
    */
   constructor(player, hostiles, rng, opts = {}) {
     this.player = player;

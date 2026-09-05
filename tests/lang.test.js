@@ -39,7 +39,7 @@ import { WEAPON_RANGE } from '../src/sim/combat.js';
 import { PRESETS } from '../src/sim/power.js';
 import { ROOMS } from '../src/world/interiors.data.js';
 import { CONSOLES } from '../src/sim/loadout.js';
-import { Ship } from '../src/sim/ship.js';
+import { Ship, SUBSYSTEM_KEYS } from '../src/sim/ship.js';
 import { RECIPES } from '../src/sim/fabrication.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -792,12 +792,18 @@ describe('the phrases printed on the buttons are real orders', () => {
     const g = new Game({ seed: 5n, crewMode: 'original' });
     const UI = (file) => readFileSync(join(HERE, '..', 'src', 'ui', file), 'utf8');
 
-    // Subsystem targeting, from the table screens.js maps over. Scraped rather
-    // than imported for the reason the test above gives: screens.js reaches
-    // `document` and cannot be loaded outside a browser.
-    const subsBlock = UI('screens.js').match(/const subs = \[([\s\S]*?)\];/);
+    // Subsystem targeting, from the label table screens.js maps over. Scraped
+    // rather than imported for the reason the test above gives: screens.js
+    // reaches `document` and cannot be loaded outside a browser.
+    //
+    // It used to scrape a hand-written `const subs = [...]` of four pairs. The
+    // buttons are now built by mapping SUBSYSTEM_KEYS over this label table,
+    // which is what closed the gap: four of the seven subsystems had a button,
+    // and `auxiliary` had neither a button nor a phrase — the only subsystem
+    // in the game with no route to it at all.
+    const subsBlock = UI('screens.js').match(/SUBSYSTEM_TARGET_LABEL = \{([\s\S]*?)\};/);
     const subs = subsBlock
-      ? [...subsBlock[1].matchAll(/\[\s*'[a-z_]+',\s*'([^']+)'\s*\]/g)].map((m) => m[1])
+      ? [...subsBlock[1].matchAll(/[a-z_]+:\s*'([^']+)'/g)].map((m) => m[1])
       : [];
 
     // The chair's intercom buttons, as the chair prints them: no comma.
@@ -808,7 +814,11 @@ describe('the phrases printed on the buttons are real orders', () => {
 
     // Prove each scrape found its buttons before believing what it says about
     // them — the rule this file already states one test above.
-    assert.ok(subs.length >= 4, `scraped ${subs.length} targeting buttons from screens.js`);
+    // SEVEN, not "at least four". The simulation models seven subsystems and
+    // every one of them is now tappable, so this is a real denominator rather
+    // than a floor the old four-button list also cleared.
+    assert.equal(subs.length, SUBSYSTEM_KEYS.length,
+      `scraped ${subs.length} targeting buttons for ${SUBSYSTEM_KEYS.length} subsystems`);
     assert.ok(stations.length >= 7, `scraped ${stations.length} intercom stations from chair.js`);
 
     /** Every templated `say:` in the UI, expanded from its own source data. */
