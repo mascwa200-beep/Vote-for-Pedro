@@ -5626,6 +5626,44 @@ the machinery was now there: 74.3% to 61.7% on diplomacy, and science untouched.
 The ratchet moves **24 → 21**, and `resolve()`'s disadvantage argument, which had
 no caller at all two passes ago, now has three.
 
+### Fifth pass: the other half of Notorious, and a duplicate folded into it
+
+*"Hostiles break off sooner out of fear"* — `fearFactor: 0.15`, unwired. The
+Living Legend feat said *"enemies hesitate"* through `enemyHesitation`, which is
+**the same thing under another name**, so the feat now declares `fearFactor` at
+0.08 and the duplicate is gone. Third deletion of that shape after `hazardScale`
+and `noRefusal`.
+
+Handed to the engagement the way `relentless` already is, because `ai.js` decides
+who runs and does not know whose ship it is fighting.
+
+**Added where the base is above zero, not multiplied into it.** Multiplying would
+have been the lazier way to keep `fanatic` and `assimilate` at nought — a Borg
+cube and a Jem'Hadar attack ship never run, whatever they are facing — and would
+also have scaled fear by nerve, so a raider would fear you more than a
+battleship does, for no reason.
+
+**And the first instrument was too coarse to see it.** A duel reported 30%
+survival against 33%, which looks like noise, because a fleeing D7 is nearly dead
+either way. Measured at the moment the flag flips instead:
+
+| | mean hull when the D7 broke off |
+| --- | --- |
+| plain | 9.7% |
+| Living Legend (0.08) | 17.2% |
+| Notorious (0.15) | **24.0%** |
+| Borg cube, any fear | never breaks off |
+
+The player-facing effect is that the fight ends sooner — 80.3 s to 73.1 s over 40
+seeds — rather than that it is won more often. **An outcome measurement can be
+too blunt for a mechanic that changes when something happens rather than
+whether.**
+
+The test then made the harness mistake in miniature: it used the Constitution the
+rest of the file uses, against which the player is destroyed before the D7 ever
+decides to run, and reported "too few break-offs to compare". The harness, not the
+mechanic. Ratchet **21 → 19**.
+
 
 ## Attribution
 

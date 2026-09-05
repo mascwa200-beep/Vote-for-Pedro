@@ -226,6 +226,8 @@ export class Engagement {
     // hostile that could be routed would make the no-win scenario winnable by
     // flying — which is the one thing it must never be.
     this.relentless = opts.relentless === true;
+    /** How much sooner hostiles break off. See `ai.js` and Notorious. */
+    this.fear = Number.isFinite(opts.fear) ? opts.fear : 0;
     // How many people were aboard when this started.
     //
     // Crew losses are permanent, so the standing deficit is the whole
