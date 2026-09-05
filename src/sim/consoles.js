@@ -215,6 +215,44 @@ const REPORTS = {
     }
     return { title: 'Shuttlebay', lines };
   },
+
+  /**
+   * The food synthesiser, on the rec deck.
+   *
+   * It declared `panel: 'shop'`, which is the MACHINE SHOP — hull patches,
+   * torpedo casings, graviton charges, a coolant purge. Nothing on that list is
+   * edible, and the room's own entry in the deck plan calls it "the one room
+   * aboard that is not for working in". A workshop console in it was the
+   * sharpest contradiction of a room's stated purpose anywhere on the ship.
+   *
+   * What it reports instead is the room, read from the same occupancy layer
+   * that draws the people in it — so the board and the compartment cannot
+   * disagree. `sim/occupancy.js` puts six here at normal, two at yellow, four
+   * at blue and NOBODY at red, and its own comment says why: a captain who
+   * walks into a deserted recreation room at red alert has been told something
+   * true about his ship without a word being printed. This says it in words for
+   * the captain who is standing at the synthesiser with his back to the room.
+   */
+  rec_food: (g) => {
+    const s = g.ship;
+    const here = occupantsOf(g, 'rec').filter((o) => !o.intruder).length;
+    const lines = [];
+    if (g.alert === 'red') {
+      // Non-essential load, shed. The room being empty is the point.
+      lines.push('Synthesiser offline. Non-essential loads are shed at red alert.');
+      lines.push('There is nobody in here. They are all somewhere else, which is where they should be.');
+    } else {
+      lines.push(`Synthesiser ready. ${s.crew} aboard to feed, of a rated complement of ${s.maxCrew}.`);
+      lines.push(here > 0
+        ? `${here} of them are in here now.`
+        : 'The room is empty at the moment.');
+    }
+    const lost = Math.max(0, (s.maxCrew ?? 0) - (s.crew ?? 0));
+    if (lost > 0) {
+      lines.push(`${lost} fewer than we sailed with. The room is quieter than it was.`);
+    }
+    return { title: 'Recreation Deck', lines };
+  },
 };
 
 /** What a first-person room is called, for the security board. */

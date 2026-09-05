@@ -3290,7 +3290,7 @@ try {
     const g = app.game;
     const was = { room: g.walk.roomId, screen: app.screen };
     const out = {};
-    for (const [room, id] of [['brig', 'brig_control'], ['hangar', 'bay_doors']]) {
+    for (const [room, id] of [['brig', 'brig_control'], ['hangar', 'bay_doors'], ['rec', 'rec_food']]) {
       g.goToRoom(room);
       for (let n = 0; n < 12000 && g.walkOrder; n++) g.update(1 / 30);
       const station = (g.walk.room?.stations ?? []).find((s) => s.id === id);
@@ -3326,6 +3326,17 @@ try {
     JSON.stringify(bay).slice(0, 240));
   check('and says whether those doors could open at all',
     /orbit|under way|nowhere below/i.test(bay.text), JSON.stringify(bay.text).slice(0, 200));
+  // The food synthesiser, which opened the machine shop: hull patches, torpedo
+  // casings and graviton charges, in the room the deck plan calls the one room
+  // aboard that is not for working in.
+  const mess = boards.rec_food ?? {};
+  check('the food synthesiser reports the mess, not the machine shop',
+    mess.arrived === 'rec' && mess.at === 'rec_food'
+      && /Recreation Deck/i.test(mess.text) && !/Machine Shop|graviton|hull patch/i.test(mess.text),
+    JSON.stringify(mess).slice(0, 240));
+  check('and counts the people in the room it is standing in',
+    /aboard to feed|in here now|room is empty|Non-essential/i.test(mess.text),
+    JSON.stringify(mess.text).slice(0, 200));
   check('and the board checks put the captain back where they were',
     boards.restored === true, JSON.stringify({ restored: boards.restored }));
 
