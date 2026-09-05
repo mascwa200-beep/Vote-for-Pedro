@@ -4753,6 +4753,95 @@ The same trap, in the same shape, one section after documenting it.
 
 
 
+## 63. "Use a thermal vent. Open this console."
+
+Third play pass over the harness screenshots. `03d-surface.png` is an away team
+standing on Vulcan IV in front of a plant, and the button offered is:
+
+    USE SOMETHING GROWING
+    "survey that"
+    OPEN THIS CONSOLE
+
+Three lines, and the middle one is right.
+
+### What the button was doing
+
+`bridgeScreen` builds one button for three different things a captain can be
+standing in front of — a console, a door, and a feature on a planet — from two
+templates:
+
+```js
+target.panel || target.id ? `Use ${target.label}` : 'Use',
+sub: target.panel ? 'Open this console' : 'Through the door',
+say: target.check ? 'survey that' : target.panel ? 'use it' : 'through the door',
+```
+
+The third line already knows. **`target.check` is a discriminator for surface
+features and nothing else** — no station aboard the ship carries one — and it
+was consulted for the spoken phrase and ignored by the label and the subtitle.
+One branch of a three-way distinction, applied to one of its three readers.
+
+All five surface features have `panel: 'survey'`, so all five got the console
+subtitle:
+
+| offered | what it is |
+| --- | --- |
+| Use a mineral outcrop / Open this console | a rock |
+| Use a standing ruin / Open this console | a ruin |
+| Use a crashed hull / Open this console | a wreck |
+| Use a thermal vent / Open this console | a vent |
+| Use something growing / Open this console | a plant |
+
+### Why it is not a text nit
+
+`hazard` is not flavour. `HAZARD_LEVEL` in `sim/away.js` turns it into numbers:
+
+| hazard | injury | death | hours away |
+| --- | --- | --- | --- |
+| routine | 4% | 0.4% | 5 |
+| elevated | 14% | 2% | 11 |
+| dangerous | 28% | **6%** | 19 |
+
+A thermal vent is `dangerous`. So a captain was being asked to spend nineteen
+hours of commission time and accept a **six per cent chance that somebody does
+not come back**, by a button that said *Open this console*. The risk was in the
+data, used by the resolution, and shown nowhere.
+
+### What it says now
+
+    SURVEY SOMETHING GROWING
+    "survey that"
+    ROUTINE — MEDICAL TEAM, 5 HOURS
+
+The label is `Survey ${lowerFirst(label)}` — only the first character, not
+`toLowerCase()` on the whole string, because the feature labels have no proper
+nouns in them *today* and flattening one the day they do would be wrong and
+silent. The subtitle is the decision: the game's own hazard word, the
+department whose officer takes the check, and the hours it costs.
+
+### The guard
+
+Three checks in `verify-app`, read off the rendered button in the real page.
+Confirmed against a control with the discriminator forced off, which reproduces
+the original string exactly:
+
+    Use Something growing"survey that"Open this console
+
+— and fails all three, each for its own reason: it does not begin with
+"Survey", it says "console", and it names neither a hazard level nor a number
+of hours.
+
+### The shape of this one
+
+Same shape as §59 and §61, which is now three for three: **the code already
+knew.** `occupancy.js` had a wall-standoff number that was right for a room and
+wrong for a corridor; the mission book had five gates and used two; this button
+had a discriminator and used it once. None of the three needed new information.
+They needed the information already present to reach all of the places that
+should have been reading it.
+
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
