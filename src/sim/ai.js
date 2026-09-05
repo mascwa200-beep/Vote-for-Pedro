@@ -5,6 +5,7 @@
 // really does hold at beam range and grind; Jem'Hadar really do ram.
 
 import { FACTIONS } from '../world/factions.data.js';
+import { archetypeOf, getShipClass } from '../world/ships.data.js';
 import { WEAPON_RANGE, stillEngaged } from './combat.js';
 import { facingForDirection } from './ship.js';
 import { chooseTactic, tickTactics } from './tactics.js';
@@ -103,15 +104,42 @@ export function boardableState(ship, from) {
 }
 
 /** Preferred engagement distance for a ship's best weapon. */
-function preferredRange(ship) {
+/**
+ * What the SHAPE of a hull changes about how it is flown.
+ *
+ * The doctrine tables above are keyed on faction and stay that way — a Klingon
+ * still fights like a Klingon. These three modulate it by what the ship
+ * physically is, because a Bird-of-Prey and a Negh'Var shared every threshold
+ * in this file and they have no business doing so.
+ *
+ * `line` is 1 / 1 / 0 on purpose: it is the identity case, and twelve of the
+ * classes resolve to it, so most of the fleet flies exactly as it did.
+ *
+ *     nerve      multiplies the break-off hull fraction. Above 1 leaves
+ *                earlier; below 1 stands longer. Multiplied rather than
+ *                replaced so `fanatic` and `assimilate` stay at zero.
+ *     range      multiplies the preferred engagement distance.
+ *
+ * Elevation commitment was a third lever here and has been REMOVED. The
+ * reasoning was that a ship taking twenty seconds to come about should hedge
+ * on a dorsal or ventral attack because being wrong costs it more. Measured,
+ * that made capitals meaningfully WORSE — commitment is how decisively a hull
+ * goes for the weaker facing, so lowering it models indecision rather than
+ * inertia, and the player came out of ninety fights against warbirds, a
+ * Vor'cha and a Negh'Var six deaths better off. A capital ship should be more
+ * dangerous than a scout, not less.
+ */
+const ARCHETYPE_NERVE = { skirmisher: 1.6, line: 1, capital: 0.6 };
+const ARCHETYPE_RANGE = { skirmisher: 1.18, line: 1, capital: 1 };
+
+function preferredRange(ship, archetype = 'line') {
   if (!ship.weapons.length) return 900;
   // Only the guns that can still fire get a say. A Defiant that has lost its
   // pulse cannons has no business still holding at 300 to use them.
   const usable = ship.weapons.filter((w) => w.enabled !== false);
   const types = (usable.length ? usable : ship.weapons).map((w) => w.type);
-  if (types.includes('cannon')) return 300;
-  if (types.includes('beam')) return 620;
-  return 800;
+  const base = types.includes('cannon') ? 300 : types.includes('beam') ? 620 : 800;
+  return base * (ARCHETYPE_RANGE[archetype] ?? 1);
 }
 
 /** Steer toward a point, in both axes. */
@@ -472,6 +500,10 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   if (decide) ship.aiTimer = DECISION_INTERVAL;
 
   const doctrine = FACTIONS[ship.faction]?.doctrine ?? 'balanced';
+  // What the faction believes, and what this particular hull can actually do
+  // about it. Resolved once here, beside the doctrine, because everything below
+  // reads both.
+  const archetype = archetypeOf(ship.cls ?? getShipClass(ship.classId));
   const rng = engagement.rng;
 
   // Pick a target — anything that is no longer in the fight is not one.
@@ -496,16 +528,25 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
   if (!stillEngaged(target)) return;
 
   const distance = ship.distanceTo(target);
-  const want = preferredRange(ship);
+  const want = preferredRange(ship, archetype);
   const hullPct = ship.hullPct;
 
   // ---- Fleeing ----
   if (!opts.allyOf && !ship.fleeing && !engagement.relentless) {
-    const breakPoint = doctrine === 'fanatic' ? 0.0
+    const base = doctrine === 'fanatic' ? 0.0
       : doctrine === 'aggressive' ? 0.12
       : doctrine === 'opportunist' ? 0.45
       : doctrine === 'assimilate' ? 0.0
       : 0.2;
+    // The hull has a say as well as the flag it flies. A raider that is losing
+    // is doing the thing raiders do; a capital ship IS the line and does not
+    // leave it at the same hull fraction a scout would.
+    //
+    // MULTIPLIED, not replaced, which keeps `fanatic` and `assimilate` at zero
+    // — a Borg cube and a Jem'Hadar attack ship never run whatever shape they
+    // are, and that is the whole meaning of those two doctrines.
+    const shape = ARCHETYPE_NERVE[archetype] ?? 1;
+    const breakPoint = base * shape;
     if (hullPct < breakPoint && ship.crew > 0) {
       ship.fleeing = true;
       engagement.pushLog(`${ship.name} is breaking off.`, 'tactical');

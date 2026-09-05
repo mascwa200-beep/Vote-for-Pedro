@@ -499,6 +499,51 @@ export function commandableAt(tier) {
   return SHIP_LIST.filter((s) => s.faction === 'federation' && s.boffSeats && s.tier <= tier);
 }
 
+/**
+ * What KIND of ship this is, derived rather than declared.
+ *
+ * The AI has always taken its doctrine from the faction alone
+ * (`FACTIONS[ship.faction].doctrine`), so a Bird-of-Prey and a Negh'Var — turn
+ * 18 against 4.5, 4,600 points of hull and shield against 19,400 — flew with
+ * every threshold identical because both are Klingon. The same was true of a
+ * Romulan scoutship against a warbird, and of a runabout against a Galaxy.
+ *
+ * DERIVED, and deliberately not read from `cls.role`. That field is 23
+ * free-text values over 31 hulls, 17 of them singletons — "heavy explorer",
+ * "attack cruiser", "cube" — and it predicts nothing mechanical: three hulls
+ * are `explorer`, spanning tier 3 to tier 6 and two to four mounts. It is a
+ * caption, correctly used as a caption, and `tests/classfields.test.js` records
+ * that decision. Computing from the numbers instead means the classification
+ * cannot drift away from the ship it describes, and a hull added tomorrow
+ * classifies itself.
+ *
+ * Two axes, because the data has two: how fast it comes about for its size,
+ * and how much punishment it holds.
+ *
+ *     skirmisher   agile and fragile   bird_of_prey scoutship defiant oberth
+ *                                      orion_raider tholian_web_spinner
+ *                                      jem_hadar_attack runabout
+ *     capital      slow or very tough  neghvar warbird galaxy sovereign vorcha
+ *                                      excelsior ambassador nebula borg_cube
+ *                                      jem_hadar_battleship bioship
+ *     line         everything else     constitution d7 galor miranda ktinga
+ *                                      keldon constellation intrepid marauder
+ *                                      constitution_refit
+ *
+ * `line` is the IDENTITY CASE and that matters: ten of the twenty-nine armed
+ * hulls keep exactly the behaviour they have today, and only the extremes
+ * move. A taxonomy that changed every ship at once would be a rebalance of the
+ * whole game wearing the clothes of a feature.
+ */
+export function archetypeOf(cls) {
+  if (!cls || !(cls.weapons ?? []).length) return 'line';
+  const agility = (cls.turnRate ?? 8) / Math.max(0.2, cls.mass ?? 1);
+  const tough = (cls.hull ?? 0) + (cls.shields ?? 0);
+  if (agility >= 20 && tough <= 12000) return 'skirmisher';
+  if (agility <= 6 || tough >= 18000) return 'capital';
+  return 'line';
+}
+
 /** Registry numbers for generated Federation ships. */
 export const FEDERATION_REGISTRIES = [
   'NCC-1701', 'NCC-1017', 'NCC-1371', 'NCC-1672', 'NCC-1764', 'NCC-2000',
