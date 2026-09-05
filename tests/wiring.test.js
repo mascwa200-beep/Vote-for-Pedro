@@ -1772,9 +1772,40 @@ describe('every sound cue is reachable', () => {
     // — the defence in `Ship.update` was written in full and nothing had ever
     // put one intruder aboard anything — and the second test below is what
     // caught the reservation going stale the moment the trigger was written.
-    tractor_beam: 'there is no tractor beam mechanic',
+    //
+    // `tractor_beam` came off it the same way. Its reason was "there is no
+    // tractor beam mechanic", which stopped being true the moment core
+    // recovery shipped: `Ship.recoverCore` describes getting a tractor beam on
+    // a live antimatter assembly, and `duty.js` calls stripping a wreck
+    // "tractoring in the floaters". Both played a generic acknowledgement.
+    //
     // `door` came off this list when the ship got an inside: "go to sickbay"
     // walks you through real doorways and the cue plays on the way out.
+  };
+
+  /**
+   * Every cue name that is actually PLAYED, rather than merely spelled.
+   *
+   * This used to test `['"`]name['"`]` against the UI sources — any quoted
+   * occurrence anywhere — and that is not the same question. `ui/tactical.js`
+   * has `case 'cloak':` and `case 'decloak':`, which are switch arms for a
+   * display event, and they satisfied that regex: both cues were synthesised,
+   * played by nothing, and passed this guard for four hundred lines of the
+   * wrong reason. The cloak ORDER meanwhile played `power_reroute`, the
+   * generic power hum, to a captain who had spent 130 Tokens of Regard on a
+   * cloaking device.
+   *
+   * Literals are taken from anywhere inside a `.play( ... )` call rather than
+   * only the first argument, because a good many are ternaries —
+   * `audio.play(r.ok ? 'door' : 'ui_deny')` — and matching the first position
+   * only would report those as dead.
+   */
+  const playedCues = () => {
+    const out = new Set();
+    for (const m of UI_SRC.matchAll(/\.play\(([^;]{0,160})/g)) {
+      for (const lit of m[1].matchAll(/['"\`]([a-z_]+)['"\`]/g)) out.add(lit[1]);
+    }
+    return out;
   };
 
   test('a cue is either played or explicitly reserved, with a reason', () => {
@@ -1782,18 +1813,18 @@ describe('every sound cue is reachable', () => {
     const unique = [...new Set(cues)];
     assert.ok(unique.length > 30, `only found ${unique.length} cues — has the table changed shape?`);
 
-    const orphans = unique.filter(
-      (c) => !new RegExp(`['"\`]${c}['"\`]`).test(UI_SRC) && !(c in RESERVED),
-    );
+    const played = playedCues();
+    assert.ok(played.size > 30, `only ${played.size} cues are played anywhere — did .play move?`);
+
+    const orphans = unique.filter((c) => !played.has(c) && !(c in RESERVED));
     assert.deepEqual(orphans, [],
       'cues that are synthesised but never played, and not listed as reserved');
   });
 
   test('nothing is reserved that is actually reachable', () => {
     // The list must not become a place to hide a missing hookup.
-    const stale = Object.keys(RESERVED).filter(
-      (c) => new RegExp(`['"\`]${c}['"\`]`).test(UI_SRC),
-    );
+    const played = playedCues();
+    const stale = Object.keys(RESERVED).filter((c) => played.has(c));
     assert.deepEqual(stale, [], 'cues listed as reserved that the UI does play');
   });
 
