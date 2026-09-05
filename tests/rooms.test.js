@@ -119,9 +119,27 @@ describe('a scene happens in a room, and the room is enforced', () => {
 describe('the scenes that ask you to get up', () => {
   // Only where being in the room IS the point, and each one where the episode
   // had already said so in its own speaker line.
+  //
+  // Every placed stage is listed, with the speaker that justifies it, so the
+  // REASON for each placement is in the test rather than in somebody's memory.
+  // Ten of a hundred and nineteen stages; it was two of seventy-two when this
+  // file was written.
   const PLACED = [
     { ep: 'wolf359_salvage', stage: 'revived', where: 'sickbay', speaker: 'Sickbay' },
     { ep: 'tholian_border', stage: 'lock', where: 'transporter', speaker: 'Transporter Room' },
+    { ep: 'qonos_council', stage: 'blade', where: 'armoury', speaker: 'Armoury' },
+    { ep: 'cardassia_debt', stage: 'briefing', where: 'briefing', speaker: 'Briefing room' },
+    { ep: 'utopia_certification', stage: 'trials', where: 'engineering', speaker: 'Engineering' },
+    { ep: 'vega_line', stage: 'hearing', where: 'briefing', speaker: 'Drafting committee' },
+    { ep: 'khitomer_accord', stage: 'brig', where: 'brig', speaker: 'The prisoner' },
+    // The two that were added with this table. Both are the same interrogation
+    // continuing in the same cell, and both were 'anywhere' — so a captain
+    // could walk back up to the bridge halfway through and finish it there.
+    { ep: 'khitomer_accord', stage: 'stonewalled', where: 'brig', speaker: 'The prisoner' },
+    { ep: 'khitomer_accord', stage: 'bargained', where: 'brig', speaker: 'The prisoner' },
+    // Its speaker has been 'Engineering' since it was written, and the scene is
+    // a chief engineer standing at a core he does not want to run that hard.
+    { ep: 'devron_anomaly', stage: 'inside', where: 'engineering', speaker: 'Engineering' },
   ];
 
   test('each is in the room its own speaker names', () => {
@@ -134,6 +152,23 @@ describe('the scenes that ask you to get up', () => {
     }
   });
 
+  test('and the table is the whole of them, not a sample', () => {
+    // Otherwise the justifications above drift out of date silently: a stage
+    // placed without a line here would be placed for no recorded reason.
+    const actual = [];
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        const w = stage.where;
+        if (w && w !== 'anywhere' && w !== 'surface') actual.push(`${ep.id}/${sid}`);
+      }
+    }
+    assert.deepEqual(
+      actual.sort(),
+      PLACED.map((p) => `${p.ep}/${p.stage}`).sort(),
+      'a stage names a compartment and PLACED does not say why',
+    );
+  });
+
   test('and the captain can walk to every room a stage names', () => {
     // A stage in a compartment nobody can reach is a stranded episode. Walked,
     // not looked up — `findRoom` succeeding is not the same as arriving.
@@ -144,7 +179,11 @@ describe('the scenes that ask you to get up', () => {
         if (w && w !== 'anywhere' && w !== 'surface') named.add(w);
       }
     }
-    assert.ok(named.size >= 2, `only ${named.size} rooms are used by any episode`);
+    // A ratchet, in the shape of the "less forgetful" one in echoes.test.js: it
+    // only moves one way. Two rooms of seventeen when this file was written,
+    // six now. The number that answers "how many rooms can you actually do
+    // something in" is this one, and it is the point of the exercise.
+    assert.ok(named.size >= 6, `only ${named.size} rooms are used by any episode`);
     for (const room of named) {
       const g = game();
       walkTo(g, room);
@@ -164,13 +203,50 @@ describe('the scenes that ask you to get up', () => {
     }
   });
 
+  // Episodes that do not happen aboard this ship. A Great Hall on Qo'noS, a
+  // Senate chamber, a yard at Mars, a board of review at Earth.
+  //
+  // Some of them DO have a scene aboard — the armoury before the challenge, the
+  // briefing room the night before a Cardassian tribunal, the cell at Khitomer
+  // — so the rule is not "all anywhere". It is that every stage says where it
+  // is, because the one thing none of them is, is the bridge of your own ship.
+  const OFF_SHIP = [
+    'court_martial', 'homecoming', 'qonos_council', 'romulus_debt',
+    'cardassia_debt', 'khitomer_accord', 'utopia_certification',
+    'vulcan_long_peace', 'vega_line',
+  ];
+
+  /** Stages of an episode that would fall through to the default, 'bridge'. */
+  const defaulting = (id) => Object.entries(EPISODE_BY_ID[id].stages)
+    .filter(([, s]) => !s.where).map(([sid]) => `${id}/${sid}`);
+
   test('a hearing at a starbase is not held on your own bridge', () => {
-    // The other direction. The default is 'bridge' and it is enforced now, so
-    // a scene that is not aboard this ship has to say so — the Board of
-    // Inquiry sits in conference room four, Starbase 11.
-    for (const [sid, stage] of Object.entries(EPISODE_BY_ID.court_martial.stages)) {
-      assert.equal(stage.where, 'anywhere', `court_martial/${sid} is held on the bridge`);
-    }
+    // This named `court_martial` alone, and `homecoming` — the last four
+    // stages of the campaign, a board of review at Earth with a casualty list
+    // on the table and nobody offering you a chair — was held on your bridge
+    // for exactly as long as this test named one episode instead of the rule.
+    const bad = OFF_SHIP.flatMap(defaulting);
+    assert.deepEqual(bad, [], 'held on the bridge of the ship it is not aboard');
+  });
+
+  test('and that check can see a stage that forgot to say', () => {
+    // The positive control. `deepEqual([], [])` passes just as happily when
+    // `where` is not read at all, so prove the instrument reacts: strip the
+    // key off a copy of the stage that was actually wrong and check it lands.
+    const real = EPISODE_BY_ID.homecoming.stages.start;
+    assert.equal(real.where, 'anywhere', 'the fix this test exists for is gone');
+    const { where, ...stripped } = real;
+    assert.equal(where, 'anywhere');
+    assert.equal(!stripped.where, true, 'a stage with no `where` was not seen as one');
+  });
+
+  test('and an episode aboard your own ship is NOT required to say so', () => {
+    // The other control, and the reason OFF_SHIP is a list rather than a
+    // sweep. 'bridge' is the default because most scenes are on the bridge,
+    // and a rule of "every stage must declare" would be a rule about
+    // punctuation rather than about where anything happens.
+    assert.ok(defaulting('vega_raid').length > 0,
+      'every stage aboard now declares a room, so this control proves nothing');
   });
 });
 

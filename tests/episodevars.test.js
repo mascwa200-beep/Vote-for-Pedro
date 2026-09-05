@@ -167,6 +167,27 @@ describe('a stage can gate on what the captain chose', () => {
     { ep: 'first_contact_grid', at: 'deep_2', path: ['answer', 'deflect'], stage: 'dialogue', choice: 'apologise', v: 'deflected' },
   ];
 
+  /**
+   * Stand where the scene is.
+   *
+   * There are TWO place gates and this file only ever satisfied one of them.
+   * `testLocation` is the star system and is handled in the loop below;
+   * `testWhere` is the compartment, and it defaults to the bridge, so this was
+   * silently correct until a stage in `GATED` was placed somewhere else.
+   * `devron_anomaly/inside` now happens in engineering, and every choice at it
+   * — gated or not — is locked to a captain standing on the bridge.
+   *
+   * Walked rather than teleported, for the reason rooms.test.js gives: a room
+   * you can look up is not a room you have arrived in.
+   */
+  function standWhereItIs(g, m) {
+    const need = m.stage?.where;
+    if (!need || need === 'anywhere' || need === 'surface') return;
+    g.goToRoom(need);
+    for (let n = 0; n < 4000 && g.walkOrder; n++) g.update(1 / 30);
+    assert.equal(g.walk.roomId, need, `could not reach ${need}`);
+  }
+
   test('the choice is there when the variable is, and not when it is not', () => {
     for (const c of GATED) {
       const g = captain();
@@ -179,6 +200,7 @@ describe('a stage can gate on what the captain chose', () => {
       }
       assert.equal(m.stageId, c.stage, `${c.ep}: landed at ${m.stageId}`);
       assert.equal(m.vars[c.v], true, `${c.ep}: ${c.v} was not set`);
+      standWhereItIs(g, m);
       const open = m.choices().filter((x) => !x.locked).map((x) => x.id);
       assert.ok(open.includes(c.choice),
         `${c.ep}/${c.stage}: "${c.choice}" is locked for a captain who has ${c.v}`);
@@ -195,12 +217,23 @@ describe('a stage can gate on what the captain chose', () => {
       g.locationId = c.at;
       // Reach the same stage without setting the variable, by hand.
       m.stageId = c.stage;
+      // And stand in the room, or the lock below is the ROOM's lock and this
+      // control passes without the variable gate doing anything at all — the
+      // exact shape of guard that measures nothing because it is satisfied in
+      // both states.
+      standWhereItIs(g, m);
       const all = m.choices();
       const gated = all.find((x) => x.id === c.choice);
       assert.ok(gated, `${c.ep}/${c.stage}: "${c.choice}" is not on the stage at all`);
       assert.equal(gated.locked, true,
         `${c.ep}/${c.stage}: "${c.choice}" is open to a captain who never did it`);
       assert.ok(gated.lockReason, 'a locked choice with no reason on it');
+      assert.doesNotMatch(gated.lockReason, /waiting for you in|happening (on the surface|aboard)/,
+        `${c.ep}/${c.stage}: locked for being in the wrong room, not for the variable`);
+      // And the ungated choices at the same stage are open, which is what
+      // proves the captain is standing in the right place.
+      assert.ok(all.some((x) => !x.locked),
+        `${c.ep}/${c.stage}: every choice is locked, so nothing here is about the variable`);
     }
   });
 
