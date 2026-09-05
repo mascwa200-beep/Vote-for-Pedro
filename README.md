@@ -47,8 +47,10 @@ than a 3D MMO.
 twelve playable species with real mechanical traits, seven origins, seven
 career tracks each with a signature power usable once per engagement, and
 personal traits that are
-genuine trades rather than bonuses — *Reckless* gives advantage on every
-attack and disadvantage on every saving throw. Feats are chosen on promotion.
+genuine trades rather than bonuses — *Reckless* makes your ship shoot straighter
+and your landing parties pay for it: a real accuracy bonus in a fight, and
+disadvantage on every away-team check taken against a genuine hazard. Feats are
+chosen on promotion.
 
 **The character sheet is D&D. The gameplay is not.** Ability scores,
 proficiency, feats, levels and advantage all still exist and still matter — but

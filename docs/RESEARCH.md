@@ -5549,6 +5549,44 @@ same reason: Federation standing starts at **100**, so a gain clamps and reads
 as "no effect", and reputation tracks store `xp` rather than `points`. A probe
 that returns zero is not evidence of zero.
 
+### Third pass: the trait the README quotes
+
+`reckless` is the example the README uses for "genuine trades rather than
+bonuses": *"advantage on every attack and disadvantage on every saving throw."*
+Both of its keys were in the 32. There is no attack roll and no saving throw —
+`resolve.js` replaced the die with a margin — so this is the **leftover** kind,
+and the fix is to keep the promise in the currency the game has.
+
+Shooting is the ship's `accuracy`, which `shipMods` already contributes to from
+the captain, beside `critRange` and `critSeverity`. The saving throw is the away
+team: the one thing in the game that resolves a check, and the one place a
+captain is personally at risk.
+
+**And `resolve()` has taken a `disadvantage` argument since it was written with
+no caller anywhere in the game.** The entire downside half of the resolution
+system was unreachable code. This is its first user.
+
+Measured, and the first number changed the design:
+
+| hazard | plain | reckless, first draft | reckless, shipped |
+| --- | --- | --- | --- |
+| routine | 86.5% | 86.5% | 86.5% |
+| elevated | 68.3% | 49.5% | 68.3% |
+| dangerous | 50.2% | — | 28.0% |
+| extreme | 26.0% | — | 10.5% |
+
+The first draft applied disadvantage to every check and took away-team success
+from 68.3% to 49.5% overall, with casualties from 4.5% to 7.2% — too much for a
+*complication* a player takes alongside a single advantage. Narrowed to
+`dangerous` and `extreme`, it is untouched on ordinary work and severe where the
+ship is actually in danger, which is what a saving throw is. The other half pays
++8 percentage points of survival in a Constitution-against-D7 duel over 40
+seeds.
+
+**A trait quoted in the README as the example of a real trade should be the last
+one to be a promise nobody kept.** The ratchet moves 26 → 24, and both the
+README and the manual now describe what the game does.
+
 
 ## Attribution
 

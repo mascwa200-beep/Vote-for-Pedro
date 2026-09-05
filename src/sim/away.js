@@ -174,6 +174,22 @@ export class AwayTeam {
     const advantage = (this.character?.hasAdvantageOn(spec.ability) ?? false)
       || this.desperate()
       || this.disciplineCovers(spec.ability);
+    // And one way to have the worse of it, which had never been asked at all.
+    //
+    // `resolve()` has documented a `disadvantage` argument since it was
+    // written and no caller anywhere in the game had ever passed one — the
+    // whole downside half of the resolution system was unreachable. "Reckless —
+    // your landing parties pay for it" is its first user: an away mission is
+    // the one thing that resolves a check and the one place a captain is
+    // personally at risk, which is this game's saving throw.
+    // Only where the check IS a saving throw. A saving throw is a reaction to
+    // something dangerous, not every skilled action, and applying it to routine
+    // scans as well took away-team success from 68.3% to 49.5% and casualties
+    // from 4.5% to 7.2% — measured over 400 checks, and too much for a
+    // complication a player takes alongside one advantage. At `dangerous` and
+    // `extreme` it is the same trade against the same odds it was written for.
+    const disadvantage = !!this.character?.mechanic('hazardDisadvantage')
+      && (hazard === 'dangerous' || hazard === 'extreme');
     // Training damps the swing rather than only shifting it. A veteran is not
     // merely better on average; they are more *consistent*, which is the thing
     // a flat die could never express and the reason this is not a d20 any more.
@@ -184,6 +200,7 @@ export class AwayTeam {
       capability: modifier,
       difficulty: targetDC,
       advantage,
+      disadvantage,
       steady,
       luck: this.difficulty?.luck ?? 0,
       label: label || spec.label,
