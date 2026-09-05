@@ -26,7 +26,18 @@
 // Violations are data, not exceptions. The caller decides whether to throw
 // (tests), log (the debug overlay), or count (the fuzzer).
 
-import { FACINGS, SHIELD_OVERCHARGE } from './ship.js';
+import {
+  FACINGS, SHIELD_OVERCHARGE, MOUNT_DISABLED_AT, MOUNT_RESTORED_AT,
+} from './ship.js';
+
+/**
+ * A hull's last standing gun, which `damageMount` refuses to knock out.
+ *
+ * The zombie check has to know about that refusal, or a single-mount hull shot
+ * to pieces reports a violation for obeying the rule.
+ */
+const lastGun = (s, w) => (s.weapons ?? []).filter((x) => x.enabled !== false).length <= 1
+  && w.enabled !== false;
 import { getShipClass } from '../world/ships.data.js';
 
 /**
@@ -154,6 +165,23 @@ function checkShip(r, s, { arenaRadius = null, label = 'ship' } = {}) {
     r.must(ok(v), 'ship.subsystem.finite', 'fatal', `${who}: subsystem ${k} is ${v}`, who);
     r.must(num(v) >= -1e-9 && num(v) <= 1 + 1e-9, 'ship.subsystem.range', 'error',
       `${who}: subsystem ${k} is ${v}, outside 0..1`, who);
+  }
+
+  // Gun mounts. Stated as TWO implications rather than one equivalence,
+  // because between the two thresholds either flag is legal — that is the
+  // hysteresis, and an equivalence here would report a violation every time a
+  // bank was repairing through the gap between 0.2 and 0.35.
+  for (const w of s.weapons ?? []) {
+    const i = num(w.integrity);
+    r.must(ok(w.integrity), 'ship.mount.finite', 'fatal',
+      `${who}: mount ${w.id} integrity is ${w.integrity}`, who);
+    r.must(i >= -1e-9 && i <= 1 + 1e-9, 'ship.mount.range', 'error',
+      `${who}: mount ${w.id} integrity is ${w.integrity}, outside 0..1`, who);
+    r.must(!(i > MOUNT_RESTORED_AT + 1e-9) || w.enabled !== false, 'ship.mount.stuck', 'error',
+      `${who}: mount ${w.id} is at ${w.integrity} and still disabled`, who);
+    r.must(!(i < MOUNT_DISABLED_AT - 1e-9) || w.enabled === false || lastGun(s, w),
+      'ship.mount.zombie', 'error',
+      `${who}: mount ${w.id} is at ${w.integrity} and still firing`, who);
   }
 
   // The grid never draws more than it has. `normalize` exists to guarantee

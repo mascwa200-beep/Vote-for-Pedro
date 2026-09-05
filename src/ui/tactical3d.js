@@ -20,14 +20,17 @@
 
 import {
   vec3, mat4, quat, identity, multiply, perspective, lookAt, compose,
-  normalMatrix, quatFromEuler, project, sub, length as vlength, normalize, cross,
+  normalMatrix, quatFromEuler, quatAxisAngle, quatMultiply,
+  project, sub, length as vlength, normalize, cross,
 } from '../gfx/math.js';
 import { Renderer } from '../gfx/gl.js';
 import { hullMesh, hullScale, paletteFor } from '../gfx/blueprint.js';
 import {
-  starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, VOLUME,
+  starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, arcMesh, VOLUME,
 } from '../gfx/scene.js';
 import { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } from '../gfx/vista.js';
+import { inArc } from '../sim/ship.js';
+import { WEAPON_RANGE } from '../sim/combat.js';
 import { drawCombatEffects } from '../gfx/effects.js';
 import { fitCanvas } from './touch.js';
 
@@ -106,6 +109,8 @@ export class TacticalView3D {
     // 'forward' is the viewscreen: the camera sits at the bridge and looks out
     // over the bow. Same renderer, same meshes, same frame — one camera.
     this.cameraMode = 'orbit';
+    this.showArcs = true;
+    this._arcQuat = quat();
 
     // Where the screen is pointed relative to the bow, and how tight the
     // magnification is. In a fight the pan is limited and springs back to
@@ -470,6 +475,11 @@ export class TacticalView3D {
       if (this.cameraMode === 'forward' && ship === engagement.player) continue;
       this.drawShip(ship, ship === engagement.target);
     }
+    // After the hulls, so a wedge lies over the grid and under nothing that
+    // matters, and once — for the player only.
+    if (engagement.player && !engagement.player.destroyed) {
+      this.drawArcs(engagement.player, engagement);
+    }
     this.drawEffects(engagement);
     this.drawTerrain(engagement.arena, 'cloud');
 
@@ -707,6 +717,66 @@ export class TacticalView3D {
         alpha: clamp(0.14 - f.r / 22000, 0.030, 0.080),
         tint: arena.tint ?? [0.8, 0.7, 1.0],
         fogFar: 1e9,
+      });
+    }
+  }
+
+  /**
+   * The wedges a captain's own guns cover.
+   *
+   * Firing arcs have been simulated in three dimensions since the third axis
+   * went in — `inArc` tests a real cone, per mount, and it decides every shot
+   * in the game — and they have never once been drawn. The single most
+   * important tactical fact in the simulation was invisible, which is why
+   * "come about" was vague advice rather than an instruction with a picture
+   * behind it.
+   *
+   * The player's mounts only. Arcs on every hostile is not information, it is
+   * a floor covered in cones.
+   *
+   * State is carried by brightness, so the same picture says three things at
+   * once: bright where the guns are ready and the target is in them, dim while
+   * they recharge, and a bare outline where a bank has been shot out.
+   */
+  drawArcs(ship, engagement) {
+    if (!this.showArcs || this.cameraMode === 'forward') return;
+    const target = engagement?.target ?? null;
+    const dir = target ? ship.directionTo(target) : null;
+    for (const w of ship.weapons ?? []) {
+      const deg = w.degrees ?? 360;
+      // Only arcs that are actually a RESTRICTION get drawn.
+      //
+      // A Constitution's phaser banks cover 250 and 200 degrees; drawn
+      // together they overlap into a near-complete ring round the hull, which
+      // fills the frame and tells a captain nothing they could act on. What is
+      // worth seeing is the narrow mount — the 90-degree torpedo tube, a
+      // Defiant's cannons — because that is the one that makes "come about" an
+      // instruction rather than a mood. Half the sky is the cut-off.
+      if (deg > 180) continue;
+      // A fixed radius near the hull, NOT the mount's real range.
+      //
+      // Drawn at range, the band sat 88 to 100 per cent of 620 units out — far
+      // outside the frame at any zoom a captain actually fights at, so the
+      // first two attempts drew nothing anyone could see. What an arc has to
+      // answer is WHICH WAY the guns point and whether the target is inside
+      // them; the range readout on the target panel already answers how far.
+      // So this is a compass rose on the hull, sized to the hull.
+      const range = Math.max(90, this.hullReach * 15);
+      // The wedge is built centred on the hull's own +x, so it has to be
+      // turned to the mount's bearing before the ship's orientation is
+      // applied. Up in world space is +y, which is the simulation's z.
+      quatAxisAngle([0, 1, 0], -(w.facing ?? 0) * Math.PI / 180, this._arcQuat);
+      quatMultiply(orientationOf(ship, this._quat), this._arcQuat, this._arcQuat);
+      compose(worldOf(ship, this._pos), this._arcQuat, range, this._model);
+      const bears = dir ? inArc(dir, w) : false;
+      const dead = w.enabled === false;
+      const ready = !dead && (w.cooldown ?? 0) <= 0;
+      this.renderer.draw(`arc:${deg}`, arcMesh(deg), {
+        model: this._model,
+        normalMatrix: normalMatrix(this._model, this._normal),
+        emissive: 1,
+        alpha: dead ? 0.12 : (ready && bears ? 0.50 : ready ? 0.28 : 0.16),
+        tint: dead ? [0.7, 0.25, 0.2] : (bears ? [0.6, 0.85, 1.0] : [0.4, 0.55, 0.7]),
       });
     }
   }

@@ -105,7 +105,10 @@ export function boardableState(ship, from) {
 /** Preferred engagement distance for a ship's best weapon. */
 function preferredRange(ship) {
   if (!ship.weapons.length) return 900;
-  const types = ship.weapons.map((w) => w.type);
+  // Only the guns that can still fire get a say. A Defiant that has lost its
+  // pulse cannons has no business still holding at 300 to use them.
+  const usable = ship.weapons.filter((w) => w.enabled !== false);
+  const types = (usable.length ? usable : ship.weapons).map((w) => w.type);
   if (types.includes('cannon')) return 300;
   if (types.includes('beam')) return 620;
   return 800;

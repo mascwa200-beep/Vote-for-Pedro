@@ -28,7 +28,15 @@ import { SHIP_CLASSES } from '../world/ships.data.js';
  * from a sensor return before a shot is fired, not a firing solution. A
  * tactical officer counting an opponent's guns counts all of them.
  */
+// A gun that has been knocked out is not output.
+//
+// The OPENING assessment is unaffected by construction — it is taken before
+// anyone has been hit, when every mount is still enabled — so the force
+// comparison the log prints at the start of a fight reads exactly as it always
+// has. What changes is the LIVE reading, which would otherwise go on crediting
+// a hostile with a battery it no longer has.
 export const outputOf = (ship) => (ship?.weapons ?? [])
+  .filter((w) => w.enabled !== false)
   .reduce((n, w) => n + w.damage / Math.max(0.1, w.cycle), 0);
 
 /**
