@@ -46,6 +46,7 @@ import { findingFor, venueFor, sitsAt } from '../rules/inquiry.js';
 import { CONSOLES, SET_LIST } from '../sim/loadout.js';
 import { TIERS, TRAIT_LIST } from '../sim/mastery.js';
 import { ABILITIES } from '../sim/officers.js';
+import { HAZARD_LEVEL, awayHours } from '../sim/away.js';
 import { availableHails } from '../sim/diplomacy.js';
 import { STATIONS, ERA_LIST, SPECIES } from '../world/crews.data.js';
 import { FACTIONS, standingTier } from '../world/factions.data.js';
@@ -112,6 +113,15 @@ function conButtons(g, app) {
  * What is left in the DOM is the order line and one strip: where you are, and
  * what your hand is on. Everything else you walk to.
  */
+/**
+ * "A thermal vent" -> "a thermal vent", so it reads inside a sentence.
+ *
+ * Only the first character, not `toLowerCase()` on the whole string: the
+ * feature labels have no proper nouns in them today and the day one does,
+ * flattening it would be wrong and silent.
+ */
+const lowerFirst = (s) => (s ? s[0].toLowerCase() + s.slice(1) : s);
+
 export function bridgeScreen(app) {
   const g = app.game;
   const root = el('div', { class: 'screen bridge3d-screen' });
@@ -145,12 +155,34 @@ export function bridgeScreen(app) {
     hand.push(button('Stop here', tap(() => { g.walkOrder = null; app.render(); }),
       { color: 'ghost', say: 'all stop' }));
   } else if (target) {
+    // Three kinds of thing get this button and they used to get two templates.
+    //
+    // A surface feature carries a `check` — no station aboard the ship does —
+    // and it was being offered as `Use a thermal vent`, subtitled `Open this
+    // console`. There is no console. It is a vent, on a planet, and the
+    // question the button is really asking is whether to send people to it.
+    //
+    // `target.check` was already consulted, for the SPOKEN phrase only: the
+    // code knew it was a survey and said "survey that" while the button said
+    // "use" and the subtitle described furniture. One branch of a three-way
+    // distinction, applied to one of its three readers.
+    //
+    // What goes in the subtitle instead is the decision. `hazard` is not
+    // flavour — `HAZARD_LEVEL` in sim/away.js turns it into a 4, 14 or 28 per
+    // cent chance of injury, a 0.4, 2 or 6 per cent chance of somebody not
+    // coming back, and 5, 11 or 19 hours of commission time. A captain was
+    // being asked to spend a day and to risk a death by a button that said
+    // "Open this console".
+    const survey = target.check ? (HAZARD_LEVEL[target.hazard] ?? null) : null;
     hand.push(button(
-      target.panel || target.id ? `Use ${target.label ?? ROOMS[target.to]?.name}` : 'Use',
+      survey ? `Survey ${lowerFirst(target.label)}`
+        : target.panel || target.id ? `Use ${target.label ?? ROOMS[target.to]?.name}` : 'Use',
       tap(() => app.useWhatIsInFront()),
       {
         color: 'orange',
-        sub: target.panel ? 'Open this console' : 'Through the door',
+        sub: survey
+          ? `${survey.label} — ${target.check} team, ${awayHours(target)} hours`
+          : target.panel ? 'Open this console' : 'Through the door',
         say: target.check ? 'survey that' : target.panel ? 'use it' : 'through the door',
       },
     ));

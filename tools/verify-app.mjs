@@ -778,6 +778,27 @@ try {
     JSON.stringify(survey));
   check('a successful survey puts something in the hold, and only once',
     survey.paid === true && survey.twice === false, JSON.stringify(survey));
+  // The button that asks you to send people down.
+  //
+  // It used to read `Use a thermal vent`, subtitled `Open this console`. There
+  // is no console; it is a vent, on a planet, and `HAZARD_LEVEL` turns its
+  // hazard into a 6% chance somebody does not come back and nineteen hours of
+  // commission time. The code already knew — `target.check` picked the spoken
+  // phrase "survey that" — and neither the label nor the subtitle used it.
+  const surveyButton = await page.evaluate(() => {
+    const app = globalThis.__app;
+    app.render();
+    const btns = [...document.querySelectorAll('.screen button')];
+    const b = btns.find((x) => /survey|use /i.test(x.textContent));
+    return b ? { text: b.textContent, looking: app.game.walk.looking?.kind ?? null } : null;
+  });
+  check('the survey button says survey, not use', 
+    !!surveyButton && /^Survey /.test(surveyButton.text), JSON.stringify(surveyButton));
+  check('and it does not call a rock a console',
+    !!surveyButton && !/console/i.test(surveyButton.text), JSON.stringify(surveyButton));
+  check('and it says what the away team is being asked to risk',
+    !!surveyButton && /(Routine|Elevated|Dangerous|Extreme)/.test(surveyButton.text)
+      && /\d+ hours/.test(surveyButton.text), JSON.stringify(surveyButton));
   await page.screenshot({ path: join(SHOTS, '03d-surface.png') });
 
   const backAboard = await page.evaluate(async () => {
