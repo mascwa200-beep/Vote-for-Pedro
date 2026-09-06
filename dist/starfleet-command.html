@@ -2443,6 +2443,23 @@ const ROOMS = {
     padCentre: [0, 1.5],
     exits: [
       { to: 'turbolift', at: [-3.1, -1.6], width: 1.2, label: 'Turbolift' },
+      // The way back out to the deck this room is actually on.
+      //
+      // `corridor_sec` has always had a door labelled "Transporter Room" and
+      // this room had no door back, which made it the ONE room in the ship
+      // whose exits did not match the set of rooms that enter it. Measured as
+      // routes: every other room off a corridor is two hops out and two back,
+      // and this one was two out and THREE back — the extra hop a turbolift
+      // ride from deck 7 to deck 7, because the only door was the lift.
+      //
+      // Two doors is not an anomaly; the hangar has had a lift door and a
+      // neighbour door the whole time. One-way was the anomaly.
+      //
+      // Not mirrored at z = -1.6 opposite the lift door, which is where it
+      // was first put: the transporter console is at [0, -1.9] and the route
+      // to that doorway passes 0.16 m from it, which is through whoever is
+      // standing at it. Moved forward beside the pads instead.
+      { to: 'corridor_sec', at: [3.1, 0.6], width: 1.2, label: 'Corridor' },
     ],
   },
 
