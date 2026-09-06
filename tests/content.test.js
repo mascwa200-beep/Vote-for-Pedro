@@ -197,8 +197,11 @@ describe('what a five-year mission is made of', () => {
     // convoy had three and one. Named individually rather than as a loop over
     // ENCOUNTER_KINDS, because ambush and trapped legitimately have one shape
     // each and a loop would either fail on them or be weakened to pass.
+    // `distress` was 4 against a floor of 4 — the only kind in this list sitting
+    // exactly on its bar, which is a guard that can catch a deletion and
+    // nothing else. Eight ship now, and the floor follows them.
     for (const [kind, least] of [['patrol', 5], ['derelict', 6], ['convoy', 5],
-      ['distress', 4], ['anomaly', 6], ['signal', 6]]) {
+      ['distress', 8], ['anomaly', 6], ['signal', 6]]) {
       const n = Object.keys(s.pairs).filter((k) => k.startsWith(`${kind}/`)).length;
       assert.ok(n >= least, `${kind} came up in only ${n} form(s)`);
     }
@@ -429,5 +432,176 @@ describe('answering a signal', () => {
       assert.equal(g.encounter, null, `${sig.id} left itself on the viewer`);
     }
     assert.ok(ENCOUNTER_KINDS.includes('signal'), 'signal is not a kind the game can roll');
+  });
+});
+
+// ============================================ the call, and who is on the end of it
+
+/**
+ * A distress call is the one encounter that puts somebody else on the board,
+ * and for a long time it did not care what happened to them.
+ *
+ * Measured before this: twelve hostile distress calls flown to the end. The
+ * ship the captain came to save was destroyed in three of them, and the
+ * encounter was a win in all twelve — because encounter fights had no objective
+ * and defaulted to `destroy`. The rescue did not depend on rescuing anybody.
+ */
+describe('a distress call is about whoever is calling', () => {
+  /** Every distinct distress call the generator can produce. */
+  function calls(rolls = 4000) {
+    const out = [];
+    for (let seed = 0; seed < rolls; seed++) {
+      const sys = SYSTEMS[seed % SYSTEMS.length];
+      const e = rollEncounter(new RNG(hashSeed(`distress${seed}`)), sys.id, {});
+      if (e?.kind === 'distress') out.push(e);
+    }
+    return out;
+  }
+  const ALL = calls();
+
+  test('the number on the button is the number in the sentence', () => {
+    // `lives` is not decoration: the button reads "N lives at stake", the
+    // ledger records it as `lives_saved`, and the experience award scales with
+    // it. It was one roll — `rng.int(80, 2400)` — for every subtype, so the
+    // screen could say "Fourteen hundred people." over a button offering to
+    // save ninety-six of them.
+    //
+    // The number is parsed out of the prose rather than listed here, so a
+    // sentence that names a figure is checked against the figure it names and
+    // nothing has to be kept in step by hand.
+    const WORDS = {
+      fourteen: 14, thirteen: 13, twelve: 12, eleven: 11, ten: 10,
+      nine: 9, eight: 8, seven: 7, six: 6, five: 5, four: 4, three: 3, two: 2,
+    };
+    let checked = 0;
+    for (const e of ALL) {
+      const m = /\b([a-z]+)\s+hundred\b/i.exec(e.text);
+      if (!m) continue;
+      const stated = (WORDS[m[1].toLowerCase()] ?? 0) * 100;
+      if (!stated) continue;
+      checked++;
+      assert.equal(e.lives, stated,
+        `"${m[0]}" in the text, and ${e.lives} on the button`);
+    }
+    assert.ok(checked > 0, 'no distress text names a number, so this proves nothing');
+  });
+
+  test('the lives at stake suit the thing that is happening', () => {
+    // A survey team is a team and a colony is a colony. Asserted as a relation
+    // between subtypes rather than a table of numbers: whatever the ranges are,
+    // the smallest sort of call must not be able to out-number the largest.
+    const range = (id) => {
+      const v = ALL.filter((e) => e.subtype === id).map((e) => e.lives);
+      return v.length ? { lo: Math.min(...v), hi: Math.max(...v), n: v.length } : null;
+    };
+    const small = ['shuttle_down', 'stranded'].map(range).filter(Boolean);
+    const large = ['colony_raid'].map(range).filter(Boolean);
+    assert.ok(small.length && large.length, 'the subtypes under test are not being rolled');
+    for (const s2 of small) {
+      for (const l of large) {
+        assert.ok(s2.hi < l.lo,
+          `a small call reaches ${s2.hi} lives and a colony starts at ${l.lo}`);
+      }
+    }
+  });
+
+  test('the ship that is staged is the ship the sentence describes', () => {
+    // A colony raid staged a freighter — the same object as "a civilian
+    // freighter is under attack", for a sentence about a colony. Derived from
+    // the text: a call that says "freighter" stages one, and a call that does
+    // not, does not.
+    let seen = 0;
+    for (const e of ALL) {
+      if (!e.victims?.length) continue;
+      seen++;
+      const hull = e.victims[0].classId;
+      if (/freighter/i.test(e.text)) {
+        assert.equal(hull, 'freighter', `${e.subtype} names a freighter and stages a ${hull}`);
+      } else {
+        assert.notEqual(hull, 'freighter',
+          `${e.subtype} stages a freighter for a sentence that does not mention one`);
+      }
+    }
+    assert.ok(seen > 0, 'no distress call stages anybody');
+  });
+
+  test('not every ship in distress is the same ship', () => {
+    const names = new Set(ALL.flatMap((e) => (e.victims ?? []).map((v) => v.name)));
+    assert.ok(names.size >= 5,
+      `every rescue in the game is one of ${names.size} ship(s): ${[...names].join(', ')}`);
+  });
+
+  test('a call that stages somebody asks the fight to keep them alive', () => {
+    // The objective is what makes the rescue about the rescue. Without it the
+    // fight is `destroy` and the freighter is scenery that can burn.
+    let staged = 0;
+    for (const e of ALL) {
+      if (e.victims?.length) {
+        staged++;
+        assert.equal(e.objective, 'protect',
+          `${e.subtype} puts a ship on the board and does not ask anyone to protect it`);
+      } else {
+        assert.equal(e.objective, undefined,
+          `${e.subtype} asks for a protect objective with nobody to protect`);
+      }
+    }
+    assert.ok(staged > 0, 'no distress call stages anybody');
+  });
+
+  test('losing the ship you came for loses the rescue', () => {
+    // End to end, through `Game`, because the objective has to survive the trip
+    // from the encounter into a real engagement — the spec is not the fight.
+    // Rolled FRESH for each arm, not shared. `startCombat` takes the
+    // encounter's own `Ship` objects as allies, so killing the victim in one
+    // arm leaves it destroyed for the next one — the second experiment then
+    // runs on a corpse and reports the first arm's answer twice.
+    const roll = () => {
+      for (let seed = 0; seed < 4000; seed++) {
+        const sys = SYSTEMS[seed % SYSTEMS.length];
+        const e = rollEncounter(new RNG(hashSeed(`distress${seed}`)), sys.id, {});
+        if (e?.kind === 'distress' && e.victims?.length && e.hostile && e.ships?.length) return e;
+      }
+      return null;
+    };
+    assert.ok(roll(), 'the generator produced no hostile distress call with a victim');
+
+    const fly = (killVictim) => {
+      const hostile = roll();
+      const g = new Game({
+        seed: 9n, crewMode: 'original', shipClass: 'constitution', difficulty: 'lieutenant',
+        character: new Character({ speciesId: 'human', careerId: 'command' }),
+      });
+      g.encounter = hostile;
+      // Through `resolveEncounter('engage')`, which is the door the player
+      // uses. Calling `startCombat` here and passing the objective by hand
+      // would prove the objective works and prove nothing about whether the
+      // encounter path hands it over — and that path is the change.
+      g.resolveEncounter('engage');
+      const eng = g.engagement;
+      assert.ok(eng, 'no fight started');
+      assert.equal(eng.objective, 'protect', 'the encounter objective never reached the fight');
+      assert.equal(eng.protectees.length, 1, 'nobody is being protected, so this proves nothing');
+      if (killVictim) for (const v of eng.protectees) v.destroyed = true;
+      for (let i = 0; i < 40000 && g.engagement && !g.engagement.over; i++) {
+        if (i % 15 === 0) {
+          g.engagement.comeAboutTo(g.engagement.target);
+          g.ship.throttle = 0.6;
+          g.ship.power.applyPreset('attack');
+        }
+        // The other arm keeps her alive rather than hoping she lives. She is a
+        // civilian hull in a firefight and she dies on her own about a quarter
+        // of the time, so "did not kill her" is not the same experiment as
+        // "she survived" — and a control that only sometimes controls is not
+        // one.
+        if (!killVictim) for (const v of eng.protectees) v.hull = v.maxHull;
+        g.update(1 / 30);
+      }
+      return g.lastCombat?.outcome ?? eng.outcome;
+    };
+
+    assert.equal(fly(true), 'failed',
+      'the ship we came to save was destroyed and the rescue was not a failure');
+    assert.notEqual(fly(false), 'failed',
+      'the rescue failed with the ship we came for still flying');
   });
 });

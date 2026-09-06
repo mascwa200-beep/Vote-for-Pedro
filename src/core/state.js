@@ -2590,6 +2590,15 @@ export class Game {
           // given a name, and left out of the battle. `Engagement` has taken
           // `opts.allies` all along.
           allies: enc.victims ?? [],
+          // And what the encounter is FOR, which until now no encounter said.
+          //
+          // Every encounter fight in the game defaulted to `destroy`, including
+          // the one kind that stages somebody to save: measured over twelve
+          // hostile distress calls, the ship the captain came to save was
+          // destroyed in three of them and the encounter was a win in all
+          // twelve. The objective is what makes the rescue about the rescue.
+          ...(enc.objective ? { objective: enc.objective } : {}),
+          ...(enc.orderLine ? { orderLine: enc.orderLine } : {}),
         });
         return {
           messages: [sprung ? 'Firing as we come about.' : 'Engaging.'],
