@@ -2069,6 +2069,66 @@ function portRow(mb, {
   return mb;
 }
 
+/**
+ * Scale the colour of everything `fn` adds, per vertex, by a field of position.
+ *
+ * The room has done this since `bakeOcclusion`: a gradient inside a single
+ * triangle costs no vertices, no triangles, no draw calls and no shader lines,
+ * because the colour channel is already per vertex and the rasteriser already
+ * interpolates it. Measured, the interiors are 78.3% colour-varying and the
+ * fleet was 0 of 33,898 — the technique shipped a year ago and no hull had ever
+ * used it.
+ *
+ * It matters most exactly where there is nothing else left. A face with
+ * `glow: 1` has its entire lighting result discarded by the shader —
+ * `mix(lit, vColor * uTint, vGlow)` — so on an emissive surface the albedo is
+ * the ONLY channel that can carry shape. Half the fleet's vertices are in that
+ * state, and every one of them was a flat disc of colour.
+ *
+ * Colour only, deliberately. The glow channel is what says a face is self-lit
+ * at all; ramping it would turn the rim of a dome back into a lit surface that
+ * takes the key light, which is a different change needing a different
+ * argument.
+ *
+ * Call this INSIDE a `mirrored` callback, never around one. `mirrored` copies
+ * colours that are already written, so shading from outside would apply one
+ * dome-centred field to both domes and mis-shade the far one — the same bug the
+ * glow comment below records being bitten by.
+ */
+function shaded(mb, fn, shade) {
+  const start = mb.positions.length;
+  fn(mb);
+  for (let i = start; i < mb.positions.length; i += 3) {
+    const s = shade(mb.positions[i], mb.positions[i + 1], mb.positions[i + 2]);
+    mb.colors[i] *= s;
+    mb.colors[i + 1] *= s;
+    mb.colors[i + 2] *= s;
+  }
+  return mb;
+}
+
+/**
+ * A field for `shaded`: hottest on the +x axis of a point, falling off toward
+ * the rim of whatever surrounds it. What a collector or an intake looks like.
+ *
+ * `peak` is deliberately above 1. Ramping DOWN from the palette colour would
+ * take emitted light away and read as a dimmer dome rather than a shaped one;
+ * overshooting instead keeps the average where it was. `gl_FragColor` clamps at
+ * write, so the core saturates to a hot, slightly desaturated centre — while
+ * the value stored in the mesh stays a pure scalar multiple of the palette
+ * colour, which is what lets a test still recognise the colour it is drawn in.
+ *
+ * `rim` is a floor, not zero, for the same reason `bakeOcclusion` clamps at
+ * 0.42: nothing on a hull should bake to black.
+ */
+const hotCore = (cx, cy, cz, { peak = 1.15, rim = 0.55 } = {}) => (px, py, pz) => {
+  const dx = px - cx;
+  const dy = py - cy;
+  const dz = pz - cz;
+  const len = Math.hypot(dx, dy, dz) || 1;
+  return rim + (peak - rim) * Math.max(0, dx / len);
+};
+
 /** Mirror everything added by `fn` across the z axis, for port/starboard pairs. */
 function mirrored(mb, fn) {
   const start = mb.positions.length;
@@ -2110,6 +2170,8 @@ __exports.windowDeck = windowDeck;
 __exports.windowBelt = windowBelt;
 __exports.greebles = greebles;
 __exports.portRow = portRow;
+__exports.shaded = shaded;
+__exports.hotCore = hotCore;
 __exports.mirrored = mirrored;
 
 });
@@ -8647,7 +8709,7 @@ __define("src/gfx/forms.federation.js", function (__exports, __require) {
 // reflects it, so everything below is written for one side only.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck, portRow, navLights } = __require("src/gfx/mesh.js");
+const { saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck, portRow, navLights, shaded, hotCore } = __require("src/gfx/mesh.js");
 
 /**
  * One nacelle and its glowing cap, at a point. Every form here ends with a
@@ -8661,10 +8723,21 @@ function nacelle(m, p, { x, y, z, length: len, radius: r }) {
   // The bussard cap. Amber rather than warp blue, and genuinely emissive
   // rather than merely pale: the glow channel is per vertex now, so a lit cap
   // costs a float and not a second draw call.
-  sphere(m, {
-    origin: vec3(x + len, y, z), radius: r * 1.05,
+  //
+  // And shaded, which is what makes it a dome rather than a disc. An emissive
+  // face has its whole lighting result thrown away by the shader, so a
+  // 250-triangle sphere at `glow: 1` was drawn as one flat circle of colour —
+  // the most expensive part of several hulls, carrying no shape at all. The
+  // ramp costs nothing: no vertices, no triangles, no draws.
+  //
+  // Inside the `mirrored` callback that every caller wraps this in, so the
+  // mirror copies colours that are already written. Shading from outside would
+  // run one dome's field over both of them.
+  const bx = x + len;
+  shaded(m, (mm) => sphere(mm, {
+    origin: vec3(bx, y, z), radius: r * 1.05,
     segments: seg(8), rings: 5, color: p.bussard ?? p.glow, glow: 1,
-  });
+  }), hotCore(bx, y, z));
 }
 
 /**
@@ -10459,7 +10532,7 @@ __define("src/gfx/blueprint.js", function (__exports, __require) {
 // renderer normalises so the largest live hull frames sensibly.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowBelt, windowDeck, navLights, greebles, portRow } = __require("src/gfx/mesh.js");
+const { MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowBelt, windowDeck, navLights, greebles, portRow, shaded, hotCore } = __require("src/gfx/mesh.js");
 const { FEDERATION_FORMS } = __require("src/gfx/forms.federation.js");
 const { KLINGON_FORMS } = __require("src/gfx/forms.klingon.js");
 const { HOSTILE_FORMS } = __require("src/gfx/forms.hostile.js");
@@ -10832,14 +10905,18 @@ const FORMS = {
         segments: seg(12),
         color: p.trim,
       });
-      sphere(m, {
-        origin: vec3(nx + nl + nr * 0.4, ny, nz),
+      // Shaded, not flat. An emissive face discards the lighting result
+      // entirely, so this 300-triangle sphere was drawn as one disc of colour.
+      // The ramp gives it a core and a rim for no triangles at all.
+      const bx = nx + nl + nr * 0.4;
+      shaded(m, (mm) => sphere(mm, {
+        origin: vec3(bx, ny, nz),
         radius: nr * 1.04,
         segments: seg(10),
         rings: 6,
         color: p.bussard ?? p.glow,
         glow: 1,
-      });
+      }), hotCore(bx, ny, nz));
       // The intercooler grille along the outboard face, which does more for
       // the read of a nacelle than its cost suggests: it is the one thing that
       // says which way is outboard.
@@ -11079,8 +11156,9 @@ const FORMS = {
         segments: seg(12),
         color: p.trim,
       });
-      sphere(m, {
-        origin: vec3(nx + nl + nr * 0.45, ny, nz),
+      const bx = nx + nl + nr * 0.45;
+      shaded(m, (mm) => sphere(mm, {
+        origin: vec3(bx, ny, nz),
         radius: nr * 1.08,
         segments: seg(10),
         rings: 6,
@@ -11089,7 +11167,7 @@ const FORMS = {
         // comment was right and the code was not.
         color: p.bussard ?? p.glow,
         glow: 1,
-      });
+      }), hotCore(bx, ny, nz));
       // The blue intercooler grille along the outboard face.
       // On the OUTBOARD flank, and protruding.
       //

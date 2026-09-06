@@ -558,6 +558,66 @@ export function portRow(mb, {
   return mb;
 }
 
+/**
+ * Scale the colour of everything `fn` adds, per vertex, by a field of position.
+ *
+ * The room has done this since `bakeOcclusion`: a gradient inside a single
+ * triangle costs no vertices, no triangles, no draw calls and no shader lines,
+ * because the colour channel is already per vertex and the rasteriser already
+ * interpolates it. Measured, the interiors are 78.3% colour-varying and the
+ * fleet was 0 of 33,898 — the technique shipped a year ago and no hull had ever
+ * used it.
+ *
+ * It matters most exactly where there is nothing else left. A face with
+ * `glow: 1` has its entire lighting result discarded by the shader —
+ * `mix(lit, vColor * uTint, vGlow)` — so on an emissive surface the albedo is
+ * the ONLY channel that can carry shape. Half the fleet's vertices are in that
+ * state, and every one of them was a flat disc of colour.
+ *
+ * Colour only, deliberately. The glow channel is what says a face is self-lit
+ * at all; ramping it would turn the rim of a dome back into a lit surface that
+ * takes the key light, which is a different change needing a different
+ * argument.
+ *
+ * Call this INSIDE a `mirrored` callback, never around one. `mirrored` copies
+ * colours that are already written, so shading from outside would apply one
+ * dome-centred field to both domes and mis-shade the far one — the same bug the
+ * glow comment below records being bitten by.
+ */
+export function shaded(mb, fn, shade) {
+  const start = mb.positions.length;
+  fn(mb);
+  for (let i = start; i < mb.positions.length; i += 3) {
+    const s = shade(mb.positions[i], mb.positions[i + 1], mb.positions[i + 2]);
+    mb.colors[i] *= s;
+    mb.colors[i + 1] *= s;
+    mb.colors[i + 2] *= s;
+  }
+  return mb;
+}
+
+/**
+ * A field for `shaded`: hottest on the +x axis of a point, falling off toward
+ * the rim of whatever surrounds it. What a collector or an intake looks like.
+ *
+ * `peak` is deliberately above 1. Ramping DOWN from the palette colour would
+ * take emitted light away and read as a dimmer dome rather than a shaped one;
+ * overshooting instead keeps the average where it was. `gl_FragColor` clamps at
+ * write, so the core saturates to a hot, slightly desaturated centre — while
+ * the value stored in the mesh stays a pure scalar multiple of the palette
+ * colour, which is what lets a test still recognise the colour it is drawn in.
+ *
+ * `rim` is a floor, not zero, for the same reason `bakeOcclusion` clamps at
+ * 0.42: nothing on a hull should bake to black.
+ */
+export const hotCore = (cx, cy, cz, { peak = 1.15, rim = 0.55 } = {}) => (px, py, pz) => {
+  const dx = px - cx;
+  const dy = py - cy;
+  const dz = pz - cz;
+  const len = Math.hypot(dx, dy, dz) || 1;
+  return rim + (peak - rim) * Math.max(0, dx / len);
+};
+
 /** Mirror everything added by `fn` across the z axis, for port/starboard pairs. */
 export function mirrored(mb, fn) {
   const start = mb.positions.length;

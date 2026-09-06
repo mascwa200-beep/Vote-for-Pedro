@@ -8767,6 +8767,192 @@ and the choice list printed at every stage, so the lock states are shown rather
 than asserted.
 
 
+## 94. The gradient the rooms have had for a year, and no hull had ever had
+
+Four sections running had been episode content, so this one went back to the
+models. The work order asks for hulls that "look real", and the first question
+is where the room to improve them is.
+
+### Not in triangles
+
+```
+fleet total                33,898   ceiling 36,000  ->  2,102 spare over 31 classes (~68 each)
+heaviest hull, constitution 2,178   ceiling  2,400  ->    222 spare
+draw calls, six hostiles        31  ceiling     60
+```
+
+There is no meaningful headroom in geometry, which is what §72 concluded when it
+last looked: *"the renderer is draw-call and fill bound, not geometry bound...
+'make the models better' correctly meant shading rather than polygons."*
+
+A note in the fleet test claimed **30,240**. The measured figure is 33,898 —
+three and a half thousand triangles had gone in unremarked, which is most of the
+headroom that ceiling exists to guard. Corrected, with the instruction to
+measure it rather than believe it.
+
+### The channel that was paid for and carried nothing
+
+The vertex format is ten floats: position, normal, **colour**, **glow**. The
+shader interpolates colour and glow across every triangle. Measured on the built
+hulls:
+
+```
+FLEET: 48192/101694 vertices carry glow >= 0.4 = 47.4%
+triangles whose vertices differ in COLOUR: 0 of 33898
+triangles whose vertices differ in GLOW  : 0 of 33898
+```
+
+Half of every hull is emissive, and the shader collapses an emissive face to
+`vColor * uTint * fog` — the whole lighting result is thrown away. On those faces
+the albedo is the **only** channel that can carry shape, and not one triangle in
+the fleet varied it. A bussard dome is a 250-triangle sphere at `glow: 1`: 500
+triangles across a Constitution's two nacelles, 23% of the most detailed hull in
+the game, drawn as two flat discs of colour.
+
+### A correction to my own framing, which made the change safer
+
+I first wrote that as "the gradient channels are unused in the game." That is
+false. Measured on the interiors:
+
+```
+ROOMS: triangles 10315 | colour-varying 8080 (78.3%) | max intra-triangle delta 0.397
+```
+
+`bakeOcclusion` has written per-vertex colour gradients into `MeshBuilder`-built
+meshes for a year, guarded by four tests. So the change was never "wire an
+interpolator nobody has used"; it was **"extend a technique that already ships,
+from rooms to hulls"** — and the flat-shading question answers itself, because
+per-vertex colour has coexisted with flat normals in the room the whole time.
+
+That is the third time in this stretch that I generalised a measurement past the
+scope I actually measured — episode flags read by no *episode* reported as read
+by *nothing*; the fleet reported as the game. The failure is not in any one
+number. It is stating a measurement of a part as a measurement of the whole, and
+it has now cost two corrections to shipped prose.
+
+### What stayed decided
+
+§72 keeps a **"Left alone deliberately"** list, and it killed two of the three
+things this pass might have done:
+
+- **Smooth normals**, settled by `mesh.js`'s own header.
+- **Ambient occlusion on hulls** — *"a hull in space has one hard light and a
+  black background, so its shape reads from the shading alone"*, and
+  `bakeOcclusion`'s distance field is keyed to a floor, walls and furniture,
+  structurally a room's. Reopening that means answering §72 with pixels first.
+  Not done here.
+
+The third candidate, a falloff inside each window, was killed by measurement
+rather than by the record: a window triangle's **longest** axis is 3.79 px on a
+240 px hull and 0.47 px at 30 px. There is no interior to fall off from.
+
+So: one change, to the bussard domes, and nothing else.
+
+### Why this is not the specular again
+
+§72's warning is the one that mattered. It wired a Blinn-Phong specular, measured
+the brightest pixel gaining **four levels of 255**, and recorded the geometry: a
+view-dependent term needs the view vector to vary across the hull, and across a
+hundred pixels it does not, so the lobe is sampled in one direction and missed.
+
+A vertex gradient is not view-dependent. The rasteriser interpolates it across
+the primitive's own surface at any size and any angle. That is the argument, and
+the pixel measurement below is what settles it — not the argument.
+
+### The seam
+
+`shaded(mb, fn, shade)` beside `mirrored`: bracket a primitive, scale the colour
+of what it just pushed, per vertex. `tri`/`quad` are untouched — `tri` runs a
+hundred thousand times per fleet build and every primitive routes through it, so
+an optional per-corner form would put a branch in the innermost loop for one
+caller.
+
+Three things needed no change, and each was checked rather than assumed:
+`mirrored` already copies colour and glow per vertex from the swapped corner
+index; `toPublishedProportions` touches only positions and normals; and an axial
+`+x` ramp is immune to the published-proportions squash because x is the
+reference axis. The one real constraint is that `shaded` must run **inside** the
+`mirrored` callback, so the mirror copies colours already written — outside it,
+one dome's field is applied to both and the far one is shaded from the near one's
+centre.
+
+The peak overshoots to 1.15 on purpose. Ramping down from the palette value would
+take emitted light away and read as a dimmer dome rather than a shaped one;
+overshooting keeps the average and lets `gl_FragColor` clamp the core to a hot,
+slightly desaturated centre — while the stored value stays a pure scalar multiple
+of the palette colour, which is what keeps it recognisable to a test.
+
+### The measurement
+
+Rendered, read back from the framebuffer, amber pixels selected by chromaticity
+and eroded by one pixel so the anti-aliased outline against black cannot
+manufacture the answer:
+
+```
+shaded : 99 dome pixels   p10 132.9  p90 154.9   spread 22.0   full range 28.5
+flat   : 151 dome pixels  p10 151.7  p90 152.3   spread  0.6   full range 19.4
+```
+
+Thirty-seven times the control. Note the flat arm's full range of 19.4 against
+its p10–p90 of 0.6: that residual is the outline and the fog, and it is exactly
+why the statistic is an eroded percentile spread rather than a min-to-max.
+
+Cost: **zero**. Fleet 33,898 before and after, heaviest hull 2,178 before and
+after, no vertices added, no draw calls added. 3,080 triangles now carry a
+gradient, up from none.
+
+And the honest half: at a 240 px hull a dome is 14.5 px, and at 12× viewscreen
+zoom about 72 px — but in a six-ship fleet action it is **1.8 px**, where this
+change buys nothing at all.
+
+### Four tests were matching the palette rather than the ship
+
+The change broke three tests, and the breakage was the most useful thing in the
+section. All three identified an accent — a bussard, an impulse deck, a
+deflector — by matching its **RGB triple** outright, which works only while every
+face of the accent carries exactly the palette value.
+
+`glowClusters` found **zero** of a Constellation's four caps. Worse, the port scan
+excludes accents in order to count windows, so a shaded bussard stopped being an
+accent, was counted as a window, and a Constitution acquired a third band of lit
+ports with 438 of them facing the wrong way. A fourth site passed only by
+tolerance luck, finding whichever facets happened to stay near palette value.
+
+The fix is to match by chromaticity, which a scalar ramp preserves exactly.
+Measured: nine distinct chromaticities on a Constitution, and the bussard's
+nearest neighbour is 0.12 away in green against a 0.02 tolerance. The hue form
+says *"this vertex is drawn in the bussard colour"* independent of how brightly,
+which is what all four tests already meant — and it is strictly stronger, because
+the triple form silently misses a legitimately shaded accent.
+
+Reverting the matcher is the control, and it fails four tests. That turns the
+breakage into the evidence that the change is real rather than something papered
+over.
+
+### And a test whose name lied
+
+`"the bussard domes are at the front of both nacelles, and glow"` matched
+`P.glow` — warp blue — while a bussard is `P.bussard`, amber. It had never once
+looked at a bussard dome. It was finding the warp grilles, which are also lit,
+also paired port and starboard, and also up on the nacelles, so every assertion
+in it happened to hold and the name went unchallenged. It measures its own
+subject now.
+
+### Guards and controls
+
+Five mesh guards and one pixel guard, each confirmed against a control that had
+to break it: the ramp flattened to a constant; the axis reversed, for a dome lit
+from behind; the shading blended toward white instead of scaled, which breaks the
+hue matcher and the port scans together; the field taken from the far dome's
+centre, which is the mirror-order bug; and the hue matcher reverted, which fails
+four tests.
+
+The pixel check lives inside the portrait pass, where a hull is already framed
+and the clock already stopped. The first version staged its own fight in the
+middle of the suite and **broke seven later checks** — the hazard this file
+records twice already, walked into a third time. Reuse the staging that exists.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

@@ -23,6 +23,7 @@ import { vec3 } from './math.js';
 import {
   MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg,
   windowRing, windowBelt, windowDeck, navLights, greebles, portRow,
+  shaded, hotCore,
 } from './mesh.js';
 import { FEDERATION_FORMS } from './forms.federation.js';
 import { KLINGON_FORMS } from './forms.klingon.js';
@@ -397,14 +398,18 @@ const FORMS = {
         segments: seg(12),
         color: p.trim,
       });
-      sphere(m, {
-        origin: vec3(nx + nl + nr * 0.4, ny, nz),
+      // Shaded, not flat. An emissive face discards the lighting result
+      // entirely, so this 300-triangle sphere was drawn as one disc of colour.
+      // The ramp gives it a core and a rim for no triangles at all.
+      const bx = nx + nl + nr * 0.4;
+      shaded(m, (mm) => sphere(mm, {
+        origin: vec3(bx, ny, nz),
         radius: nr * 1.04,
         segments: seg(10),
         rings: 6,
         color: p.bussard ?? p.glow,
         glow: 1,
-      });
+      }), hotCore(bx, ny, nz));
       // The intercooler grille along the outboard face, which does more for
       // the read of a nacelle than its cost suggests: it is the one thing that
       // says which way is outboard.
@@ -644,8 +649,9 @@ const FORMS = {
         segments: seg(12),
         color: p.trim,
       });
-      sphere(m, {
-        origin: vec3(nx + nl + nr * 0.45, ny, nz),
+      const bx = nx + nl + nr * 0.45;
+      shaded(m, (mm) => sphere(mm, {
+        origin: vec3(bx, ny, nz),
         radius: nr * 1.08,
         segments: seg(10),
         rings: 6,
@@ -654,7 +660,7 @@ const FORMS = {
         // comment was right and the code was not.
         color: p.bussard ?? p.glow,
         glow: 1,
-      });
+      }), hotCore(bx, ny, nz));
       // The blue intercooler grille along the outboard face.
       // On the OUTBOARD flank, and protruding.
       //
