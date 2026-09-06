@@ -17242,6 +17242,17 @@ class Engagement {
     // How long `survive` has to be survived for. Zero on every other
     // objective, which is what keeps the check in `settle` inert for them.
     this.objectiveTime = Math.max(0, Number(opts.objectiveTime) || 0);
+    // What this particular fight's orders say, when the objective's own line
+    // would be wrong for it.
+    //
+    // `OBJECTIVES.survive.line` is "Hold on. Help is coming." — true of a ship
+    // holding until relief arrives, and false of the one fight in the book that
+    // wants this objective, where nothing is coming and the episode's own
+    // endings say so. A general line cannot be right for every fight that uses
+    // it, so the fight may bring its own.
+    this.orderLine = typeof opts.orderLine === 'string' && opts.orderLine.trim()
+      ? opts.orderLine.trim()
+      : null;
     this.time = 0;
     this.over = false;
     this.outcome = null;
@@ -17976,7 +17987,14 @@ class Engagement {
       }
     }
     // Lasting is winning. `objectiveTime` is set by whoever staged the fight.
+    //
+    // With a line, like its two neighbours. Without one this was the only
+    // objective that ended a fight in silence: the shooting simply stopped, the
+    // screen said victory, and nothing anywhere said why — which on the one
+    // objective whose whole content is a clock the player is watching is the
+    // worst place in the game to say nothing.
     if (this.objective === 'survive' && this.objectiveTime > 0 && this.time >= this.objectiveTime) {
+      this.pushLog('That is long enough, Captain. We held.', 'tactical');
       this.end('victory');
       return true;
     }
@@ -23494,8 +23512,29 @@ const FRONTIER_EPISODES = [
         text: 'It does not manoeuvre. It does not hail. It absorbs the first full spread and continues at the same speed, and then it fires.',
         speaker: 'Tactical',
         choices: [
+          // `survive`, because every ending this fight can reach says the cube
+          // is not destroyed — "You slowed it by four hours" — and a `destroy`
+          // fight can only be won by destroying it. Measured, the cube kills
+          // the player 8 times out of 8 in every hull tried, so both of this
+          // episode's authored endings and their experience were unreachable.
+          //
+          // Fifteen seconds, and the same fifteen on the other road: the forty
+          // hours of study buys SURVIVABILITY, not a shorter job. Measured over
+          // twelve seeds a hull, that clock is the only one the prepared road
+          // reliably beats in every ship while the unprepared road stays hard
+          // in the ones a captain plausibly flies here.
+          //
+          // Its own order line because the objective's — "Hold on. Help is
+          // coming." — is false here. Nothing is coming.
           { id: 'fight', label: 'Fight it', outcome: 'engaged',
-            effects: { combat: { faction: 'borg', ships: ['borg_cube'] }, damage: 0.25, xp: 1800 } },
+            effects: {
+              combat: {
+                faction: 'borg', ships: ['borg_cube'],
+                objective: 'survive', objectiveTime: 15,
+                orderLine: 'Stay on it. Every second we hold is a second Starfleet gets.',
+              },
+              damage: 0.25, xp: 1800,
+            } },
           { id: 'break', label: 'Break off while we still can', outcome: 'survived',
             effects: { xp: 600, damage: 0.15 } },
         ],
@@ -23509,7 +23548,11 @@ const FRONTIER_EPISODES = [
               // Nine seconds is the whole advantage. It is not a different
               // cube: same hull, same guns, same forty-two thousand tonnes of
               // it — the shields are simply not there when the spread lands.
-              combat: { faction: 'borg', ships: ['borg_cube'], shieldsAt: 0 },
+              combat: {
+                faction: 'borg', ships: ['borg_cube'], shieldsAt: 0,
+                objective: 'survive', objectiveTime: 15,
+                orderLine: 'Stay on it. Every second we hold is a second Starfleet gets.',
+              },
               damage: 0.12, xp: 2400,
             } },
           { id: 'break', label: 'Let it pass. We have what Starfleet needs', outcome: 'survived',
@@ -39567,6 +39610,7 @@ class Game {
       // Plain data, like everything else in this record, so it survives a save
       // — see the note on `effects.combat` in missions/engine.js.
       objective: spec.objective, objectiveTime: spec.objectiveTime,
+      orderLine: spec.orderLine,
     };
     return id;
   }
@@ -43624,7 +43668,7 @@ class Game {
     // A mission stage queued a fight; start it once the UI has caught up.
     if (this.pendingCombat && this.mode !== MODES.COMBAT) {
       const {
-        ships, escort, canWarpOut, shieldsAt, fightId, objective, objectiveTime,
+        ships, escort, canWarpOut, shieldsAt, fightId, objective, objectiveTime, orderLine,
       } = this.pendingCombat;
       this.pendingCombat = null;
       const eng = this.startCombat(ships, {
@@ -43634,6 +43678,7 @@ class Game {
         ...(objective ? { objective } : {}),
         ...(objectiveTime != null ? { objectiveTime } : {}),
         ...(escort?.length ? { allies: escort } : {}),
+        ...(orderLine ? { orderLine } : {}),
       });
       // The fight now on the screen answers for the episode only if the
       // episode's enemies are actually in it. `startCombat` does not always
@@ -45464,11 +45509,18 @@ function tacticalScreen(app) {
   // ship crippled rather than killed had to ask in prose and hope.
   if (eng.objective && eng.objective !== 'destroy') {
     side.append(panel('Orders', [
-      el('p', { text: OBJECTIVES[eng.objective]?.line ?? '' }),
-      eng.objective === 'protect' && eng.allies?.length
+      el('p', { text: eng.orderLine ?? OBJECTIVES[eng.objective]?.line ?? '' }),
+      // `protectees`, not `allies`. The two are different lists and this line
+      // was reading the wrong one: `allies` also collects the escort a
+      // reputation perk buys and the relief ship `callForHelp` pushes in
+      // mid-fight, neither of which is the convoy. `Engagement.settle` was
+      // changed to read the snapshot and this readout was not changed with it,
+      // so a captain holding an escort perk could be told two ships were still
+      // with them on the tick the objective failed.
+      eng.objective === 'protect' && eng.protectees?.length
         ? el('p', {
           class: 'hint',
-          text: `${eng.allies.filter((a) => !a.destroyed).length} of ${eng.allies.length} still with us.`,
+          text: `${eng.protectees.filter((a) => !a.destroyed).length} of ${eng.protectees.length} still with us.`,
         })
         : null,
     ], 'accent'));
@@ -50689,6 +50741,18 @@ class App {
         el('div', { class: 'chip', text: `Speed ${Math.round(p.throttle * 100)}%` }),
         p.breaching ? el('div', { class: 'chip danger', text: `BREACH ${p.breachTimer.toFixed(0)}s` }) : null,
         eng.warpOutTimer > 0 ? el('div', { class: 'chip warn', text: `Warp in ${eng.warpOutTimer.toFixed(0)}s` }) : null,
+        // The one objective whose whole content is a clock, and the clock was
+        // not on the screen anywhere. Here rather than in the Orders panel
+        // because the panels re-render every eighth sim tick and a countdown
+        // that jumps in quarter-seconds is worse than none; this row is redrawn
+        // every frame, which is why the breach and warp timers already live in
+        // it. Same shape as both of them.
+        eng.objective === 'survive' && eng.objectiveTime > 0 && !eng.over
+          ? el('div', {
+            class: 'chip warn',
+            text: `Hold ${Math.max(0, Math.ceil(eng.objectiveTime - eng.time))}s`,
+          })
+          : null,
         el('div', { class: 'chip', text: `Crew ${p.crew}` }),
       ].filter(Boolean)),
     );

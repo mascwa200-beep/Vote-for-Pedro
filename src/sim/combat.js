@@ -195,6 +195,17 @@ export class Engagement {
     // How long `survive` has to be survived for. Zero on every other
     // objective, which is what keeps the check in `settle` inert for them.
     this.objectiveTime = Math.max(0, Number(opts.objectiveTime) || 0);
+    // What this particular fight's orders say, when the objective's own line
+    // would be wrong for it.
+    //
+    // `OBJECTIVES.survive.line` is "Hold on. Help is coming." — true of a ship
+    // holding until relief arrives, and false of the one fight in the book that
+    // wants this objective, where nothing is coming and the episode's own
+    // endings say so. A general line cannot be right for every fight that uses
+    // it, so the fight may bring its own.
+    this.orderLine = typeof opts.orderLine === 'string' && opts.orderLine.trim()
+      ? opts.orderLine.trim()
+      : null;
     this.time = 0;
     this.over = false;
     this.outcome = null;
@@ -929,7 +940,14 @@ export class Engagement {
       }
     }
     // Lasting is winning. `objectiveTime` is set by whoever staged the fight.
+    //
+    // With a line, like its two neighbours. Without one this was the only
+    // objective that ended a fight in silence: the shooting simply stopped, the
+    // screen said victory, and nothing anywhere said why — which on the one
+    // objective whose whole content is a clock the player is watching is the
+    // worst place in the game to say nothing.
     if (this.objective === 'survive' && this.objectiveTime > 0 && this.time >= this.objectiveTime) {
+      this.pushLog('That is long enough, Captain. We held.', 'tactical');
       this.end('victory');
       return true;
     }

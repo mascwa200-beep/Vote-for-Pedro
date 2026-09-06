@@ -7051,6 +7051,142 @@ in ordinary play.** That is a `survive` objective with a clock, it is a bigger
 change than this one, and it is the next thing to do here.
 
 
+## 83. The cube nobody could slow down
+
+`the_cube` asks the captain to **"Engage. Slow it down"**. Every ending that
+fight can reach says the cube is not destroyed:
+
+| ending | text | XP |
+| --- | --- | --- |
+| `engaged` | *"You slowed it by four hours. Starfleet used every one of them."* | 1,800 |
+| `engaged_window` | *"It does not stop — nothing stops it — but it arrives at Wolf 359 leaking atmosphere."* | 2,400 |
+| `survived` | *"Broke off. The ship survives. So does the cube."* | 600 / 900 |
+
+Both fights are terminal and carry `outcome: 'engaged'` / `'engaged_window'`
+directly. They were `destroy` fights, so the only way to reach either ending was
+to empty the board — and a Borg cube is not something a starship empties.
+Measured, it destroys the player **8 times out of 8 in every hull tried**:
+
+| player | median survival | outcome |
+| --- | --- | --- |
+| constitution @ lieutenant | 13 s | destroyed 8/8 |
+| galaxy @ commander | 23 s | destroyed 8/8 |
+| sovereign @ commander | 34 s | destroyed 8/8 |
+| sovereign @ lieutenant | 40 s | destroyed 8/8 |
+
+**Both authored endings, and their 1,800 and 2,400 experience, were unreachable
+in ordinary play.** A captain who fought got `broke_off` — a description of an
+event that did not happen — or lost the ship. `survive` was the one objective
+still unused, and this is what it is for.
+
+### The clock came from a table
+
+Pass rates out of 12 seeds at Commander, unprepared → through the shield window:
+
+| ship | 10 s | 12 s | **15 s** | 18 s | 20 s | 25 s | 30 s |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| constitution | 8→12 | 6→12 | **1→11** | 0→2 | 0→1 | 0→0 | 0→0 |
+| excelsior | 12→12 | 12→12 | **5→12** | 3→11 | 3→9 | 2→3 | 1→0 |
+| ambassador | 12→12 | 12→12 | **5→12** | 4→12 | 4→12 | 0→9 | 0→4 |
+| galaxy | 12→12 | 12→12 | **12→12** | 11→12 | 11→12 | 2→12 | 0→12 |
+| sovereign | 12→12 | 12→12 | **12→12** | 12→12 | 12→12 | 12→12 | 8→12 |
+
+**Fifteen seconds, the same fifteen on both roads.** It is the only clock the
+prepared road reliably beats in every hull while the unprepared road stays hard
+in the ships a captain plausibly flies here. Longer and a Constitution survives
+neither; shorter and both are free. No hull carries a `minRank`, so the
+Constitution row is not hypothetical.
+
+The same number on both because the forty hours of study buys **survivability,
+not a shorter job**. Measured after the change:
+
+| road | Constitution | Excelsior | Galaxy | Sovereign |
+| --- | --- | --- | --- | --- |
+| unprepared → `engaged` | 0/8 | 2/8 | 8/8 | 8/8 |
+| through the window → `engaged_window` | **8/8** | **8/8** | **8/8** | **8/8** |
+
+Before, neither ending was reachable in any hull. Now the study is what decides
+it, and in a heavy ship it is a formality — which is what a heavy ship is.
+
+### Three things that had to ship with it
+
+- **There was no clock anywhere.** The Orders panel showed a sentence and
+  nothing else. A timed objective the player cannot see is a fight they cannot
+  play deliberately — and worse, a captain reading "Hold on" presses the
+  prominent Disengage button three seconds from the end and takes `broke_off`,
+  which pays nothing, where the `break` choice one stage earlier pays 600 and
+  gives a written ending. The countdown went in the **per-frame chip row**
+  beside `BREACH` and `Warp in`, not in the Orders panel: the panels re-render
+  every eighth sim tick, and a countdown that jumps in quarter-seconds is worse
+  than none.
+- **A survive fight ended in silence.** Its branch in `settle` was the only one
+  of the four that pushed no log line — the shooting stopped, the screen said
+  victory, and nothing said why, on the one objective whose whole content is a
+  clock.
+- **The order line was false here.** `OBJECTIVES.survive.line` is *"Hold on.
+  Help is coming."* Nothing is coming; the endings say so in as many words.
+  Shipping it would have added exactly the kind of falsehood §80–§82 removed, so
+  a fight may now bring its own line.
+
+### A defect from §82, found by reading the screen it printed to
+
+The Orders panel counts the escort for a `protect` objective. §82 changed
+`Engagement.settle` to read `protectees` — a snapshot of what the caller staged
+— because `allies` also collects the escort a reputation perk buys and the
+relief ship `callForHelp` pushes in mid-fight. **The readout was not changed with
+it.** A captain holding an escort perk could be told two ships were still with
+them on the tick the objective failed. One line, and it was found only by going
+back to look at what the feature actually renders.
+
+### What the change did to an older test, and why that was the honest answer
+
+`episodevars.test.js` asserts the shield window is *worth something in the
+fight*, measured as hull taken off the cube: 6.0% with the window against 1.0%
+without, with a bar at half that. After the change it measured 2.2% against
+0.9% and failed.
+
+That is not a regression, and the reason is worth keeping. **The fights are now
+the same length.** Before, a ship that used the window also lived longer, so it
+also shot for longer — the 6:1 margin was measuring two advantages at once, the
+shields being down and the extra seconds on the board. On a fixed clock what is
+left is the shield advantage alone, cleanly isolated at 2.4:1.
+
+And the advantage did not shrink; it **moved, and moved differently by hull**.
+In a Sovereign both roads last the fifteen seconds and the window shows up as
+damage. In a Constitution it shows up as whether the captain is alive at the end
+of them — 8 of 8 against 1 of 8 — which is a far larger difference than the
+margin ever was, and which did not exist at all before, because every road ended
+with the ship destroyed. The test now asserts both.
+
+Its strictest arm — *the window never came out worse, in any battle* — was
+relaxed, and only after measuring why. It held while the window bought extra
+seconds; at equal duration whether a spread lands well is down to the seed. Per
+seed the ratio is 0.76, 3.52, 1.87, 1.83, 3.46, 4.12, 0.97, 3.25: six of eight
+decisively better, two level, none meaningfully worse. The guard now says that,
+with the numbers in it.
+
+### The instrument that did nothing, again
+
+The guard that a survive fight is won by lasting held the player alive with
+`g.ship.invulnerable = true`. **There is no such field anywhere in `src/`.** The
+line was a no-op and the test passed for a reason unrelated to what it claimed
+to test. Replaced with topping the hull up every tick — a thing the code
+actually has. This is the fourth instrument in this dossier to fail by asserting
+against a field or a path that was not there, and the tell each time was the
+same: it passed first try, on a case that should have been hard.
+
+### Guards and controls
+
+Five new guards, each confirmed failing against its own control: both cube
+fights back to `destroy` (2 fail); the two roads given different clocks (2); the
+order line never reaching the fight (1); the escort readout back to `eng.allies`,
+which is the code as it stood (1); the hold chip removed (1).
+
+The countdown and the order line were also confirmed **in a real browser** rather
+than from the source: the chip row renders `Hold 13s` beside the hull and shield
+chips, and the Orders panel shows the fight's own line and not the objective's.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
