@@ -64,12 +64,39 @@ export const CAPITAL_EPISODES = [
             effects: { xp: 700, standing: { klingon: 10 } } },
           { id: 'silent', label: 'Say nothing. It was addressed to Kang',
             next: afterTheCharge, effects: { xp: 300, setVar: { let_it_stand: true } } },
-          // Only a captain who actually did it. Archanis has an ending where
-          // the claim is settled without a shot, and `archanis_massacre` is the
-          // one where it is not.
+          // Only a captain who actually did it — and one who can be standing
+          // here at all, which the first version of this gate could not be.
+          //
+          // It asked for `archanis_massacre`, which is `archanis_claim`'s
+          // `battle/finish`. This episode's own gate is `kang_respects_you`,
+          // which is `honour/seal` and `battle/rescue`. All three are TERMINAL
+          // choices of one episode, a playthrough takes exactly one, and
+          // `availableAt` never offers a completed episode again — so no
+          // captain could ever hold both, and every captain who reached this
+          // stage was shown a greyed button promising something the game could
+          // not deliver. The reasoning in the old comment was about the
+          // fiction and was right; nobody asked whether the two flags could
+          // be held at once.
+          //
+          // `fired_first_archanis` is `start/attack` — mid-route, not terminal
+          // — and `battle/rescue` lies downstream of it. That is a real
+          // captain: you opened fire on Kang, and then took his people off a
+          // dead hull. He has the list, and he has standing to read it.
           { id: 'own_it', label: 'Read the rest of the list. You have it memorised',
-            next: 'seconded', requires: { flag: 'archanis_massacre' },
+            next: 'seconded', requires: { flag: 'fired_first_archanis' },
             effects: { xp: 900, standing: { klingon: 14 }, flag: 'owned_archanis' } },
+          // Duras accuses Kang of vouching for an outsider. At Archanis, Kang
+          // said to your face that a Klingon who withdraws on a Starfleet
+          // officer's word "has not withdrawn, he has been sent away, and
+          // there is a difference his House would find in about a day" — and
+          // then refused the exit and fought. His own words answer the charge.
+          //
+          // Not free: saying it tells the Great Hall that a Federation officer
+          // once offered Kang a way out, which is a thing Duras can use, and
+          // which Starfleet would rather have been told first.
+          { id: 'sent_away', label: '"He told me himself. A Klingon sent away has not withdrawn"',
+            next: 'seconded', requires: { flag: 'kang_left_room' },
+            effects: { xp: 800, standing: { klingon: 10, federation: -4 } } },
         ],
       },
 
@@ -84,6 +111,14 @@ export const CAPITAL_EPISODES = [
             effects: { xp: 500, standing: { klingon: -12, federation: 8 } } },
           { id: 'kang', label: 'Ask that Kang answer it, as is his right', next: 'kang_fights',
             effects: { xp: 600, standing: { klingon: 4 } } },
+          // Written one stage earlier, at `charge/own_it`. `charge` is the only
+          // way into this stage, so the write is always upstream of the read —
+          // an episode remembering something the captain did inside it, which
+          // is the shortest reach in the book and the only kind that cannot
+          // depend on which episodes he happened to play.
+          { id: 'my_dead', label: '"Those were my dead too. I will answer for them"',
+            next: 'blade', requires: { flag: 'owned_archanis' },
+            effects: { xp: 1000, standing: { klingon: 18 } } },
         ],
       },
 
@@ -190,10 +225,27 @@ export const CAPITAL_EPISODES = [
             effects: { xp: 800, standing: { romulan: 8 } } },
           { id: 'press', label: 'Ask him what it costs before agreeing', next: 'summons',
             effects: { xp: 700 } },
-          // A captain who took the device is being asked to describe taking it.
-          { id: 'admit', label: 'Tell him you have the device aboard your ship',
-            next: 'summons', requires: { flag: 'captured_cloak' },
-            effects: { xp: 1100, standing: { romulan: -10 }, flag: 'admitted_the_cloak' } },
+          // There used to be a choice here for a captain who took the device:
+          // "Tell him you have the device aboard your ship", gated on
+          // `captured_cloak`. It could never open. `captured_cloak` is
+          // `outpost_silence/battle/board` and this episode's own gate,
+          // `spared_warbird`, is `battle/honour` — the SIBLING choice at the
+          // same stage. Boarding and standing off are one fork, and the
+          // episode was asking for both arms of it.
+          //
+          // It is gone rather than re-gated, because no other flag makes that
+          // sentence true: the device is aboard your ship precisely when you
+          // boarded, and boarding is the thing this episode is premised on your
+          // not having done.
+          //
+          // What a captain CAN carry into this room is having fired first
+          // inside the Zone and then let the commander go home anyway — six
+          // routes reach both. The Romulans logged the first part
+          // (`FACTION_MEMORY`, state.js), and Telek is about to stake his life
+          // on a Federation officer's record.
+          { id: 'came_first', label: 'Tell him what your record says before he stakes his life on it',
+            next: 'summons', requires: { flag: 'fired_first_neutral_zone' },
+            effects: { xp: 900, standing: { romulan: -4 }, flag: 'told_telek_first' } },
         ],
       },
 
@@ -246,6 +298,15 @@ export const CAPITAL_EPISODES = [
             effects: { xp: 1200, standing: { romulan: 10 }, flag: 'telek_acquitted' } },
           { id: 'refuse_q', label: 'Decline to answer a hypothetical', outcome: 'unresolved',
             effects: { xp: 900, standing: { romulan: -8 } } },
+          // Written at `told/came_first`, three stages back and on the only
+          // route into this one. The prosecutor's question is whether you
+          // would have boarded; a captain who told Telek about the Zone before
+          // any of this started can answer it with the harder, better thing —
+          // that Telek asked for him knowing exactly what he was.
+          { id: 'he_knew', label: '"He knew what I was before he asked for me."',
+            outcome: 'acquitted', requires: { flag: 'told_telek_first' },
+            effects: { xp: 2200, standing: { romulan: 18, federation: 10 },
+              record: { treaty_signed: 1 }, flag: ['telek_acquitted', 'romulus_witness'] } },
         ],
       },
     },

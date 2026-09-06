@@ -119,7 +119,8 @@ describe('the capitals themselves', () => {
       for (let trial = 0; trial < 12; trial++) {
         const g = captain({
           seed: BigInt(700 + trial),
-          flags: ['kang_respects_you', 'spared_warbird', 'archanis_massacre', 'captured_cloak'],
+          flags: ['kang_respects_you', 'spared_warbird',
+            'fired_first_archanis', 'kang_left_room', 'fired_first_neutral_zone'],
         });
         const m = g.missions.start(id, g);
         g.locationId = ep.system;
@@ -179,11 +180,17 @@ describe('the capitals themselves', () => {
 
 describe('what the new episodes read back', () => {
   test('a captain who did the worse thing can say so', () => {
-    // `archanis_massacre` and `captured_cloak` were both write-only. Each now
-    // opens one extra choice, at a stage that already had two.
+    // The gates these choices carry, and a correction to what this comment
+    // used to say. It claimed `archanis_massacre` and `captured_cloak` were
+    // "both write-only"; `archanis_massacre` is read by `Game.FACTION_MEMORY`
+    // at -0.30. More to the point, both gates were IMPOSSIBLE — see the
+    // holdability test below and the comments in `capitals.js`.
     for (const [id, system, stage, choice, flag] of [
-      ['qonos_council', 'qonos', 'charge', 'own_it', 'archanis_massacre'],
-      ['romulus_debt', 'romulus', 'told', 'admit', 'captured_cloak'],
+      ['qonos_council', 'qonos', 'charge', 'own_it', 'fired_first_archanis'],
+      ['qonos_council', 'qonos', 'charge', 'sent_away', 'kang_left_room'],
+      ['qonos_council', 'qonos', 'seconded', 'my_dead', 'owned_archanis'],
+      ['romulus_debt', 'romulus', 'told', 'came_first', 'fired_first_neutral_zone'],
+      ['romulus_debt', 'romulus', 'testify', 'he_knew', 'told_telek_first'],
     ]) {
       const gate = EPISODE_BY_ID[id].requiresFlag;
       const open = (flags) => {
@@ -199,6 +206,73 @@ describe('what the new episodes read back', () => {
       assert.ok(without?.locked, `${id}/${choice} open to a captain who does not`);
       assert.ok(without.lockReason, 'a locked choice with no reason on it');
     }
+  });
+
+  test('and a captain can hold what the gate asks for, by playing for it', () => {
+    // The test above hands the flags over with `setFlag`. That proves the gate
+    // READS the flag; it never asks whether a captain can HOLD it — and for
+    // both shipped gates the answer was no.
+    //
+    //   qonos_council  gate kang_respects_you   choice needed archanis_massacre
+    //   romulus_debt   gate spared_warbird      choice needed captured_cloak
+    //
+    // Every one of those four flags is written only by a TERMINAL choice of
+    // one episode — `archanis_claim` and `outpost_silence` — and a playthrough
+    // takes exactly one terminal choice, so the pairs were mutually exclusive.
+    // The choices could never open, and every captain who reached those stages
+    // was shown a greyed button with "Not yet available" on it forever.
+    //
+    // So this plays the route instead of granting the state, which is the only
+    // version of the question the game can actually answer.
+    const play = (g, id, choices) => {
+      const m = g.missions.start(id, g);
+      for (const cid of choices) {
+        const here = m.testLocation();
+        if (!here.ok) g.locationId = here.need;
+        const inside = m.testWhere();
+        if (!inside.ok && inside.need && inside.need !== 'surface') walkTo(g, inside.need);
+        const pick = m.choices().find((c) => c.id === cid);
+        assert.ok(pick && !pick.locked,
+          `${id}/${m.stageId}/${cid}: ${pick ? 'locked — ' + pick.lockReason : 'no such choice'}`);
+        m.choose(cid);
+        if (m.pending) m.settleCombat('victory');
+      }
+      g.missions.finishActive();
+      return m;
+    };
+
+    // Fire on Kang at Archanis, then take his people off the wreck.
+    const klingon = captain();
+    play(klingon, 'archanis_claim', ['attack', 'rescue']);
+    assert.ok(klingon.ledger.has('fired_first_archanis'), 'the route did not fire first');
+    assert.ok(klingon.ledger.has('kang_respects_you'), 'the route did not earn the berth');
+    klingon.locationId = 'qonos';
+    const council = klingon.missions.start('qonos_council', klingon);
+    council.stageId = 'charge';
+    const ownIt = council.choices().find((c) => c.id === 'own_it');
+    assert.ok(ownIt && !ownIt.locked,
+      'a captain who played for it still cannot read the list at Qo\'noS');
+    // And the callback one stage later, which only opens by taking it.
+    council.choose('own_it');
+    const myDead = council.choices().find((c) => c.id === 'my_dead');
+    assert.ok(myDead && !myDead.locked, 'the Council forgot what he just did in the room');
+
+    // Fire first inside the Zone, then let the commander go home anyway.
+    const romulan = captain();
+    play(romulan, 'outpost_silence', ['silent', 'wait', 'fire', 'honour']);
+    assert.ok(romulan.ledger.has('fired_first_neutral_zone'), 'the route did not fire first');
+    assert.ok(romulan.ledger.has('spared_warbird'), 'the route did not earn the berth');
+    romulan.locationId = 'romulus';
+    const senate = romulan.missions.start('romulus_debt', romulan);
+    senate.stageId = 'told';
+    const cameFirst = senate.choices().find((c) => c.id === 'came_first');
+    assert.ok(cameFirst && !cameFirst.locked,
+      'a captain who played for it still cannot tell Telek what his record says');
+    senate.choose('came_first');
+    senate.choose('disarm');
+    senate.choose('testify');
+    const heKnew = senate.choices().find((c) => c.id === 'he_knew');
+    assert.ok(heKnew && !heKnew.locked, 'the chamber forgot what he told Telek');
   });
 
   test('and the variable each one sets is read', () => {

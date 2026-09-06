@@ -8537,9 +8537,18 @@ pop a verdict nobody delivered on every routine dock, forever.
 
 ### What the board hears
 
-Three choices gated on flags that were written and read by nothing:
+Three choices gated on flags the hearing had never mentioned:
 `falsified_report` (act 1 — the shakedown lie, and this is the earliest room it
 can be owned in), `romulan_cloak_reported` and `fired_first_neutral_zone` (act 2).
+
+**Corrected in §93.** This sentence originally said all three were "written and
+read by nothing", which is true of one of them. `falsified_report` was already
+read by `homecoming/questioned/correct`, and `fired_first_neutral_zone` by
+`Game.FACTION_MEMORY` at −0.20 — a crew-morale table that reads twelve episode
+flags and that the sweep behind this section never looked at. Only
+`romulan_cloak_reported` was genuinely unread, and `state.js` says in so many
+words why it was left out of that table. What was new here was never that
+anything read them. It was that the room said them out loud.
 
 They pay experience, standing and a flag, and deliberately **no record entry**.
 Two reasons, and the first is a correction. The plan had said standing would
@@ -8625,6 +8634,137 @@ a second grant.
 
 Acts 3 and 4 hold roughly twenty-two more write-only flags. Act 5's five are
 legitimately terminal — nothing follows them.
+
+
+## 93. Two choices no captain could take, and the test that proved they worked
+
+§92 gave an act-3 hearing knowledge of what the captain had done. The obvious
+next move was the two act-4 capitals, which are also trials and which read
+almost nothing:
+
+| episode | stages | flags any choice reads |
+| --- | --- | --- |
+| `qonos_council` — Kang defends you before the High Council over Archanis | 7 | **1** |
+| `romulus_debt` — the commander you did not board asks for you as a witness | 6 | **1** |
+
+Measuring that one flag each, before adding more, found something worse than a
+thin scene.
+
+### Both of them were impossible
+
+```
+kang_respects_you   archanis_claim/honour/seal    [TERMINAL]
+                    archanis_claim/battle/rescue  [TERMINAL]
+archanis_massacre   archanis_claim/battle/finish  [TERMINAL]
+
+spared_warbird      outpost_silence/battle/honour [TERMINAL]
+captured_cloak      outpost_silence/battle/board  [TERMINAL]
+```
+
+`qonos_council` is offered only to a captain holding `kang_respects_you`. Its one
+gated choice asked for `archanis_massacre`. All three flags are written **only**
+by terminal choices of the same episode; a playthrough takes exactly one terminal
+choice, and `availableAt` never offers a completed episode again. No captain
+could hold both. The choice could not open for anybody, ever.
+
+`romulus_debt` was the same and tighter: gated on `spared_warbird`, its extra
+choice asked for `captured_cloak` — the **sibling choice at the same stage**.
+Boarding the crippled warbird and standing off it are one fork, and the episode
+was asking for both arms of it.
+
+This was not book hygiene. A gated choice is rendered as a greyed button reading
+*"Not yet available"*, so every captain who reached those two stages was shown a
+promise the game had no way to keep, in both of the great powers' capitals.
+
+### The comment reasoned about the fiction and never asked the question
+
+The shipped comment on the Qo'noS choice read: *"Only a captain who actually did
+it. Archanis has an ending where the claim is settled without a shot, and
+`archanis_massacre` is the one where it is not."* Every word of that is true
+about the story. Nobody asked whether the flag it names could be held at the same
+time as the flag the episode itself demands.
+
+### And the test proved the wrong thing
+
+`capitals.test.js` covered both choices, and passed, because its harness did
+`captain({ flags: [gate, flag] })` — granting both with `setFlag`. That proves
+the gate *reads* the flag. It never asks whether a captain can *hold* it. A guard
+satisfied by a state the game cannot produce is the same family as §51 and §52,
+and this is the third time it has been found here.
+
+The replacement plays for it: fire on Kang at Archanis and then take his people
+off the wreck; fire first inside the Neutral Zone and then let the commander go
+home anyway. Both routes run through the real engine, and the assertion is made
+on the ledger they leave behind.
+
+### The fixes
+
+`charge/own_it` is re-gated to `fired_first_archanis`, which is written mid-route
+at `start/attack` with `battle/rescue` downstream of it. That is a real captain,
+and a better one for the scene: he opened fire on Kang and then pulled his crew
+out, so he has the casualty list and the standing to read it.
+
+`told/admit` is **deleted**. No re-gate could save it — "tell him you have the
+device aboard your ship" is definitionally the flag written by boarding, and
+boarding is the thing the episode is premised on your not having done. Deleting a
+choice nobody can take removes dead content rather than content, and the honest
+cost is that `captured_cloak` loses its only reader and goes on the register
+below.
+
+In their place, three things a captain can actually carry: Kang's own words about
+being *"sent away"* rather than withdrawing, quoted back at the Councillor now
+making that exact accusation; and two callbacks one episode long, where the Great
+Hall and the Senate chamber remember what the captain said in the room three
+stages earlier.
+
+### A correction, and the sweep that caused it
+
+`Game.FACTION_MEMORY` is a crew-morale and faction-memory table that reads twelve
+episode flags no episode reads. Every flag sweep in §92 counted only episode
+reads, so its figures were wrong and one of its sentences claimed more than had
+been measured. §92 now carries the correction in place.
+
+Counting readers across all of `src/`, with comments stripped:
+
+```
+flags written by episodes : 78
+read structurally         : 44
+read by NOTHING           : 35
+```
+
+### A register, not a ratchet
+
+The obvious guard is "the count of unread flags does not grow". It is wrong three
+ways. It is satisfiable by trades — this change alone deleted one dead flag and
+returned another to unread, netting zero and teaching nothing. Scraping the
+source for a flag name counts **comments**, which is the §51 defect a third time,
+and two of these flags are named only in prose. And the number's correct
+direction is downward, so a ceiling blocks nothing useful.
+
+So the guard is a named register in the repo's own idiom, locked in both
+directions: thirty-five flags, each marked `terminal` (written at the end of the
+commission, where nothing follows and nothing should) or `candidate` (a later
+scene could read it and none does yet). Writing a flag nothing reads fails until
+it is wired or written down. Wiring one fails until it is struck off. The debt
+can only move on purpose.
+
+`candidate` is deliberately not a to-do list. §91's rule stands: an unwired thing
+is a hypothesis, and one of these hypotheses has already been measured and found
+catastrophic.
+
+### Guards and controls
+
+Two new guards, each confirmed against a control that had to break it. The
+holdability guard was run against the shipped shape restored — it reports both
+violations, which is the instrument working on real data rather than on a plant.
+The register was run three ways: a newly dead flag left off the list; a listed
+flag wired and left listed; and the comment trap, with the morale table removed
+from the reader set to prove the register depends on reading it structurally
+rather than on the flag's name appearing somewhere in the source.
+
+Both routes were then played end to end through the real location and room gates,
+and the choice list printed at every stage, so the lock states are shown rather
+than asserted.
 
 
 ## Attribution
