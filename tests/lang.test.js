@@ -26,6 +26,7 @@ import {
 } from '../src/lang/gazetteer.js';
 import { parseText, CONFIDENT } from '../src/lang/parse.js';
 import { INTENTS, lexiconActions, phraseCount } from '../src/lang/lexicon.js';
+import { SIGNALS, TRAPS, ENCOUNTER_KINDS } from '../src/world/encounters.js';
 import { parseOrder, commandReference, orderHelp } from '../src/ui/orders.js';
 import { article } from '../src/world/encounters.js';
 import { FACTIONS } from '../src/world/factions.data.js';
@@ -1127,7 +1128,23 @@ describe('every encounter choice can be said', () => {
   // the list of choices and the list of phrases could not be compared. They
   // come from `Game.encounterChoices` now, and this is the comparison.
 
-  /** Every encounter the game can put in front of a captain. */
+  /**
+   * Every encounter the game can put in front of a captain.
+   *
+   * This used to be eight hand-written shapes under that exact sentence, and
+   * the sentence was not true. `signal` was not among them — so all EIGHT
+   * signal encounters printed a phrase the parser had never heard of, and the
+   * guard that exists to catch precisely that could not see any of them. The
+   * `trapped` case below it named `powerChannel: 'auxiliary'`, the one channel
+   * whose phrase happened to match, so the trap that asks for `engines` was
+   * never tried either.
+   *
+   * A hand-written list of what the world can produce drifts from the world.
+   * These are derived instead: one entry per `SIGNALS` row, one per trap
+   * channel that `TRAPS` actually uses, and the fixed shapes for everything
+   * whose choices do not vary with content. Add a signal or a trap channel and
+   * it is covered without anyone remembering to add it here.
+   */
   const SHAPES = [
     { label: 'a hostile', enc: { kind: 'patrol', hostile: true, factionId: 'klingon' } },
     { label: 'a distress call', enc: { kind: 'distress', lives: 40 } },
@@ -1137,18 +1154,33 @@ describe('every encounter choice can be said', () => {
     { label: 'a first contact', enc: { kind: 'first_contact', preWarp: false, speciesName: 'Melkotian' } },
     { label: 'a pre-warp contact', enc: { kind: 'first_contact', preWarp: true, speciesName: 'Melkotian' } },
     { label: 'a patrol', enc: { kind: 'patrol', hailable: true, factionId: 'klingon' } },
+    { label: 'a sprung ambush', enc: { kind: 'ambush', hostile: true, surprise: true, detected: true, factionId: 'klingon' } },
+    { label: 'a quiet watch', enc: { kind: 'quiet' } },
+    ...SIGNALS.map((sig) => ({ label: `a signal (${sig.from ?? sig.title ?? 'unknown'})`, enc: { kind: 'signal', signal: sig } })),
+    ...[...new Set(TRAPS.map((t) => t.powerChannel))].map((channel) => ({
+      label: `a trap on ${channel}`,
+      // A device the ship HAS, so `trap_device` prints a phrase rather than the
+      // greyed-out "No … aboard" that correctly prints none.
+      enc: { kind: 'trapped', trap: { ...TRAPS.find((t) => t.powerChannel === channel) } },
+      carry: TRAPS.find((t) => t.powerChannel === channel).device,
+    })),
   ];
 
-  const at = (enc) => {
+  const at = (enc, carry = null) => {
     const g = new Game({ seed: 5n, crewMode: 'original' });
+    // A trap offers `trap_device` as a real choice only to a ship that built
+    // the device; without one the button correctly reads "No ... aboard" and
+    // correctly prints no phrase. Carrying it is what puts the sayable version
+    // of the choice in front of the guard.
+    if (carry) { g.devices = { ...(g.devices ?? {}), [carry]: 1 }; }
     g.encounter = { system: g.location, title: 'x', text: 'y', hostile: false, ...enc };
     return g;
   };
 
   test('every choice offers a phrase, and the phrase parses', () => {
     const broken = [];
-    for (const { label, enc } of SHAPES) {
-      for (const c of at(enc).encounterChoices()) {
+    for (const { label, enc, carry } of SHAPES) {
+      for (const c of at(enc, carry).encounterChoices()) {
         if (!c.say) { broken.push(`${label}/${c.id}: no phrase printed`); continue; }
         const order = parseOrder(c.say);
         if (order.unknown || order.error) {
@@ -1174,8 +1206,8 @@ describe('every encounter choice can be said', () => {
         : null;
     };
     const wrong = [];
-    for (const { label, enc } of SHAPES) {
-      const g = at(enc);
+    for (const { label, enc, carry } of SHAPES) {
+      const g = at(enc, carry);
       for (const c of g.encounterChoices()) {
         if (!c.say) continue;
         const got = route(g, c.say);
@@ -1183,6 +1215,58 @@ describe('every encounter choice can be said', () => {
       }
     }
     assert.deepEqual(wrong, [], 'phrases printed on buttons that do something else');
+  });
+
+  test('the shapes are derived from the world, not remembered', () => {
+    // The instrument. If SIGNALS or TRAPS stopped reaching this list, every
+    // assertion above would pass over the eight hand-written shapes again and
+    // report a healthy game — which is exactly what it did before.
+    assert.ok(SIGNALS.length >= 8, `only ${SIGNALS.length} signals`);
+    assert.ok(SHAPES.filter((x) => x.enc.kind === 'signal').length === SIGNALS.length,
+      'the signal shapes stopped coming from SIGNALS');
+    const channels = new Set(TRAPS.map((t) => t.powerChannel));
+    assert.ok(channels.size >= 2, 'every trap now asks for the same channel, so the mismatch cannot recur');
+    for (const ch of channels) {
+      assert.ok(SHAPES.some((x) => x.label === `a trap on ${ch}`), `no shape covers a trap on ${ch}`);
+    }
+  });
+
+  test('and every kind the world can roll is one the guard covers', () => {
+    // `trapped` was produced by `buildTrap` and absent from ENCOUNTER_KINDS,
+    // and two separate guards enumerate that array to decide their coverage.
+    // A kind missing from it is a kind nothing checks.
+    const covered = new Set(SHAPES.map((x) => x.enc.kind));
+    const uncovered = ENCOUNTER_KINDS.filter((k) => !covered.has(k));
+    assert.deepEqual(uncovered, [], 'encounter kinds no shape puts in front of the guard');
+  });
+
+  test('and the power phrase names the channel the trap actually uses', () => {
+    // The label always named the right channel; the phrase under it said
+    // "auxiliary" whatever the label said. On the gravimetric eddy the button
+    // therefore read "Everything to engines" over the words "everything to
+    // auxiliary" — and saying the words on the button parsed as nothing, with
+    // a suggestion to target somebody's engines. A trap has no withdraw.
+    for (const t of TRAPS) {
+      const g = at({ kind: 'trapped', trap: t }, t.device);
+      const power = g.encounterChoices().find((c) => c.id === 'trap_power');
+      assert.ok(power.label.includes(t.powerChannel), `${t.id}: label says ${power.label}`);
+      assert.ok(power.say.includes(t.powerChannel),
+        `${t.id}: label says "${power.label}" and the phrase says "${power.say}"`);
+      assert.equal(parseOrder(power.say).choice, 'trap_power', `${t.id}: "${power.say}"`);
+    }
+  });
+
+  test('and every signal answers to the words printed on its own button', () => {
+    // Eight of eight were unknown to the parser. The button's stated job is to
+    // teach the game's language; for every signal in the game it taught a word
+    // the game did not speak.
+    for (const sig of SIGNALS) {
+      const g = at({ kind: 'signal', signal: sig });
+      const answer = g.encounterChoices().find((c) => c.id === 'answer');
+      assert.ok(answer, `${sig.from ?? sig.title}: no answer offered`);
+      assert.equal(parseOrder(answer.say).choice, 'answer',
+        `${sig.from ?? sig.title}: the button says "${answer.label}" and prints "${answer.say}"`);
+    }
   });
 
   test('the trapped encounter is sayable too, and has no withdraw to say', () => {

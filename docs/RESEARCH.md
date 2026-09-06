@@ -6237,6 +6237,104 @@ whole word. Comments are stripped too — this dossier and `ledger.js` both
 discuss these kinds in prose.
 
 
+## 75. Eight buttons that taught a language the game does not speak
+
+Every encounter button prints the phrase for saying the same thing out loud.
+`lcars.js` says why:
+
+> `say` is how this game teaches its own language. Everything worth doing is
+> supposed to be doable by telling somebody to do it, and a player who never
+> discovers that plays a game of buttons with an ignored text box at the bottom.
+
+**For every signal encounter in the game, the language it taught was not one the
+game speaks.** All eight `SIGNALS` entries carry their own phrasing — *"realign
+it"*, *"grant it"*, *"put the doctor on"* — and not one of the eight was in the
+lexicon. Saying what the button says did nothing at all.
+
+And the trap power button printed a phrase that named a **different system from
+its own label**. The label was built from `trap.powerChannel`; the phrase was
+the literal string `'everything to auxiliary'`. So a ship held by a gravimetric
+eddy showed:
+
+> **Everything to engines**
+> *"everything to auxiliary"*
+
+Saying the words on the button returns `unknown`, and the parser's suggestion is
+*"Target their engines / weapons / warp core"* — a combat suggestion, offered to
+a ship that is held. Saying `all power to engines` parses as a **power order**:
+it sets the channel and leaves you trapped, and `trapped` deliberately offers no
+withdraw. The only phrase that worked named the wrong system.
+
+### The guard that exists for exactly this, and could not see either of them
+
+`tests/lang.test.js` already checked that every encounter choice's printed
+phrase parses, and reaches that choice and no other. It was written after five
+buttons were found routing to the wrong handler. It ran against this:
+
+```js
+/** Every encounter the game can put in front of a captain. */
+const SHAPES = [ ...eight hand-written shapes... ];
+```
+
+**`signal` was not among them.** And the `trapped` case below it hardcoded
+`powerChannel: 'auxiliary'` — the one channel whose phrase happened to match —
+so the trap that asks for `engines` was never tried.
+
+A hand-written list of what the world can produce drifts from the world. The
+shapes are derived now: one per `SIGNALS` row, one per channel `TRAPS` actually
+uses, and the fixed shapes for everything whose choices do not vary with
+content. Add a signal and it is covered without anyone remembering to.
+
+### And the declaration that was not the truth
+
+`ENCOUNTER_KINDS` claims to be the kinds the game can roll. `buildTrap` has
+produced `trapped` since traps were written and the array never listed it — and
+**two separate guards enumerate that array to decide what they cover**, including
+"every encounter kind the game can roll has a policy". A kind missing from the
+list is a kind neither guard checks.
+
+### My own guard had the same defect, and the control caught it
+
+The first version asserted that every entry in `ENCOUNTER_KINDS` was covered by
+a shape. Deleting `trapped` from the array made that guard **check less and
+pass** — the control ran clean.
+
+**A list cannot be the authority on its own completeness.** The guard now rolls
+four thousand encounters and asserts that every kind actually *produced* is
+declared, and separately that every declared kind is one the world produces, so
+neither direction can drift. That is the only version whose control fails.
+
+### What was fixed
+
+| | |
+| --- | --- |
+| eight signal phrases | now in the lexicon, with a test that derives the list from `SIGNALS` so a new signal cannot arrive without one |
+| the trap power phrase | built from `trap.powerChannel`, so the label and the words under it name one channel |
+| `everything to engines` | taught to the parser; `build` already routed any *everything to* to `trap_power`, and only the recognition list was short |
+| `ENCOUNTER_KINDS` | gains `trapped` |
+| the phrase guard | derived from `SIGNALS` and `TRAPS` instead of remembered |
+
+### Four leads killed before any of this
+
+The sweep that found it also cleared four things that looked like defects and
+were not, which is the rule that keeps earning its place:
+
+- **`effects.repair`** is implemented and used by no episode — but no episode
+  text promises a repair it does not perform. Latent capability, not a broken
+  promise.
+- **`choice.hidden`, `requires.standing` / `notFlag` / `torpedoes`, `def.vars`,
+  `stage.label`, `where: 'surface'`** are all engine options no content uses. A
+  player never sees that an engine supports `notFlag`; wiring them artificially
+  would be inventing content, and removing them would be churn.
+- **Every one of the seven `PATROL_ERRANDS` has an `observe` payoff** in
+  `PATROL_WATCH`, with no orphans in either direction. Checked, clean.
+- And the first grep for all of this reported `hidden`, `repair` and `vars` as
+  *used* by episodes. All three were prose — the word "hidden" in a stage's
+  narration, "repair teams" in a choice label, `m.vars[key]` in a routing
+  helper. **Reading the matches rather than the counts is what turned a false
+  all-clear into the real finding.**
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
