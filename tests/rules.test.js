@@ -34,7 +34,9 @@ import { Mission } from '../src/missions/engine.js';
 import { Ship } from '../src/sim/ship.js';
 import { AwayTeam, CHECK_TYPES } from '../src/sim/away.js';
 import { Officer } from '../src/sim/officers.js';
-import { Ledger, assessmentOf } from '../src/core/ledger.js';
+import {
+  Ledger, assessmentOf, RECORD_WEIGHTS, WEIGHTLESS_RECORDS,
+} from '../src/core/ledger.js';
 import { RANKS } from '../src/sim/skills.js';
 import { Game } from '../src/core/state.js';
 
@@ -2093,5 +2095,153 @@ describe('an ambush belongs to the place the ship stops, not the place it was ai
     assert.ok(ambushes >= 30, `only ${ambushes} presence-drawn ambushes to check`);
     assert.deepEqual(trespass.slice(0, 5), [],
       `${trespass.length} of ${ambushes} ambushes fielded somebody with no presence where the ship stopped`);
+  });
+});
+
+// The service record, and a commendation that was worth a log entry.
+//
+// `serviceScore` sums `RECORD_WEIGHTS[kind] ?? 0` over the counters, so a kind
+// with no entry in that table contributes EXACTLY ZERO and nothing anywhere
+// says whether that was intended. The score is not decoration: `findingFor`
+// turns it into exonerated, reprimanded or reduced in rank at a Board of
+// Inquiry, and it is on the character sheet twice.
+//
+// Two kinds were written by episodes and weighed nothing.
+//
+//   commendation      Six endings award one. `consequences.js` explains in its
+//                     own comment why it chose a record over a flag: "the
+//                     durable consequence is the `commendation` on the service
+//                     record, which the Starfleet review really does read."
+//                     It did not — and `record()` pushed colony_saved,
+//                     first_contact and treaty_signed onto `commendations`
+//                     while the kind named after the list was left off it.
+//
+//   violated_border   Written by three endings, each alongside a standing hit,
+//                     so crossing the Neutral Zone cost you with the Romulans
+//                     and then left no mark on the record Starfleet reads.
+//                     Its sibling `prime_directive_violation` weighs -14.
+//
+// The durable half is the sweep at the bottom: `endOfCommission` had already
+// established that a deliberately weightless record says so, in a comment on
+// its own call. That practice is a table now, and every kind written anywhere
+// in src/ has to be in one table or the other.
+describe('every record either counts or says why it does not', () => {
+  /** Every record kind written anywhere in src/, comments stripped. */
+  const writtenKinds = () => {
+    let src = '';
+    const walk = (d) => {
+      for (const n of readdirSync(d, { withFileTypes: true })) {
+        if (n.isDirectory()) walk(`${d}/${n.name}`);
+        else if (n.name.endsWith('.js')) {
+          // Comments stripped, because this file and `ledger.js` both discuss
+          // these kinds in prose and a regular expression cannot tell a
+          // sentence about `commendation` from a call that writes one. That
+          // mistake has been made four times in this repo.
+          src += readFileSync(`${d}/${n.name}`, 'utf8')
+            .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+        }
+      }
+    };
+    walk('src');
+    const kinds = new Set();
+    for (const m of src.matchAll(/\.record\(\s*'([a-z_]+)'/g)) kinds.add(m[1]);
+    // The lookbehind is load-bearing. Three episode stages are called
+    // `their_record`, `our_record` and `on_the_record`, and without it the
+    // pattern matched the tail of the STAGE ID and then took the stage's own
+    // next key — so `label` and `text` arrived as record kinds. A regular
+    // expression over source matching the thing next to the thing, again.
+    for (const m of src.matchAll(/(?<![A-Za-z0-9_])record:\s*\{\s*([a-z_]+)/g)) kinds.add(m[1]);
+    // `destroyShip` picks its kind from a ternary rather than a literal call.
+    for (const m of src.matchAll(/civilian \? '([a-z_]+)' : '([a-z_]+)'/g)) {
+      kinds.add(m[1]); kinds.add(m[2]);
+    }
+    return kinds;
+  };
+
+  test('the sweep can see the kinds it is meant to see', () => {
+    // The instrument first. If the patterns above stop matching, every
+    // assertion below passes over an empty set and reports a healthy ledger.
+    const kinds = writtenKinds();
+    assert.ok(kinds.size >= 25, `only ${kinds.size} record kinds found; the sweep has gone blind`);
+    for (const known of ['crew_lost', 'commendation', 'violated_border', 'mission_complete']) {
+      assert.ok(kinds.has(known), `${known} is written in src/ and the sweep missed it`);
+    }
+    assert.equal(kinds.has('not_a_record_kind_at_all'), false);
+  });
+
+  test('and nothing is written that is in neither table', () => {
+    const missing = [...writtenKinds()]
+      .filter((k) => !(k in RECORD_WEIGHTS) && !(k in WEIGHTLESS_RECORDS))
+      .sort();
+    assert.deepEqual(missing, [],
+      `${missing.length} record kinds score zero by omission rather than on purpose`);
+  });
+
+  test('and nothing is in both, because that is two answers', () => {
+    const both = Object.keys(RECORD_WEIGHTS).filter((k) => k in WEIGHTLESS_RECORDS);
+    assert.deepEqual(both, []);
+  });
+
+  test('and every weightless kind gives a reason rather than a shrug', () => {
+    for (const [kind, why] of Object.entries(WEIGHTLESS_RECORDS)) {
+      assert.equal(typeof why, 'string', kind);
+      assert.ok(why.length > 20, `${kind}: "${why}" is not a reason`);
+    }
+  });
+
+  test('a commendation moves the record it is written on', () => {
+    const l = new Ledger();
+    const before = l.serviceScore();
+    l.record('commendation', { text: 'cited' });
+    assert.ok(l.serviceScore() > before,
+      `six of these are what an episode calls a durable consequence, and one moved the score by ${l.serviceScore() - before}`);
+    // Worth a first contact, and less than a treaty. Relations, not constants:
+    // the numbers may be retuned, the ordering is the claim.
+    const scoreOf = (kind) => { const x = new Ledger(); x.record(kind, {}); return x.serviceScore(); };
+    assert.equal(scoreOf('commendation'), scoreOf('first_contact'));
+    assert.ok(scoreOf('commendation') < scoreOf('treaty_signed'));
+  });
+
+  test('and it appears on the list of things you were commended for', () => {
+    // The list already collected colony_saved, first_contact and treaty_signed
+    // — the things Starfleet commends you FOR. The citation itself was the one
+    // kind named after this list that never reached it.
+    const l = new Ledger();
+    l.record('commendation', { text: 'cited' });
+    assert.equal(l.commendations.length, 1);
+    assert.equal(l.commendations[0].kind, 'commendation');
+  });
+
+  test('and crossing a border is on the record, not only on the standing', () => {
+    const l = new Ledger();
+    const before = l.serviceScore();
+    l.record('violated_border', { text: 'crossed' });
+    assert.ok(l.serviceScore() < before, 'a border violation left no mark at the hearing');
+    // Graver kinds stay graver. A treaty line is not a whole culture.
+    const scoreOf = (kind) => { const x = new Ledger(); x.record(kind, {}); return x.serviceScore(); };
+    assert.ok(scoreOf('violated_border') > scoreOf('prime_directive_violation'));
+  });
+
+  test('and enough of them carry a board that would otherwise reprimand', () => {
+    // The consequence end to end, not the arithmetic. The score decides the
+    // FINDING, so a commendation that counts must be able to change one — and
+    // this is the claim the episode comment was making all along.
+    //
+    // The scenario is the claim: five citations outweigh a lost colony and a
+    // disobeyed order. Both arms are asserted, so this cannot pass by the base
+    // record happening to be exonerated already.
+    const base = () => {
+      const l = new Ledger();
+      l.record('order_disobeyed', {});
+      l.record('colony_lost', {});
+      return l;
+    };
+    assert.equal(findingFor(base()).verdict, 'reprimanded',
+      `the uncited record scored ${base().serviceScore()} and was not reprimanded`);
+
+    const cited = base();
+    for (let i = 0; i < 5; i++) cited.record('commendation', { text: 'cited' });
+    assert.equal(findingFor(cited).verdict, 'exonerated',
+      `five commendations scored ${cited.serviceScore()} and did not carry the board`);
   });
 });

@@ -6151,6 +6151,92 @@ two places for the vacuum to drift apart from itself, so it is one exported
 object used by both.
 
 
+## 74. A commendation worth a log entry
+
+`serviceScore()` is one line:
+
+```js
+score += (RECORD_WEIGHTS[kind] ?? 0) * n;
+```
+
+That `?? 0` is the whole defect. A record kind with no entry in the table
+contributes **exactly zero and says nothing about it**, so from inside the game
+"deliberately worth nothing" and "forgotten" are the same value.
+
+And the score is not decoration. `findingFor` turns it into **exonerated,
+reprimanded, or reduced in rank** at a Board of Inquiry, and it is on the
+character sheet twice.
+
+### The one that says out loud what it was supposed to do
+
+`consequences.js` — a file whose entire subject is flags that nothing reads —
+explains in its own comment why one ending writes a record rather than a flag:
+
+> No flag on either ending here, deliberately. A first draft set
+> `utopia_finding` and the test caught it: nothing reads it, which is the exact
+> defect this whole file is about… The durable consequence is the
+> `commendation` on the service record, **which the Starfleet review really does
+> read.**
+
+It did not. Six episode endings award a `commendation` and every one of them
+weighed nothing. The author avoided writing an inert flag by writing an inert
+record instead, in the file about inert flags.
+
+**And there is a second half to it.** `record()` collects
+`colony_saved`, `first_contact` and `treaty_signed` into `this.commendations` —
+the things Starfleet commends you *for*. The kind literally named
+`commendation`, the citation itself, was **the one record in the game named
+after that list that never reached it.**
+
+### And its sibling
+
+`violated_border` is written by three endings, each alongside a standing hit —
+so crossing the Romulan Neutral Zone and firing first cost you with the Romulans
+and then left **no mark at all on the record Starfleet reads at the hearing**,
+while `prime_directive_violation` weighed −14.
+
+| | weight |
+| --- | --- |
+| `commendation` | 8, the same as a first contact and less than a treaty at 15 |
+| `violated_border` | −6, the same as ignoring a distress call, above −14 for a whole culture |
+
+Five citations now carry a board that a lost colony and a disobeyed order would
+otherwise have reprimanded — asserted on the **finding**, both arms, so it
+cannot pass by the base record happening to be clear already.
+
+### The durable half, and the practice that was already here
+
+The fix that matters is not the two numbers. `endOfCommission` had already got
+this right for the one case it knew about, in a comment on its own call:
+
+> Recorded, and deliberately weightless: `RECORD_WEIGHTS` has no entry for this,
+> so `serviceScore()` counts it as zero… a captain does not get to be Exemplary
+> for having merely lasted.
+
+That practice is a **table** now — `WEIGHTLESS_RECORDS`, thirteen kinds each
+with a one-line reason — and a sweep holds every record kind written anywhere in
+`src/` to being in exactly one of the two. A new kind can no longer score zero
+by omission. Thirteen were left weightless *on purpose and in writing* rather
+than wired, which is the §68 discipline: a sweep whose only output is "weight
+everything you find" would have made the review a count of missions flown.
+
+`record()`'s own doc comment said `kind` may be "a `RECORD_WEIGHTS` key **or any
+custom tag**". That sentence is how this happened, and it is gone.
+
+### The instrument, wrong in a new way
+
+The sweep first reported `label` and `text` as unweighted record kinds. Neither
+is a record kind. The pattern was `record:\s*\{\s*([a-z_]+)`, and three episode
+stages are called **`their_record`, `our_record` and `on_the_record`** — so it
+matched the tail of a *stage id* and then took that stage's own next key.
+
+A regular expression over source matching the thing next to the thing. The same
+family as the four comment-prose failures already recorded here, and the fix is
+the same shape: anchor it, with a negative lookbehind, so `record:` has to be a
+whole word. Comments are stripped too — this dossier and `ledger.js` both
+discuss these kinds in prose.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
