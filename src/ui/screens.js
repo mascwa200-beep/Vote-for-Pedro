@@ -910,9 +910,16 @@ export function tacticalScreen(app) {
   const factionId = eng.hostiles[0]?.faction;
   const inbound = g.helpInbound;
   const comms = [];
-  if (FACTIONS[factionId]?.hailable) {
-    comms.push(button('Hail them', tap(() => app.openHail(factionId)),
-      { say: 'open a channel', color: 'lilac' }));
+  // "Xenolinguist — unhailable factions may answer once." Three factions carry
+  // `hailable: false` and this button has never been drawn for them at all, so
+  // the trait's second clause could not happen even in principle.
+  const reach = g.mayReachUnhailable?.(factionId);
+  if (FACTIONS[factionId]?.hailable || reach) {
+    comms.push(button('Hail them', tap(() => app.openHail(factionId)), {
+      say: 'open a channel',
+      color: 'lilac',
+      sub: reach ? 'Your linguist thinks they can be reached. Once.' : '',
+    }));
   }
   if (inbound) {
     comms.push(el('p', { class: 'hint', text: `${inbound.name} inbound — ${Math.max(0, Math.round(inbound.eta))} seconds out.` }));
