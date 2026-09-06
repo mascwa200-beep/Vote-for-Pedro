@@ -10,8 +10,15 @@
 import { emit } from './events.js';
 import { FACTIONS, standingTier } from '../world/factions.data.js';
 
-/** Weights that feed the eventual Starfleet review of your command. */
-const RECORD_WEIGHTS = {
+/**
+ * Weights that feed the eventual Starfleet review of your command.
+ *
+ * Exported so a test can hold it against `WEIGHTLESS_RECORDS` below and against
+ * every kind actually written in src/. `serviceScore` reads a missing kind as
+ * zero, so without that sweep the difference between "worth nothing" and
+ * "forgotten" is invisible from inside the game.
+ */
+export const RECORD_WEIGHTS = {
   lives_saved: 0.02,
   lives_lost: -0.05,
   crew_lost: -1.2,
@@ -34,6 +41,61 @@ const RECORD_WEIGHTS = {
   surrender_refused: -8,
   anomaly_catalogued: 3,
   order_disobeyed: -5,
+  // A citation, weighing nothing.
+  //
+  // Six episode endings award one, and `consequences.js` says in its own
+  // comment why it chose a record over a flag: "the durable consequence is the
+  // `commendation` on the service record, which the Starfleet review really
+  // does read." It did not. `serviceScore` sums `RECORD_WEIGHTS[kind] ?? 0`, so
+  // a kind with no entry contributes exactly zero and says nothing about it —
+  // and that score is what `findingFor` turns into exonerated, reprimanded or
+  // reduced in rank at a Board of Inquiry. A captain could arrive at a hearing
+  // with six commendations and none of them counted.
+  //
+  // Worth a first contact. Both are a notable thing done once and formally
+  // noted, and a treaty at 15 should still outrank either.
+  commendation: 8,
+  // Its sibling weighed -14 and this weighed nothing.
+  //
+  // Every episode that writes it also charges standing to the faction whose
+  // border it was, so crossing the Neutral Zone and firing first cost you with
+  // the Romulans — and then left no mark at all on the record Starfleet reads
+  // at the hearing. Less grave than a Prime Directive violation, which is about
+  // a whole culture rather than a treaty line, and the same as ignoring a
+  // distress call.
+  violated_border: -6,
+};
+
+/**
+ * Kinds that are recorded and deliberately weigh NOTHING.
+ *
+ * `serviceScore` cannot tell a kind that was left out from a kind that was left
+ * out on purpose — both come to `?? 0` — which is how a commendation came to be
+ * worth the same as a log entry. `endOfCommission` had already established the
+ * right practice for the one case it knew about, in a comment on the call:
+ * "recorded, and deliberately weightless... a captain does not get to be
+ * Exemplary for having merely lasted."
+ *
+ * So the intent is written down rather than inferred, and `tests/rules.test.js`
+ * holds every kind written anywhere in src/ to being in exactly one of these
+ * two tables. A new record kind can no longer score zero by omission.
+ *
+ * None of these is a merit or a demerit. They are the things that happened.
+ */
+export const WEIGHTLESS_RECORDS = {
+  away_mission: 'a landing party is an event, and its outcome is recorded separately',
+  bribe_paid: 'the price is paid in latinum and in Ferengi regard, both immediately',
+  captain_wounded: 'the cost of leading in person, already paid by the party breaking off',
+  command_accepted: 'taking a command is the start of a record, not an entry in one',
+  command_declined: 'and so is declining one',
+  commission_completed: 'a captain does not get to be Exemplary for having merely lasted',
+  inquiry_concluded: 'the finding is the consequence; this is the fact that it happened',
+  mission_complete: 'weighting it would make the review a count of missions flown',
+  objective_failed: 'what the failure cost is recorded by whatever it cost',
+  ship_captured: 'a prize is worth what the salvage and the standing are worth',
+  ship_crippled: 'not a kill, and the kill is what the record counts',
+  ship_stranded: 'a hazard survived, not a thing done well or badly',
+  signal_answered: 'answering a beacon is courtesy, and it pays in what it finds',
 };
 
 /**
@@ -85,7 +147,13 @@ export class Ledger {
 
   /**
    * Record something that happened.
-   * @param {string} kind    a RECORD_WEIGHTS key or any custom tag
+   *
+   * `kind` must appear in `RECORD_WEIGHTS` or in `WEIGHTLESS_RECORDS`, and a
+   * test holds every kind written anywhere in src/ to that. It used to say "or
+   * any custom tag", which is how a commendation came to be worth nothing: an
+   * unlisted kind scores zero and nothing anywhere says whether that was meant.
+   *
+   * @param {string} kind    a RECORD_WEIGHTS or WEIGHTLESS_RECORDS key
    * @param {object} detail  { stardate, system, text, count, faction, ... }
    */
   record(kind, detail = {}) {
@@ -111,7 +179,14 @@ export class Ledger {
         this.openInquiry('a pattern of Prime Directive violations', entry);
       }
     }
-    if (kind === 'colony_saved' || kind === 'first_contact' || kind === 'treaty_signed') {
+    // What gets cited. Saving a colony, a first contact, a treaty signed — and
+    // a commendation, which was the one kind this list left out.
+    //
+    // The three above are things Starfleet commends you FOR. `commendation` is
+    // the citation itself, awarded by an episode ending, and it was the only
+    // record in the game named after this list that did not appear on it.
+    if (kind === 'colony_saved' || kind === 'first_contact'
+      || kind === 'treaty_signed' || kind === 'commendation') {
       this.commendations.push(entry);
     }
 
