@@ -1,5 +1,24 @@
 // Episodes 1-8: the Federation interior and the Klingon border.
 
+/**
+ * Which finding the board returns — read off the board that returned it.
+ *
+ * By the time this runs the engine has already sat the board (`inquiry: true`
+ * on the choice) and put its verdict on `applied.finding`. `rules/inquiry.js`
+ * names the three verdicts; this names the three rooms they are read in.
+ *
+ * NOT `ledger.assessment()`, which is what the finale's `byRecord` reads: it
+ * reports 'inquiry' for as long as a board is sitting (ledger.js:312), which
+ * is true and useless here, because a court-martial is the one scene where a
+ * board is always sitting. Every captain would have walked into the same room.
+ *
+ * The default is 'reprimanded' rather than 'exonerated' because that is what
+ * `findingFor` returns on a record with nothing on it — a captain nobody has
+ * assessed is not a captain the board clears.
+ */
+const byFinding = (m, applied) => applied?.finding?.verdict ?? 'reprimanded';
+byFinding.targets = ['exonerated', 'reprimanded', 'reduced'];
+
 export const CORE_EPISODES = [
   // -------------------------------------------------------------------------
   {
@@ -702,6 +721,29 @@ export const CORE_EPISODES = [
             effects: { xp: 300, standing: { federation: 6 } } },
           { id: 'blame', label: 'Cite your orders and the conditions', next: 'defence',
             effects: { xp: 150, flag: 'deflected_blame' } },
+          // What the room hears about the rest of the commission.
+          //
+          // The board already READS all of it: `serviceScore` weighs every
+          // record entry from act 1 onward and `findingFor` turns that into
+          // the verdict. What was missing is that the room never said any of
+          // it out loud — so a captain who reported a cloaking device instead
+          // of keeping it sat through a hearing that never mentioned it.
+          //
+          // Testimony, not evidence: experience, standing and a flag, and no
+          // `record`. A choice at the hearing that wrote a record entry would
+          // be the captain entering evidence about the hearing into the log
+          // the hearing is reading — and this file's own doctrine is that the
+          // log is incontrovertible (rules/inquiry.js).
+          { id: 'cloak', label: 'Ask that the Outpost 4 report be entered',
+            next: 'defence', requires: { flag: 'romulan_cloak_reported' },
+            effects: { xp: 400, standing: { federation: 8 } } },
+          // Six ranks and a whole commission ago, and the earliest room in
+          // which it can be owned. `homecoming` offers the same correction at
+          // the end of the five years; a captain gets to make it once, and
+          // making it here costs more and is worth more.
+          { id: 'trials', label: 'Correct the shakedown report before they reach it',
+            next: 'accept', requires: { flag: 'falsified_report' },
+            effects: { xp: 350, standing: { federation: 10 }, flag: 'came_clean' } },
         ],
       },
       defence: {
@@ -713,6 +755,12 @@ export const CORE_EPISODES = [
             effects: { xp: 400 } },
           { id: 'object', label: 'Object to the question', next: 'verdict',
             effects: { xp: 100, standing: { federation: -6 } } },
+          // The thing a board would actually ask about, offered before they
+          // ask. The Romulans think better of a captain who says it in a
+          // Federation hearing than of one who lets it be found.
+          { id: 'concede', label: 'Concede that you fired first in the Neutral Zone',
+            next: 'verdict', requires: { flag: 'fired_first_neutral_zone' },
+            effects: { xp: 300, standing: { federation: 4, romulan: 6 } } },
         ],
       },
       accept: {
@@ -725,18 +773,73 @@ export const CORE_EPISODES = [
       },
       verdict: {
         where: 'anywhere',
-        text: 'The board withdraws for four hours and returns.',
+        text: 'The board withdraws for four hours and returns. The president has one page in front of him, and he does not sit down to read it.',
         speaker: 'Board of Inquiry',
         choices: [
-          { id: 'hear', label: 'Stand for the finding', outcome: 'verdict',
-            effects: { xp: 600 } },
+          // `inquiry: true` is the board actually sitting — the same call
+          // docking makes, through the same door on the Game, so the rank
+          // ladder unfreezes and no second board sits later for this one.
+          // `time: 2` is the two days a hearing costs, which the dock charged
+          // and the episode did not.
+          { id: 'hear', label: 'Stand for the finding', next: byFinding,
+            effects: { inquiry: true, xp: 600, time: 2 } },
+        ],
+      },
+      // The three rooms the three verdicts are read in.
+      //
+      // Each has to be true in both orders: the paper may have been signed in
+      // this room ten minutes ago, or at the dock last week by the board this
+      // hearing is about. So none of them says "the board has decided" — they
+      // say what the finding IS and what it does, which does not change with
+      // where it was signed.
+      exonerated: {
+        where: 'anywhere',
+        text: 'No fault. The president reads it in four sentences and none of them is about you: the circumstances, the decisions available, and the finding that a reasonable officer in that chair would have done what you did. The advocate closes the file. Somebody at the back of the room starts collecting the chairs.',
+        speaker: 'Board of Inquiry',
+        choices: [
+          { id: 'accept_clear', label: 'Thank the board and stand down', outcome: 'exonerated',
+            effects: { xp: 500, standing: { federation: 8 } } },
+          { id: 'the_dead', label: 'Ask that the names be read anyway', outcome: 'exonerated',
+            effects: { xp: 700, standing: { federation: 12 } } },
+        ],
+      },
+      reprimanded: {
+        where: 'anywhere',
+        text: 'A formal reprimand. It is two paragraphs, it is on your record permanently, and it is read out in a room with four people in it and no press. The president says the board considered the alternative and did not reach it. He does not say which alternative.',
+        speaker: 'Board of Inquiry',
+        choices: [
+          { id: 'accept_rep', label: 'Accept it without comment', outcome: 'reprimanded',
+            effects: { xp: 400 } },
+          { id: 'ask_terms', label: 'Ask what it will mean for the ship', outcome: 'reprimanded',
+            effects: { xp: 600, standing: { federation: 4 } } },
+        ],
+      },
+      reduced: {
+        where: 'anywhere',
+        text: 'The finding is against you and the board takes a rank for it. The president reads the reduction, the reasons, and the sentence that says you retain command — because Starfleet is short of hulls and shorter of people who have sat in that chair. Nobody in the room enjoys any part of it.',
+        speaker: 'Board of Inquiry',
+        choices: [
+          { id: 'accept_red', label: 'Accept the reduction', outcome: 'reduced',
+            effects: { xp: 500 } },
+          { id: 'the_ship', label: 'Ask only whether you keep the ship', outcome: 'reduced',
+            effects: { xp: 700, standing: { federation: 6 } } },
         ],
       },
     },
     start: 'start',
     endings: {
-      verdict: { label: 'Finding delivered',
-        text: 'The finding is entered into your record, where it stays.',
+      // All three carry `inquiry_resolved`. It is the flag `homecoming` reads
+      // five years later when a captain in front of the final board refers
+      // them to the inquiry's own finding — and that referral is worth making
+      // whichever way this one went.
+      exonerated: { label: 'Exonerated',
+        text: 'The finding is entered into your record, where it stays, and what it says is that there was nothing to answer.',
+        effects: { flag: 'inquiry_resolved' } },
+      reprimanded: { label: 'Formal reprimand',
+        text: 'The finding is entered into your record, where it stays. So is the reprimand, and it will be read by everyone who reads the record.',
+        effects: { flag: 'inquiry_resolved' } },
+      reduced: { label: 'Reduced in rank',
+        text: 'The finding is entered into your record, where it stays. The rank is gone, and it is gone the way ranks go: quietly, in a room, on a page. You will have to fly the gap again.',
         effects: { flag: 'inquiry_resolved' } },
     },
   },

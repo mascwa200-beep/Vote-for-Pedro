@@ -1702,6 +1702,180 @@ describe('the board of inquiry actually sits', () => {
     assert.equal(restored.inquiryReason, g.ledger.inquiryReason,
       'the board came back not knowing what it was about');
   });
+
+  test('and a rank the board takes is not handed back by the next point of experience', () => {
+    // The heaviest penalty in the game, undone by the next thing that
+    // happened. `convene` did `rankIndex--` and nothing else, so the
+    // experience that had earned the rank was still banked against a
+    // threshold now sitting below the total:
+    //
+    //     rank before dock : Fleet Captain
+    //     finding          : Reduced in rank -> Captain
+    //     one more xp point: promoted -> Fleet Captain, +5 skill points
+    //
+    // It did not merely undo the demotion. It paid five skill points for it,
+    // and it could be done again at the next board.
+    const g = new Game({ seed: 0x1701n, crewMode: 'original' });
+    g.progress.addXP(120000, { ledger: g.ledger });
+    for (let i = 0; i < 4; i += 1) g.ledger.record('prime_directive_violation', { text: 'p' });
+    const before = g.progress.rank.name;
+    const points = g.progress.unspent;
+    const finding = putIn(g).finding;
+    assert.equal(finding.verdict, 'reduced', 'the board did not find against him');
+    const reduced = g.progress.rank.name;
+    assert.notEqual(reduced, before, 'no rank was taken');
+
+    g.progress.addXP(1, { ledger: g.ledger });
+    assert.equal(g.progress.rank.name, reduced,
+      `one point of experience put ${reduced} back to ${g.progress.rank.name}`);
+    assert.equal(g.progress.unspent, points,
+      'the rank was taken and its skill points were granted a second time');
+
+    // And the gap is real: the rank comes back when it is flown again, not
+    // before. This is the other half — a demotion that could never be undone
+    // would be a different bug.
+    g.progress.addXP(1e6, { ledger: g.ledger });
+    assert.notEqual(g.progress.rank.name, reduced,
+      'the rank could not be earned back at all');
+  });
+});
+
+describe('the board of inquiry is the one the episode is about', () => {
+  /** A captain with a record, a board open, and Starbase 11 under the keel. */
+  const summoned = (records = {}, { standing = null } = {}) => {
+    const g = new Game({
+      seed: 0x1701n, crewMode: 'original',
+      character: new Character({ speciesId: 'human', careerId: 'command' }),
+    });
+    g.progress.addXP(30000, { ledger: g.ledger });
+    for (const [kind, n] of Object.entries(records)) {
+      for (let i = 0; i < n; i += 1) g.ledger.record(kind, { text: kind });
+    }
+    if (standing !== null) g.ledger.standing.federation = standing;
+    g.ledger.openInquiry('the loss of the Merrimack');
+    g.ledger.setFlag('inquiry_summoned');
+    g.locationId = 'starbase_11';
+    return g;
+  };
+
+  /** Sit through the hearing, taking whichever arm the board actually reads. */
+  const TERMINAL = { exonerated: 'accept_clear', reprimanded: 'accept_rep', reduced: 'accept_red' };
+  const sitThrough = (g) => {
+    const m = g.missions.start('court_martial', g);
+    const step = (id) => {
+      const here = m.testLocation();
+      if (!here.ok) g.locationId = here.need;
+      const took = m.choose(id);
+      assert.ok(took, `the hearing refused "${id}" at ${m.stageId}`);
+    };
+    step('accept');
+    step('continue');
+    step('hear');
+    const arm = m.stageId;
+    step(TERMINAL[arm] ?? 'accept_rep');
+    g.missions.finishActive();
+    return { m, arm };
+  };
+
+  test('sitting through it is what sits the board', () => {
+    // "The board withdraws for four hours and returns." It returned nothing:
+    // no finding on the record, the inquiry still open, the promotion still
+    // held — and then the real board sat a SECOND time at the dock and took a
+    // rank for a hearing that had already happened on screen.
+    const g = summoned({ prime_directive_violation: 4 });
+    assert.equal(g.ledger.inquiryOpen, true);
+    const { m } = sitThrough(g);
+
+    assert.ok(m.complete, 'the hearing did not end');
+    assert.equal(g.ledger.inquiryOpen, false, 'the board sat and never reported');
+    assert.equal(g.ledger.findings.length, 1,
+      `the record carries ${g.ledger.findings.length} findings, not one`);
+
+    // And no second board for the same hearing.
+    g.locationId = venueFor(g).id;
+    const docked = g.dock();
+    assert.equal(docked.finding, null, 'a second board sat for the same inquiry');
+    assert.equal(g.ledger.findings.length, 1, 'the dock added a second finding');
+  });
+
+  test('and the room the finding is read in follows the record', () => {
+    // The measured defect, stated as a test. A captain scoring 180 and a
+    // captain scoring -56 walked into the same room and heard the same
+    // sentence, while the engine already knew one was to be cleared and the
+    // other reduced in rank.
+    const good = summoned({ treaty_signed: 12 });
+    const bad = summoned({ prime_directive_violation: 4 });
+    const goodRank = good.progress.rank.name;
+    const badRank = bad.progress.rank.name;
+
+    const a = sitThrough(good);
+    const b = sitThrough(bad);
+
+    assert.equal(a.arm, 'exonerated', `a record of ${good.ledger.serviceScore()} was heard in ${a.arm}`);
+    assert.equal(b.arm, 'reduced', `a record of ${bad.ledger.serviceScore()} was heard in ${b.arm}`);
+    assert.notEqual(a.m.outcome, b.m.outcome, 'both records ended the same way');
+    assert.equal(good.progress.rank.name, goodRank, 'the cleared captain lost a rank');
+    assert.notEqual(bad.progress.rank.name, badRank, 'the reduction took no rank');
+  });
+
+  test('and the room and the record say the same thing', () => {
+    for (const records of [{ treaty_signed: 12 }, {}, { prime_directive_violation: 4 }]) {
+      const g = summoned(records);
+      const { m } = sitThrough(g);
+      assert.equal(m.outcome, g.ledger.findings.at(-1).verdict,
+        `the room read ${m.outcome} and the record says ${g.ledger.findings.at(-1).verdict}`);
+    }
+  });
+
+  test('and it costs the same whether the board sat here or at the dock', () => {
+    // Order B: put in first, be tried, and then walk into the hearing about
+    // it. The episode is offered either way — `inquiry_summoned` is never
+    // cleared — so the only question is whether the second telling charges
+    // the captain twice. It did: two boards, two ranks.
+    //
+    // Federation standing is set off the cap on purpose. `adjustStanding`
+    // clamps at 100 and a fresh captain starts there, so at the cap the two
+    // orders differ by whatever the hearing paid before the board took its
+    // fifteen — an artefact of the clamp, not of the hearing.
+    const a = summoned({ prime_directive_violation: 4 }, { standing: 50 });
+    const b = summoned({ prime_directive_violation: 4 }, { standing: 50 });
+
+    sitThrough(a);
+    a.locationId = venueFor(a).id;
+    a.dock();
+
+    b.locationId = venueFor(b).id;
+    b.dock();
+    sitThrough(b);
+
+    assert.equal(a.progress.rankIndex, b.progress.rankIndex,
+      `play-then-dock left him at ${a.progress.rank.name}, dock-then-play at ${b.progress.rank.name}`);
+    assert.equal(a.ledger.findings.length, 1, 'play-then-dock recorded two findings');
+    assert.equal(b.ledger.findings.length, 1, 'dock-then-play recorded two findings');
+    assert.equal(a.ledger.standingOf('federation'), b.ledger.standingOf('federation'),
+      'the order the hearing was told in changed what it cost');
+  });
+
+  test('and the promotion unfreezes wherever the board sat', () => {
+    // `promotionHeld` is a said-once latch, and it was cleared in exactly one
+    // place: inside `dock()`. A board that sat any other way would have left
+    // it latched forever, and the NEXT board would then have held a promotion
+    // in total silence — a flag set in one place and cleared in one unrelated
+    // place, which is the shape of the bug this whole file records.
+    const g = summoned({ prime_directive_violation: 4 });
+    g.awardXP(1e6);
+    assert.equal(g.promotionHeld, true, 'the captain was never told his promotion was held');
+
+    sitThrough(g);
+    assert.equal(g.promotionHeld, false, 'the board reported and the latch stayed set');
+
+    // A second board, and it must say so again.
+    g.ledger.openInquiry('a second matter');
+    g.log.length = 0;
+    g.awardXP(1e6);
+    assert.match(g.log.map((e) => e.text).join(' '), /holding it/i,
+      'the second board held a promotion and told the captain nothing');
+  });
 });
 
 test('a feat can be taken without a screen, and only when one is banked', () => {

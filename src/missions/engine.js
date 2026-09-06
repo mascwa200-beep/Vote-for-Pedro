@@ -308,6 +308,46 @@ export class Mission {
       for (const f of [].concat(effects.flag)) g.ledger.setFlag(f);
     }
 
+    // The board of inquiry the episode is about is the board the game keeps.
+    //
+    // `court_martial` dramatised a hearing while `rules/inquiry.js` held a real
+    // one, and the two had never met. Its verdict stage read no state at all,
+    // so a captain scoring 0 and a captain scoring -220 heard the same
+    // sentence — "the board withdraws for four hours and returns" — and it
+    // returned nothing: no finding on the record, the inquiry still open, the
+    // promotion still held, and then the mechanical board sitting a SECOND
+    // time at the dock and taking a rank for a hearing already held on screen.
+    //
+    // Through the Game rather than through `convene` directly, so the rank
+    // ladder unfreezes and the bookkeeping is exactly what docking does.
+    //
+    // BEFORE the experience, deliberately. `addXP` banks the points but
+    // refuses the promotion while a board is open (skills.js:115), and grants
+    // a rank only at the moment of an award — never retroactively. Applied
+    // after the experience, a captain who had earned the next rank in that
+    // very scene would sit at the old one until some unrelated later payout.
+    if (effects.inquiry) {
+      const board = g.concludeInquiry?.({ hours: 0 }) ?? { sat: false, finding: null };
+      out.finding = board.finding;
+      out.inquirySat = board.sat;
+      if (board.sat) {
+        out.messages.push(board.finding.text);
+        if (board.finding.reducedTo) {
+          out.messages.push(`Your rank is now ${board.finding.reducedTo}.`);
+        }
+      } else if (g.ledger.findings.length) {
+        // The board reported at the dock before the captain sat down in the
+        // room. The finding is real and already on the record; saying so is
+        // true in a way that re-announcing it would not be.
+        out.messages.push(`The finding already on your record stands: ${board.finding.label}.`);
+      }
+      // And nothing at all when no board was ever held. The third arm of the
+      // fallback is `findingFor`, which the Record screen renders as "on the
+      // record as it stands the finding WOULD be" — a forecast. It is a sound
+      // routing input, because it guarantees the stage after this one exists.
+      // It is not a thing to put in the log as a verdict nobody returned.
+    }
+
     // "Silent Partnership — every mission reward is increased by half. They
     // take their cut invisibly." Two hundred and eighty Bars of Latinum for
     // nothing at all: the perk went into a Set no code read.

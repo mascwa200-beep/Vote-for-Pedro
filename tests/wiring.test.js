@@ -1443,6 +1443,140 @@ describe('every episode graph is sound', () => {
     assert.deepEqual(stray, [], 'branch arms the engine never follows');
   });
 
+  test('and every effect a choice declares is one the engine actually applies', () => {
+    // The sibling of the gate guard above, and the same silent failure in the
+    // same dangerous direction: `applyEffects` reads the keys it knows and
+    // ignores the rest without a word, so a misspelled effect is not an error.
+    // It is a reward that never pays, a flag that is never set, or — the one
+    // that prompted writing this — a board of inquiry that never sits.
+    //
+    // Read off `applyEffects` rather than restated from memory: two copies of
+    // this list would drift and this would be the one that ended up wrong.
+    const engineSrc = readFileSync(
+      new URL('../src/missions/engine.js', import.meta.url), 'utf8',
+    );
+    const applied = new Set(
+      [...engineSrc.matchAll(/effects\.([a-zA-Z_$][\w$]*)/g)].map((m) => m[1]),
+    );
+    assert.ok(applied.size >= 12, `only ${applied.size} effect keys found in the engine`);
+
+    const unknown = [];
+    const seen = new Set();
+    const sweep = (where, effects) => {
+      for (const k of Object.keys(effects ?? {})) {
+        seen.add(k);
+        if (!applied.has(k)) unknown.push(`${where}: effects.${k}`);
+      }
+    };
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) sweep(`${ep.id}/${sid}/${c.id}`, c.effects);
+      }
+      for (const [oid, ending] of Object.entries(ep.endings ?? {})) {
+        sweep(`${ep.id}/ending:${oid}`, ending.effects);
+      }
+    }
+    assert.deepEqual(unknown, [],
+      'effect keys `applyEffects` never reads, so the effect silently does nothing');
+    assert.ok(seen.size >= 10, `only ${seen.size} distinct effects in the whole book`);
+  });
+
+  test('and no choice sits a board of inquiry and orders a fight at once', () => {
+    // `applyEffects` holds exactly four keys when a choice starts a fight —
+    // standing, record, flag and xp, the rewards for winning — and applies
+    // everything else immediately. A board of inquiry is not a reward, so
+    // `inquiry` is deliberately NOT in that destructure; the cost of that
+    // decision is that a choice declaring both would sit the board before the
+    // shooting started. Nothing declares both today. This is what keeps it so,
+    // rather than adding a branch to the engine that nothing would exercise.
+    const both = [];
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          if (c.effects?.inquiry && c.effects?.combat) both.push(`${ep.id}/${sid}/${c.id}`);
+        }
+      }
+    }
+    assert.deepEqual(both, [], 'a hearing that starts a battle sits the board first');
+  });
+
+  test('every flag an episode reads was earned in an earlier act', () => {
+    // The rule existed three times, each copy scoped to one file's own
+    // episodes — `consequences.test.js`, `echoes.test.js`, `accords.test.js` —
+    // so nothing held it over the book. `court_martial` is act 3 and reads
+    // acts 1 and 2; without this, gating it on an act-3 flag written by a
+    // different act-3 episode would be a coin toss on episode order.
+    //
+    // Two exemptions, both real:
+    //
+    //   - A flag the reading episode WRITES ITSELF. Five reads do this today
+    //     (`cardassia_debt/name`, `khitomer_accord` three times,
+    //     `long_watch/mine`), each reading something an earlier stage of the
+    //     same episode set. That is intra-episode memory and it is legitimate;
+    //     it is also exactly what the three scoped copies could never see.
+    //   - `inquiry_summoned`, which `main.js` sets when a board opens rather
+    //     than any episode. `finale.test.js` already carries the same carve-out.
+    const OFF_BOOK = new Set(['inquiry_summoned']);
+    const writesOf = (ep) => {
+      const out = new Set();
+      for (const stage of Object.values(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          for (const f of [].concat(c.effects?.flag ?? [])) out.add(f);
+        }
+      }
+      for (const ending of Object.values(ep.endings ?? {})) {
+        for (const f of [].concat(ending.effects?.flag ?? [])) out.add(f);
+      }
+      return out;
+    };
+    const actsThatSet = new Map();
+    for (const ep of EPISODES) {
+      for (const f of writesOf(ep)) {
+        actsThatSet.set(f, Math.min(actsThatSet.get(f) ?? Infinity, ep.act));
+      }
+    }
+
+    const check = (book) => {
+      const bad = [];
+      for (const ep of book) {
+        const mine = writesOf(ep);
+        const reads = [];
+        for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+          for (const c of stage.choices ?? []) {
+            if (c.requires?.flag) reads.push([`${sid}/${c.id}`, c.requires.flag]);
+            if (c.requires?.notFlag) reads.push([`${sid}/${c.id}`, c.requires.notFlag]);
+          }
+        }
+        if (ep.requiresFlag) reads.push(['<gate>', ep.requiresFlag]);
+        if (ep.blockedByFlag) reads.push(['<gate>', ep.blockedByFlag]);
+        for (const [where, flag] of reads) {
+          if (OFF_BOOK.has(flag) || mine.has(flag)) continue;
+          const first = actsThatSet.get(flag);
+          if (first === undefined) { bad.push(`${ep.id}/${where} reads ${flag}, which nothing writes`); continue; }
+          if (!(first < ep.act)) {
+            bad.push(`${ep.id} is act ${ep.act} and ${where} reads ${flag}, first written in act ${first}`);
+          }
+        }
+      }
+      return bad;
+    };
+
+    assert.deepEqual(check(EPISODES), [], 'flags read before anything could have earned them');
+
+    // The positive control, in this file's own style: the checker has to
+    // report a violation that is really there, or it is only reporting that
+    // the book is small.
+    const planted = {
+      id: 'planted', title: 'planted', system: 'sol', act: 1,
+      stages: { start: { text: 'x', choices: [
+        { id: 'a', label: 'a', outcome: 'done', requires: { flag: 'inquiry_resolved' } },
+      ] } },
+      start: 'start',
+      endings: { done: { label: 'done', text: 'x' } },
+    };
+    assert.equal(check([planted]).length, 1, 'the checker cannot see a violation put in front of it');
+  });
+
   test('every episode can be played to an end, by any route', () => {
     // Random legal choices, thirty runs each. The engine has no loop guard, so
     // a cycle in the graph would hang the player rather than fail loudly.

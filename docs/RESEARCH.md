@@ -8412,6 +8412,221 @@ four played to **both** ends of their branches through the real location and roo
 gates.
 
 
+## 92. The board that never sat, and the demotion one point of experience undid
+
+The backlog item was "forty-nine episode flags are written and read by nothing;
+find out which of them represent lost branching before deciding whether to wire
+them or delete them." §91 had just established the rule that an unwired thing is
+a hypothesis rather than a defect, so the work was to measure rather than to
+assume. Measuring it found something larger than a flag, and then a second thing
+underneath that, and the two turned out to need each other.
+
+### The lead: one episode reads nothing, and its twin reads ten
+
+Two episodes in the book put the captain's command on trial. Comparing what each
+one actually reads:
+
+```
+=== court_martial (act 3) — Board of Inquiry
+    "Starfleet has questions about your command, and this time they are formal."
+    choices that read ANY prior state: 0
+
+=== homecoming (act 5) — Homecoming
+    "Starfleet convenes to review your command in full."
+    choices that read ANY prior state: 10
+```
+
+`homecoming` had been given this treatment already: it routes to three different
+rooms on the record and offers ten gated choices, each one a thing the captain
+did years earlier. `court_martial` — an episode whose entire premise is a formal
+inquiry into the captain's conduct — reads nothing at all. Act 2 writes
+`fired_first_neutral_zone`, which is precisely the sort of thing a board of
+inquiry exists to ask about, and the board never asks.
+
+### What the measurement actually found
+
+The game has **two** boards of inquiry, and they had never met.
+
+One is mechanical: `rules/inquiry.js` reads the service record, bands it the same
+way the captain's own screen does, and returns exonerated, reprimanded or reduced
+in rank. It is closed from `Game.dock()`, and the screens already print what it
+will find before the captain sails into it.
+
+The other is the episode. Driven through the game's own door:
+
+```
+service score   0.0    engine finding WOULD be : Formal reprimand
+service score -220.0   engine finding WOULD be : Reduced in rank
+
+both hear     : "The board withdraws for four hours and returns."
+both are told : "The finding is entered into your record, where it stays."
+
+after the episode:  ledger.findings = []   inquiryOpen = true   promotion still held
+```
+
+The board withdrew and returned nothing. The ending's sentence is not merely
+thin, it is false: no finding is entered, the inquiry is still open, and the
+promotion the screens promised would be released "until the board reports" stays
+frozen. And because `convene` was reachable only by docking, **both orderings
+were broken**:
+
+| order | what a captain got |
+| --- | --- |
+| play the hearing, then dock | sat through the board, heard nothing, then a **second** board took a rank |
+| dock, then play the hearing | the board reported and took the rank — and the episode was **still offered**, and played out a hearing about a board that had already reported |
+
+### The thing underneath
+
+Chasing the promotion freeze led to the demotion itself, which has nothing to do
+with the episode:
+
+```
+rank before dock : Fleet Captain
+finding          : Reduced in rank -> rank Captain
+one more xp point: {"promoted":true,"rank":"Fleet Captain","points":5} -> Fleet Captain
+```
+
+`convene` did `p.rankIndex--` and nothing else. The experience that earned the
+rank stayed banked, against a threshold now sitting below the total — so the next
+award re-promoted immediately **and granted the rank's five skill points a second
+time**. The heaviest penalty in the game was undone by the next thing that
+happened, and paid for the privilege.
+
+### Why the two fixes ship together
+
+`addXP` banks experience but refuses a promotion while a board is open, and it
+grants a rank only at the moment of an award — never retroactively. So the
+episode's `inquiry` effect has to run **before** its experience, or a captain who
+earned a rank in that very scene sits at the old one until some unrelated later
+payout.
+
+Run it before the experience *without* the clawback and the verdict stage becomes
+the exploit in miniature: the board takes a rank and the same choice's six
+hundred experience hands it straight back with five fresh skill points. The
+clawback is what makes the correct ordering safe — seventeen thousand plus six
+hundred is not twenty-eight thousand. Neither fix is complete on its own.
+
+### The seam
+
+The obvious move was for the mission engine to import `convene`. It was wrong.
+`Game.dock()` does more than call it: it clears `promotionHeld`, a said-once
+latch set in `awardXP` and cleared in **exactly one place** — three references in
+the whole of `src/`. An episode that convened the board directly would have left
+that latch set for the rest of the commission, and the *next* board would then
+have held a promotion in total silence. That is a flag set in one place and
+cleared in one unrelated place, which is the exact shape of the §22 bug the file
+is a monument to; reproducing it inside the fix for it would have been a poor
+piece of work.
+
+So both callers now come through one door on the Game, `concludeInquiry`, and the
+engine gains a declarative `inquiry` effect that needs no new imports at all.
+
+Its return is `{sat, finding}`, and the distinction is load-bearing. `finding` is
+always something to say — it falls back to the board already on the record, and
+then to `findingFor`, which is what guarantees the stage after the verdict exists
+and the episode walker can never strand. But `findingFor` is a **forecast**: it is
+the same function the Record screen renders as *"on the record as it stands the
+finding would be"*. So `sat` gates the narration and not the routing. The hearing
+announces a finding when this call delivered one, says the standing finding still
+stands when the dock delivered it, and says nothing at all when no board was ever
+held. Routing on a forecast is fine. Reading one out as a verdict is not.
+
+`dock()` keeps returning `finding: sat ? finding : null` for the same reason: the
+screen raises a modal on whatever it returns, and handing back the forecast would
+pop a verdict nobody delivered on every routine dock, forever.
+
+### What the board hears
+
+Three choices gated on flags that were written and read by nothing:
+`falsified_report` (act 1 — the shakedown lie, and this is the earliest room it
+can be owned in), `romulan_cloak_reported` and `fired_first_neutral_zone` (act 2).
+
+They pay experience, standing and a flag, and deliberately **no record entry**.
+Two reasons, and the first is a correction. The plan had said standing would
+swing the verdict — it does not: `serviceScore` sums record weights and reads
+standing not at all, so every point of it would have moved the finding by exactly
+zero. Swinging it with a record entry *would* have worked, and would have been
+the captain entering evidence about the hearing into the log the hearing is
+reading — against this file's own stated doctrine that the log is
+incontrovertible. It would also have double-charged: `outpost_silence` already
+writes `violated_border` for firing first.
+
+The hearing was **already** winnable by what the captain did. The whole distance
+between the reprimanded captain and the reduced one is record entries earned in
+acts 1 and 2. What was missing was never a lever. It was that the room never said
+any of it out loud.
+
+### What was cut, and why
+
+An earlier draft added `board_exonerated_you`, written by the exonerated ending
+and read by a new choice at the finale, so the new flag would not be write-only.
+That is writing a flag to satisfy a lint. It was cut. `inquiry_resolved` is
+already carried by all three endings and already read at the finale, and an
+exoneration is already legible on the record.
+
+The ordering was left alone. Blocking the episode once a board has reported would
+strand `utopia_certification`, which requires `court_martial` completed; gating
+the dock-side board on an unplayed episode would re-create the frozen rank ladder
+§22 exists to record. The three new rooms are written so their prose is true in
+either order — the paper reads the same whether it was signed in this room ten
+minutes ago or at the dock last week — which resolves it without a gate.
+
+And no dice. `court_martial` sits in the `TALKED_THROUGH` list from §91, a
+two-way lock: it may never gain a skill check, and the computed set of checkless
+episodes must equal that list exactly. A board of inquiry is a scene about what
+is said. That decision stands.
+
+### The guard that was missing, and the one that was three-quarters missing
+
+Two of the nine new guards are not about this episode at all.
+
+`applyEffects` reads the effect keys it knows and ignores the rest without a
+word, so a misspelled effect is not an error — it is a reward that never pays or
+a board that never sits. There was a guard for exactly this on `requires` keys
+and none on `effects`. There is now, and it reads the legal set off the engine
+source rather than restating it, because two copies would drift.
+
+The rule that a flag must be earned in an earlier act than it is read existed
+**three times**, each copy scoped to one file's own episodes, so nothing held it
+over the book. Made book-wide it needs one carve-out that the scoped copies could
+never have seen: five reads today are an episode reading a flag its own earlier
+stage set — intra-episode memory, which is legitimate. With that arm the shipped
+book has zero violations; without it the guard would fail on five real episodes
+and say nothing true.
+
+### Guards and controls
+
+Nine guards, seven of them confirmed against a control that had to make them
+fail: the clawback removed; `inquiry: true` dropped from the verdict choice; the
+verdict routed to one room; `promotionHeld` moved back inside `dock()`; the
+effect key misspelled; a hearing that also orders a fight; and the board gated on
+an act-3 flag written by a different act-3 episode. The book-wide act guard
+carries its own positive control in-test, and the checkless lock needed no edit.
+
+The hearing was played to all three verdicts through the real location gates, and
+in both orderings, showing one finding recorded and one rank taken either way.
+The order-equivalence guard sets Federation standing off the cap on purpose:
+`adjustStanding` clamps at 100 and a fresh captain starts there, so at the cap
+the two orders differ by whatever the hearing paid before the board took its
+fifteen — an artefact of the clamp, not of the hearing.
+
+### Recorded, not fixed
+
+`court_martial` is unreachable for one background. `insubordinate` grants
+immunity from boards of inquiry, so `openInquiry` returns false, no event fires,
+`inquiry_summoned` is never set, the episode is never offered — and
+`utopia_certification`, which requires it completed, is permanently dead for that
+captain. Pre-existing, out of scope here, and an argument against making this
+episode carry more load rather than less.
+
+Re-earning a rank still grants its skill points a second time. With the
+experience clawed back that is a real regrind rather than a farm, but it is still
+a second grant.
+
+Acts 3 and 4 hold roughly twenty-two more write-only flags. Act 5's five are
+legitimately terminal — nothing follows them.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
