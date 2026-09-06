@@ -23,7 +23,7 @@ import {
 } from '../src/gfx/mesh.js';
 import {
   BLUEPRINTS, DIMENSIONS, hullMesh, hullScale, paletteFor, UNITS_PER_METRE,
-  proportionError,
+  proportionError, HULL_RIM,
 } from '../src/gfx/blueprint.js';
 import { SHIP_LIST } from '../src/world/ships.data.js';
 import { drawCombatEffects, DRAWN_EFFECTS } from '../src/gfx/effects.js';
@@ -3080,6 +3080,191 @@ describe('a fight is drawn, not just simulated', () => {
   test('nothing at all is a fight the renderer survives', () => {
     for (const eng of [null, undefined, {}, { effects: null, projectiles: null }]) {
       assert.doesNotThrow(() => drawCombatEffects(recorder(), eng));
+    }
+  });
+});
+
+// ============================== the planet you are not looking at, and the flat room
+
+describe('a landing is the world you landed on', () => {
+  const WORLDS = [
+    { id: 'sol:body:0', kind: 'desert', radius: 700, seed: 3, tint: [1, 1, 1] },
+    { id: 'vulcan:body:1', kind: 'ice', radius: 900, seed: 9, tint: [1, 1, 1] },
+    { id: 'andor:body:2', kind: 'jungle', radius: 800, seed: 21, tint: [1, 1, 1] },
+  ];
+
+  /** Exactly what `FirstPerson.drawRoom` computes to file a buffer under. */
+  const drawKey = (room) => `room:${room.cacheKey ?? room.id}`;
+
+  test('two worlds are two worlds, as far as the mesh cache is concerned', () => {
+    // `Renderer.upload` files a buffer under its key and, on a hit, hands that
+    // buffer back WITHOUT looking at the mesh passed with it. Every planet's
+    // room is `id: 'surface'` — one id for every world in the galaxy — so a
+    // draw key built from the id was `room:surface` on the first landing and
+    // `room:surface` on all of them: the desert at Sol was still the ground
+    // under your feet at Vulcan.
+    //
+    // `makeSurface` saw it coming and set `cacheKey`, with the comment
+    // "Distinct per world, so the mesh cache does not hand back the last
+    // planet". Nothing read it.
+    const keys = new Set();
+    const shapes = new Set();
+    for (const body of WORLDS) {
+      const room = makeSurface(body, `World ${body.id}`);
+      keys.add(drawKey(room));
+      const m = roomMeshes(room.id).solid;
+      let sum = 0;
+      for (let i = 0; i < m.data.length; i++) sum += m.data[i] * ((i % 7) + 1);
+      shapes.add(`${m.vertexCount}:${sum.toFixed(1)}`);
+    }
+    assert.equal(shapes.size, WORLDS.length,
+      'the worlds build the same geometry, so this test cannot see the bug');
+    assert.equal(keys.size, WORLDS.length,
+      `${WORLDS.length} different worlds share ${keys.size} draw key: ${[...keys].join(', ')}`);
+  });
+
+  test('and every compartment aboard still answers to its own name', () => {
+    // The other half: `cacheKey` is a surface's business. A compartment has a
+    // unique, stable id already, and changing what they key on would invalidate
+    // nothing and risk everything.
+    for (const room of ROOM_LIST) {
+      assert.equal(drawKey(room), `room:${room.id}`,
+        `${room.id} changed the key it is cached under`);
+    }
+  });
+
+  test('the room pass actually reads the key, rather than the id', () => {
+    // `src/ui/firstperson.js` is DOM-bound and cannot be imported here, so this
+    // reads it as text the way the rest of this file does.
+    const fp = readFileSync(new URL('../src/ui/firstperson.js', import.meta.url), 'utf8');
+    const at = fp.indexOf('  drawRoom(room) {');
+    assert.ok(at > 0, 'drawRoom moved');
+    const body = fp.slice(at, at + 2200);
+    assert.ok(/room\.cacheKey \?\? room\.id/.test(body),
+      'drawRoom builds its draw key without consulting cacheKey');
+    assert.ok(!/draw\(`room:\$\{room\.id\}`/.test(body),
+      'drawRoom still files every planet under room:surface');
+  });
+
+  test('no interior is drawn flat', () => {
+    // The shader has carried a rim term since it was written and `uRim`
+    // defaults to zero, so the hulls had it — `HULL_RIM`, in the viewer and on
+    // the plot — and every room in the game was drawn without it. A room at
+    // 0.62 ambient with pale walls bouncing at each other is exactly where a
+    // surface facing away needs something to separate it from the one behind.
+    const fp = readFileSync(new URL('../src/ui/firstperson.js', import.meta.url), 'utf8');
+    assert.ok(/export const ROOM_RIM = ([0-9.]+)/.test(fp), 'ROOM_RIM is gone');
+    const strength = Number(fp.match(/export const ROOM_RIM = ([0-9.]+)/)[1]);
+    assert.ok(strength > 0, 'the interior rim is switched off again');
+    // Gentler than a hull's, for the reason its own comment gives: a bulkhead
+    // is rimmed against another bulkhead two metres behind it.
+    assert.ok(strength < HULL_RIM, `the interior rim ${strength} is at hull strength`);
+    assert.ok(/rim: ROOM_RIM/.test(fp), 'nothing passes ROOM_RIM to the renderer');
+  });
+});
+
+describe('the ships and rooms a player actually looks at', () => {
+  /**
+   * The same twelve-slice silhouette the Federation suite uses, hull only.
+   *
+   * Its own copy because that one is scoped to its describe block and takes
+   * the Federation palette. Lit geometry is excluded for the reason given
+   * there: decoration applied by the same rules to every class measures what
+   * the classes have in COMMON and drowns out what separates them.
+   */
+  function fingerprintOf(id) {
+    const cls = SHIP_LIST.find((c) => c.id === id);
+    const m = hullMesh(id, cls.faction);
+    const f = m.stride / 4;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < m.vertexCount; i++) {
+      if (m.data[i * f + 9] > 0) continue;
+      const x = m.data[i * f];
+      lo = Math.min(lo, x); hi = Math.max(hi, x);
+    }
+    const span = hi - lo || 1;
+    const slices = new Array(12).fill(0);
+    for (let i = 0; i < m.vertexCount; i++) {
+      if (m.data[i * f + 9] > 0) continue;
+      const u = (m.data[i * f] - lo) / span;
+      const k = Math.min(11, Math.max(0, Math.floor(u * 12)));
+      slices[k] = Math.max(slices[k], Math.hypot(m.data[i * f + 1], m.data[i * f + 2]));
+    }
+    const max = Math.max(...slices) || 1;
+    return slices.map((v) => v / max);
+  }
+
+  test('the crudest hulls in the fleet stopped being the crudest', () => {
+    // `independent` reaches more sectors than any other faction, and one of
+    // these two is what turns up; `marauder` is the ONLY Ferengi hull, so every
+    // Ferengi encounter anywhere in the galaxy is that one mesh. They were
+    // 285, 285 and 480 triangles.
+    const floors = {
+      transport: 420, freighter: 420, jem_hadar_attack: 470,
+    };
+    for (const [id, floor] of Object.entries(floors)) {
+      const cls = SHIP_LIST.find((c) => c.id === id);
+      assert.ok(cls, `${id} is gone`);
+      const tris = hullMesh(id, cls.faction).triangles;
+      assert.ok(tris >= floor, `${id} is back down to ${tris} triangles`);
+    }
+  });
+
+  test('a transport and a freighter are different ships, not one ship twice', () => {
+    // They differed in three numbers — `length_`, `r0`, `r1` — while their own
+    // entries in DIMENSIONS said one carries 1,400 people over 120 metres and
+    // the other carries fourteen over 220. A liner and a warehouse.
+    const a = fingerprintOf('transport');
+    const b = fingerprintOf('freighter');
+    const d = a.reduce((s, v, i) => s + Math.abs(v - b[i]), 0) / a.length;
+    assert.ok(d > 0.2, `transport and freighter are ${d.toFixed(3)} apart in silhouette`);
+  });
+
+  test('a corridor has something to walk past', () => {
+    // A fourteen-metre corridor was a floor quad, a ceiling quad, two flat
+    // bands of wall and ONE light strip — 148 to 172 triangles against a cap of
+    // 4,000, and nothing in it that changes as you move. Ribs give it
+    // structure; a run of separate ceiling panels gives it a rhythm, which is
+    // the thing that actually reads as distance.
+    for (const id of ['corridor_a', 'corridor_sec', 'corridor_rec']) {
+      const m = roomMeshes(id);
+      const tris = m.solid.vertexCount / 3 + m.glow.vertexCount / 3;
+      assert.ok(tris > 300, `${id} is still ${tris} triangles`);
+
+      // Separate lamps, not one stripe: count distinct z spans among the
+      // down-facing ceiling glow triangles.
+      const f = m.glow.stride / 4;
+      const h = ROOMS[id].shape.height ?? 2.5;
+      const spans = new Set();
+      for (let i = 0; i < m.glow.vertexCount; i++) {
+        const o = i * f;
+        if (Math.abs(m.glow.data[o + 1] - (h - 0.03)) > 1e-6) continue;
+        spans.add(m.glow.data[o + 2].toFixed(3));
+      }
+      assert.ok(spans.size >= 6,
+        `${id}'s ceiling is one continuous strip (${spans.size} distinct stations)`);
+    }
+  });
+
+  test('and every room still fits in the room budget', () => {
+    for (const room of ROOM_LIST) {
+      const m = roomMeshes(room.id);
+      const tris = m.solid.vertexCount / 3 + m.glow.vertexCount / 3;
+      assert.ok(tris < 4000, `${room.id} is ${tris} triangles`);
+    }
+  });
+
+  test('and a room is still the same room every time you walk into it', () => {
+    // Hashed variation, never a live stream. Appearance that moves is a save
+    // that does not reload as the ship you left.
+    for (const id of ['corridor_a', 'hangar', 'rec']) {
+      const a = roomMeshes(id).solid;
+      const b = roomMeshes(id).solid;
+      assert.equal(a.vertexCount, b.vertexCount, `${id} rebuilt to a different size`);
+      for (let i = 0; i < a.data.length; i += 97) {
+        assert.equal(a.data[i], b.data[i], `${id} rebuilt differently at ${i}`);
+      }
     }
   });
 });

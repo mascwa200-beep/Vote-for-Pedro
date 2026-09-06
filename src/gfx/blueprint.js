@@ -22,7 +22,7 @@
 import { vec3 } from './math.js';
 import {
   MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg,
-  windowRing, windowBelt, windowDeck, navLights,
+  windowRing, windowBelt, windowDeck, navLights, greebles, portRow,
 } from './mesh.js';
 import { FEDERATION_FORMS } from './forms.federation.js';
 import { KLINGON_FORMS } from './forms.klingon.js';
@@ -680,12 +680,35 @@ const FORMS = {
   },
 
   /** A working hull: cylinder, bridge block, cargo spine. `length_` — see wedge. */
+  /**
+   * The two civilian hulls, and the fallback for anything unrecognised.
+   *
+   * `transport` and `freighter` used to be this form with three numbers
+   * changed — `length_`, `r0`, `r1` — and 285 triangles each, the crudest hulls
+   * in the game. They are also among the most-seen: `independent` appears in
+   * more sectors than any other faction, and one of these two is what turns up.
+   *
+   * Their own entries in `DIMENSIONS` had already told them apart and nothing
+   * had read it. A transport is 120 metres and carries **1,400** people; a
+   * freighter is 220 metres and carries **fourteen**. One is a liner and the
+   * other is fourteen people and a warehouse, and they were the same ship.
+   *
+   * So the shapes come from the numbers: `pods` slings cargo containers on a
+   * spine for the hauler that exists to carry them, and `habitat` puts a
+   * deckhouse and a second row of ports on the one that exists to carry people.
+   * Both default off, which keeps this safe as the fallback form for an unknown
+   * class (see the `BLUEPRINTS[classId] ?? BLUEPRINTS.transport` below).
+   */
   hauler(mb, p, b) {
+    const L = b.length_ ?? 1.0;
+    const hr0 = b.r0 ?? 0.16; const hr1 = b.r1 ?? 0.13;
+    const rAt = (u) => hr0 + (hr1 - hr0) * u;
+
     tube(mb, {
       origin: vec3(-0.5, 0, 0),
-      length: b.length_ ?? 1.0,
-      r0: b.r0 ?? 0.16,
-      r1: b.r1 ?? 0.13,
+      length: L,
+      r0: hr0,
+      r1: hr1,
       segments: seg(10),
       color: p.hull,
     });
@@ -694,11 +717,51 @@ const FORMS = {
       box(m, { center: vec3(-0.18, 0, 0.2), size: vec3(0.5, 0.12, 0.12), color: p.trim });
     });
 
+    // Cargo. Containers slung outboard on the spars, in a row, with the
+    // handling gear between them — which is what makes a freighter read as a
+    // freighter from any angle rather than as a tube with a box on it.
+    if (b.pods) {
+      mirrored(mb, (m) => {
+        for (let i = 0; i < b.pods; i++) {
+          const u = 0.16 + (i + 0.5) * (0.62 / b.pods);
+          box(m, {
+            center: vec3(-0.5 + L * u, -0.03, 0.235),
+            size: vec3(L * (0.5 / b.pods), 0.135, 0.115),
+            color: i % 2 ? p.trim : p.hull,
+          });
+        }
+        // The gear that holds them on.
+        greebles(m, {
+          from: vec3(-0.5 + L * 0.18, 0.05, 0.19),
+          to: vec3(-0.5 + L * 0.78, 0.05, 0.19),
+          count: 5, size: vec3(0.05, 0.035, 0.05), vary: 0.5, color: p.trim,
+        });
+      });
+    }
+
+    // Fourteen hundred people need somewhere to be. A deckhouse over the
+    // forward third, which is the only part of a transport that is not tankage.
+    if (b.habitat) {
+      box(mb, {
+        center: vec3(-0.5 + L * 0.62, hr0 * 0.72, 0),
+        size: vec3(L * 0.34, 0.1, 0.28),
+        rake: 0.06,
+        color: p.trim,
+      });
+      portRow(mb, {
+        from: vec3(-0.5 + L * 0.48, hr0 * 0.72, 0.14),
+        to: vec3(-0.5 + L * 0.76, hr0 * 0.72, 0.14),
+        count: seg(4), size: 0.019,
+      });
+      portRow(mb, {
+        from: vec3(-0.5 + L * 0.48, hr0 * 0.72, -0.14),
+        to: vec3(-0.5 + L * 0.76, hr0 * 0.72, -0.14),
+        count: seg(4), size: 0.019,
+      });
+    }
+
     // A freighter is a working ship with people living on it for months, so it
     // gets the most windows in the fleet and no weapons to glow instead.
-    const L = b.length_ ?? 1.0;
-    const hr0 = b.r0 ?? 0.16; const hr1 = b.r1 ?? 0.13;
-    const rAt = (u) => hr0 + (hr1 - hr0) * u;
     // Short ports at four stations. Thirteen windows spanning seventy degrees
     // of arc and half the hull's length was not a row of ports, it was a woven
     // mat — the same mistake the secondary hulls started with.
@@ -860,8 +923,10 @@ export const BLUEPRINTS = {
   jem_hadar_battleship: { form: 'dominion', length: 800, heavy: true, length_: 1.1, prongSweep: 0.2, ridgeCount: 7, engines: 5 },
   borg_cube: { form: 'cube', length: 3040, size: 1.15 },
   bioship: { form: 'bioship', length: 600 },
-  transport: { form: 'hauler', length: 120, length_: 1.0, r0: 0.13, r1: 0.11 },
-  freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.155, r1: 0.13 },
+  // 1,400 aboard a 120-metre hull: a liner, so a deckhouse and rows of ports.
+  transport: { form: 'hauler', length: 120, length_: 1.0, r0: 0.13, r1: 0.11, habitat: true },
+  // Fourteen aboard 220 metres: the rest of her is cargo, so show the cargo.
+  freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.155, r1: 0.13, pods: 4 },
 };
 
 /** Meshes are built once per class and reused by every ship of that class. */

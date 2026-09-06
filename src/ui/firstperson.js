@@ -46,6 +46,16 @@ import { fitCanvas } from './touch.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+/**
+ * Rim strength inside the ship, against `HULL_RIM`'s 0.35 outside her.
+ *
+ * A hull in space is rimmed against nothing and can take the full term. A
+ * bulkhead is rimmed against another bulkhead two metres behind it, in a room
+ * already lit at 0.62 ambient, so the same strength reads as fog on every
+ * surface rather than as an edge on the near one.
+ */
+export const ROOM_RIM = 0.16;
+
 /** Eye height. A person standing, not a camera on a tripod. */
 export const EYE_HEIGHT = 1.62;
 
@@ -302,10 +312,24 @@ export class FirstPersonView {
     this.renderer.clearScissor();
     this.renderer.resetViewport();
     this.renderer.setDepthRange(0, 1);
+    // `rim` set for the whole interior pass, which is the room, the consoles,
+    // the props and the crew standing in it.
+    //
+    // The shader has had a rim term since it was written and `uRim` defaults to
+    // zero, so the exteriors carried it — `HULL_RIM` on every hull, in the
+    // viewer and on the tactical plot — and EVERY INTERIOR IN THE GAME was
+    // drawn flat. A room at ambient 0.62 with pale bouncing walls is exactly
+    // where a surface facing away from you has nothing else to separate it from
+    // the surface behind it.
+    //
+    // Gentler than the hulls' 0.35: a ship in space is rimmed against nothing,
+    // and a bulkhead is rimmed against another bulkhead two metres behind it.
+    // At hull strength the whole compartment glows at its own edges and reads
+    // as fog rather than as form. It costs no triangles and no draw calls.
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
       ambient: 0.62, keyPower: 0.44,
-      eye: this.eyeOf(walker), gloss: 0.22,
+      eye: this.eyeOf(walker), gloss: 0.22, rim: ROOM_RIM,
     });
     this.renderer.setCamera(this._viewProj);
     this.drawRoom(room);
@@ -689,12 +713,29 @@ export class FirstPersonView {
     if (!m) return;
     compose(vec3(0, 0, 0), quat(), 1, this._model);
     const nm = normalMatrix(this._model, this._normal);
+
+    // `room.cacheKey`, not `room.id`, and the difference is a planet.
+    //
+    // `Renderer.upload` files a buffer under its key and, on a hit, hands that
+    // buffer back WITHOUT looking at the mesh it was passed. Every planet's
+    // room is `id: 'surface'` — one id for every world in the galaxy — so the
+    // key was `room:surface` on the first landing and `room:surface` on all of
+    // them. The desert you beamed down to at Sol was still the ground under
+    // your feet at Vulcan and at Andoria: different geometry built, different
+    // triangle counts, one buffer drawn.
+    //
+    // `makeSurface` saw this coming and set `cacheKey: \`surface:${body.id}\``
+    // with the comment "Distinct per world, so the mesh cache does not hand
+    // back the last planet" — and then nothing read it. Compartments aboard
+    // have no `cacheKey` and fall back to their id, which is unique and
+    // stable, so this changes nothing for them.
+    const key = room.cacheKey ?? room.id;
     // Rooms are 10 metres across, not 3,000 — the tactical falloff would fog a
     // bulkhead you are standing next to.
-    this.renderer.draw(`room:${room.id}`, m.solid, {
+    this.renderer.draw(`room:${key}`, m.solid, {
       model: this._model, normalMatrix: nm, fogFar: 1e6,
     });
-    this.renderer.draw(`room:${room.id}:glow`, m.glow, {
+    this.renderer.draw(`room:${key}:glow`, m.glow, {
       model: this._model, normalMatrix: nm, emissive: 1, fogFar: 1e6,
     });
 
