@@ -2183,7 +2183,13 @@ export class Game {
     // `encounter:end` is emitted, so the bridge is told what the captain just
     // did. Done AFTER the plan is accepted — a course the helm refuses is not a
     // departure, and the thing on the viewer is still in front of the ship.
-    if (this.encounter) this.endEncounter();
+    if (this.encounter) {
+      // Charged before the encounter is cleared, or there is nothing left to
+      // read the kind off.
+      const said = this.leftACallUnanswered(this.encounter);
+      if (said) this.officerSays('comms', said);
+      this.endEncounter();
+    }
     // You cannot hold an orbit and leave the system. Cleared silently: the helm
     // announcing a break the captain did not order is noise, and the course
     // report immediately after says where the ship is going instead.
@@ -2571,6 +2577,38 @@ export class Game {
   }
 
   /** Resolve an encounter choice. Returns messages for the UI. */
+  /**
+   * A call for help the ship did not answer, charged wherever it is left.
+   *
+   * Three doors lead away from an encounter and all three are the same act: the
+   * `ignore` button on a quiet call, the `withdraw` button on one with raiders
+   * on it, and laying in a course out of the system — which `setCourse` itself
+   * calls "flying away is withdrawing", and which cost nothing at all by either
+   * shape of call, including the quiet one that has been charged through the
+   * button since long before this.
+   *
+   * One implementation rather than the number written out three times, for the
+   * reason `directiveCost` gives: a price in more than one place is a promise
+   * that can drift.
+   *
+   * NOT called from `endEncounter`. A hail that ends the encounter ends it
+   * because the raiders surrendered, were bought off, stood down or were
+   * deterred — every `endsCombat` outcome leaves the people alive. That is a
+   * rescue by other means, and charging for it would price talking somebody
+   * off a colony as abandoning it.
+   */
+  leftACallUnanswered(enc) {
+    if (enc?.kind !== 'distress') return null;
+    const where = enc.system?.name ?? 'an unnamed system';
+    this.ledger.record('distress_ignored', {
+      text: `Left a distress call unanswered at ${where}`, system: enc.system?.id,
+    });
+    this.ledger.adjustStanding(
+      'federation', STANDING_EFFECTS.ignored_distress, 'Left a distress call',
+    );
+    return 'We come about and leave them to it. The channel stays open a while.';
+  }
+
   resolveEncounter(choiceId) {
     const enc = this.encounter;
     if (!enc) return { messages: [] };
@@ -2922,15 +2960,9 @@ export class Game {
         // a captain walks away from an anomaly, a signal, a patrol, a convoy, a
         // derelict and a first contact — nine kind-and-hostility combinations
         // in all — and none of those is an abandonment.
-        if (enc.kind === 'distress') {
-          this.ledger.record('distress_ignored', {
-            text: `Left a distress call unanswered at ${enc.system.name}`, system: enc.system.id,
-          });
-          this.ledger.adjustStanding(
-            'federation', STANDING_EFFECTS.ignored_distress, 'Left a distress call',
-          );
-          out.messages.push('We come about and leave them to it. The channel stays open a while.');
-          break;
+        {
+          const said = this.leftACallUnanswered(enc);
+          if (said) { out.messages.push(said); break; }
         }
         out.messages.push('We withdraw.');
         break;

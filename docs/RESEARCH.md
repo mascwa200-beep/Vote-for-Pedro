@@ -7406,6 +7406,31 @@ using it, so the guard cannot drift back onto a button that does not exist.
 passed for as long as the branch existed and would have gone on passing if the
 button had never been added at all.
 
+### The third door, found by not trusting a note
+
+Writing this up, the change was described as fixing "both ways out of a call".
+That was flagged as unverified rather than asserted — and it was wrong. There
+are **three** doors, and `setCourse` says so in its own comment: *"Flying away
+is withdrawing."* Measured:
+
+| door | quiet call | call under fire |
+| --- | --- | --- |
+| the button | −3 | −3 |
+| **laying in a course out of the system** | **0** | **0** |
+
+The helm has always been free, including for the quiet call that has been
+charged through its button since long before any of this. A guard comparing only
+the two buttons would have reported them in agreement and been right about
+exactly the wrong thing.
+
+The charge is now one method, `leftACallUnanswered`, called from the withdraw
+arm and from `setCourse` — for the reason `directiveCost` gives about a price
+written in more than one place. It is deliberately **not** called from
+`endEncounter`, which is the tempting single choke point: a hail routes through
+there on every `endsCombat` outcome, and surrendered, bought off, stood down and
+deterred all leave the people alive. Charging there would price talking raiders
+off a colony as abandoning it.
+
 ### Two defects this change introduced, and how they were caught
 
 **A button that printed an order the game refused.** Relabelling `engage` to
@@ -7450,12 +7475,13 @@ about somebody else's shortcut caught mine.**
 
 ### Guards and controls
 
-Nine guards in all, each confirmed failing against its own control: withdrawing free
+Ten guards in all, each confirmed failing against its own control: withdrawing free
 again as it was (1 fail); the cost moved to the shared arm so every kind pays
 (1); the stakes taken off the hostile button (1); the panel naming only the
 hostiles as it did (1); the unreachable `assist` arm restored (1); the dispatcher arm removed from
 both sides (1); the hostile shape removed from the language suite (1); the
-rescue credit removed (1); and the fight never told it is a rescue (1).
+rescue credit removed (1); the fight never told it is a rescue (1); and the helm
+door free again (1).
 
 Two of them are relations rather than numbers. *Leaving a call costs the same
 however the panel is shaped* takes whichever exit each generated call offers and
