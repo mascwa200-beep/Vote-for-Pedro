@@ -995,6 +995,7 @@ try {
     'sovereign', 'runabout',
   ];
   const portraits = [];
+  let domeReadout = null;
   for (const id of FED_CLASSES) {
     const ok = await page.evaluate(async (classId) => {
       const app = globalThis.__app;
@@ -1056,12 +1057,81 @@ try {
     });
     if (!alive) { portraits.push(`${id}:fight-ended-mid-portrait`); continue; }
     if (!box) { portraits.push(`${id}:no-canvas`); continue; }
+
+    // While a Constitution is framed and the clock is stopped, read the
+    // bussard domes off the actual pixels.
+    //
+    // A dome is 250 triangles of sphere at `glow: 1`, and the shader discards
+    // the entire lighting result for an emissive face — so none of the light
+    // terms above can touch it and it was drawn as one flat disc of colour.
+    // The mesh tests say a ramp was written into the vertices; only this says
+    // it arrives on screen.
+    //
+    // Here rather than in a staging of its own: the first version started its
+    // own fight in the middle of the suite and broke seven later checks, which
+    // is the hazard this file already records twice. The portraits have a hull
+    // framed, the clock stopped and the cleanup written.
+    if (id === 'constitution') {
+      domeReadout = await page.evaluate(() => {
+        const v = globalThis.__app.tactical;
+        const eng = globalThis.__app.game?.engagement;
+        const gl = v?.renderer?.gl;
+        if (!v || !eng || !gl) return null;
+        // Read back in the same call as the render: the context is created
+        // with `preserveDrawingBuffer: false`, so anything later gets a
+        // cleared buffer.
+        v.render(eng, 0, 0);
+        const w = gl.drawingBufferWidth;
+        const h = gl.drawingBufferHeight;
+        const px = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+
+        // Amber by chromaticity: a bussard is [1, 0.46, 0.22], so red leads
+        // green leads blue by a wide margin. The hull is near-white, warp glow
+        // is blue, windows are pale — none of them satisfy this.
+        const amber = new Uint8Array(w * h);
+        for (let i = 0; i < w * h; i++) {
+          const r = px[i * 4]; const g = px[i * 4 + 1]; const b = px[i * 4 + 2];
+          if (r > 100 && r > g * 1.7 && g > b * 1.6) amber[i] = 1;
+        }
+        // Eroded by one pixel. Any lit shape against black has a blended
+        // outline, and an un-eroded selection manufactures exactly the spread
+        // this is looking for — it would pass on a flat disc.
+        const lum = [];
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            const i = y * w + x;
+            if (!amber[i]) continue;
+            if (!amber[i - 1] || !amber[i + 1] || !amber[i - w] || !amber[i + w]) continue;
+            lum.push(0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2]);
+          }
+        }
+        lum.sort((a, b) => a - b);
+        const q = (p) => (lum.length ? lum[Math.min(lum.length - 1, Math.floor(lum.length * p))] : 0);
+        return {
+          pixels: lum.length,
+          p10: q(0.1),
+          p90: q(0.9),
+          spread: q(0.9) - q(0.1),
+          range: lum.length ? lum[lum.length - 1] - lum[0] : 0,
+        };
+      });
+    }
     const png = await page.screenshot({ path: join(SHOTS, `17-hull-${id}.png`), clip: box });
     // A hull that failed to build draws nothing, and nothing compresses small.
     if (!ok || png.length < 6000) portraits.push(`${id}:${png.length}B`);
   }
   check('every Federation class draws a hull when it is the only ship on the plot',
     portraits.length === 0, portraits.join(' | '));
+
+  // The floor is set from the flat control, not borrowed from another check.
+  // Running the ramp as `return 1` gives a dome that varies only by fog across
+  // its own depth: measured at 0.0 levels of spread. Anything clearly above
+  // that is a gradient the rasteriser really put on screen.
+  check('a bussard dome is shaded on screen, not a flat disc of colour',
+    domeReadout && domeReadout.pixels > 40 && domeReadout.spread > 8,
+    `${domeReadout?.pixels} dome pixels spanning ${domeReadout?.spread?.toFixed(1)} levels `
+    + `p10-p90 (full range ${domeReadout?.range?.toFixed(1)}) of 255`);
 
   // The camera has to cope with 130:1 as well as the geometry does.
   const framing = await page.evaluate(async () => {
@@ -2197,6 +2267,7 @@ try {
       shine && shine.rim.max > shine.spec.max * 1.8,
       `rim peaks at +${shine?.rim?.max?.toFixed(1)} against the highlight's `
       + `+${shine?.spec?.max?.toFixed(1)} of 255`);
+
 
     // A ship cloaking, on the display everyone actually uses.
     //

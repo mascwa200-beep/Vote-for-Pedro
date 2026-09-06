@@ -48,6 +48,35 @@ const close = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
 const vecClose = (a, b, eps = 1e-9) =>
   close(a[0], b[0], eps) && close(a[1], b[1], eps) && close(a[2], b[2], eps);
 
+/**
+ * "Is this vertex drawn in that colour", independent of how brightly.
+ *
+ * Four tests here identified an accent — a bussard cap, an impulse deck, a
+ * deflector — by matching its RGB triple outright. That works only while every
+ * face of the accent carries exactly the palette value, and it stopped being
+ * true the moment a bussard dome was shaded: a scalar ramp moves the triple and
+ * leaves the hue alone.
+ *
+ * The consequences were not subtle, and they are the argument for this helper.
+ * `glowClusters` found ZERO of a Constellation's four caps. Worse, the port scan
+ * excludes accents in order to count windows — so a shaded bussard stopped being
+ * an accent, was counted as a window, and a Constitution acquired a third band
+ * of lit ports, 438 of them facing the wrong way. A matcher that a legitimate
+ * shading change can silently defeat is measuring the palette, not the ship.
+ *
+ * Chromaticity is exactly what a scalar ramp preserves. Measured on a
+ * Constitution: nine distinct chromaticities, and the bussard's nearest
+ * neighbour is 0.12 away in green against this 0.02 tolerance.
+ */
+const sameHue = (c, target, eps = 0.02) => {
+  const cm = Math.max(c[0], c[1], c[2]);
+  const tm = Math.max(target[0], target[1], target[2]);
+  if (cm < 1e-6 || tm < 1e-6) return cm < 1e-6 && tm < 1e-6;
+  return Math.abs(c[0] / cm - target[0] / tm) < eps
+    && Math.abs(c[1] / cm - target[1] / tm) < eps
+    && Math.abs(c[2] / cm - target[2] / tm) < eps;
+};
+
 describe('vector maths', () => {
   test('the basics are the basics', () => {
     assert.ok(vecClose(add(vec3(1, 2, 3), vec3(4, 5, 6)), vec3(5, 7, 9)));
@@ -344,7 +373,10 @@ describe('the fleet has hulls', () => {
     // a budget moved on noise.
     const total = Object.values(SHIP_CLASSES)
       .reduce((n, c) => n + hullMesh(c.id, c.faction).triangles, 0);
-    // 30,240 today across thirty-one classes, up from 25,647 when the seven
+    // 33,898 today across thirty-one classes — the note here said 30,240 for
+    // long enough that three and a half thousand triangles went in unremarked,
+    // which is most of the headroom this ceiling is supposed to be guarding.
+    // Measure it before believing it. Up from 25,647 when the seven
     // hulls on the Klingon forms were 241 triangles each and had no ports on
     // them at all. This is a FLEET total and not a per-frame one: no more than
     // seven hulls are ever on the board, and the measurements above are of six
@@ -595,7 +627,20 @@ describe('the TOS Constitution', () => {
   });
 
   test('the bussard domes are at the front of both nacelles, and glow', () => {
-    const glow = coloured(P.glow);
+    // This measured `P.glow` — warp blue, [0.45, 0.72, 1] — while a bussard cap
+    // is `P.bussard`, amber, [1, 0.46, 0.22]. It has never once looked at a
+    // bussard dome: it was finding the warp grilles, which are also lit, also
+    // paired port and starboard, and also up on the nacelles, so every
+    // assertion below happened to hold and the name went unchallenged.
+    //
+    // By hue, because the domes are shaded now and an exact triple finds only
+    // whichever facets happen to sit near the palette value.
+    const glow = [];
+    for (let i = 0; i < mesh.vertexCount; i++) {
+      const o = i * FLOATS;
+      const c = [mesh.data[o + 6], mesh.data[o + 7], mesh.data[o + 8]];
+      if (sameHue(c, P.bussard)) glow.push([mesh.data[o], mesh.data[o + 1], mesh.data[o + 2]]);
+    }
     assert.ok(glow.length > 40, `only ${glow.length} vertices glow`);
     // One cluster to port, one to starboard, both forward.
     const port = glow.filter((v) => v[2] < 0);
@@ -2208,11 +2253,10 @@ describe('no two Federation classes are the same shape', () => {
       const glow = paletteFor('federation').bussard;
       const seen = [];
       for (let i = 0; i < m.vertexCount; i++) {
-        const r = m.data[i * f + 6];
-        const g = m.data[i * f + 7];
-        const b = m.data[i * f + 8];
-        if (Math.abs(r - glow[0]) > 1e-3 || Math.abs(g - glow[1]) > 1e-3
-          || Math.abs(b - glow[2]) > 1e-3) continue;
+        // By hue, not by triple: the domes are shaded now, so an exact match
+        // finds none of them at all. See `sameHue`.
+        const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
+        if (!sameHue(c, glow)) continue;
         const pt = [m.data[i * f], m.data[i * f + 1], m.data[i * f + 2]];
         // 0.09, not 0.25: the hulls are drawn at their published height now,
         // and a Constellation's two nacelle pairs are a fifth of its length
@@ -2226,6 +2270,90 @@ describe('no two Federation classes are the same shape', () => {
     assert.equal(glowClusters('constellation'), 4,
       'a Constellation is the ship with four glowing caps in a square');
     assert.equal(glowClusters('constitution'), 2);
+  });
+
+  describe('and the bussard domes are domes rather than discs', () => {
+    const P = paletteFor('federation');
+    /** Every bussard vertex, with the scale its colour was multiplied by. */
+    const domeVerts = (id) => {
+      const m = hullMesh(id, 'federation');
+      const f = m.stride / 4;
+      const tm = Math.max(P.bussard[0], P.bussard[1], P.bussard[2]);
+      const out = [];
+      for (let i = 0; i < m.vertexCount; i++) {
+        const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
+        if (!sameHue(c, P.bussard)) continue;
+        out.push({
+          x: m.data[i * f], y: m.data[i * f + 1], z: m.data[i * f + 2],
+          scale: Math.max(c[0], c[1], c[2]) / tm,
+        });
+      }
+      return out;
+    };
+
+    test('a dome is shaded, and shaded in its own colour', () => {
+      // The point of the change. An emissive face has its lighting result
+      // discarded by the shader, so the albedo is the only channel that can
+      // carry shape — and every one of these was a single flat value.
+      //
+      // "In its own colour" is what makes the change testable at all: a scalar
+      // ramp preserves chromaticity exactly, so `sameHue` still recognises the
+      // dome. Blending toward white instead would shade it just as well and
+      // leave nothing able to say what colour it is.
+      for (const id of ['constitution', 'galaxy', 'excelsior', 'constellation']) {
+        const verts = domeVerts(id);
+        assert.ok(verts.length > 200, `${id}: only ${verts.length} bussard vertices`);
+        const scales = verts.map((v) => v.scale);
+        const lo = Math.min(...scales);
+        const hi = Math.max(...scales);
+        assert.ok(hi - lo > 0.3, `${id} domes span ${(hi - lo).toFixed(3)} of scale — that is a disc`);
+        // Nothing baked to black, nothing left at a flat palette value. The
+        // room's own bake clamps at 0.42 for the first of those reasons.
+        assert.ok(lo >= 0.5, `${id} has a bussard vertex at ${lo.toFixed(3)} of palette`);
+        assert.ok(hi <= 1.2, `${id} overshoots to ${hi.toFixed(3)}, which is a different colour`);
+      }
+    });
+
+    test('and it is hot on the axis the scoop faces', () => {
+      // A collector points forward. Reversing this is a dome lit from behind,
+      // which is a perfectly smooth gradient and the wrong one.
+      for (const id of ['constitution', 'galaxy']) {
+        const verts = domeVerts(id);
+        const mid = (Math.min(...verts.map((v) => v.x)) + Math.max(...verts.map((v) => v.x))) / 2;
+        const mean = (list) => list.reduce((n, v) => n + v.scale, 0) / (list.length || 1);
+        const fore = mean(verts.filter((v) => v.x > mid));
+        const aft = mean(verts.filter((v) => v.x <= mid));
+        assert.ok(fore > aft * 1.15,
+          `${id}: forward half ${fore.toFixed(3)} against aft ${aft.toFixed(3)}`);
+      }
+    });
+
+    test('and both domes are shaded identically, which the mirror decides', () => {
+      // `shaded` has to run INSIDE the `mirrored` callback so the mirror copies
+      // colours that are already written. Outside it, one dome's field is
+      // applied to both and the port one is shaded from the starboard centre —
+      // the same shape of bug the glow channel's own comment in mesh.js
+      // records being bitten by.
+      for (const id of ['constitution', 'galaxy', 'constellation']) {
+        const verts = domeVerts(id);
+        const round = (n) => Math.round(n * 1000) / 1000;
+        const port = verts.filter((v) => v.z < 0).map((v) => round(v.scale)).sort((a, b) => a - b);
+        const stbd = verts.filter((v) => v.z > 0).map((v) => round(v.scale)).sort((a, b) => a - b);
+        assert.ok(port.length > 0 && stbd.length > 0, `${id} has domes on one side only`);
+        assert.deepEqual(port, stbd, `${id}: the two domes are shaded differently`);
+      }
+    });
+
+    test('and it cost nothing, which is the whole reason it is allowed', () => {
+      // Geometry is spent: 33,898 of a 36,000 fleet ceiling, about 68 triangles
+      // per class. A gradient is the one thing left that is free.
+      for (const id of ['constitution', 'galaxy', 'constellation']) {
+        const m = hullMesh(id, 'federation');
+        assert.equal(m.vertexCount, m.triangles * 3, `${id} stopped being flat-shaded`);
+      }
+      assert.equal(hullMesh('constitution', 'federation').triangles, 2178,
+        'the Constitution changed size, so the shading went into the geometry');
+    });
   });
 
   test('the stretched saucers are actually stretched', () => {
@@ -2316,7 +2444,7 @@ describe('no two Federation classes are the same shape', () => {
         const x = m.data[i * f];
         const z = m.data[i * f + 2];
         const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
-        if (near(c, P.bussard)) glow.push([x, m.data[i * f + 1], z]);
+        if (sameHue(c, P.bussard)) glow.push([x, m.data[i * f + 1], z]);
         if (near(c, P.trim) && x > -0.53 && x < -0.46 && Math.abs(z) < 0.12) trimAtStern++;
       }
       // Bussards: two clusters, one either side, both up on the nacelles.
@@ -2403,7 +2531,7 @@ describe('no two Federation classes are the same shape', () => {
       for (let i = 0; i < m.vertexCount; i++) {
         if (m.data[i * f + 9] !== 1) continue;
         const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
-        if (accents.some((a2) => near(c, a2))) continue;
+        if (accents.some((a2) => sameHue(c, a2))) continue;
         pts.push([m.data[i * f], m.data[i * f + 1], m.data[i * f + 2]]);
       }
       return pts;
@@ -2533,7 +2661,7 @@ describe('no two Federation classes are the same shape', () => {
       for (let i = 0; i < m.vertexCount; i++) {
         if (m.data[i * f + 9] !== 1) continue;
         const c = [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
-        if (accents.some((a2) => near(c, a2))) continue;
+        if (accents.some((a2) => sameHue(c, a2))) continue;
         // A DECK port lies flat: its normal is dominated by y. A rim port and
         // a flank port both stand up, so |ny| is small on those and this
         // selects the ones being asserted about without needing to know where

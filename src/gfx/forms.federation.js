@@ -30,6 +30,7 @@
 import { vec3 } from './math.js';
 import {
   saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck, portRow, navLights,
+  shaded, hotCore,
 } from './mesh.js';
 
 /**
@@ -44,10 +45,21 @@ function nacelle(m, p, { x, y, z, length: len, radius: r }) {
   // The bussard cap. Amber rather than warp blue, and genuinely emissive
   // rather than merely pale: the glow channel is per vertex now, so a lit cap
   // costs a float and not a second draw call.
-  sphere(m, {
-    origin: vec3(x + len, y, z), radius: r * 1.05,
+  //
+  // And shaded, which is what makes it a dome rather than a disc. An emissive
+  // face has its whole lighting result thrown away by the shader, so a
+  // 250-triangle sphere at `glow: 1` was drawn as one flat circle of colour —
+  // the most expensive part of several hulls, carrying no shape at all. The
+  // ramp costs nothing: no vertices, no triangles, no draws.
+  //
+  // Inside the `mirrored` callback that every caller wraps this in, so the
+  // mirror copies colours that are already written. Shading from outside would
+  // run one dome's field over both of them.
+  const bx = x + len;
+  shaded(m, (mm) => sphere(mm, {
+    origin: vec3(bx, y, z), radius: r * 1.05,
     segments: seg(8), rings: 5, color: p.bussard ?? p.glow, glow: 1,
-  });
+  }), hotCore(bx, y, z));
 }
 
 /**
