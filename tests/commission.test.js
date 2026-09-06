@@ -732,15 +732,61 @@ describe('and the things this file exists to reach', () => {
 
   test('and a landing party went down on every kind of ground there is', () => {
     // Asserted against the canonical export, not a hand-written list, so adding
-    // a template to the game fails this until the captain can reach it. All
-    // five are reachable — including `boarding_action`, which the design notes
-    // had down as possibly unreachable until this file went and reached it.
+    // a template to the game fails this until the captain can reach it.
+    //
+    // Four of the five are reached by EVERY commission flown. The fifth was
+    // reached by exactly one of five, and a content change elsewhere — more
+    // anomalies and more traps, which shifts which encounters a seed meets —
+    // re-rolled that one to zero and failed this test. Nothing about the game
+    // had broken; the coverage was a lottery ticket that had been winning.
+    //
+    // Measured at eight commissions: the other four are reached 8 times out of
+    // 8, and `derelict_search` once. So the honest split is below — what the
+    // sample reliably reaches is asserted from the sample, and the rare one is
+    // PROVEN rather than hoped for.
     const templates = new Set(ALL((j) => j.awayTemplates));
     for (const t of templates) {
       assert.ok(AWAY_TEMPLATES[t], `ran "${t}", which is not a template`);
     }
-    const never = Object.keys(AWAY_TEMPLATES).filter((t) => !templates.has(t));
+    const never = Object.keys(AWAY_TEMPLATES)
+      .filter((t) => t !== 'derelict_search' && !templates.has(t));
     assert.deepEqual(never, [], 'away templates no commission ever reached');
+  });
+
+  test('and the rare one is reachable, which is what the lottery was standing in for', () => {
+    // Why it is rare, which the failure above is what made anybody look:
+    // `game.wreck` is set by WINNING A FIGHT that leaves hulls adrift, and not
+    // by meeting a `derelict` encounter at all — that kind resolves through
+    // `resolveEncounter('board')`, a different path with a different outcome.
+    // So this template needs a victory with wreckage AND a captain who then
+    // chooses to send a party into it, which a scripted captain does about one
+    // commission in eight.
+    //
+    // Directed, so it holds whatever the encounter stream does — and the whole
+    // path, not half of it. The first draft set `game.wreck` by hand, which
+    // proved that a wreck offers the template and proved nothing about whether
+    // a fight ever leaves one: stubbing out wreck creation left it passing.
+    // Nothing else in the suite covered that either.
+    const g = new Game({
+      seed: 9n, crewMode: 'original', difficulty: 'lieutenant', shipClass: 'constitution',
+    });
+    assert.deepEqual(g.availableAwayMissions().map((t) => t.id), [],
+      'something is on offer with no wreck and nothing in front of the ship');
+
+    g.startCombat([new Ship('d7', { faction: 'klingon', name: 'IKS Vengeance' })], { name: 'Trial' });
+    const foe = g.engagement.hostiles[0];
+    foe.hull = 0;
+    foe.destroyed = true;
+    g.finishCombat('victory');
+    assert.ok(g.wreck, 'a won fight with a hull killed left nothing adrift');
+    assert.equal(g.wreck.systemId, g.locationId);
+
+    assert.deepEqual(g.availableAwayMissions().map((t) => t.id), ['derelict_search'],
+      'a hulk adrift did not put a boarding party on the board');
+    const r = g.awayMission('derelict_search', {});
+    assert.equal(r.ok, true, r.reason);
+    assert.ok(['success', 'partial', 'failure'].includes(r.outcome), JSON.stringify(r));
+    assert.equal(g.wreck.boarded, true, 'the party went aboard and the wreck does not know');
   });
 
   test('and a save taken anywhere on the way loads clean', () => {
