@@ -5741,6 +5741,42 @@ is a promise that can drift.
 
 Ratchet **18 → 16**.
 
+### Eighth pass: a clause that could not have happened
+
+*"Xenolinguist — first contact never fails outright, and unhailable factions may
+answer once."* Both halves read by nothing, and the second could not have
+happened **even in principle**: three factions carry `hailable: false` — Tholian,
+Borg, Dominion — and the tactical screen never drew the Hail button for them at
+all. There was no path to the promise.
+
+The hearing is **forced**, through the flag the Diplomatic Corps signature power
+already uses: a doctrine that refuses the channel is exactly what has to be got
+round. It is spent on **speaking**, not on opening the channel, because a captain
+who opens a channel and closes it again without saying anything has not used
+anything up. And it survives a save, or a reload would hand it back.
+
+`contactFloor` went with it — half a trait is the thing this dossier keeps
+refusing to ship.
+
+| first contact, 120 encounters | made |
+| --- | --- |
+| plain | 51.2% |
+| xenolinguist | **100%** |
+
+**Not a free success.** The failure branch becomes a *guarded* contact: the
+species is recorded, and it pays **6 standing against a clean contact's 12**, with
+400 experience against 900. A trait that turned the failure into the success
+would have removed the roll rather than softened it.
+
+And the measurement was wrong twice before it was right, both times for reasons
+already written down in this section. The probe called `resolveEncounter` with
+the encounter's KIND when the switch is on the CHOICE id, and read 0% for both
+arms. Then the standing comparison read 0 for both — the clamp at 100 again,
+three passes after it was first recorded here. **Knowing a trap is written down
+is not the same as remembering it at the moment you build the instrument.**
+
+Ratchet **16 → 14**.
+
 
 ## Attribution
 

@@ -1343,6 +1343,36 @@ export class Game {
   }
 
   /**
+   * Whether this captain can get a hearing from a faction that does not take
+   * calls — "Xenolinguist: unhailable factions may answer once."
+   *
+   * Once per commission, and only for the three factions that carry
+   * `hailable: false`. Read by the tactical screen to decide whether to offer
+   * the button at all; spending it is `spendUnhailableHail`.
+   */
+  mayReachUnhailable(factionId) {
+    if (!this.character?.mechanic('reachUnhailable')) return false;
+    if (this.xenolinguistHailUsed) return false;
+    return FACTIONS[factionId]?.hailable === false;
+  }
+
+  /**
+   * Take the one hearing, if this is the hail that needs it.
+   *
+   * Consumed HERE rather than when the button is drawn, because a captain who
+   * opens the channel and closes it again without saying anything has not used
+   * anything up.
+   */
+  spendUnhailableHail(factionId) {
+    if (!this.mayReachUnhailable(factionId)) return false;
+    this.xenolinguistHailUsed = true;
+    this.pushLog(
+      'Your linguist has found something they will answer to. It will not work twice.',
+      'comms');
+    return true;
+  }
+
+  /**
    * What a Prime Directive breach costs this captain.
    *
    * "Maverick — advantage on any check the regulations forbid. Prime Directive
@@ -2790,6 +2820,22 @@ export class Game {
           this.ledger.adjustStanding('federation', STANDING_EFFECTS.first_contact_peaceful, 'First contact');
           this.earnReputation('first_contact');
           out.messages.push(`Contact established with the ${enc.speciesName}. They are... cautious, but talking.`);
+        } else if (this.character?.mechanic('contactFloor')) {
+          // "Xenolinguist — first contact never fails outright." Not a second
+          // roll and not a free success: the contact is MADE, cautiously, and
+          // the standing and experience are a fraction of what a clean one
+          // pays. A trait that turned the failure into the success would have
+          // removed the roll rather than softened it.
+          this.ledger.record('first_contact', {
+            text: `Guarded first contact with the ${enc.speciesName}`, system: enc.system.id,
+          });
+          this.awardXP(400);
+          this.ledger.adjustStanding('federation',
+            Math.round(STANDING_EFFECTS.first_contact_peaceful / 2), 'Guarded first contact');
+          out.messages.push(
+            'They do not trust us and they do not close the channel. Your linguist finds a '
+            + `word the ${enc.speciesName} will answer to, and the database gets a name `
+            + 'rather than a signal.');
         } else {
           out.messages.push('They break off without answering. The database gets a new entry and nothing else.');
           this.awardXP(200);
@@ -2946,7 +2992,13 @@ export class Game {
       factionId,
       // The Diplomatic Corps signature forces a hearing from a faction whose
       // doctrine would otherwise refuse the channel outright.
-      forced: this.parleyForced === true,
+      // "Xenolinguist — unhailable factions may answer once." Three factions
+      // carry `hailable: false` — Tholian, Borg, Dominion — and the screen does
+      // not offer the button for them at all. This is the one commission where
+      // it does, and the hearing is FORCED for the same reason the Diplomatic
+      // Corps signature forces one: a doctrine that refuses the channel is
+      // exactly what has to be got round.
+      forced: this.parleyForced === true || this.spendUnhailableHail(factionId),
       standing: this.ledger.standingOf(factionId),
       diplomacyBonus: this.progress.diplomacyBonus,
       winning: eng ? this.ship.hullPct > enemyHull : false,
@@ -4974,6 +5026,7 @@ export class Game {
       // back from the dead without `podJettisoned`.
       pendingFeats: this.pendingFeats ?? 0,
       podJettisoned: this.podJettisoned === true,
+      xenolinguistHailUsed: this.xenolinguistHailUsed === true,
       warpFactor: this.warpFactor,
       walk: this.walk.save(),
       // Which surface features have already been worked.
@@ -5748,6 +5801,7 @@ export class Game {
     g.firstStrike = false;
     g.gambitOpen = false;
     g.parleyForced = false;
+    g.xenolinguistHailUsed = data.xenolinguistHailUsed === true;
     g.inKobayashi = false;
 
     g.applyAllMods();

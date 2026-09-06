@@ -110,7 +110,7 @@ describe('the sweep, and the instrument that produced it', () => {
     assert.equal(consumed().has('thisKeyIsDeclaredByNobodyAtAll'), false);
   });
 
-  test('the ratchet: no more than 16 declared mechanics are read by nothing', () => {
+  test('the ratchet: no more than 14 declared mechanics are read by nothing', () => {
     // It may go down — by wiring one, or by deleting one honestly — and it may
     // not go up. A new trait that declares a mechanic and forgets to wire it
     // fails here rather than shipping as a card that promises something.
@@ -118,7 +118,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     const dead = [...keys.keys()].filter((k) => !read.has(k)).sort();
     assert.ok(keys.size >= 55, `only ${keys.size} mechanics declared; has the sheet shrunk?`);
-    assert.ok(dead.length <= 16,
+    assert.ok(dead.length <= 14,
       `${dead.length} declared mechanics are read by nothing:\n  ${dead.join('\n  ')}`);
   });
 
@@ -126,7 +126,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty',
       'accuracyBonus', 'hazardDisadvantage',
-      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor', 'ignorePressure', 'cloakDetect', 'directivePenalty']) {
+      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor', 'ignorePressure', 'cloakDetect', 'directivePenalty', 'contactFloor', 'reachUnhailable']) {
       assert.ok(read.has(k), `${k} is read by nothing again`);
     }
   });
@@ -657,5 +657,87 @@ describe('the price of a Maverick’s advantage', () => {
       const g = captain({ traits });
       assert.equal(g.directiveCost(-18), -18, `${traits[0] ?? 'plain'} moved it`);
     }
+  });
+});
+
+describe('the trait that talks to people who do not take calls', () => {
+  // "Xenolinguist — first contact never fails outright, and unhailable
+  // factions may answer once." Both halves were read by nothing, and the
+  // second could not have happened even in principle: three factions carry
+  // `hailable: false` and the tactical screen never drew the button for them.
+  const contact = (traits, seed) => {
+    const g = captain({ traits, seed: BigInt(seed) });
+    g.encounter = { kind: 'contact', speciesName: 'Vissian', system: { id: 'sol', name: 'Sol' } };
+    // From 40, not the 100 a Starfleet captain starts at, or the gain clamps
+    // and reads as no effect. That trap is recorded in RESEARCH §70 and it
+    // caught this measurement too.
+    g.ledger.standing.federation = 40;
+    const before = g.ledger.count('first_contact');
+    const out = g.resolveEncounter('contact_peaceful');
+    return {
+      made: g.ledger.count('first_contact') > before,
+      standing: g.ledger.standing.federation - 40,
+      text: out.messages[0] ?? '',
+    };
+  };
+
+  test('first contact never fails outright, and it is not a free success', () => {
+    let plainMade = 0;
+    let wideMade = 0;
+    for (let seed = 1; seed <= 120; seed++) {
+      if (contact([], seed).made) plainMade++;
+      if (contact(['xenolinguist'], seed).made) wideMade++;
+    }
+    assert.ok(plainMade > 30 && plainMade < 100, `the control made ${plainMade}/120`);
+    assert.equal(wideMade, 120, `${wideMade}/120 — "never fails outright" means never`);
+  });
+
+  test('and a guarded contact is worth half a clean one, not all of it', () => {
+    // Otherwise the roll stops meaning anything and the trait has removed a
+    // decision rather than softened a failure.
+    let checked = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      const plain = contact([], seed);
+      if (plain.made) continue;
+      checked++;
+      const wide = contact(['xenolinguist'], seed);
+      assert.equal(plain.standing, 0, 'a failed contact paid standing');
+      assert.ok(wide.standing > 0 && wide.standing < 12,
+        `guarded contact paid ${wide.standing}; a clean one pays 12`);
+      assert.match(wide.text, /do not trust us/, wide.text);
+    }
+    assert.ok(checked >= 5, `only ${checked} failed rolls to compare`);
+  });
+
+  test('and only a xenolinguist can reach a faction that does not take calls', () => {
+    const plain = captain();
+    const wide = captain({ traits: ['xenolinguist'] });
+    for (const f of ['borg', 'dominion', 'tholian']) {
+      assert.equal(plain.mayReachUnhailable(f), false, f);
+      assert.equal(wide.mayReachUnhailable(f), true, f);
+    }
+    // And not for factions that were always reachable — the trait is about the
+    // three that were not.
+    for (const f of ['klingon', 'romulan', 'federation']) {
+      assert.equal(wide.mayReachUnhailable(f), false, f);
+    }
+  });
+
+  test('and it is once, spent on speaking rather than on opening the channel', () => {
+    // A captain who opens the channel and closes it again without saying
+    // anything has not used anything up.
+    const g = captain({ traits: ['xenolinguist'] });
+    assert.equal(g.mayReachUnhailable('borg'), true);
+    assert.equal(g.spendUnhailableHail('borg'), true);
+    assert.equal(g.spendUnhailableHail('borg'), false, 'it worked twice');
+    assert.equal(g.mayReachUnhailable('borg'), false);
+  });
+
+  test('and having spent it survives a save and a load', () => {
+    const g = captain({ traits: ['xenolinguist'] });
+    g.spendUnhailableHail('borg');
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(back.xenolinguistHailUsed, true);
+    assert.equal(back.mayReachUnhailable('borg'), false, 'a reload gave it back');
   });
 });
