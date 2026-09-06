@@ -7305,6 +7305,166 @@ Two findings in the same area, out of scope here and worth their own work:
   with a real cost."* For half of them it costs nothing and leaves no trace.
 
 
+## 85. The distress call you could not answer, and could abandon for free
+
+`Game.encounterChoices()` opens with `if (enc.hostile) { …engage/hail/withdraw…;
+return out; }`, and that early return sits **above** the `switch (enc.kind)`
+whose `case 'distress'` adds `assist` and `ignore`. Measured over 6,000 rolls:
+
+| distress calls | buttons offered | n |
+| --- | --- | --- |
+| non-hostile | `assist, ignore` | 211 |
+| **hostile (37.4%)** | **`engage, hail, withdraw`** | **126** |
+
+`assist` was offered on a hostile call **never**. Four things followed.
+
+### The more serious abandonment was the free one
+
+`ignore` — reachable only on the calm calls — records `distress_ignored` and
+costs **−3** Federation standing. `withdraw`, the only exit from a hostile call,
+fell into a `default:` arm shared with every other encounter kind and pushed
+*"We withdraw."* and nothing else.
+
+So flying away from a colony being raided cost nothing, and declining to divert
+for a stranded survey team — the same act, and a smaller one — cost standing and
+a line on the record. Over a commission a captain meets **6.7** distress calls:
+4.2 that could be ignored at a price, and **2.5 that could be left for free**.
+A captain who abandons every call now pays **−20.1** across a commission, of
+which **−7.4 was previously free**.
+
+The cost is keyed on the KIND, not on the shared arm. `withdraw` is also how a
+captain leaves an anomaly (1,105 of the sample), a signal (1,022), a patrol
+(515), an ambush (226), a convoy (210), a derelict (174) and a first contact
+(89). None of those is an abandonment, and a cost on the arm they share would
+have priced walking away from a sensor ghost.
+
+### The stakes were hidden on the calls where they were largest
+
+`lives` is rolled for every subtype, and the *"N lives at stake"* line lived on
+the `assist` button — unreachable when hostile. So the panel a captain actually
+saw on a raided colony was:
+
+```
+A colony is being raided… the evacuation transport lifting off is the only thing
+between the raiders and the people still on the ground.
+  [ Engage ]     Red alert. Bring weapons to bear.
+  [ Hail them ]  Talking is free until it is not.
+  [ Withdraw ]   Leave the system.
+```
+
+Six hundred lives were rolled and shown nowhere. `colony_raid` carries 600–3,200
+— the largest stakes in the encounter layer. And "Engage" said *bring weapons to
+bear* although, since §84, that fight carries a `protect` objective and **fails**
+if the ship being raided dies. The same panel now:
+
+```
+  [ Go to their aid ]  600 lives at stake. Whatever else happens, they live.
+  [ Hail them ]        Talking is free until it is not.
+  [ Withdraw ]         It will be in the log either way.
+```
+
+### The panel never named who you were protecting
+
+`encounterPanel` rendered `enc.ships` as hint lines — the two Orion raiders —
+and never `enc.victims`. The one ship on the board whose survival decides the
+outcome was absent from the briefing about it.
+
+### A dead branch, and a dead field
+
+`case 'assist'` ended with twelve carefully commented lines for *"the distress
+call that turns out to be a trap"*, and `assist` cannot be reached when the call
+is hostile. It also called `startCombat(enc.ships, { name: enc.title })` with
+**no allies and no objective** — so had anyone reached it, the ship being rescued
+would not have been in the battle, which is the exact defect §84 fixed on the
+`engage` path.
+
+Deleted rather than made reachable. Since §84, engaging a hostile distress call
+already stages the victim, carries the `protect` objective and fails if they die
+— engaging **is** rendering assistance, and a second button would be a second
+name for one act. What is nominally lost is the ambush framing, and that was
+already gone: a hostile call announces its hostiles on the panel, so nothing was
+disguised.
+
+`ignorable: true` was set once in `buildDistress` and **read nowhere**, under a
+comment reading *"Ignoring a distress call is a real choice with a real cost."*
+Deleted too. Repurposing it to carry the new cost was considered and rejected:
+"can be ignored" is not the statement "leaving this costs you", and renaming a
+dead flag would have left the next reader a field whose name and job disagree —
+which is most of what this dossier keeps finding.
+
+### The test that guarded a door nobody could open
+
+`wiring.test.js` proved the trap branch cleaned up after itself by calling
+`resolveEncounter('assist')` on a hand-built hostile distress. The behaviour it
+guarded is real and still matters — an encounter left set after it becomes a
+battle means the next hail in the campaign is answered by whoever was in *this*
+one — but the door was one `encounterChoices` never opens. It now drives the
+same behaviour through `engage`, and asserts the panel offers that id before
+using it, so the guard cannot drift back onto a button that does not exist.
+
+**A test that reaches past the interface can outlive the interface.** This one
+passed for as long as the branch existed and would have gone on passing if the
+button had never been added at all.
+
+### Two defects this change introduced, and how they were caught
+
+**A button that printed an order the game refused.** Relabelling `engage` to
+"Go to their aid" also changed the phrase it prints, and *"go to their aid"*
+parses to `{ action: 'encounter_choice', choice: 'assist' }`. On a hostile call
+`assist` is not offered, so the dispatcher fell through to *"That is not one of
+the choices in front of us, Captain."* **The button on the highest-stakes
+encounter in the game printed a phrase the game refused** — which is the exact
+class of defect the `say` field exists to prevent.
+
+`tests/lang.test.js` was blind to it. Its `SHAPES` table carried one
+hand-written distress call with no `hostile` flag, so the hostile button set —
+which leaves `encounterChoices` by a different door entirely — had never been
+through the language suite at all. The shapes now derive both halves from
+`DISTRESS`, and the fix is in the dispatcher rather than the string: an
+assist-intent said at a call that offers only `engage` routes to `engage`,
+because on a call where the only way to render assistance is to fight, rendering
+assistance *is* engaging. `tests/lang.test.js`'s `route()` helper is a
+hand-copied mirror of that chain and was updated in the same breath; left alone
+it would have passed while testing a dispatcher that no longer existed.
+
+**A label that promised what the ledger did not record.** "Go to their aid — N
+lives at stake. Whatever else happens, they live" is a promise, and
+`finishCombat` reads only the outcome. Measured: a raided colony fought and won
+with the transport still flying recorded `distress_answered: 0` and
+`lives_saved: 0`, while the same call answered quietly recorded 1 and every one
+of the lives. The prose got better and the bookkeeping did not follow — this
+dossier's own subject, committed by this change.
+
+Fixed by carrying a `rescue` marker on the engagement, set only by the distress
+arm, and crediting it in `finishCombat` when the fight is won and somebody being
+protected is still alive. Keyed on that marker and **not** on the objective,
+because an episode escort carries `protect` too and surviving a convoy run
+through the Badlands is not answering a distress call. It also credits `parley`:
+talking raiders off a colony leaves the colony exactly as saved.
+
+The subset test for those outcomes was first written as
+`['victory', 'routed', 'parley'].includes(outcome)`, and `wiring.test.js` failed
+it — a three-name array of outcome names is a second copy of `OUTCOMES`, and the
+house style spells a deliberate subset out as a comparison. **A guard written
+about somebody else's shortcut caught mine.**
+
+### Guards and controls
+
+Nine guards in all, each confirmed failing against its own control: withdrawing free
+again as it was (1 fail); the cost moved to the shared arm so every kind pays
+(1); the stakes taken off the hostile button (1); the panel naming only the
+hostiles as it did (1); the unreachable `assist` arm restored (1); the dispatcher arm removed from
+both sides (1); the hostile shape removed from the language suite (1); the
+rescue credit removed (1); and the fight never told it is a rescue (1).
+
+Two of them are relations rather than numbers. *Leaving a call costs the same
+however the panel is shaped* takes whichever exit each generated call offers and
+requires the two to agree — it does not know which button it will get, which is
+the point. *No distress branch is a door the player cannot open* collects every
+id `encounterChoices` actually offers and requires the resolver's distress
+branches to be among them.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

@@ -751,7 +751,7 @@ const CIVILIAN_NAMES = [
  * objective only when EVERY protectee is dead, so a pair would make losing one
  * of them invisible.
  */
-const DISTRESS = [
+export const DISTRESS = [
   {
     id: 'freighter_attacked', hostile: true, victim: 'freighter',
     text: 'A civilian freighter is under attack and losing containment.',
@@ -818,8 +818,11 @@ function buildDistress(rng, system) {
     lives: rng.int(pick.lives[0], pick.lives[1]),
     title: 'Distress call',
     text: pick.text,
-    // Ignoring a distress call is a real choice with a real cost.
-    ignorable: true,
+    // `ignorable: true` was here, read by nothing anywhere in the codebase,
+    // under a comment saying ignoring a distress call is a real choice with a
+    // real cost. It is one now — `resolveEncounter` charges for leaving one
+    // whichever button the panel offered — and it is keyed on the kind, which
+    // is what the flag was standing in for.
   };
 }
 

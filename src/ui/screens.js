@@ -2069,6 +2069,13 @@ export function encounterPanel(app) {
     el('div', { class: 'speaker', text: enc.hostile ? 'Tactical' : 'Science' }),
     el('p', { text: enc.text }),
     ...(enc.ships ?? []).map((s) => el('p', { class: 'hint', text: `${s.name} — ${s.cls.name}` })),
+    // And whoever the encounter is FOR. The panel listed the two Orion raiders
+    // and never the transport lifting people off the colony — the one ship on
+    // the board whose survival decides the outcome, absent from the briefing
+    // about it.
+    ...(enc.victims ?? []).map((v) => el('p', {
+      class: 'hint', text: `${v.name} — ${v.cls.name}, under attack`,
+    })),
   ], enc.hostile ? 'danger' : 'warn'));
 
   // The choices come from the model — `Game.encounterChoices` — because the

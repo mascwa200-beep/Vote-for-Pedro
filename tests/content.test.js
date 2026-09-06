@@ -25,6 +25,7 @@ import {
 import { SYSTEMS } from '../src/world/systems.data.js';
 import { Game } from '../src/core/state.js';
 import { Character } from '../src/rules/character.js';
+import { readFileSync } from 'node:fs';
 
 /** Roll a lot of encounters across the whole map and tally what came up. */
 function survey(rolls = 4000) {
@@ -603,5 +604,185 @@ describe('a distress call is about whoever is calling', () => {
       'the ship we came to save was destroyed and the rescue was not a failure');
     assert.notEqual(fly(false), 'failed',
       'the rescue failed with the ship we came for still flying');
+  });
+
+  test('leaving a call costs the same however the panel is shaped', () => {
+    // `encounterChoices` returns early for any hostile encounter, above the
+    // `distress` case, so a call with raiders on it never gets `ignore` — it
+    // gets `withdraw`, which fell through to a shared arm and did nothing.
+    // Measured: 126 of 337 calls are hostile, so for 37% of them a captain
+    // could fly away from people asking for help and the game recorded
+    // neither the standing nor the fact — while declining to divert for a
+    // stranded survey team, the same act and a smaller one, cost three points.
+    //
+    // Asserted as a relation over whatever the generator produces rather than
+    // as two numbers: whichever exit a call offers, taking it must cost the
+    // same and leave a mark.
+    const exits = new Map();
+    for (const e of ALL) {
+      const g = new Game({
+        seed: 5n, crewMode: 'original', shipClass: 'constitution',
+        character: new Character({ speciesId: 'human', careerId: 'command' }),
+      });
+      g.encounter = e;
+      const ids = g.encounterChoices().map((c) => c.id);
+      const exit = ids.includes('ignore') ? 'ignore' : 'withdraw';
+      const before = g.ledger.standingOf('federation');
+      const marks = g.ledger.entries?.length ?? 0;
+      g.resolveEncounter(exit);
+      exits.set(exit, {
+        delta: g.ledger.standingOf('federation') - before,
+        recorded: (g.ledger.entries?.length ?? 0) > marks,
+      });
+    }
+    assert.equal(exits.size, 2,
+      `only one kind of exit was exercised: ${[...exits.keys()].join(', ')}`);
+    const [a, b] = [...exits.values()];
+    assert.ok(a.recorded && b.recorded, 'an exit that leaves no mark on the record');
+    assert.ok(a.delta < 0 && b.delta < 0, 'an exit that costs nothing');
+    assert.equal(a.delta, b.delta,
+      `one way out costs ${a.delta} and the other ${b.delta}`);
+  });
+
+  test('and nothing else is charged for walking away', () => {
+    // `withdraw` is how a captain also leaves an anomaly, a signal, a patrol, a
+    // convoy, a derelict and a first contact — nine kind-and-hostility
+    // combinations. None of those is an abandonment, and a cost on the shared
+    // arm would price them all.
+    let checked = 0;
+    for (let seed = 0; seed < 1200; seed++) {
+      const sys = SYSTEMS[seed % SYSTEMS.length];
+      const e = rollEncounter(new RNG(hashSeed(`away${seed}`)), sys.id, {});
+      if (!e || e.kind === 'quiet' || e.kind === 'distress') continue;
+      const g = new Game({
+        seed: 5n, crewMode: 'original', shipClass: 'constitution',
+        character: new Character({ speciesId: 'human', careerId: 'command' }),
+      });
+      g.encounter = e;
+      if (!g.encounterChoices().some((c) => c.id === 'withdraw')) continue;
+      checked++;
+      const before = g.ledger.standingOf('federation');
+      g.resolveEncounter('withdraw');
+      assert.equal(g.ledger.standingOf('federation'), before,
+        `withdrawing from ${e.kind} cost Federation standing`);
+    }
+    assert.ok(checked > 50, `only ${checked} non-distress withdrawals exercised`);
+  });
+
+  test('every call shows what is at stake on it', () => {
+    // `lives` is rolled for every subtype and was printed only on the `assist`
+    // button, which the hostile early return makes unreachable — so on a raided
+    // colony, the largest stakes in the encounter layer at 600 to 3,200 people,
+    // the figure was computed and shown nowhere.
+    for (const e of ALL) {
+      const g = new Game({
+        seed: 5n, crewMode: 'original', shipClass: 'constitution',
+        character: new Character({ speciesId: 'human', careerId: 'command' }),
+      });
+      g.encounter = e;
+      const subs = g.encounterChoices().map((c) => c.sub ?? '').join(' | ');
+      assert.ok(subs.includes(String(e.lives)),
+        `${e.subtype} risks ${e.lives} lives and no button says so: ${subs}`);
+    }
+  });
+
+  test('the panel names whoever the call is about', () => {
+    // The briefing listed the two Orion raiders and never the transport lifting
+    // people off the colony — the one ship on the board whose survival decides
+    // the outcome, absent from the panel about it.
+    //
+    // Read from the source: the panel is DOM built inside a screen function
+    // with no seam to call, and what is being guarded is that it renders both
+    // lists and not just the one.
+    const screens = readFileSync('src/ui/screens.js', 'utf8');
+    const i = screens.indexOf('export function encounterPanel');
+    assert.ok(i > 0, 'the encounter panel has moved');
+    const block = screens.slice(i, screens.indexOf('const choices =', i));
+    assert.ok(/enc\.ships/.test(block), 'the panel stopped naming the hostiles');
+    assert.ok(/enc\.victims/.test(block),
+      'the panel names the hostiles and not the ship the encounter is about');
+  });
+
+  test('no distress branch is a door the player cannot open', () => {
+    // The `assist` case carried twelve commented lines for "the distress call
+    // that turns out to be a trap", guarded by a test that called
+    // `resolveEncounter('assist')` directly — through a door
+    // `encounterChoices` never opens, because it returns early for every
+    // hostile encounter above the `distress` case. It also staged its fight
+    // with no allies and no objective, so had anyone reached it the ship being
+    // rescued would not have been in the battle.
+    //
+    // Derived: collect every choice id the panel actually offers on a distress
+    // call, then require the resolver's distress-only branches to be among
+    // them.
+    const offered = new Set();
+    for (const e of ALL) {
+      const g = new Game({
+        seed: 5n, crewMode: 'original', shipClass: 'constitution',
+        character: new Character({ speciesId: 'human', careerId: 'command' }),
+      });
+      g.encounter = e;
+      for (const c of g.encounterChoices()) offered.add(c.id);
+    }
+    assert.ok(offered.size >= 4, `only ${offered.size} ids ever offered`);
+    // `assist` and `ignore` are the two the non-hostile panel adds; both must
+    // still be reachable, and nothing may resolve a distress call that is not.
+    for (const id of ['assist', 'ignore', 'engage', 'withdraw']) {
+      assert.ok(offered.has(id), `${id} resolves a distress call and is never offered`);
+    }
+    const state = readFileSync('src/core/state.js', 'utf8');
+    assert.ok(!/enc\.hostile && enc\.ships\?\.length/.test(state),
+      'the unreachable hostile arm of the assist branch is back');
+  });
+
+  test('a rescue that succeeded is recorded as a rescue, whichever door', () => {
+    // `finishCombat` reads only the outcome, so answering a call by fighting
+    // for it paid combat experience and nothing else: a raided colony fought
+    // and won with the transport still flying recorded `distress_answered: 0`
+    // and `lives_saved: 0`, where the same call answered quietly recorded 1 and
+    // every one of the lives. The button says "Go to their aid".
+    //
+    // Compared as a record SHAPE against the quiet door rather than against
+    // numbers, so the two ways of answering a call cannot drift apart.
+    const mk = () => new Game({
+      seed: 5n, crewMode: 'original', shipClass: 'constitution', difficulty: 'lieutenant',
+      character: new Character({ speciesId: 'human', careerId: 'command' }),
+    });
+    const shape = (g) => ({
+      answered: g.ledger.counters?.distress_answered ?? 0,
+      lives: g.ledger.counters?.lives_saved ?? 0,
+    });
+
+    const quiet = ALL.find((e) => !e.hostile);
+    const raid = ALL.find((e) => e.hostile && e.victims?.length && e.ships?.length);
+    assert.ok(quiet && raid, 'the generator produced only one shape of call');
+
+    const a = mk(); a.encounter = quiet; a.resolveEncounter('assist');
+    assert.deepEqual(shape(a), { answered: 1, lives: quiet.lives });
+
+    const fly = (keepAlive) => {
+      const g = mk();
+      g.encounter = raid;
+      g.resolveEncounter('engage');
+      const eng = g.engagement;
+      assert.ok(eng?.rescue, 'the fight does not know it is a rescue');
+      for (let i = 0; i < 40000 && g.engagement && !g.engagement.over; i++) {
+        if (i % 15 === 0) {
+          g.engagement.comeAboutTo(g.engagement.target);
+          g.ship.throttle = 0.6;
+          g.ship.power.applyPreset('attack');
+        }
+        for (const v of eng.protectees) {
+          if (keepAlive) v.hull = v.maxHull; else v.destroyed = true;
+        }
+        g.update(1 / 30);
+      }
+      return shape(g);
+    };
+
+    assert.deepEqual(fly(true), { answered: 1, lives: raid.lives },
+      'the transport came through and the record shows a firefight');
+    assert.deepEqual(fly(false), { answered: 0, lives: 0 },
+      'the ship we came for was destroyed and the rescue was credited anyway');
   });
 });

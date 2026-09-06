@@ -1569,7 +1569,16 @@ class App {
     if (g.encounter) {
       const offered = g.encounterChoices();
       const has = (id) => offered.some((c) => c.id === id);
-      const wanted = order.action === 'encounter_choice' ? order.choice
+      const wanted = order.action === 'encounter_choice'
+        // On a call where the only way to render assistance is to fight,
+        // rendering assistance IS engaging. Both phrases name one act and the
+        // encounter decides which button carries it: a distress call with
+        // raiders on it offers `engage` and never `assist`, because
+        // `encounterChoices` returns early for anything hostile. Without this
+        // arm the button on the highest-stakes encounter in the game printed
+        // "go to their aid" and the game answered that it was not one of the
+        // choices in front of us.
+        ? (order.choice === 'assist' && !has('assist') && has('engage') ? 'engage' : order.choice)
         : order.action === 'warp_out' ? 'withdraw'
         : order.action === 'fire' ? 'engage'
         : order.action === 'scan' ? 'scan'

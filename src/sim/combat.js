@@ -206,6 +206,15 @@ export class Engagement {
     this.orderLine = typeof opts.orderLine === 'string' && opts.orderLine.trim()
       ? opts.orderLine.trim()
       : null;
+    // Who this fight is for, when they are people outside the ship.
+    //
+    // `protect` alone cannot say it: an episode escort carries the same
+    // objective and is not a distress call, so crediting on the objective
+    // would write "answered a distress call" into the record for surviving a
+    // convoy run through the Badlands. Set only by the distress arm of
+    // `resolveEncounter`, and carried on the ENGAGEMENT rather than the Game
+    // because a fight is not restored across a save.
+    this.rescue = opts.rescue ?? null;
     this.time = 0;
     this.over = false;
     this.outcome = null;

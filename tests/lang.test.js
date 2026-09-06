@@ -26,7 +26,7 @@ import {
 } from '../src/lang/gazetteer.js';
 import { parseText, CONFIDENT } from '../src/lang/parse.js';
 import { INTENTS, lexiconActions, phraseCount } from '../src/lang/lexicon.js';
-import { SIGNALS, TRAPS, ENCOUNTER_KINDS } from '../src/world/encounters.js';
+import { SIGNALS, TRAPS, DISTRESS, ENCOUNTER_KINDS } from '../src/world/encounters.js';
 import { parseOrder, commandReference, orderHelp } from '../src/ui/orders.js';
 import { article } from '../src/world/encounters.js';
 import { FACTIONS } from '../src/world/factions.data.js';
@@ -1148,6 +1148,18 @@ describe('every encounter choice can be said', () => {
   const SHAPES = [
     { label: 'a hostile', enc: { kind: 'patrol', hostile: true, factionId: 'klingon' } },
     { label: 'a distress call', enc: { kind: 'distress', lives: 40 } },
+    // Both halves, derived below from `DISTRESS` rather than remembered. The
+    // hostile half was missing, and `encounterChoices` returns early for
+    // anything hostile ABOVE the distress case — so the buttons a raided
+    // colony actually shows had never been through this suite at all, and the
+    // phrase one of them printed routed to a choice that call never offers.
+    {
+      label: 'a distress call under attack',
+      enc: {
+        kind: 'distress', hostile: true, lives: 600, factionId: 'orion',
+        ships: [{ name: 'Raider', cls: { name: 'Orion Raider' } }],
+      },
+    },
     { label: 'a derelict', enc: { kind: 'derelict', risk: 0.4 } },
     { label: 'an anomaly', enc: { kind: 'anomaly', anomaly: { hazard: 0.3, name: 'Rift', value: 2 } } },
     { label: 'a convoy', enc: { kind: 'convoy', escortReward: 400, factionId: 'independent' } },
@@ -1198,7 +1210,12 @@ describe('every encounter choice can be said', () => {
     const route = (g, say) => {
       const order = parseOrder(say);
       const has = (id) => g.encounterChoices().some((c) => c.id === id);
-      return order.action === 'encounter_choice' ? order.choice
+      return order.action === 'encounter_choice'
+        // Mirrors the assist-means-engage arm in the dispatcher. This helper is
+        // a hand-copied mirror of `main.js` and drifts silently if only one
+        // side is changed, which would leave this guard testing a dispatcher
+        // that no longer exists.
+        ? (order.choice === 'assist' && !has('assist') && has('engage') ? 'engage' : order.choice)
         : order.action === 'warp_out' ? 'withdraw'
         : order.action === 'fire' ? 'engage'
         : order.action === 'scan' ? 'scan'
@@ -1224,6 +1241,12 @@ describe('every encounter choice can be said', () => {
     assert.ok(SIGNALS.length >= 8, `only ${SIGNALS.length} signals`);
     assert.ok(SHAPES.filter((x) => x.enc.kind === 'signal').length === SIGNALS.length,
       'the signal shapes stopped coming from SIGNALS');
+    // A distress call has two shapes and the suite must carry both, because the
+    // hostile one takes a different door out of `encounterChoices` entirely.
+    const hostilities = new Set(DISTRESS.map((d) => !!d.hostile));
+    assert.equal(hostilities.size, 2, 'DISTRESS no longer has both a hostile and a quiet half');
+    assert.equal(SHAPES.filter((x) => x.enc.kind === 'distress').length, hostilities.size,
+      'the distress shapes stopped covering both halves of DISTRESS');
     const channels = new Set(TRAPS.map((t) => t.powerChannel));
     assert.ok(channels.size >= 2, 'every trap now asks for the same channel, so the mismatch cannot recur');
     for (const ch of channels) {
