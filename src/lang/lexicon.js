@@ -1249,7 +1249,12 @@ export const INTENTS = [
       // the button said parsed as nothing at all, with a suggestion to target
       // somebody's engines. `build` below already routes any "everything to"
       // to trap_power; it was only ever the recognition list that was short.
+      // All four power channels a trap can ask for. Three new traps arrived
+      // after this list learned the first two, and the phrase guard named both
+      // the trap and the words on its button before any of it shipped — which
+      // is what that guard is for.
       'use the device', 'everything to auxiliary', 'everything to engines',
+      'everything to shields', 'everything to weapons',
       'ride it out', 'sit it out',
       // Answering a signal. Every SIGNALS entry prints its own phrase on its
       // own button — "realign it", "grant it", "put the doctor on" — and not
@@ -1263,6 +1268,9 @@ export const INTENTS = [
       'answer it', 'take the packet aboard', 'exchange reports', 'realign it',
       'run the sweep', 'pipe it through the ship', 'update it',
       'put the doctor on', 'grant it',
+      'hold station for it', 'record the broadcast', 'take the message',
+      'take their questions', 'sign the return', 'log the beacon',
+      'send them the logs', 'patch it through to quarters',
       'observe them', 'watch them', 'watch what they are doing', 'keep an eye on them',
       // Springing an ambush the sensors caught. Without these, "take them
       // first" parsed as `mission_choice` and the phrase printed on the button
@@ -1294,7 +1302,7 @@ export const INTENTS = [
         [/\bride it out|sit it out\b/, 'trap_wait'],
         // A signal answered. After the trap arms above, because "everything to
         // auxiliary" is a trap and not a reply.
-        [/\banswer it|take the packet|exchange reports|realign it|run the sweep|pipe it through|update it|put the doctor on|grant it\b/, 'answer'],
+        [/\banswer it|take the packet|exchange reports|realign it|run the sweep|pipe it through|update it|put the doctor on|grant it|hold station for it|record the broadcast|take the message|take their questions|sign the return|log the beacon|send them the logs|patch it through to quarters\b/, 'answer'],
         // Before `fire first` can be read as anything else. An ambush the
         // sensors caught is the only place this choice exists, and
         // `executeOrder` refuses it anywhere else.

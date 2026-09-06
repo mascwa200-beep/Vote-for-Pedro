@@ -88,6 +88,76 @@ describe('the list of kinds is the list of kinds', () => {
   });
 });
 
+describe('and you do not read the same sentence all commission', () => {
+  // The measurement this half was written after.
+  //
+  // The frequency of an anomaly had already been fixed once — the note below
+  // records anomalies at 52% of every live encounter and the work done to bring
+  // them down. But how OFTEN you meet a kind and how many different things it
+  // says are two problems, and only the first had been solved. Anomalies had
+  // SEVEN entries and one sentence between them, with the name swapped into the
+  // gap, and a commission meets about twenty-two of them.
+  //
+  //   kind            met/commission   texts before   after
+  //   anomaly                   21.6              1      24
+  //   signal                    19.6              8      16
+  //   trapped                    6.5              3       6
+  //   first_contact              2.1              1       8
+  //
+  // Asserted as a RELATION between two measured quantities rather than a bar
+  // somebody picked: a kind must carry enough prose that its opening is not
+  // read more than twice in a commission. Anomalies at one sentence scored
+  // 21.6 and would fail this by a factor of ten.
+  const COMMISSION = 120;
+
+  test('no kind makes you read one opening more than twice a commission', () => {
+    const rolls = 6000;
+    const met = {};
+    const texts = {};
+    for (let seed = 0; seed < rolls; seed++) {
+      const sys = SYSTEMS[seed % SYSTEMS.length];
+      const e = rollEncounter(new RNG(hashSeed(`prose${seed}`)), sys.id, {});
+      // `quiet` is not shown to anybody — `beginEncounter` is skipped for it —
+      // so it has no prose to repeat and counting it would be counting a
+      // non-event.
+      if (!e || e.kind === 'quiet') continue;
+      met[e.kind] = (met[e.kind] ?? 0) + 1;
+      (texts[e.kind] ??= new Set()).add(e.text ?? '');
+    }
+    // The instrument, before anything is believed about it.
+    assert.ok(Object.keys(met).length >= 8, `only ${Object.keys(met).length} kinds rolled`);
+
+    const worn = [];
+    for (const [kind, n] of Object.entries(met)) {
+      const perCommission = (n / rolls) * COMMISSION;
+      const distinct = texts[kind].size;
+      const rereads = perCommission / distinct;
+      if (rereads > 2) {
+        worn.push(`${kind}: ${distinct} openings for ${perCommission.toFixed(1)} meetings `
+          + `= the same words ${rereads.toFixed(1)} times`);
+      }
+    }
+    assert.deepEqual(worn, [], 'kinds whose prose a captain runs out of');
+  });
+
+  test('and every kind says something at all', () => {
+    // A kind with no text would score zero rereads and pass the relation above
+    // by having nothing to repeat, which is the wrong way to satisfy it.
+    const seen = {};
+    for (let seed = 0; seed < 3000; seed++) {
+      const sys = SYSTEMS[seed % SYSTEMS.length];
+      const e = rollEncounter(new RNG(hashSeed(`said${seed}`)), sys.id, {});
+      if (!e || e.kind === 'quiet') continue;
+      (seen[e.kind] ??= new Set()).add(e.text ?? '');
+    }
+    for (const [kind, set] of Object.entries(seen)) {
+      for (const t of set) {
+        assert.ok(t && t.length > 20, `${kind} put "${t}" in front of a captain`);
+      }
+    }
+  });
+});
+
 describe('what a five-year mission is made of', () => {
   const s = survey();
 

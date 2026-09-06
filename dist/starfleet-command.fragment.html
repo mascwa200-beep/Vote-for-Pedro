@@ -27528,7 +27528,12 @@ const INTENTS = [
       // the button said parsed as nothing at all, with a suggestion to target
       // somebody's engines. `build` below already routes any "everything to"
       // to trap_power; it was only ever the recognition list that was short.
+      // All four power channels a trap can ask for. Three new traps arrived
+      // after this list learned the first two, and the phrase guard named both
+      // the trap and the words on its button before any of it shipped — which
+      // is what that guard is for.
       'use the device', 'everything to auxiliary', 'everything to engines',
+      'everything to shields', 'everything to weapons',
       'ride it out', 'sit it out',
       // Answering a signal. Every SIGNALS entry prints its own phrase on its
       // own button — "realign it", "grant it", "put the doctor on" — and not
@@ -27542,6 +27547,9 @@ const INTENTS = [
       'answer it', 'take the packet aboard', 'exchange reports', 'realign it',
       'run the sweep', 'pipe it through the ship', 'update it',
       'put the doctor on', 'grant it',
+      'hold station for it', 'record the broadcast', 'take the message',
+      'take their questions', 'sign the return', 'log the beacon',
+      'send them the logs', 'patch it through to quarters',
       'observe them', 'watch them', 'watch what they are doing', 'keep an eye on them',
       // Springing an ambush the sensors caught. Without these, "take them
       // first" parsed as `mission_choice` and the phrase printed on the button
@@ -27573,7 +27581,7 @@ const INTENTS = [
         [/\bride it out|sit it out\b/, 'trap_wait'],
         // A signal answered. After the trap arms above, because "everything to
         // auxiliary" is a trap and not a reply.
-        [/\banswer it|take the packet|exchange reports|realign it|run the sweep|pipe it through|update it|put the doctor on|grant it\b/, 'answer'],
+        [/\banswer it|take the packet|exchange reports|realign it|run the sweep|pipe it through|update it|put the doctor on|grant it|hold station for it|record the broadcast|take the message|take their questions|sign the return|log the beacon|send them the logs|patch it through to quarters\b/, 'answer'],
         // Before `fire first` can be read as anything else. An ambush the
         // sensors caught is the only place this choice exists, and
         // `executeOrder` refuses it anywhere else.
@@ -35215,6 +35223,128 @@ const SIGNALS = [
     hours: 0.4,
     xp: 60,
   },
+  // Eight more. A signal is met about twenty times in a commission and there
+  // were eight of them, so every second or third one was one you had read.
+  // Same envelope as the originals — 0.2 to 1.6 hours, 30 to 90 experience —
+  // because this is prose the captain has run out of, not a payout to raise.
+  {
+    id: 'beacon_calibration',
+    from: 'comms',
+    title: 'Beacon calibration',
+    text: 'A navigation beacon two light-minutes out is asking any passing ship to sit still for '
+      + 'four hundred seconds while it takes a fix on us.',
+    answer: 'Hold station for it',
+    say: 'hold station for it',
+    hint: 'It is somebody else\u2019s survey, and it is four hundred seconds.',
+    result: 'The beacon thanks us in machine code and goes back to sleep. Somewhere a chart is '
+      + 'half a second more accurate.',
+    hours: 0.3,
+    xp: 40,
+    charts: true,
+  },
+  {
+    id: 'repeating_broadcast',
+    from: 'science',
+    title: 'A broadcast that repeats',
+    text: 'Something is transmitting on a narrow band, the same eleven seconds over and over, and '
+      + 'it has been doing it for longer than the buoy that noticed has been out here.',
+    answer: 'Record the whole cycle',
+    say: 'record the broadcast',
+    hint: 'Eleven seconds, and nobody has the other end of it.',
+    result: 'Eleven seconds, recorded clean, filed with the linguistics section at Memory Alpha. '
+      + 'It is still eleven seconds of nothing anybody can read.',
+    hours: 0.5,
+    xp: 80,
+  },
+  {
+    id: 'freighter_favour',
+    from: 'comms',
+    title: 'A freighter asking',
+    text: 'An independent hauler with a failed long-range transmitter wants a message passed to '
+      + 'their family at the next Federation relay. It is four lines long.',
+    answer: 'Take the message',
+    say: 'take the message',
+    hint: 'Four lines, and it costs nothing but the saying of it.',
+    result: 'The message goes out at the next relay. The reply, six weeks later, is addressed to '
+      + 'this ship by name.',
+    hours: 0.2,
+    xp: 30,
+    standing: { independent: 3 },
+  },
+  {
+    id: 'academy_hour',
+    from: 'comms',
+    title: 'A cadet class, waiting',
+    text: 'The Academy is asking whether the captain would take questions from a first-year '
+      + 'navigation seminar over subspace. They have been told no twice already.',
+    answer: 'Take their questions',
+    say: 'take their questions',
+    hint: 'Forty minutes, and one of them will be sitting in this chair one day.',
+    result: 'Forty minutes of questions, most of them better than expected, one of them about a '
+      + 'decision this ship made that they had read about.',
+    hours: 0.7,
+    xp: 60,
+    standing: { federation: 4 },
+  },
+  {
+    id: 'census_return',
+    from: 'first_officer',
+    title: 'The quarterly return',
+    text: 'Starfleet Personnel wants the crew census. It is late, it is four hundred names, and it '
+      + 'is the sort of thing that is somebody else\u2019s problem until it is not.',
+    answer: 'Sign it and send it',
+    say: 'sign the return',
+    hint: 'Nobody has ever been commended for this. People have been noticed for not doing it.',
+    result: 'Four hundred names, checked and sent. The yeoman looks visibly lighter.',
+    hours: 0.6,
+    xp: 40,
+    standing: { federation: 3 },
+  },
+  {
+    id: 'dead_beacon',
+    from: 'science',
+    title: 'An automated beacon, long dead',
+    text: 'A distress beacon on a Federation frequency, running on the last of a battery that was '
+      + 'installed before anybody aboard was born. Whatever it was launched from is not out there.',
+    answer: 'Log it and recover the record',
+    say: 'log the beacon',
+    hint: 'Somebody put it there. Somebody\u2019s family never found out where.',
+    result: 'The record comes off intact: a survey tender, a hull number, and a date. Starfleet '
+      + 'closes a file that has been open for sixty-one years.',
+    hours: 0.9,
+    xp: 90,
+    standing: { federation: 4 },
+  },
+  {
+    id: 'weather_net',
+    from: 'science',
+    title: 'Subspace weather net',
+    text: 'A monitoring station is short of readings from this volume and is asking any ship '
+      + 'passing through to dump its sensor logs on the way past.',
+    answer: 'Send them the logs',
+    say: 'send them the logs',
+    hint: 'Our own readings, which we already took, sent to somebody who needs them.',
+    result: 'Sent. The forecast for this sector improves for everybody who comes after us, which '
+      + 'is the entire point of a net.',
+    hours: 0.2,
+    xp: 50,
+    charts: true,
+  },
+  {
+    id: 'call_home',
+    from: 'comms',
+    title: 'A call routed through',
+    text: 'A relay has a personal call held for one of the ratings in engineering. It is six weeks '
+      + 'old and it has been chasing this ship across two sectors.',
+    answer: 'Patch it through to quarters',
+    say: 'patch it through to quarters',
+    hint: 'A quarter of an hour of somebody\u2019s life that the war did not get.',
+    result: 'Fifteen minutes, in quarters, with the door shut. She is back on shift early and she '
+      + 'is different for the rest of the week.',
+    hours: 0.3,
+    xp: 40,
+    rested: true,
+  },
   {
     id: 'passing_ship',
     from: 'comms',
@@ -35626,6 +35756,61 @@ const TRAPS = [
     waitText: 'Nobody waits this one out. Engineering does it by hand, and it costs.',
     damage: 0.14,
   },
+  // Three more. A trap is met about six times in a commission and there were
+  // three of them, so every second one was a repeat.
+  //
+  // These use `shields` and `weapons`, which are real power channels the table
+  // had never asked for — and asking for them is what puts the other half of
+  // the phrase guard to work, since the words printed under the button are
+  // built from whichever channel the trap names.
+  {
+    id: 'web_filament',
+    title: 'Something is being spun around us',
+    text: 'There is a filament across the bow that was not there ten minutes ago, and another one '
+      + 'astern. Whatever is laying them is doing it faster than we are getting out of the way.',
+    device: 'shield_harmonics',
+    deviceText: 'The harmonics take the shields out of phase with the filament and the ship goes '
+      + 'through the gap as if it were not there.',
+    powerChannel: 'shields',
+    powerText: 'Everything to the shields. The strands go taut, burn out against the envelope, and '
+      + 'let go one after another.',
+    waitHours: 11,
+    waitText: 'Eleven hours of it tightening before whatever is out there decides we are more '
+      + 'trouble than we are worth. The hull carries the marks.',
+    damage: 0.09,
+  },
+  {
+    id: 'coolant_failure',
+    title: 'The coolant loop has stopped',
+    text: 'Primary coolant is not moving. Core temperature is climbing at four degrees a minute and '
+      + 'the loop is not going to restart itself.',
+    device: 'coolant_purge',
+    deviceText: 'The purge dumps the whole loop to space, and the secondary takes the load before '
+      + 'the temperature reaches anything anyone has to write a report about.',
+    powerChannel: 'auxiliary',
+    powerText: 'Auxiliary drives the backup pumps directly, at a draw they were never rated for, '
+      + 'and the temperature comes down.',
+    waitHours: 5,
+    waitText: 'Engineering nurses it by hand for five hours. It holds. Two people are burned doing '
+      + 'it and the loop will need replacing at a starbase.',
+    damage: 0.11,
+  },
+  {
+    id: 'drifting_mines',
+    title: 'A minefield nobody charted',
+    text: 'Passive ordnance, drifting, and thick — old enough that whoever laid it is probably not '
+      + 'at war any more. They are magnetic, and we are made of metal.',
+    device: 'sensor_pallet',
+    deviceText: 'The pallet resolves them individually at eight thousand kilometres. Helm threads '
+      + 'the ship through a field it can finally see.',
+    powerChannel: 'weapons',
+    powerText: 'Everything to the weapons and we clear a lane ourselves, one at a time, at a range '
+      + 'that makes the tactical officer unhappy.',
+    waitHours: 16,
+    waitText: 'Thrusters only, sixteen hours, and nobody on the bridge sits down. Two touch the '
+      + 'hull. Neither is one of the live ones.',
+    damage: 0.07,
+  },
 ];
 
 function buildTrap(rng, system) {
@@ -35745,15 +35930,60 @@ function buildConvoy(rng, system, presence) {
   };
 }
 
+/**
+ * A first contact, and the two entirely different things that phrase means.
+ *
+ * There was ONE sentence here for both — "An unknown vessel of unfamiliar
+ * configuration. No match in the database. They are transmitting." — and 35% of
+ * the time it was printed above these two choices:
+ *
+ *     Withdraw without revealing ourselves   The Directive exists for a reason.
+ *     Make contact anyway                    This cannot be undone.
+ *
+ * A pre-warp culture is not transmitting from a vessel. It does not know
+ * anybody is out here, which is the entire reason General Order One applies to
+ * it and the reason `contact_prewarp` records a Prime Directive violation. The
+ * description and the choices under it were about different events, and the
+ * consequence agreed with the choices.
+ *
+ * So the two branches say what they are now, and each has its own lines: a
+ * first contact is met about twice a commission, and one sentence covered both
+ * kinds of it.
+ */
+const CONTACT_SPECIES = ['Kelvan', 'Sheliak', 'Xindi-Aquatic', 'Melkotian', 'Excalbian', 'Medusan', 'Tamarian'];
+
+/** They are out here, and they have seen us. */
+const CONTACT_WARP = [
+  'An unknown vessel of unfamiliar configuration. No match in the database. They are transmitting.',
+  'A ship on an intercept that is not an intercept — matching our speed at a courteous distance and '
+    + 'holding there. Nothing in the registry looks like it.',
+  'They came out of warp four hundred kilometres off the bow, which is either very good navigation '
+    + 'or a message. Comms has a carrier and no language to put on it.',
+  'A vessel, drive signature unlike anything catalogued, running with every light on. Whoever they '
+    + 'are, they want to be seen.',
+];
+
+/** They are down there, and they do not know anybody is out here. */
+const CONTACT_PREWARP = [
+  'The third planet carries a civilisation at roughly a pre-industrial level. They have cities, '
+    + 'agriculture, and no idea that anybody else exists. Nobody down there is looking up at us.',
+  'Radio. Weak, local, and unshielded — a world that has just learned to broadcast to itself and '
+    + 'has not yet wondered whether anyone is listening. They cannot detect us at all.',
+  'A pre-warp culture, mid-industrial, roughly four centuries from a warp field of their own. '
+    + 'Science has the whole planet on the screen and is being very careful about how it is phrased.',
+  'They are down there in numbers, building things, and they have no more idea of us than we had of '
+    + 'anybody a thousand years ago. General Order One is what this is for.',
+];
+
 function buildFirstContact(rng, system) {
-  const names = ['Kelvan', 'Sheliak', 'Xindi-Aquatic', 'Melkotian', 'Excalbian', 'Medusan', 'Tamarian'];
+  // The Prime Directive is a live question here, not decoration.
+  const preWarp = rng.chance(0.35);
   return {
     kind: 'first_contact', system, hostile: false,
-    speciesName: rng.pick(names),
-    title: 'First contact',
-    text: 'An unknown vessel of unfamiliar configuration. No match in the database. They are transmitting.',
-    // The Prime Directive is a live question here, not decoration.
-    preWarp: rng.chance(0.35),
+    speciesName: rng.pick(CONTACT_SPECIES),
+    title: preWarp ? 'A world that has not seen us' : 'First contact',
+    text: rng.pick(preWarp ? CONTACT_PREWARP : CONTACT_WARP),
+    preWarp,
   };
 }
 
@@ -35779,21 +36009,180 @@ function buildSignal(rng, system) {
   };
 }
 
+/**
+ * The things science asks to look at.
+ *
+ * This table had seven entries and ONE sentence between them: "Sensors are
+ * reading a <name>. Science requests permission to investigate." An anomaly is
+ * met about twenty-two times in a five-year commission, so that sentence was
+ * read twenty-two times with seven nouns rotating through the gap.
+ *
+ * The frequency half of this was already fixed once — see the note in
+ * `tests/content.test.js`, which records anomalies at 52% of every live
+ * encounter and the work done to bring them down. But how OFTEN you meet one
+ * and how many different things it says are two problems, and only the first
+ * was solved. A player's default experience was still one sentence.
+ *
+ * So each carries its own lines now, and a `hazard`/`value` pair unchanged in
+ * spirit: the five new entries are spread so the pool's mean hazard (0.39) and
+ * mean value (3.0) move by less than a hundredth, because this is a prose
+ * change and not a rebalance.
+ */
+const ANOMALIES = [
+  {
+    id: 'subspace_rift',
+    name: 'Subspace rift',
+    hazard: 0.4,
+    value: 3,
+    texts: [
+      'A tear in subspace off the port bow, about four hundred metres across and not holding still. '
+        + 'Science wants a look before it closes.',
+      'Subspace is torn open out there. The edges are moving, and the readings from inside it are not '
+        + 'readings of anything the database has a word for.',
+    ],
+  },
+  {
+    id: 'protostar',
+    name: 'Protostar',
+    hazard: 0.25,
+    value: 2,
+    texts: [
+      'A star that has not finished becoming one. Science has been waiting a career to see this '
+        + 'happen from close enough to measure.',
+      'There is a protostar in the cloud ahead, still gathering. Astrophysics is asking, politely, '
+        + 'and then asking again.',
+    ],
+  },
+  {
+    id: 'gravitic_eddy',
+    name: 'Gravitic eddy',
+    hazard: 0.5,
+    value: 2,
+    texts: [
+      'A gravity gradient that has no business being here, turning slowly. Helm can hold us off it '
+        + 'at this range and would rather not do it for long.',
+      'Something is bending space in a circle out there. It is not large. It is very deep.',
+    ],
+  },
+  {
+    id: 'ion_storm',
+    name: 'Ion storm',
+    hazard: 0.6,
+    value: 1,
+    texts: [
+      'An ion storm, front edge nine minutes out. Every ship that has ever logged one has logged it '
+        + 'from further away than this.',
+      'The storm is moving faster than the forecast and it is between us and where we were going.',
+    ],
+  },
+  {
+    id: 'dark_matter',
+    name: 'Dark matter nebula',
+    hazard: 0.35,
+    value: 4,
+    texts: [
+      'A nebula the sensors can only find by what it hides. It is out there because the stars behind '
+        + 'it are not.',
+      'Dark matter, in a cloud dense enough to see the shape of. Nobody aboard has been this close '
+        + 'to one and neither has anybody else.',
+    ],
+  },
+  {
+    id: 'chroniton_field',
+    name: 'Chroniton field',
+    hazard: 0.45,
+    value: 4,
+    texts: [
+      'The chronometers on decks four and five disagree with the bridge by eleven seconds. Science '
+        + 'has found the field responsible and would like to know more.',
+      'Time is running at a different rate a thousand kilometres off the bow. Measurably. Not much, '
+        + 'and not by an amount anybody can explain.',
+    ],
+  },
+  {
+    id: 'derelict_probe',
+    name: 'Ancient probe',
+    hazard: 0.2,
+    value: 5,
+    texts: [
+      'A probe, tumbling, and old — the isotope decay puts it at eleven thousand years. It is still '
+        + 'transmitting, on a carrier nobody uses.',
+      'Something built and then forgotten. No propulsion left, no power to speak of, and a hull '
+        + 'that has been out here longer than anybody has been going to space.',
+    ],
+  },
+  // Five more, spread so the pool's mean hazard and value barely move.
+  {
+    id: 'magnetar_wake',
+    name: 'Magnetar wake',
+    hazard: 0.25,
+    value: 4,
+    texts: [
+      'The magnetic field out there is strong enough to be a hazard at this distance and we are not '
+        + 'at this distance by accident — helm put us here to look at it.',
+      'A magnetar went past this volume a long time ago and the field it dragged behind it is still '
+        + 'lying here, in sheets.',
+    ],
+  },
+  {
+    id: 'plasma_filament',
+    name: 'Plasma filament',
+    hazard: 0.4,
+    value: 5,
+    texts: [
+      'A thread of plasma a quarter of a light-year long and forty kilometres thick. It is the '
+        + 'straightest thing anybody on this bridge has ever seen in space.',
+      'There is a filament of plasma out there under tension, and something at one end of it is '
+        + 'pulling.',
+    ],
+  },
+  {
+    id: 'radiation_belt',
+    name: 'Hard radiation belt',
+    hazard: 0.55,
+    value: 2,
+    texts: [
+      'A belt of hard radiation with no star to explain it. Medical would like it on record that '
+        + 'they have opinions.',
+      'The count is climbing and the source is ahead, not around us. Shields will hold. They will '
+        + 'not hold for as long as science would like.',
+    ],
+  },
+  {
+    id: 'cold_nebula',
+    name: 'Cold molecular cloud',
+    hazard: 0.3,
+    value: 3,
+    texts: [
+      'A molecular cloud, close to absolute zero and full of the chemistry that eventually becomes '
+        + 'people. Science is being very calm about it.',
+      'Cold gas, denser than the models allow, and organic. That last part is why the science '
+        + 'station has stopped talking.',
+    ],
+  },
+  {
+    id: 'graviton_shear',
+    name: 'Graviton shear',
+    hazard: 0.45,
+    value: 2,
+    texts: [
+      'Two gravity gradients running against each other, and the line where they meet is doing '
+        + 'something to light that the viewer cannot quite draw.',
+      'Shear, gravitic, and sharp enough that the port and starboard sensor pallets are reporting '
+        + 'different distances to the same object.',
+    ],
+  },
+];
+
 function buildAnomaly(rng, system) {
-  const anomalies = [
-    { id: 'subspace_rift', name: 'Subspace rift', hazard: 0.4, value: 3 },
-    { id: 'protostar', name: 'Protostar', hazard: 0.25, value: 2 },
-    { id: 'gravitic_eddy', name: 'Gravitic eddy', hazard: 0.5, value: 2 },
-    { id: 'ion_storm', name: 'Ion storm', hazard: 0.6, value: 1 },
-    { id: 'dark_matter', name: 'Dark matter nebula', hazard: 0.35, value: 4 },
-    { id: 'chroniton_field', name: 'Chroniton field', hazard: 0.45, value: 4 },
-    { id: 'derelict_probe', name: 'Ancient probe', hazard: 0.2, value: 5 },
-  ];
-  const a = rng.pick(anomalies);
+  const a = rng.pick(ANOMALIES);
   return {
     kind: 'anomaly', system, anomaly: a, hostile: false,
     title: a.name,
-    text: `Sensors are reading a ${a.name.toLowerCase()}. Science requests permission to investigate.`,
+    // Its own words. The pick happens after the anomaly is chosen and nothing
+    // is drawn after it, so which anomaly a given seed produces is decided by
+    // the same draw it always was.
+    text: rng.pick(a.texts),
   };
 }
 
@@ -35853,6 +36242,7 @@ __exports.SALVAGE_POOL = SALVAGE_POOL;
 __exports.rollEncounter = rollEncounter;
 __exports.article = article;
 __exports.TRAPS = TRAPS;
+__exports.ANOMALIES = ANOMALIES;
 __exports.environmentalHazard = environmentalHazard;
 
 });

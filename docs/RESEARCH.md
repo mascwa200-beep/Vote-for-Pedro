@@ -6335,6 +6335,115 @@ were not, which is the rule that keeps earning its place:
   all-clear into the real finding.**
 
 
+## 76. The sentence you read twenty-one times
+
+`tests/content.test.js` opens with a measurement and the work it caused:
+
+> anomalies were 52% of every live encounter in the game. A player's default
+> experience of a starship command simulator was a sentence about a gravitic
+> eddy.
+
+That fixed how **often** you meet one. It did not fix how many different things
+one says, and those are two problems. The anomaly table had seven entries and
+**one sentence between them**:
+
+```js
+text: `Sensors are reading a ${a.name.toLowerCase()}. Science requests permission to investigate.`
+```
+
+A commission meets about twenty-two anomalies. So the default experience was
+still a sentence about a gravitic eddy — the same sentence, with seven nouns
+rotating through the gap.
+
+### Measured before anything was written
+
+Encounters per commission against distinct opening text, which is what a player
+actually experiences:
+
+| kind | met/commission | openings before | after | rereads before → after |
+| --- | --- | --- | --- | --- |
+| **anomaly** | 21.6 | 1 template | 24 | **3.1 → 0.9** |
+| **signal** | 19.6 | 8 | 16 | **2.5 → 1.2** |
+| **trapped** | 6.5 | 3 | 6 | **2.2 → 1.1** |
+| **first contact** | 2.1 | 1 | 8 | **2.1 → 0.3** |
+
+Shares of live encounters are **unchanged** — anomaly stays at 26.8% against a
+28% bar the file deliberately sits close to — and the anomaly pool's mean hazard
+moved 0.393 → 0.392 and mean value 3.00 → 3.08. This is prose, not a rebalance.
+Distinct opening texts across the game: **168**, against a ratchet of 100.
+
+### A screen that contradicted itself
+
+`buildFirstContact` printed one line for both of the entirely different things
+that phrase means — *"An unknown vessel of unfamiliar configuration. No match in
+the database. They are transmitting."* — and 35% of the time it sat above these:
+
+> **Withdraw without revealing ourselves** — The Directive exists for a reason.
+> **Make contact anyway** — This cannot be undone.
+
+A pre-warp culture is not transmitting from a vessel. It does not know anybody
+is out here, which is the entire reason General Order One applies and the reason
+`contact_prewarp` records a Prime Directive violation. **The description and the
+choices under it were about different events, and the consequence agreed with
+the choices.** Both branches say what they are now.
+
+### The guard from §75 catching content written after it
+
+Three new traps use `shields` and `weapons` — real power channels the table had
+never asked for. The phrase guard added one PR earlier failed immediately,
+naming the trap and the words on its button, because the lexicon did not know
+`everything to shields`. Same again for eight new signal phrases.
+
+That is the guard working exactly as intended, on content that did not exist
+when it was written, before any of it shipped.
+
+### A coverage assertion that was a lottery ticket
+
+Adding anomalies and traps shifts which encounters a seed meets, and
+`tests/commission.test.js` failed: *"away templates no commission ever reached:
+derelict_search"*.
+
+Nothing about the game had broken. Measured across the sample: four of the five
+away templates are reached by **every commission flown**, and `derelict_search`
+was reached by **exactly one of five** — so a content change re-rolled a die
+that had been landing the right way up. At eight commissions it is still 1 of 8.
+
+Why it is rare is the interesting part, and the failure is what made anybody
+look: **`game.wreck` is set by winning a fight that leaves hulls adrift, not by
+meeting a `derelict` encounter at all** — that kind resolves through
+`resolveEncounter('board')`, a different path with a different outcome. The
+template needs a victory with wreckage *and* a captain who then sends a party
+into it.
+
+So the rare one is **proven** now rather than hoped for: win a fight, assert a
+wreck exists, assert it is what puts the template on the board, run it.
+
+### Two controls that did not fire, and what each was missing
+
+**The first directed test set `game.wreck` by hand.** Stubbing out wreck
+creation left it passing — it proved that a wreck offers the template and
+nothing about whether a fight ever leaves one, and nothing else in the suite
+covered that either. It stages a real fight now, and the control fails.
+
+**The first control for the prose ratchet reverted the text picker only.** It
+did not fire, because the shared template interpolates the anomaly's *name* and
+the table had grown from seven entries to twelve — twelve names in one sentence
+is twelve distinct texts, which passes. The real before-state is seven entries
+AND the shared sentence, and against that the guard fails as it should.
+
+Both are the same lesson in different clothes: **a control has to reproduce the
+condition it claims to reproduce**, and "I reverted something" is not the same
+as "I reverted to the state that was broken".
+
+### What is left
+
+`distress` is now the thinnest at 4 openings for 6.3 meetings — 1.6 rereads,
+under the bar and the next one worth writing. The ratchet asserts a **relation**
+between two measured quantities rather than a bar somebody picked: a kind must
+carry enough prose that its opening is not read more than twice a commission.
+Anomalies at one sentence scored 21.6 and would fail it by a factor of ten.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
