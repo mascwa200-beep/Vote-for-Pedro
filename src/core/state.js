@@ -1343,6 +1343,27 @@ export class Game {
   }
 
   /**
+   * What a Prime Directive breach costs this captain.
+   *
+   * "Maverick — advantage on any check the regulations forbid. Prime Directive
+   * violations cost double." `directivePenalty` is the price of that advantage
+   * and was read by nothing.
+   *
+   * Applied at BOTH places the Directive charges you — the recorded violation,
+   * and being seen by a pre-warp culture during a covert landing, whose own log
+   * line says "that will be in the report to the Prime Directive board". A
+   * trait that doubled one of the two would be doubling the bookkeeping rather
+   * than the rule.
+   *
+   * A helper rather than the expression twice, for the reason `peaceGain` and
+   * `critSeverity` both record: a number written out in two places is a promise
+   * that can drift.
+   */
+  directiveCost(base) {
+    return Math.round(base * (this.character?.mechanic('directivePenalty') ?? 1));
+  }
+
+  /**
    * Hours in sickbay, spent rather than waited out.
    *
    * `effectRepairs` for the crew, and deliberately built the same way: it costs
@@ -2781,7 +2802,9 @@ export class Game {
         this.ledger.record('prime_directive_violation', {
           text: `Revealed the ship to a pre-warp culture at ${enc.system.name}`, system: enc.system.id,
         });
-        this.ledger.adjustStanding('federation', STANDING_EFFECTS.prime_directive_violation, 'Prime Directive violation');
+        this.ledger.adjustStanding('federation',
+          this.directiveCost(STANDING_EFFECTS.prime_directive_violation),
+          'Prime Directive violation');
         out.messages.push('They have seen the ship. Whatever happens to that culture now, it happened because of this.');
         break;
       }
@@ -4018,7 +4041,9 @@ export class Game {
     }
     if (template.id === 'covert_landing' && outcome === 'failure') {
       // Being seen is the failure that matters here, and it is not free.
-      this.ledger.adjustStanding('federation', STANDING_EFFECTS.observed_during_survey, 'Observed by a pre-warp culture');
+      this.ledger.adjustStanding('federation',
+        this.directiveCost(STANDING_EFFECTS.observed_during_survey),
+        'Observed by a pre-warp culture');
       this.pushLog(
         'We were seen, Captain. That will be in the report to the Prime Directive board.',
         'science');
