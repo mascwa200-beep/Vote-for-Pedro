@@ -1577,6 +1577,177 @@ describe('every episode graph is sound', () => {
     assert.equal(check([planted]).length, 1, 'the checker cannot see a violation put in front of it');
   });
 
+  test('and every gated choice is one some captain can actually unlock', () => {
+    // The act guard above asks whether a flag is earned EARLY enough. It never
+    // asks whether it can be earned AT ALL alongside the gate on the episode
+    // that reads it — and two shipped choices could not be:
+    //
+    //   qonos_council  gate kang_respects_you   charge/own_it  needed archanis_massacre
+    //   romulus_debt   gate spared_warbird      told/admit     needed captured_cloak
+    //
+    // Every one of those four flags is written only by a TERMINAL choice of a
+    // single episode (`archanis_claim`, `outpost_silence` — and the second pair
+    // are SIBLING choices at one stage). A playthrough takes exactly one
+    // terminal choice and `availableAt` never offers a completed episode again,
+    // so the pairs were mutually exclusive. The choices could not open for
+    // anybody, and `engine.js` renders such a choice as a greyed button reading
+    // "Not yet available" — a promise the game had no way to keep.
+    //
+    // Neither the act guard nor `capitals.test.js` saw it: the latter granted
+    // both flags with `setFlag`, which proves the gate reads the flag and never
+    // that a captain can hold it. A guard satisfied by a state the game cannot
+    // produce is the shape `guards.test.js` exists to record.
+    const writers = new Map();
+    const note = (flag, ep, terminal) => {
+      for (const f of [].concat(flag ?? [])) {
+        if (!writers.has(f)) writers.set(f, []);
+        writers.get(f).push({ ep: ep.id, terminal });
+      }
+    };
+    for (const ep of EPISODES) {
+      for (const stage of Object.values(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) note(c.effects?.flag, ep, !!c.outcome);
+      }
+      // An ending is reached by a terminal choice, so it is terminal too.
+      for (const en of Object.values(ep.endings ?? {})) note(en.effects?.flag, ep, true);
+    }
+
+    const impossible = (gate, need) => {
+      const g = writers.get(gate) ?? [];
+      const n = writers.get(need) ?? [];
+      if (!g.length || !n.length) return false;
+      const gEps = new Set(g.map((w) => w.ep));
+      const nEps = new Set(n.map((w) => w.ep));
+      // Only decidable when BOTH are written inside one and the same episode:
+      // then one playthrough is one terminal choice, and two terminal writers
+      // cannot both fire. Anything spread across episodes is holdable by
+      // playing both, and this says nothing about it.
+      if (gEps.size !== 1 || nEps.size !== 1 || [...gEps][0] !== [...nEps][0]) return false;
+      return g.every((w) => w.terminal) && n.every((w) => w.terminal);
+    };
+
+    const check = (book) => {
+      const bad = [];
+      for (const ep of book) {
+        const gate = ep.requiresFlag;
+        if (!gate) continue;
+        for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+          for (const c of stage.choices ?? []) {
+            const need = c.requires?.flag;
+            if (!need || writers.get(need)?.some((w) => w.ep === ep.id)) continue;
+            if (impossible(gate, need)) {
+              bad.push(`${ep.id}/${sid}/${c.id} needs ${need}, which no captain holding ${gate} can have`);
+            }
+          }
+        }
+      }
+      return bad;
+    };
+
+    assert.deepEqual(check(EPISODES), [], 'choices offered to nobody, forever');
+
+    // The control is the shipped shape, restored: it has to be reported, or
+    // the checker is only saying that the book is currently tidy.
+    const planted = {
+      id: 'planted', title: 'planted', system: 'qonos', act: 4,
+      requiresFlag: 'kang_respects_you',
+      stages: { start: { text: 'x', where: 'anywhere', choices: [
+        { id: 'ok', label: 'ok', outcome: 'done' },
+        { id: 'never', label: 'never', outcome: 'done', requires: { flag: 'archanis_massacre' } },
+      ] } },
+      start: 'start',
+      endings: { done: { label: 'done', text: 'x' } },
+    };
+    assert.equal(check([planted]).length, 1,
+      'the checker cannot see the very shape it was written for');
+  });
+
+  test('and every flag nothing reads is one somebody decided not to read', () => {
+    // A registry, not a ratchet.
+    //
+    // The obvious guard is "the count of unread flags does not grow", and it
+    // is wrong three ways. It is satisfiable by trades — this very change
+    // deleted one dead flag and returned `captured_cloak` to unread, for a net
+    // of zero and nothing learned. Scraping the source for a flag NAME counts
+    // comments, which is the defect `guards.test.js` exists to record, and two
+    // flags are named only in prose. And the number's correct direction is
+    // downward, so a ceiling blocks nothing while breaking mid-change.
+    //
+    // So: a named list with a reason on every line, locked in both directions,
+    // in the same idiom as `PLACED` and `TALKED_THROUGH`. Writing a flag
+    // nothing reads fails until it is either wired or written down here.
+    // Wiring one fails until it is struck off. The debt can only move
+    // deliberately.
+    //
+    //   terminal  — written at the end of the commission; nothing follows it,
+    //               and nothing should. These are records, not switches.
+    //   candidate — a later scene could read it and none does yet. Not a
+    //               defect on its own: an unwired thing is a hypothesis, and
+    //               one of these hypotheses has already been measured and
+    //               found catastrophic. Wiring one is a content pass with its
+    //               own measurement, not a tidy-up.
+    const WRITTEN_AND_UNREAD = {
+      censured_command: 'terminal', command_reviewed: 'terminal',
+      commended_command: 'terminal', credited_the_crew: 'terminal',
+      romulan_testimony: 'terminal',
+
+      archanis_ratified: 'candidate', asked_about_hurry: 'candidate',
+      badlands_run: 'candidate', borrowed_blade: 'candidate',
+      came_clean: 'candidate',
+      // Was read by `romulus_debt/told/admit` until that choice was found to be
+      // unreachable and removed — the gate asked for the sibling of the arm the
+      // episode itself is premised on. Losing its only reader is the honest
+      // cost of deleting a choice nobody could take.
+      captured_cloak: 'candidate',
+      centauri_reported: 'candidate', devron_blind: 'candidate',
+      devron_collapsed: 'candidate', devron_data: 'candidate',
+      dmz_clause_recovered: 'candidate', dmz_favourable: 'candidate',
+      donatu_accord: 'candidate', donatu_battle: 'candidate',
+      donatu_pressed: 'candidate', grid_9902_contact: 'candidate',
+      grid_answered_late: 'candidate', grid_candid: 'candidate',
+      marru_left: 'candidate', merrimack_lost: 'candidate',
+      ordered_the_deck: 'candidate', organia_rebuffed: 'candidate',
+      organia_revealed: 'candidate', organia_secret: 'candidate',
+      ran_silent: 'candidate', rescued_vell: 'candidate',
+      romulus_witness: 'candidate', telek_acquitted: 'candidate',
+      vell_lost: 'candidate', wolf_scanned: 'candidate',
+    };
+
+    // Readers, computed from the objects rather than from the source text —
+    // the episode gates, plus the crew-morale table, which is the one system
+    // outside the book that reads episode flags and which every earlier sweep
+    // of mine missed.
+    const read = new Set();
+    const written = new Set();
+    for (const ep of EPISODES) {
+      for (const stage of Object.values(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          for (const f of [].concat(c.effects?.flag ?? [])) written.add(f);
+          if (c.requires?.flag) read.add(c.requires.flag);
+          if (c.requires?.notFlag) read.add(c.requires.notFlag);
+        }
+      }
+      for (const en of Object.values(ep.endings ?? {})) {
+        for (const f of [].concat(en.effects?.flag ?? [])) written.add(f);
+      }
+      if (ep.requiresFlag) read.add(ep.requiresFlag);
+      if (ep.blockedByFlag) read.add(ep.blockedByFlag);
+    }
+    for (const list of Object.values(Game.FACTION_MEMORY ?? {})) {
+      for (const entry of list) read.add(entry.flag);
+    }
+    assert.ok(read.size >= 40, `only ${read.size} flags are read anywhere`);
+
+    const unread = [...written].filter((f) => !read.has(f)).sort();
+    assert.deepEqual(unread, Object.keys(WRITTEN_AND_UNREAD).sort(),
+      'the list of flags nothing reads no longer matches the flags nothing reads');
+
+    // And the categories are the two that were reasoned about, not free text.
+    for (const [flag, why] of Object.entries(WRITTEN_AND_UNREAD)) {
+      assert.ok(why === 'terminal' || why === 'candidate', `${flag}: ${why}`);
+    }
+  });
+
   test('every episode can be played to an end, by any route', () => {
     // Random legal choices, thirty runs each. The engine has no loop guard, so
     // a cycle in the graph would hang the player rather than fail loudly.
