@@ -22,7 +22,7 @@ import {
   SYSTEMS, systemDepth, distanceLy, REAL_DECLINATION,
 } from '../src/world/systems.data.js';
 import { Ship, FACINGS } from '../src/sim/ship.js';
-import { RNG } from '../src/core/rng.js';
+import { RNG, hashSeed } from '../src/core/rng.js';
 import { Character, CAREERS } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { CONSOLES, Loadout, SET_LIST, SETS } from '../src/sim/loadout.js';
@@ -52,6 +52,7 @@ import { STANDING_EFFECTS } from '../src/sim/diplomacy.js';
 import { checkGame } from '../src/sim/invariants.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { checkAll } from '../src/sim/invariants.js';
+import { buildArena, ARENA_KINDS } from '../src/sim/arena.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -3571,4 +3572,130 @@ test('the shipyard changes ship through the path that knows what that costs', ()
     'the shipyard does not go through takeCommandOf');
   assert.ok(!/new Ship\(classId/.test(body),
     'the shipyard still builds its own hull, so nothing re-points the mastery track');
+});
+
+// ====================== an option the game offers is one the ship will honour
+
+describe('freedom of choice, at the boundary where it was being lost', () => {
+  const SCREENS = readFileSync(join(HERE, '..', 'src', 'ui', 'screens.js'), 'utf8');
+  const MAIN = readFileSync(join(HERE, '..', 'src', 'main.js'), 'utf8');
+
+  test('the sim layer never refuses without saying why', () => {
+    // The half that was already right, asserted so it stays that way. Ninety
+    // refusals across these five files and every one of them carries words —
+    // the failures were all at the boundary, in screens that offered something
+    // the method would refuse, or threw the refusal away.
+    const silent = [];
+    for (const rel of ['core/state.js', 'sim/combat.js', 'sim/walk.js',
+      'sim/fabrication.js', 'missions/engine.js']) {
+      const src = readFileSync(join(HERE, '..', 'src', rel), 'utf8').split('\n');
+      src.forEach((line, i) => {
+        if (!/return\s*\{\s*ok:\s*false/.test(line)) return;
+        const window = src.slice(i, i + 3).join(' ');
+        if (!/reason:|error:/.test(window)) silent.push(`${rel}:${i + 1}`);
+      });
+    }
+    assert.deepEqual(silent, [], 'a refusal the player can reach that says nothing');
+  });
+
+  test('no tap is answered with silence', () => {
+    // Two handlers discarded a refusal outright. Breaking orbit while ashore
+    // ran `g.breakOrbit()` and dropped the result on the floor — the method has
+    // always refused with "You are on the surface, Captain. We are not leaving
+    // without you." and nobody ever saw it. The door chips read `.ok` and threw
+    // the reason away, so tapping a door under fire produced no message, no log
+    // and not even a deny cue.
+    const orbit = SCREENS.slice(SCREENS.indexOf("button('Break orbit'"), SCREENS.indexOf("button('Break orbit'") + 500);
+    assert.ok(orbit.length > 20, 'the break-orbit button moved');
+    assert.ok(!/tap\(\(\) => \{ g\.breakOrbit\(\); app\.render\(\); \}\)/.test(SCREENS),
+      'breaking orbit throws its refusal away again');
+    assert.ok(/g\.ashore \? null :/.test(orbit), 'break orbit is offered with the captain ashore');
+
+    const chips = SCREENS.slice(SCREENS.indexOf("// Somewhere to walk"), SCREENS.indexOf("// Somewhere to walk") + 1400);
+    assert.ok(/mayWalk\?\.\(\)/.test(chips), 'the door chips do not ask whether walking is allowed');
+    assert.ok(/may\.reason/.test(chips), 'the door chips refuse without saying why');
+  });
+
+  test('and the turbolift says so before the tap, not only after it', () => {
+    // This one always ANSWERED — `ui_deny` and a log line — so it was never
+    // silent. What it did not do was say so in advance: eight or nine decks in
+    // the enabled colour during a fight, every one of them refused.
+    const at = MAIN.indexOf("case 'turbolift':");
+    assert.ok(at > 0, 'the turbolift console moved');
+    const branch = MAIN.slice(at, at + 1200);
+    assert.ok(/mayWalk\?\.\(\)/.test(branch), 'the lift offers decks without asking');
+    assert.ok(/ui_deny/.test(branch), 'the lift stopped answering a refused tap');
+  });
+
+  test('a survey already done does not look available', () => {
+    // `surveyFeature` has refused a second survey since it was written, and
+    // NOTHING on any screen read `g.surveyed` — so the button stayed
+    // full-strength orange and went on promising a science team and nineteen
+    // hours for work that was finished.
+    assert.ok(/g\.surveyed\?\.\[/.test(SCREENS), 'no screen reads what has been surveyed');
+    // Truthy, not `=== 'found'`: the key is set to 'found' or 'empty' and both
+    // mean the away team has been over it.
+    assert.ok(!/surveyed\?\.\[[^\]]+\] === 'found'/.test(SCREENS),
+      'an empty survey would be offered again');
+  });
+
+  test('everything the save system implements is reachable', () => {
+    // Three named slots and an autosave, each with a label and a timestamp,
+    // complete and exported and imported by nobody — so a captain could not see
+    // what was in them or clear one.
+    const save = readFileSync(join(HERE, '..', 'src', 'core', 'save.js'), 'utf8');
+    const verbs = [...save.matchAll(/^export function (\w+)/gm)].map((m) => m[1]);
+    // Everything the file offers EXCEPT its plumbing. A first draft of this
+    // swept every export and flagged `checksum`, which is the integrity helper
+    // the save format uses internally — it is not a thing a captain does, and a
+    // guard that demands a screen for it would be demanding the wrong screen.
+    const PLUMBING = new Set(['checksum']);
+    const facing = verbs.filter((v) => !PLUMBING.has(v));
+    assert.ok(facing.includes('listSaves') && facing.includes('deleteSave'), 'the slot verbs are gone');
+    const ui = `${SCREENS}\n${MAIN}`;
+    const unreachable = facing.filter((v) => !new RegExp(`\\b${v}\\b`).test(ui));
+    assert.deepEqual(unreachable, [],
+      `the save system implements verbs no screen can reach: ${unreachable.join(', ')}`);
+  });
+
+  test('and deleting a commission asks first', () => {
+    // The one button on that screen that destroys five years. The first draft
+    // reached for a confirm helper this app does not have, and the optional
+    // call fell through to deleting on a single tap with no question asked.
+    const at = SCREENS.indexOf('Saved Commissions');
+    assert.ok(at > 0, 'the saved-commissions panel is gone');
+    const panel = SCREENS.slice(at, at + 2000);
+    assert.ok(/deleteSave\(/.test(panel), 'the panel cannot delete anything');
+    assert.ok(/showMessage\(/.test(panel), 'deleting no longer asks');
+    assert.ok(!/app\.confirm\?\./.test(SCREENS), 'the confirm that does not exist is back');
+  });
+});
+
+describe('the arena reaches one more place it should always have reached', () => {
+  test('Beta Reticuli is a wreck field', () => {
+    // Where the cube went through. `beta_reticuli` — "What the Cube Left" — is
+    // gated on finishing `the_cube` at Gamma Hydra next door, and the system
+    // links straight to Wolf 359, which carries debris for the same reason.
+    const sys = SYSTEMS.find((s) => s.id === 'frontier_1');
+    assert.ok(sys, 'Beta Reticuli is gone');
+    assert.equal(sys.hazard, 'debris');
+    const arena = buildArena(new RNG(hashSeed('arena:frontier_1')), sys.hazard);
+    assert.ok(arena.features.length > 0, 'the debris field has nothing in it');
+    assert.notEqual(arena.name, 'open space');
+  });
+
+  test('and nowhere else changed', () => {
+    // Terrain is a fact about a place. Adding one must not quietly give it to
+    // anything else, and every arena kind must still be reachable from
+    // somewhere — a terrain type nothing can produce is terrain nobody sees.
+    const hazardous = SYSTEMS.filter((s) => s.hazard).map((s) => `${s.id}:${s.hazard}`).sort();
+    assert.deepEqual(hazardous, [
+      'badlands_1:plasma_storm', 'briar:metreon', 'devron:temporal',
+      'frontier_1:debris', 'mutara:nebula', 'tholian_edge:tholian_web', 'wolf359:debris',
+    ], 'the set of systems carrying terrain changed');
+    const reachable = new Set(SYSTEMS.filter((s) => s.hazard).map((s) => s.hazard));
+    for (const kind of Object.keys(ARENA_KINDS)) {
+      assert.ok(reachable.has(kind), `${kind} terrain exists and no system produces it`);
+    }
+  });
 });

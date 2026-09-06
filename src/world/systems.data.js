@@ -247,7 +247,21 @@ export const SYSTEMS = [
   {
     id: 'frontier_1', name: 'Beta Reticuli', sector: 'frontier', x: 14.0, y: 4.0, type: 'anomaly', faction: 'none',
     facilities: [],
-    description: 'Charted once, briefly, by a survey ship that did not file a second report.',
+    // Debris, for the same reason Wolf 359 carries it: this is where something
+    // was destroyed and the pieces are still here. `beta_reticuli` — "What the
+    // Cube Left" — is gated on having finished `the_cube` at Gamma Hydra next
+    // door, and the survey ship that did not file a second report is part of
+    // what a fight here is now flying through.
+    //
+    // Nine systems are typed `anomaly` and four carried terrain, so the whole
+    // arena layer — four kinds, doctrine-tuned cover thresholds, blocking,
+    // clouds — was live in four systems out of forty-three. This is the one
+    // addition the fiction actually asks for; the rest of the anomalies are a
+    // wormhole, its far terminus and two unsurveyed grids, and inventing
+    // hazards for those would be terrain for the sake of terrain.
+    hazard: 'debris',
+    description: 'Charted once, briefly, by a survey ship that did not file a second report. '
+      + 'What the sensors return now is wreckage in a slow tumble, and not all of it is hers.',
     links: ['wolf359', 'frontier_2', 'deep_2'],
   },
   {

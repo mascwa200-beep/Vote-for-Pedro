@@ -8007,6 +8007,157 @@ real location and room gates rather than around them, and the failure scene read
 back to confirm it differs in substance rather than in adjectives.
 
 
+## 89. Freedom of choice, and the seven times the instrument was wrong
+
+This began as "deepen space combat" and turned into something else, because the
+combat layer turned out not to need it.
+
+### Seven probes, seven instrument errors
+
+Every measurement I made into the combat layer found the game right and my own
+harness wrong. The list is the evidence:
+
+| what I nearly reported | what was actually wrong |
+| --- | --- |
+| "subsystem targeting does nothing" | I assigned to `eng.targetSubsystem`, which is a **method**. I overwrote it with a string, targeted nothing, and got three tactics with byte-identical results |
+| "the defence preset is a no-op" | the preset is `defense`; `applyPreset` returns `false` on an unknown id, so that row measured the do-nothing case under another name |
+| "fights rarely resolve" | they resolve as `routed`, which is the canonical outcome. I read a proper ending as a failure |
+| "no faction ever uses a tactic" | `chooseTactic` records by **adding a buff**, not by setting `ship.tactic` |
+| "`attack_pattern_alpha` is dead" | it needs the PLAYER under 32% hull — a finish-them order, and my captain was winning. Pinned in its own window it fires **1,806** times |
+| "four doctrines are identical" | they share a tactic pair and differ in `COVER_DOCTRINE`, `CALLED_SHOT` (territorial aims at engines, attrition at weapons), flee thresholds and boarding |
+| "allies are inert" | `pendingCombat` takes **`escort`**, not `allies`. With the right key: 60s → 36s, own hull 72% → 84% |
+
+What the levers actually do, over eight seeds against a D7:
+
+```
+tactic             own hull   enemy   how it ended
+nothing at all        36%       9%    routed 8
+attack power          73%       5%    routed 7, victory 1
+speed power           79%      39%    DESTROYED 6, routed 1, timeout 1
+attack + weapons      80%       9%    routed 8
+attack + engines      60%      10%    routed 8
+```
+
+Every lever is real and points sensibly: shoot their weapons and you finish at
+80% hull; run with power to engines and you die six times in eight. The player
+holds **24 of 26 abilities at commission**, 21 firing immediately. The layer is
+deliberate and well tuned, and adding mechanics to it would have been adding
+noise to something that works.
+
+**The rule this section exists to record: check the API before believing the
+measurement.** Seven times in one sitting the fastest explanation was "the game
+is broken" and seven times it was "the harness is". A measurement is an
+instrument, and an instrument that has never been calibrated is a rumour.
+
+### What was actually wrong: the boundary
+
+The simulation layer is already disciplined about refusals. Measured across
+`state.js`, `combat.js`, `walk.js`, `fabrication.js` and `engine.js`: **all 90
+`{ ok: false }` returns carry a `reason` or an `error`. Zero silent refusals.**
+
+The failures were all one step out, where a screen offers something the method
+will refuse, or throws the refusal away.
+
+**Breaking orbit while ashore was a button that did nothing.**
+`tap(() => { g.breakOrbit(); app.render(); })` discarded the result entirely, and
+`breakOrbit` has always refused it with the right sentence — *"You are on the
+surface, Captain. We are not leaving without you."* Nobody ever saw it.
+
+**Door chips were drawn blue during a fight and absorbed the tap.** `mayWalk`
+refuses under fire; the handler read `.ok` and threw the reason away, so there
+was no message, no log entry and not even a deny cue. The rule is right and
+worth keeping — being told about it was the part that was missing. The turbolift
+console was the same offer with a better answer: it always played `ui_deny` and
+logged the reason, so it was never silent; what it did not do was say so
+*before* the tap, with eight or nine decks in the enabled colour.
+
+**A survey already done went on advertising itself.** `surveyFeature` has
+refused a second survey since it was written, and nothing on any screen read
+`g.surveyed` — so the orange button kept promising *"Dangerous — science team,
+19 hours"* for work that was finished.
+
+**Three save slots were implemented and unreachable.** `listSaves` and
+`deleteSave` are complete, exported, and were imported by nothing. The file's
+own header argues at length about a save surviving *"five years of storage
+pressure, a phone running out of space mid-write"* — and then gave the player no
+way to see what was in a slot or clear one.
+
+The rule applied throughout: **an option the game shows is an option the game
+honours; a refusal the player can reach arrives in words; and a thing the player
+owns is reachable.** Where a rule genuinely forbids something, it is said at the
+point of offering — greyed, with the reason — rather than accepted and dropped.
+
+### One that came off the list by reading the body
+
+`setAlert` discards its return value at its call site, which looks identical to
+the two defects above. It is not one: it calls `officerSays` *inside the method*
+before returning, so a captain asking for blue alert mid-battle is already told
+*"Not while we are under fire, Captain."* A refusal that speaks for itself is
+not silent, and the call site is right to ignore it.
+
+### Beta Reticuli
+
+Nine systems are typed `anomaly`; four carried terrain. The whole arena layer —
+four kinds, doctrine-tuned cover thresholds, blocking, clouds — was live in
+**four systems out of forty-three**.
+
+One addition the fiction actually asks for: Beta Reticuli is where the cube went
+through. `beta_reticuli`, "What the Cube Left", is gated on finishing `the_cube`
+at Gamma Hydra next door, and the system links straight to Wolf 359, which
+carries `debris` for exactly the same reason — *"a graveyard with coordinates."*
+It now carries it too.
+
+The other four anomalies are a wormhole, its far terminus and two unsurveyed
+grids. Inventing hazards for those would be terrain for the sake of terrain, so
+they keep their empty space.
+
+### Three guards tripped by prose about code
+
+Worth recording as a class. `tests/lang.test.js` scrapes `say:` phrases out of
+`screens.js` and requires each to parse as a real order; `tests/decks.test.js`
+reads a fixed 900-byte window of the turbolift branch and requires `deckLabel(`
+inside it; and a guard written in this change refuses the string `app.confirm?.`
+anywhere in the screens.
+
+All three fired on **comments**. A sentence quoting `say:`, a comment long
+enough to push a call past a byte window, and a note explaining why
+`app.confirm?.()` was the wrong idea — each was read as the code it described. A
+guard that scans source as text cannot tell an example from a use, and the
+answer is to write the prose so it does not look like the thing.
+
+### The confirm that would have deleted a commission
+
+The delete button reached for `app.confirm?.(...)`, with an immediate delete as
+the fallback. `app.confirm` does not exist — so the optional call returned
+`undefined`, the fallback fired, and a red button destroyed a five-year
+commission on one tap with no question asked. It now goes through
+`showMessage`'s own actions, in the shape `confirmNewGame` already uses: the
+destructive answer in red, the way out in ghost, and no spoken phrase on either
+— because `showMessage` registers a voice route only for its default action, and
+a phrase printed on a modal that cannot hear it is one more promise the game
+does not keep.
+
+### And a guard that was asserting the old behaviour
+
+`tools/verify-app.mjs` checks that the survey button says what the away team is
+being asked to risk — and the scenario surveys the feature *before* it reads the
+button. Once a finished survey correctly greyed out, that check failed, and it
+was right to fail: it was pinned to the state the change removes. It now reads
+the button in **both** states — the risk line with the record clear, the refusal
+with it set — which is a stronger check than the one it replaces, and 409 checks
+rather than 408.
+
+### Guards and controls
+
+Six guards, each confirmed failing against its own control: break orbit throwing
+its refusal away again; the door chips no longer asking `mayWalk`; the survey
+button no longer reading `g.surveyed`; the save slots back to unreachable; Beta
+Reticuli losing its debris; and the turbolift no longer asking before the tap.
+
+And the combat measurements above were re-run after every change and are
+byte-identical. This section moved no fight.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
