@@ -5822,6 +5822,106 @@ tactician check fires, and the empath fires two.
 Ratchet **14 → 12**.
 
 
+## 71. The skill tree, and two numbers the away check was given and never read
+
+§70 swept the character sheet, which a captain fills in once. This is the other
+sheet — the one filled in **over and over, with a resource the whole game is
+built to award and no way to get a point back**. Seventeen skills, four
+branches, a hard cap per skill. If a point buys nothing, the game has taken
+something from the player that it cannot give back.
+
+Twelve of the seventeen buy a ship modifier through `mods`, and all twelve work.
+The other five buy a **`special`** — a named effect some other system is meant to
+ask for. Three of those five were asked for by nobody.
+
+| skill | branch | ranks | sold as | actually |
+| --- | --- | --- | --- | --- |
+| **Exobiology** | science | 3 | *away team science and medical outcomes* | `mods: {}`, and its one reader handed it to a parameter that does not exist |
+| **Inspiration** | command | 3 | *crew survive hits better; officers object less* | `mods: {}`, no reader at all |
+| **Fleet Tactics** | command | 3 | *your damage, and any allied ships'* | the 4% damage works; allies get nothing |
+
+Exobiology and Inspiration have **empty `mods` as well**, so they are the two
+skills in the tree that a captain can max out and buy literally nothing with.
+
+### The parameter that never existed
+
+`AwayTeam.check` takes `{dc, hazard, situational, label}`. The mission engine
+called it like this, and had since the engine was written:
+
+```js
+team.check(g.rng, effects.check.type, {
+  difficulty: effects.check.difficulty ?? 0.5,
+  hazard:     effects.check.hazard ?? 'elevated',
+  captainBonus: g.progress.awayScienceBonus,
+});
+```
+
+**Neither `difficulty` nor `captainBonus` is a parameter of `check`.** Both were
+destructured into nothing on every episode check in the game.
+
+`captainBonus` is Exobiology's only appearance anywhere in `src/`. And
+`difficulty` is worse than a dead skill, because eleven episode choices declare
+one — 0.4, 0.45, 0.5, 0.55, 0.6 — and every one of them ran at its hazard's
+default DC instead. Two `dangerous` scenes as different as talking a saboteur
+down and holding a breaching core against a deadline were **exactly the same
+roll**.
+
+The declared values sit on a **0.05 grid around a neutral 0.5**, which is the
+whole reading: 0.05 is one point of DC and the range spans ±2 — a nudge inside a
+hazard band, not a second hazard scale competing with the first. The author was
+writing in single DC points without knowing it.
+
+| declared | 0.40 | 0.45 | 0.50 | 0.55 | 0.60 |
+| --- | --- | --- | --- | --- | --- |
+| success, 800 checks | 94.9% | 92.0% | 88.4% | 85.5% | 77.3% |
+
+Exobiology moved to where the rest of the captain's contribution lives — the
+`AwayTeam` constructor, beside `locals` and `hullPct` — rather than the options
+bag, **because two callers run checks and only one of them was passing it**. Now
+the away-mission board gets it too. It is itemised in `parts` like everything
+else, so a captain can see the three points and where they came from.
+
+| exobiology ranks | 0 | 1 | 2 | 3 |
+| --- | --- | --- | --- | --- |
+| science | 69.4% | 79.6% | 83.9% | 89.6% |
+| medicine | 38.4% | 51.0% | 53.1% | 60.5% |
+| **combat (control)** | **55.3%** | **55.3%** | **55.3%** | **55.3%** |
+
+"Away team science and medical outcomes" — so science and medicine, and not the
+two checks about shooting and not being seen.
+
+### A control that drifted, and a sweep that went blind
+
+Two instrument failures, and the second is the worst one this dossier has
+recorded.
+
+The combat control first read 51.1% → 55.6% → 54.1% → 53.1% across the four
+ranks, which looks like a small real effect and is 2.5σ of noise. **The seed
+varied with the rank**, so the four cells were not the same rolls with one thing
+changed; they were four different sets of rolls. Pairing the seed made the
+control exact to the decimal, and an exact control is worth more than a
+plausible one.
+
+Then the sweep that *finds* dead specials — the ratchet this section leaves
+behind — was blind. Unwiring Exobiology completely left it reporting a healthy
+tree, because the comment in `state.js` **explaining that `awayScienceBonus`
+used to have no reader** is itself a match for `awayScienceBonus`.
+
+Prose about dead code reads exactly like live code to a regular expression. That
+has now happened four times in this repo, and three of those were caught by the
+guard failing loudly. This is the first time it **hid a real unwiring** — the
+check passed, and it passed because the thing it was looking for was a sentence
+about the thing it was looking for. Comments are stripped before matching now.
+
+### What is left, on a ratchet
+
+`allyBonus` and `moraleBonus` are still read by nothing: **3 → 2**, and the test
+that counts them refuses to let the number go back up. `crewProtect` is already
+a live additive ship mod read by the casualty model, and the objection system in
+`powers.js` already has a `noObjection` gate — so both remaining promises have
+somewhere real to land, and neither needs a new number invented for it.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
