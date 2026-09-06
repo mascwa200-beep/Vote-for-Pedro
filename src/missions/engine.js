@@ -265,10 +265,14 @@ export class Mission {
 
     if (effects.check) {
       const team = g.awayTeam ?? g.buildAwayTeam();
+      // Two numbers went into this call and `check` accepted neither of them.
+      // `difficulty` is the stage's own dial and is now `declared`; the captain's
+      // Exobiology ranks were arriving as a `captainBonus` that nothing read and
+      // now reach the team the way everything else about the captain does —
+      // through `buildAwayTeam`, so the away-mission board gets them too.
       const result = team.check(g.rng, effects.check.type, {
-        difficulty: effects.check.difficulty ?? 0.5,
+        declared: effects.check.difficulty ?? 0.5,
         hazard: effects.check.hazard ?? 'elevated',
-        captainBonus: g.progress.awayScienceBonus,
       });
       out.success = result.success;
       out.checkResult = result;

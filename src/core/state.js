@@ -3804,6 +3804,12 @@ export class Game {
       // breaching core, hull fires" removed a penalty that did not exist.
       fires: this.ship?.fires ?? 0,
       breaching: !!this.ship?.breaching,
+      // And the captain's own training, which reached the away team through
+      // nothing at all: `awayScienceBonus` had exactly one reader in the whole
+      // of src/, and that reader handed it to `AwayTeam.check` as an option
+      // `check` does not accept. Exobiology is three ranks of the science
+      // branch and it bought a captain nothing.
+      awayScience: this.progress?.awayScienceBonus ?? 0,
     });
     // A landing party is a mission, and the Human reroll is once per mission.
     // `Character.refresh` is called by `startCombat`, which is a different

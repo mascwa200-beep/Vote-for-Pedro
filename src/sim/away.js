@@ -79,6 +79,16 @@ export class AwayTeam {
     /** Fires burning and a core breaching, for `pressure()`. */
     this.fires = opts.fires ?? 0;
     this.breaching = !!opts.breaching;
+    // Exobiology, off the captain's own skill tree: "away team science and
+    // medical outcomes." One of the seven specialisations the tree sells and
+    // one of the three nothing read. It was reaching `check` as a `captainBonus`
+    // option that `check` does not accept and never has, so three ranks of a
+    // command-branch skill bought a captain exactly nothing.
+    //
+    // It belongs here rather than in the options bag, with `locals` and
+    // `hullPct` and the rest of what only the caller knows — because there are
+    // two callers that run checks and only one of them was passing it.
+    this.awayScience = opts.awayScience ?? 0;
     this.casualties = [];
     this.rolls = [];                      // full audit trail for the UI
   }
@@ -144,6 +154,18 @@ export class AwayTeam {
       parts.push({ source: 'locals lending a hand', value: this.locals });
     }
 
+    // "Away team science and medical outcomes" — so science and medicine, and
+    // not the two checks about shooting and not being seen. A rank is 0.1 on
+    // the skill tree's own scale and one point here, which is the same rate the
+    // rest of this list runs at: three ranks are worth what proficiency is.
+    if (this.awayScience > 0 && (spec.ability === 'science' || spec.ability === 'medicine')) {
+      const trained = Math.round(this.awayScience * 10);
+      if (trained) {
+        total += trained;
+        parts.push({ source: 'exobiology', value: trained });
+      }
+    }
+
     // A larger security detail helps with anything physical.
     if ((checkType === 'combat' || checkType === 'stealth') && this.security > 0) {
       const detail = Math.min(3, Math.floor(this.security / 2));
@@ -181,12 +203,28 @@ export class AwayTeam {
    * Resolve one check.
    * @returns {object} the roll, the consequences, and readable prose
    */
-  check(rng, checkType, { dc = null, hazard = 'elevated', situational = 0, label = '' } = {}) {
+  check(rng, checkType, {
+    dc = null, hazard = 'elevated', situational = 0, label = '', declared = 0.5,
+  } = {}) {
     const level = HAZARD_LEVEL[hazard] ?? HAZARD_LEVEL.elevated;
     const spec = CHECK_TYPES[checkType] ?? CHECK_TYPES.science;
     const { total: modifier, parts, officer } = this.modifierFor(checkType, situational);
 
-    let targetDC = dc ?? level.dc;
+    // The hazard sets the floor; the stage that wrote the check sets the rest.
+    //
+    // Eleven episode choices declare `check.difficulty` — 0.4, 0.45, 0.5, 0.55,
+    // 0.6 — and `check` had no such parameter. Every one of them was destructured
+    // into nothing and every episode check in the game ran at its hazard's
+    // default DC, which is why `dangerous` scenes as different as talking a
+    // saboteur down and holding a breaching core against a deadline were exactly
+    // the same roll.
+    //
+    // The declared values sit on a 0.05 grid around a neutral 0.5, so 0.05 is
+    // one point of DC and the range spans ±2 — a nudge inside a hazard band
+    // rather than a second, competing hazard scale. Named `declared` here
+    // because `this.difficulty` is the commission's difficulty setting and the
+    // two must never be mistaken for one another.
+    let targetDC = (dc ?? level.dc) + Math.round((declared - 0.5) * 20);
     if (this.difficulty) targetDC = this.difficulty.dc(targetDC);
 
     // Three ways to have the better of a check, and only the first of them
