@@ -126,6 +126,11 @@ describe('the scenes that ask you to get up', () => {
   // file was written.
   const PLACED = [
     { ep: 'wolf359_salvage', stage: 'revived', where: 'sickbay', speaker: 'Sickbay' },
+    // The other end of the same revival. It is the same room and the same
+    // table, and the captain has to be standing at it either way — a failure
+    // the player watches from the bridge is a line of text, and this one is
+    // somebody dying in front of them.
+    { ep: 'wolf359_salvage', stage: 'lost_her', where: 'sickbay', speaker: 'Sickbay' },
     { ep: 'tholian_border', stage: 'lock', where: 'transporter', speaker: 'Transporter Room' },
     { ep: 'qonos_council', stage: 'blade', where: 'armoury', speaker: 'Armoury' },
     { ep: 'cardassia_debt', stage: 'briefing', where: 'briefing', speaker: 'Briefing room' },
@@ -149,6 +154,10 @@ describe('the scenes that ask you to get up', () => {
     { ep: 'long_watch', stage: 'manifest', where: 'cargo', speaker: 'Cargo manifest' },
     { ep: 'long_watch', stage: 'the_bunk', where: 'crewquarters', speaker: 'Crew quarters' },
     { ep: 'long_watch', stage: 'the_deck', where: 'rec', speaker: 'Recreation deck' },
+    // Being told nothing, in the room where you asked. The scene is a rec deck
+    // full of people declining to give up a shipmate, and it only works if the
+    // captain is standing in front of them when they do it.
+    { ep: 'long_watch', stage: 'closed_ranks', where: 'rec', speaker: 'Recreation deck' },
     { ep: 'long_watch', stage: 'middle_watch', where: 'auxcontrol', speaker: 'Petty Officer Ile Marchetti' },
     { ep: 'long_watch', stage: 'the_cell', where: 'brig', speaker: 'Petty Officer Ile Marchetti' },
     { ep: 'long_watch', stage: 'the_write_up', where: 'quarters', speaker: "Captain's quarters" },

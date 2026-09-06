@@ -25,8 +25,22 @@ export const CORE_EPISODES = [
         text: 'Engineering reports the core is holding at ninety-four percent efficiency. Your chief engineer wants to push it. Your first officer would prefer the manual’s numbers.',
         speaker: 'Bridge',
         choices: [
+          // The first gamble a captain takes in the game, and for a long time
+          // the ONLY one: `branch` appeared exactly once in twenty-six
+          // episodes, here, on a flat `roll: 0.7` that did not consult the
+          // captain, the crew or the chief engineer standing in front of you.
+          // A coin taught the mechanic and then nothing used it.
+          //
+          // `engineering`, because it is the intermix, and the check reaches
+          // the chief through `buildAwayTeam` the way every other one does.
+          // `routine`, because the failure this branches to says "two injured,
+          // nothing worse" — that is a 4% injury band, not a 28% one, and the
+          // hazard has to mean what the scene says.
           { id: 'push', label: 'Push the core to its limit',
-            effects: { roll: 0.7, xp: 200 },
+            effects: {
+              check: { type: 'engineering', difficulty: 0.45, hazard: 'routine' },
+              xp: 200,
+            },
             branch: { success: 'push_good', failure: 'push_bad' } },
           { id: 'manual', label: 'Run the standard profile', next: 'report',
             effects: { xp: 120, setVar: { cautious: true } } },
@@ -98,8 +112,30 @@ export const CORE_EPISODES = [
             effects: { combat: { faction: 'orion', ships: ['orion_raider', 'orion_raider'] } } },
           { id: 'hail_first', label: 'Hail them first', next: 'hail',
             effects: { xp: 80 } },
-          { id: 'ground_first', label: 'Beam a team to the surface grid', next: 'ground',
-            effects: { check: { type: 'engineering', difficulty: 0.5, hazard: 'dangerous' } } },
+          // The check was here and decided nothing: it rolled, printed a line,
+          // and went to `ground` either way — where the grid always came up and
+          // four hundred people were always saved. A `dangerous` hazard that
+          // cannot fail is a hazard in name.
+          { id: 'ground_first', label: 'Beam a team to the surface grid',
+            effects: { check: { type: 'engineering', difficulty: 0.5, hazard: 'dangerous' } },
+            branch: { success: 'ground', failure: 'ground_hard' } },
+        ],
+      },
+      ground_hard: {
+        text: 'The housing is not the problem. Somebody has been through the primary junction with '
+          + 'a cutting torch and taken the couplings with them, and there is no getting the grid up '
+          + 'from down here inside an hour. There are shuttles on the ground four streets away and '
+          + 'our people are standing in the open with a toolkit.',
+        speaker: 'Away Team',
+        choices: [
+          { id: 'cover', label: 'Get them out and take the raiders from orbit', next: 'after_combat',
+            effects: {
+              combat: { faction: 'orion', ships: ['orion_raider', 'orion_raider'] },
+              xp: 120,
+              // Some of them, and not the four hundred the grid would have
+              // covered. That difference IS the check.
+              record: { lives_saved: 90 },
+            } },
         ],
       },
       hail: {
@@ -180,10 +216,34 @@ export const CORE_EPISODES = [
         text: 'He transmits them. They are genuine, and they are two years out of date — signed before a treaty amendment his command never forwarded. He reads it as you do, and his jaw sets.',
         speaker: 'Captain Kang',
         choices: [
-          { id: 'offer_out', label: 'Offer him a way to withdraw with honour', next: 'honour',
-            requires: { skill: 'diplomacy', ranks: 2 }, effects: { xp: 400 } },
+          // Handing a Klingon captain a ladder is the whole episode, and it
+          // could not fail: the diplomacy gate decided whether the BUTTON was
+          // there, and pressing it always worked. A gate on the offer and a
+          // check on whether he takes it are different questions.
+          //
+          // `command` rather than `diplomacy`. The skill gate above is already
+          // diplomacy — this is not the same roll twice — and what Kang is
+          // weighing is not how well the sentence was phrased but whether the
+          // officer saying it is somebody he can withdraw in front of.
+          // `routine`: nobody is off the ship, and the risk here is not to a
+          // body.
+          { id: 'offer_out', label: 'Offer him a way to withdraw with honour',
+            requires: { skill: 'diplomacy', ranks: 2 },
+            effects: { check: { type: 'command', difficulty: 0.55, hazard: 'routine' }, xp: 400 },
+            branch: { success: 'honour', failure: 'refused_ladder' } },
           { id: 'humiliate', label: 'Tell him to explain himself to his High Council', next: 'standoff',
             effects: { standing: { klingon: -12 } } },
+        ],
+      },
+      refused_ladder: {
+        text: 'He hears it out. Then he says that a Klingon who withdraws on a Starfleet officer’s '
+          + 'word has not withdrawn, he has been sent away, and that there is a difference his '
+          + 'House would find in about a day. The orders are still two years dead and he is still '
+          + 'in orbit of your colony, and now both of you know he cannot simply leave.',
+        speaker: 'Captain Kang',
+        choices: [
+          { id: 'hold', label: 'Hold position and let him decide', next: 'standoff',
+            effects: { xp: 250, standing: { klingon: 4 }, flag: 'kang_left_room' } },
         ],
       },
       honour: {
@@ -245,12 +305,29 @@ export const CORE_EPISODES = [
         text: 'Organia is agrarian, peaceful, and entirely without defences. A Klingon occupation force is eleven hours out. The Organians have been told, and appear untroubled — which your science officer finds more alarming than the fleet.',
         speaker: 'Science',
         choices: [
-          { id: 'warn', label: 'Beam down and warn the council', next: 'council',
-            effects: { check: { type: 'diplomacy', difficulty: 0.4, hazard: 'routine' }, xp: 200 } },
+          // Getting a hearing at all is the check, and it used to be scenery:
+          // the roll happened and the council received you either way.
+          { id: 'warn', label: 'Beam down and warn the council',
+            effects: { check: { type: 'diplomacy', difficulty: 0.4, hazard: 'routine' }, xp: 200 },
+            branch: { success: 'council', failure: 'council_cool' } },
           { id: 'defend', label: 'Hold orbit and defend the planet', next: 'defend',
             effects: { xp: 150 } },
           { id: 'observe', label: 'Observe from range. Do not interfere', next: 'observe',
             effects: { xp: 300, flag: 'observed_organia', record: { anomaly_catalogued: 1 } } },
+        ],
+      },
+      council_cool: {
+        // The failure is not a closed door. It is being handled — which on
+        // Organia is worse, because it costs you the tricorder readings that
+        // are the whole thread out of this episode.
+        text: 'You are received in an ante-room by two of them, and they are courteous for exactly '
+          + 'as long as it takes to walk you back out. The word "occupation" is met the way one '
+          + 'meets a remark about the weather. Nobody offers a chamber, nobody offers a reading, '
+          + 'and your science officer’s tricorder spends eleven minutes recording a room.',
+        speaker: 'Away Team',
+        choices: [
+          { id: 'back', label: 'Return to the ship and hold orbit', next: 'defend',
+            effects: { xp: 120, flag: 'organia_rebuffed' } },
         ],
       },
       council: {
@@ -338,10 +415,39 @@ export const CORE_EPISODES = [
         text: 'The pod is intact. The occupant is alive, and has been alone in a dead ship for eight years without knowing it. Your CMO says the revival is survivable. Barely.',
         speaker: 'Away Team',
         choices: [
-          { id: 'revive', label: 'Revive them here', next: 'revived',
-            effects: { check: { type: 'medical', difficulty: 0.6, hazard: 'elevated' }, xp: 400 } },
-          { id: 'transport', label: 'Move the pod intact to sickbay', next: 'revived',
-            effects: { check: { type: 'engineering', difficulty: 0.4, hazard: 'routine' }, xp: 350, time: 0.4 } },
+          // "The revival is survivable. Barely." Both of these rolled and both
+          // went to the same waking either way, so the CMO's warning was
+          // decoration and the careful option bought nothing: `transport` is
+          // slower, easier and safer, and against an outcome that could not
+          // fail it was strictly worse than `revive`. Now the two checks are
+          // the decision.
+          { id: 'revive', label: 'Revive them here',
+            effects: { check: { type: 'medical', difficulty: 0.6, hazard: 'elevated' }, xp: 400 },
+            branch: { success: 'revived', failure: 'lost_her' } },
+          { id: 'transport', label: 'Move the pod intact to sickbay',
+            effects: { check: { type: 'engineering', difficulty: 0.4, hazard: 'routine' }, xp: 350, time: 0.4 },
+            branch: { success: 'revived', failure: 'lost_her' } },
+        ],
+      },
+      lost_her: {
+        // Eight years in a pod and she does not come out of it. This is what
+        // the CMO meant by "barely", and until now nothing in the episode could
+        // ever reach it.
+        where: 'sickbay',
+        text: 'The pod comes up through its stages and stops at the last one. Your CMO works for '
+          + 'forty minutes and then stands back, and the room is quiet the way a room is when '
+          + 'everybody in it has stopped being busy. Lieutenant Commander Aris Vell, tactical '
+          + 'officer, USS Kyushu. She was on the casualty list for eight years and she was not on '
+          + 'it, and now she is.',
+        speaker: 'Sickbay',
+        choices: [
+          { id: 'log', label: 'Enter her name in the log yourself', outcome: 'too_late',
+            effects: {
+              xp: 500,
+              record: { lives_lost: 1 },
+              standing: { federation: 4 },
+              flag: 'vell_lost',
+            } },
         ],
       },
       revived: {
@@ -367,6 +473,9 @@ export const CORE_EPISODES = [
         text: 'One name comes off the Wolf 359 casualty list, eight years late.' },
       left: { label: 'Survey filed',
         text: 'The signal is in your survey data. Someone will read it eventually.' },
+      too_late: { label: 'Eight years too late',
+        text: 'One name comes off the Wolf 359 missing list and goes onto the other one. '
+          + 'The record shows she was found, which is not nothing, and is not what anybody wanted.' },
     },
   },
 
@@ -403,12 +512,46 @@ export const CORE_EPISODES = [
         text: 'The team is inside. Marru is in a holding suite two levels down, and there are more guards than the intelligence suggested.',
         speaker: 'Away Team',
         choices: [
-          { id: 'quiet', label: 'Take her out quietly', outcome: 'extracted',
-            effects: { check: { type: 'stealth', difficulty: 0.6, hazard: 'dangerous' },
-              xp: 700, record: { lives_saved: 1 } } },
-          { id: 'loud', label: 'Go loud', outcome: 'extracted',
+          // Both of these rolled and both banked `lives_saved: 1` and ended
+          // `extracted` whatever came up — an EXTREME-hazard extraction, on a
+          // Syndicate world, with more guards than the intelligence suggested,
+          // that could not go wrong. The roll is the episode; it had no way to
+          // say so.
+          { id: 'quiet', label: 'Take her out quietly',
+            effects: { check: { type: 'stealth', difficulty: 0.6, hazard: 'dangerous' }, xp: 400 },
+            branch: { success: 'got_her', failure: 'blown' } },
+          { id: 'loud', label: 'Go loud',
             effects: { check: { type: 'combat', difficulty: 0.45, hazard: 'extreme' },
-              xp: 600, record: { lives_saved: 1 }, standing: { orion: -14 } } },
+              xp: 350, standing: { orion: -14 } },
+            branch: { success: 'got_her', failure: 'blown' } },
+        ],
+      },
+      got_her: {
+        text: 'Two levels down, through a service corridor that is on no plan anybody sold us, and '
+          + 'back out the way we came. Doctor Marru walks the last hundred metres herself and asks, '
+          + 'on the pad, whether anybody thought to bring her notes.',
+        speaker: 'Away Team',
+        choices: [
+          { id: 'up', label: 'Energise', outcome: 'extracted',
+            effects: { xp: 400, record: { lives_saved: 1 } } },
+        ],
+      },
+      blown: {
+        // Failure that is a decision rather than a wall. She is still down
+        // there; the question is what a captain does about it now.
+        text: 'A guard rotation nobody briefed walks into the corridor behind the team. They are out '
+          + 'and they are counted, and they are out without her — and the broker now knows exactly '
+          + 'what the ship in orbit is willing to do. Marru is being moved within the hour.',
+        speaker: 'Away Team',
+        choices: [
+          { id: 'again', label: 'Go back in, and not quietly this time', next: 'force',
+            effects: { xp: 300, standing: { orion: -18, independent: -10 } } },
+          { id: 'withdraw', label: 'Break orbit and file it', outcome: 'left_her',
+            effects: {
+              xp: 250, standing: { federation: -8 },
+              record: { order_disobeyed: 0 },
+              flag: 'marru_left',
+            } },
         ],
       },
       force: {
@@ -427,6 +570,9 @@ export const CORE_EPISODES = [
       extracted: { label: 'Extracted', text: 'Marru is aboard. Rigel will complain, and will be ignored.' },
       forced: { label: 'Taken by force',
         text: 'Starfleet Judge Advocate requests a written account within the week.' },
+      left_her: { label: 'Left on Rigel',
+        text: 'The file stays open. Doctor Marru is a Federation citizen being held by a broker on '
+          + 'a neutral world, and the last entry in the record is a starship breaking orbit.' },
     },
   },
 
@@ -646,15 +792,58 @@ export const CORE_EPISODES = [
               standing: { klingon: 14 },
               flag: 'centauri_aid',
             } },
-          { id: 'repair', label: 'Send two people across with a bypass', outcome: 'towed',
+          // Two of your people, onto a Klingon reactor that is nine hours from
+          // the end of its argument. This was the best-paying choice on the
+          // board and it could not fail — 1,100 experience and eighteen points
+          // of Klingon standing for pressing a button.
+          //
+          // `dangerous` is a 6% chance somebody does not come back, and it is
+          // the right band: the scene is a containment breach in progress and
+          // the reward is the largest in the episode. The check decides whether
+          // the bypass holds, and the two endings are different ships.
+          { id: 'repair', label: 'Send two people across with a bypass',
             effects: {
-              xp: 1100, time: 0.6, damage: 0.04,
+              check: { type: 'engineering', difficulty: 0.55, hazard: 'dangerous' },
+              xp: 300, time: 0.6,
+            },
+            branch: { success: 'bypass_held', failure: 'bypass_failed' } },
+          { id: 'watch', label: 'Hold station and watch', outcome: 'watched',
+            effects: { xp: 300, standing: { klingon: -10 }, flag: 'centauri_watched' } },
+        ],
+      },
+      bypass_held: {
+        text: 'The bypass takes. Containment steadies at a number nobody aboard either ship would '
+          + 'call comfortable and both would call holding, and the shouting behind the lieutenant '
+          + 'stops. Her chief engineer and ours argue about the method for six minutes, which is '
+          + 'how engineers say thank you.',
+        speaker: 'Engineering',
+        choices: [
+          { id: 'ok', label: 'Take her under tow', outcome: 'towed',
+            effects: {
+              xp: 800, damage: 0.04,
               record: { lives_saved: 11, distress_answered: 1 },
               standing: { klingon: 18 },
               flag: 'centauri_aid',
             } },
-          { id: 'watch', label: 'Hold station and watch', outcome: 'watched',
-            effects: { xp: 300, standing: { klingon: -10 }, flag: 'centauri_watched' } },
+        ],
+      },
+      bypass_failed: {
+        text: 'The bypass does not take. The containment field steps down through three settings in '
+          + 'ninety seconds and our people come off that ship with the Klingons rather than ahead of '
+          + 'them. Eleven aboard and two of ours hurt getting them, and the scout goes up eight '
+          + 'minutes after the last pad cycles.',
+        speaker: 'Engineering',
+        choices: [
+          { id: 'ok', label: 'Log it as it happened', outcome: 'towed',
+            effects: {
+              xp: 500, damage: 0.04,
+              // The people still live. The SHIP does not, which is what the
+              // Klingons will remember and why this pays less standing than the
+              // bypass that held.
+              record: { lives_saved: 11, distress_answered: 1 },
+              standing: { klingon: 8 },
+              flag: 'centauri_aid',
+            } },
         ],
       },
       decision_refused: {
