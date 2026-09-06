@@ -1830,6 +1830,49 @@ const PORT_LIGHT = [1.0, 0.93, 0.72];
 const WINDOW = PORT_LIGHT;
 
 /**
+ * Port red and starboard green: the two lights every vessel at sea or in space
+ * carries, and the ones no Federation hull in this game had.
+ *
+ * Measured across the fleet, every faction already ran them off `greebles`
+ * with `litEvery` — Klingon 204 to 264 triangles of them, Romulan up to 316,
+ * even an independent freighter 69. All thirteen Federation classes had zero,
+ * including the Constitution the player is flying.
+ *
+ * Their own colours rather than the faction accent, for two reasons. A
+ * Starfleet hull's accent is the blue of a warp grille and a blue running light
+ * reads as more grille; and red-and-green is the one lighting convention a
+ * viewer already knows without being told, which is worth more at phone scale
+ * than any amount of detail.
+ *
+ * -z is port and +z is starboard, which is the convention this whole file is
+ * written in. Twenty-four triangles a ship.
+ */
+const NAV_PORT = [1.0, 0.26, 0.20];
+const NAV_STBD = [0.26, 1.0, 0.42];
+function navLights(mb, {
+  origin = vec3(), radius = 1, y = 0, size = 0.05, out = 1.012,
+} = {}) {
+  // Sized against the window band it sits in rather than by eye. A rim port
+  // is one `windowRing` quad — an arc of (2pi/24)*0.45 by 2*0.008 of the
+  // radius, about 0.0019 r^2 of outward-facing face. The first draft of this
+  // helper was 1.5s by 0.85s at s = 0.03r, which is 0.0011 r^2: SIXTY PER CENT
+  // of a window, and rendered it looked exactly like that — a light dimmer
+  // than the windows either side of it, which is backwards. These proportions
+  // put it at about twice a port's face, and long rather than tall, so it
+  // reads as a lamp on the rim and not a lump standing off it.
+  const s = radius * size;
+  for (const [z, color] of [[-1, NAV_PORT], [1, NAV_STBD]]) {
+    box(mb, {
+      center: at(origin, 0, y, z * radius * out),
+      size: vec3(s * 2.2, s * 0.7, s),
+      color,
+      glow: 1,
+    });
+  }
+  return mb;
+}
+
+/**
  * A band of lit windows around a horizontal circle — a saucer rim.
  *
  * WHY THIS IS GEOMETRY AND NOT A BRIGHTER COLOUR.
@@ -2059,6 +2102,9 @@ __exports.box = box;
 __exports.prow = prow;
 __exports.sphere = sphere;
 __exports.PORT_LIGHT = PORT_LIGHT;
+__exports.NAV_PORT = NAV_PORT;
+__exports.NAV_STBD = NAV_STBD;
+__exports.navLights = navLights;
 __exports.windowRing = windowRing;
 __exports.windowDeck = windowDeck;
 __exports.windowBelt = windowBelt;
@@ -8525,7 +8571,7 @@ __define("src/gfx/forms.federation.js", function (__exports, __require) {
 // reflects it, so everything below is written for one side only.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck, portRow } = __require("src/gfx/mesh.js");
+const { saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck, portRow, navLights } = __require("src/gfx/mesh.js");
 
 /**
  * One nacelle and its glowing cap, at a point. Every form here ends with a
@@ -8556,6 +8602,9 @@ function nacelle(m, p, { x, y, z, length: len, radius: r }) {
 function primaryLights(mb, p, b, {
   x, y = 0, radius, stretch = 1, high, thickness, domeRatio = 0.3,
 }) {
+  // Port and starboard, on the widest part of the hull, whether or not this
+  // class carries lit ports — a darkened ship still runs her navigation lights.
+  navLights(mb, { origin: vec3(x, y, 0), radius });
   if (b.windows !== false) {
     windowRing(mb, {
       origin: vec3(x, y, 0),
@@ -8881,6 +8930,15 @@ const FEDERATION_FORMS = {
       origin: vec3(bl * 0.46, -high * 0.06, 0),
       radius: high * 0.24, segments: seg(8), rings: 5,
       color: p.dish ?? p.glow, glow: 0.55,
+    });
+
+    // Port and starboard, outside the `windows` gate for the same reason the
+    // saucer forms carry them outside it: running lights are not habitation.
+    // The outboard face is raked aft by the sweep, so the lights ride back
+    // with it or they hang off the front of nothing.
+    navLights(mb, {
+      origin: vec3(bl * 0.2 - (b.bodySweep ?? bl * 0.3), 0, 0),
+      radius: bw / 2,
     });
 
     // Ports along the top of the wedge, as boxes rather than a belt.
@@ -10300,7 +10358,7 @@ __define("src/gfx/blueprint.js", function (__exports, __require) {
 // renderer normalises so the largest live hull frames sensibly.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowBelt, windowDeck } = __require("src/gfx/mesh.js");
+const { MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowBelt, windowDeck, navLights } = __require("src/gfx/mesh.js");
 const { FEDERATION_FORMS } = __require("src/gfx/forms.federation.js");
 const { KLINGON_FORMS } = __require("src/gfx/forms.klingon.js");
 const { HOSTILE_FORMS } = __require("src/gfx/forms.hostile.js");
@@ -10480,6 +10538,8 @@ const FORMS = {
     // The plate's own height at a given radius: it runs from y = 0 at the rim
     // up to y = half at the dome's edge, linearly.
     const plateY = (r) => saucerHalf * ((sr - r) / (sr - domeR));
+    // Port and starboard, whether or not this class carries lit ports.
+    navLights(mb, { origin: vec3(sx, saucerY, 0), radius: sr });
     if (b.windows !== false) {
       windowRing(mb, {
         origin: vec3(sx, saucerY, 0),
@@ -10765,6 +10825,7 @@ const FORMS = {
     const saucerHalf = (b.saucerThickness ?? high * 0.19) / 2;
     const domeR = sr * (b.domeRatio ?? 0.3);
     const plateY = (r) => saucerHalf * ((sr - r) / (sr - domeR));
+    navLights(mb, { origin: vec3(sx, b.saucerY ?? 0, 0), radius: sr });
     if (b.windows !== false) {
       windowRing(mb, {
         origin: vec3(sx, b.saucerY ?? 0, 0),
