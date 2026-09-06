@@ -36221,20 +36221,110 @@ function buildAmbush(rng, system, presence, ledger, intruder = 0) {
   };
 }
 
+/**
+ * Civilian hulls, so the ship you are saving is not always the same ship.
+ *
+ * Every rescue in the game staged `SS Kobayashi` — one name, one class, on a
+ * colony raid as readily as on a freighter under attack. The name is drawn from
+ * a DERIVED stream rather than from the encounter's own rng, so adding a name
+ * does not shift every roll downstream of it.
+ */
+const CIVILIAN_NAMES = [
+  'SS Ptolemy', 'SS Deneva', 'SS Arcos', 'SS Huron', 'SS Beagle',
+  'SS Odin', 'SS Norkova', 'SS Kobayashi', 'SS Lantree', 'SS Denorios',
+];
+
+/**
+ * Who is calling, what it costs, and who is out there to lose.
+ *
+ * THE THREE THINGS THIS TABLE FIXES.
+ *
+ * `lives` was one roll, `rng.int(80, 2400)`, for every subtype — and it is not
+ * decoration: the button reads "N lives at stake", the ledger records it as
+ * `lives_saved`, and the experience award scales with it. So the screen could
+ * say "Fourteen hundred people." over a button offering to save ninety-six of
+ * them, and a stranded survey team could be two thousand strong. Each subtype
+ * now carries the range its own sentence can bear, and the one that names a
+ * number gets a range around that number.
+ *
+ * `victims` was always one freighter, including for the colony raid — where the
+ * text says a colony is being raided and the thing put on the board was a cargo
+ * hull. A colony is not a ship and cannot be one, so what is in orbit over a
+ * raided colony is what you can actually protect: the transport lifting people
+ * off it.
+ *
+ * And an `objective`, which is the whole point. Encounter fights all defaulted
+ * to `destroy`: measured over twelve hostile distress calls, the ship the
+ * captain came to save was destroyed in three of them and the encounter was a
+ * win in all twelve. One victim, not several — `settle` fails a protect
+ * objective only when EVERY protectee is dead, so a pair would make losing one
+ * of them invisible.
+ */
+const DISTRESS = [
+  {
+    id: 'freighter_attacked', hostile: true, victim: 'freighter',
+    text: 'A civilian freighter is under attack and losing containment.',
+    lives: [40, 260],
+  },
+  {
+    id: 'medical', hostile: false,
+    text: 'A colony transport reports a viral outbreak aboard. Fourteen hundred people.',
+    // The one sentence that names a number. It is the number.
+    lives: [1400, 1400],
+  },
+  {
+    id: 'stranded', hostile: false,
+    text: 'A survey team is stranded with a failing life-support system.',
+    // A survey team is a team.
+    lives: [6, 24],
+  },
+  {
+    id: 'colony_raid', hostile: true, victim: 'transport',
+    text: 'A colony is being raided. Their defence grid is already down, and the '
+      + 'evacuation transport lifting off is the only thing between the raiders '
+      + 'and the people still on the ground.',
+    lives: [600, 3200],
+  },
+  {
+    id: 'liner_adrift', hostile: false,
+    text: 'A passenger liner has lost main power three light-years from anywhere, '
+      + 'and her reserves are measured in hours.',
+    lives: [220, 900],
+  },
+  {
+    id: 'mining_collapse', hostile: false,
+    text: 'An asteroid mining station has had a pressure-dome collapse. They are '
+      + 'asking for anyone with a transporter and a doctor.',
+    lives: [30, 140],
+  },
+  {
+    id: 'tug_boarded', hostile: true, victim: 'transport',
+    text: 'An ore tug is broadcasting on a loop nobody is answering, and there is '
+      + 'a second contact alongside her with no transponder at all.',
+    lives: [12, 60],
+  },
+  {
+    id: 'shuttle_down', hostile: false,
+    text: 'A shuttle went down on a moon with no atmosphere to speak of. Their '
+      + 'suits are good for rather less than the time it takes to get there.',
+    lives: [2, 9],
+  },
+];
+
 function buildDistress(rng, system) {
-  const kinds = [
-    { id: 'freighter_attacked', text: 'A civilian freighter is under attack and losing containment.', hostile: true },
-    { id: 'medical', text: 'A colony transport reports a viral outbreak aboard. Fourteen hundred people.', hostile: false },
-    { id: 'stranded', text: 'A survey team is stranded with a failing life-support system.', hostile: false },
-    { id: 'colony_raid', text: 'A colony is being raided. Their defence grid is already down.', hostile: true },
-  ];
-  const pick = rng.pick(kinds);
+  const pick = rng.pick(DISTRESS);
   const factionId = pick.hostile ? rng.pick(['orion', 'klingon', 'ferengi']) : null;
+  const name = CIVILIAN_NAMES[rng.int(0, CIVILIAN_NAMES.length - 1)];
   return {
     kind: 'distress', system, subtype: pick.id, hostile: pick.hostile, factionId,
     ships: pick.hostile ? makeShips(rng, factionId, RAIDER_STRENGTH) : [],
-    victims: pick.hostile ? [new Ship('freighter', { name: 'SS Kobayashi', faction: 'independent' })] : [],
-    lives: rng.int(80, 2400),
+    victims: pick.victim
+      ? [new Ship(pick.victim, { name, faction: 'independent' })]
+      : [],
+    // What the fight is for, when there is somebody on the board to lose.
+    objective: pick.victim ? 'protect' : undefined,
+    orderLine: pick.victim ? 'They are why we came. Keep them alive.' : undefined,
+    lives: rng.int(pick.lives[0], pick.lives[1]),
     title: 'Distress call',
     text: pick.text,
     // Ignoring a distress call is a real choice with a real cost.
@@ -41519,6 +41609,15 @@ class Game {
           // given a name, and left out of the battle. `Engagement` has taken
           // `opts.allies` all along.
           allies: enc.victims ?? [],
+          // And what the encounter is FOR, which until now no encounter said.
+          //
+          // Every encounter fight in the game defaulted to `destroy`, including
+          // the one kind that stages somebody to save: measured over twelve
+          // hostile distress calls, the ship the captain came to save was
+          // destroyed in three of them and the encounter was a win in all
+          // twelve. The objective is what makes the rescue about the rescue.
+          ...(enc.objective ? { objective: enc.objective } : {}),
+          ...(enc.orderLine ? { orderLine: enc.orderLine } : {}),
         });
         return {
           messages: [sprung ? 'Firing as we come about.' : 'Engaging.'],

@@ -140,16 +140,24 @@ describe('through the encounter, which is where it happens', () => {
     assert.equal(behind(p.g), 0, 'a patrol from the real generator ambushed us');
   });
 
-  test('the freighter in a distress call is in the battle', () => {
-    // `victims` — one `Ship('freighter', {name: 'SS Kobayashi'})` — was built,
-    // named, and left out of the fight it was the subject of.
+  test('the ship in a distress call is in the battle', () => {
+    // `victims` was built, named, and left out of the fight it was the subject
+    // of. It is in the fight now.
+    //
+    // This asserted the name was `SS Kobayashi`, which was true and was the
+    // defect: every rescue in the game staged the same hull under the same
+    // name, on a colony raid as readily as on a freighter under attack. Pinning
+    // the name pinned the bug, so what is asserted instead is what the fight
+    // actually needs — a civilian hull, on the board, with a name.
     const d = engageFirst('distress');
     assert.ok(d, 'no hostile distress call was rolled');
     assert.equal(d.enc.victims.length, 1);
     assert.equal(d.eng.allies.length, 1, 'the ship under attack was not in the battle');
-    assert.equal(d.eng.allies[0].name, 'SS Kobayashi');
+    const victim = d.eng.allies[0];
+    assert.equal(victim.faction, 'independent');
+    assert.match(victim.name, /^SS /);
     // And it is on the board — `allShips` is what the tactical display draws.
-    assert.ok(d.eng.allShips.includes(d.eng.allies[0]),
+    assert.ok(d.eng.allShips.includes(victim),
       'the freighter is in the fight but not on the display');
   });
 });

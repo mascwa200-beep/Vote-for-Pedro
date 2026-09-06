@@ -7187,6 +7187,124 @@ than from the source: the chip row renders `Hold 13s` beside the hull and shield
 chips, and the Orders panel shows the fight's own line and not the objective's.
 
 
+## 84. The rescue that did not care whether you rescued anyone
+
+`buildDistress` is the one encounter builder in the game that puts somebody else
+on the board — `victims` is set nowhere else. It did not check what happened to
+them.
+
+### Flown, not argued
+
+Twelve hostile distress calls, Constitution at Lieutenant, played to the end:
+
+| | |
+| --- | --- |
+| rescues flown | 12 |
+| **the ship the captain came to save was destroyed** | **3** |
+| **and the encounter was a win** | **12 of 12** |
+
+An encounter reaches combat with `allies: enc.victims ?? []` and **no
+objective**, so it defaulted to `destroy`. The `protect` resolution — written,
+tested, and wired into episodes in §82 — was inert here because nothing asked
+for it. You could watch the freighter burn, kill the last raider, and be told
+you had won.
+
+### Three more things wrong in twenty lines
+
+**The number on the button was not the number in the sentence.** `lives` was one
+roll, `rng.int(80, 2400)`, for every subtype. It is not decoration: the button
+reads *"N lives at stake"*, the ledger records it as `lives_saved`, and the
+experience award scales with it. So the panel could read, two lines apart on one
+screen:
+
+> A colony transport reports a viral outbreak aboard. **Fourteen hundred people.**
+> `[ Render assistance ]` **96 lives at stake.** Costs time.
+
+And a *"survey team stranded with a failing life-support system"* could be two
+thousand people.
+
+**A colony raid staged a freighter.** `victims` was always
+`new Ship('freighter', { name: 'SS Kobayashi' })` — including for the subtype
+whose text is *"A colony is being raided."* A colony is not a ship and cannot be
+one; what can be in orbit over a raided colony is the transport lifting people
+off it, which is also the thing a captain can actually protect.
+
+**Every rescue in the game was the same ship.** One hull, one name, every time.
+
+**And it was the thinnest pool in the game**: four openings, sitting at exactly
+the `>= 4` floor in `content.test.js` — the only kind in that list on its bar,
+which is a guard that can catch a deletion and nothing else — with the worst
+reread ratio measured, 1.68 against a bar of 2.0.
+
+### After
+
+Eight subtypes, each with a `lives` range its own sentence can bear:
+
+| subtype | text | lives |
+| --- | --- | --- |
+| `shuttle_down` | a shuttle down on an airless moon | 2 – 9 |
+| `stranded` | a survey team | 6 – 24 |
+| `tug_boarded` | an ore tug with a second contact alongside | 12 – 60 |
+| `mining_collapse` | a pressure-dome collapse | 30 – 140 |
+| `freighter_attacked` | a civilian freighter under attack | 40 – 260 |
+| `liner_adrift` | a passenger liner, reserves in hours | 220 – 900 |
+| `medical` | **"Fourteen hundred people."** | **exactly 1400** |
+| `colony_raid` | a colony, and the transport lifting off | 600 – 3200 |
+
+Measured on the test's own normalisation, `distress` rereads fell **1.68 → 0.84**
+and it is no longer the worst kind in the game; distinct encounter texts went
+168 → 173. The worst-kind share is unchanged at 26.67% against its 28% bar,
+because distress grew in variety and not in frequency — which is the point.
+
+And the fight is about the rescue: three of the eight flown now end `failed`
+rather than counting as wins, and there is no run where the ship died and the
+encounter was still won. `failed` was already handled generically from §82 — the
+captain is told *"we did not do what we came to do"*, the ledger records
+`objective_failed`, and no experience is paid.
+
+### The guard that pinned the bug
+
+`ambush.test.js` asserted the staged victim's name was `SS Kobayashi`. That was
+true, and it was **the defect**: one hull under one name on every rescue in the
+game. A test that pins a value cannot tell you the value is wrong. It now
+asserts what the fight actually needs — a civilian hull, on the board, with a
+name — and a separate guard asserts the names vary.
+
+### Two of my own instruments failed, both the usual way
+
+**A control arm that was not a control.** The end-to-end guard flies the rescue
+twice: once killing the victim, once not. `startCombat` takes the encounter's
+own `Ship` objects as allies, so killing the victim in the first arm left it
+destroyed for the second — the second experiment ran on a corpse and reported
+the first arm's answer back. Fixed by rolling a fresh encounter per arm. And
+"did not kill her" was not the same experiment as "she survived": a civilian
+hull in a firefight dies on her own about a quarter of the time, so the surviving
+arm now keeps her alive rather than hoping.
+
+**A guard that proved the wrong thing.** The same test originally called
+`startCombat` directly and passed the objective by hand. It passed, and it would
+have passed with the encounter plumbing deleted — which the control proved:
+removing the line from `state.js` changed nothing. Routed through
+`resolveEncounter('engage')`, the door the player actually uses, the control
+fails as it should. **A guard that supplies the value under test proves the
+value works and nothing about whether anything supplies it.**
+
+### Recorded, and not small
+
+Two findings in the same area, out of scope here and worth their own work:
+
+- **`assist` is unreachable on a hostile distress call.** `encounterChoices`
+  returns early for any hostile encounter, so a distress call that is also a
+  fight never reaches its own branch — and the twelve-line, carefully commented
+  "the distress call that turns out to be a trap" handler is dead code in the
+  shipped game, protected by a test that calls it directly rather than through
+  the panel.
+- **`ignorable: true` is read by nothing**, and for the ~48% of distress calls
+  that are hostile the only way out is `withdraw`, which records nothing at all.
+  The comment above that flag says *"Ignoring a distress call is a real choice
+  with a real cost."* For half of them it costs nothing and leaves no trace.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
