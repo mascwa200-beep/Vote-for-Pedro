@@ -29,7 +29,7 @@
 
 import { vec3 } from './math.js';
 import {
-  saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck, portRow,
+  saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowDeck, portRow, navLights,
 } from './mesh.js';
 
 /**
@@ -61,6 +61,9 @@ function nacelle(m, p, { x, y, z, length: len, radius: r }) {
 function primaryLights(mb, p, b, {
   x, y = 0, radius, stretch = 1, high, thickness, domeRatio = 0.3,
 }) {
+  // Port and starboard, on the widest part of the hull, whether or not this
+  // class carries lit ports — a darkened ship still runs her navigation lights.
+  navLights(mb, { origin: vec3(x, y, 0), radius });
   if (b.windows !== false) {
     windowRing(mb, {
       origin: vec3(x, y, 0),
@@ -387,6 +390,15 @@ export const FEDERATION_FORMS = {
       origin: vec3(bl * 0.46, -high * 0.06, 0),
       radius: high * 0.24, segments: seg(8), rings: 5,
       color: p.dish ?? p.glow, glow: 0.55,
+    });
+
+    // Port and starboard, outside the `windows` gate for the same reason the
+    // saucer forms carry them outside it: running lights are not habitation.
+    // The outboard face is raked aft by the sweep, so the lights ride back
+    // with it or they hang off the front of nothing.
+    navLights(mb, {
+      origin: vec3(bl * 0.2 - (b.bodySweep ?? bl * 0.3), 0, 0),
+      radius: bw / 2,
     });
 
     // Ports along the top of the wedge, as boxes rather than a belt.

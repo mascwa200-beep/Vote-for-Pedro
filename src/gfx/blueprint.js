@@ -22,7 +22,7 @@
 import { vec3 } from './math.js';
 import {
   MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg,
-  windowRing, windowBelt, windowDeck,
+  windowRing, windowBelt, windowDeck, navLights,
 } from './mesh.js';
 import { FEDERATION_FORMS } from './forms.federation.js';
 import { KLINGON_FORMS } from './forms.klingon.js';
@@ -204,6 +204,8 @@ const FORMS = {
     // The plate's own height at a given radius: it runs from y = 0 at the rim
     // up to y = half at the dome's edge, linearly.
     const plateY = (r) => saucerHalf * ((sr - r) / (sr - domeR));
+    // Port and starboard, whether or not this class carries lit ports.
+    navLights(mb, { origin: vec3(sx, saucerY, 0), radius: sr });
     if (b.windows !== false) {
       windowRing(mb, {
         origin: vec3(sx, saucerY, 0),
@@ -489,6 +491,7 @@ const FORMS = {
     const saucerHalf = (b.saucerThickness ?? high * 0.19) / 2;
     const domeR = sr * (b.domeRatio ?? 0.3);
     const plateY = (r) => saucerHalf * ((sr - r) / (sr - domeR));
+    navLights(mb, { origin: vec3(sx, b.saucerY ?? 0, 0), radius: sr });
     if (b.windows !== false) {
       windowRing(mb, {
         origin: vec3(sx, b.saucerY ?? 0, 0),

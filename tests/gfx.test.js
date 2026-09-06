@@ -18,7 +18,9 @@ import {
   transformQuat, quatAxisAngle, quatMultiply, quatFromTo, quatSlerp, quatFromEuler,
   mat4, identity, multiply, perspective, lookAt, compose, normalMatrix, project,
 } from '../src/gfx/math.js';
-import { MeshBuilder, saucer, tube, box, sphere, mirrored, DETAIL, seg } from '../src/gfx/mesh.js';
+import {
+  MeshBuilder, saucer, tube, box, sphere, mirrored, DETAIL, seg, NAV_PORT, NAV_STBD,
+} from '../src/gfx/mesh.js';
 import {
   BLUEPRINTS, DIMENSIONS, hullMesh, hullScale, paletteFor, UNITS_PER_METRE,
   proportionError,
@@ -2018,6 +2020,92 @@ describe('every hull is drawn to its published beam and height', () => {
   });
 });
 
+// ==================================================== port red, starboard green
+
+describe('every Federation hull runs navigation lights', () => {
+  /**
+   * Measured before this guard existed: counting faction-coloured faces at
+   * glow > 0.9 on all thirty-one hulls, every non-Federation class carried
+   * running lights — a bird-of-prey 216, a warbird 316, a Ferengi marauder
+   * 120, even an independent freighter 69 — and all THIRTEEN Federation
+   * classes carried zero, including the Constitution the player flies.
+   *
+   * The list under test is derived from SHIP_LIST rather than written out,
+   * because a hand-written list of hulls is exactly the kind of guard that
+   * silently stops covering the class somebody adds next.
+   */
+  const FEDERATION = SHIP_LIST.filter((c) => c.faction === 'federation').map((c) => c.id);
+
+  const isNav = (col, want) => col.every((v, i) => Math.abs(v - want[i]) < 0.02);
+
+  function lights(id) {
+    const m = hullMesh(id, 'federation');
+    const f = m.stride / 4;
+    const port = [];
+    const stbd = [];
+    let hullMax = 0;
+    for (let i = 0; i < m.vertexCount; i++) {
+      const o = i * f;
+      const z = m.data[o + 2];
+      hullMax = Math.max(hullMax, Math.abs(z));
+      const col = [m.data[o + 6], m.data[o + 7], m.data[o + 8]];
+      const v = { z, glow: m.data[o + 9] };
+      if (isNav(col, NAV_PORT)) port.push(v);
+      else if (isNav(col, NAV_STBD)) stbd.push(v);
+    }
+    return { port, stbd, hullMax };
+  }
+
+  test('every one of them carries both, and the two colours differ', () => {
+    // The length check is not a count of the fleet — it is the guard against
+    // this whole suite passing on an empty derivation. A filter that matched
+    // nothing would make all four tests below loop zero times and report green.
+    assert.ok(FEDERATION.length >= 13, `only ${FEDERATION.length} Federation classes found`);
+    assert.notDeepEqual(NAV_PORT, NAV_STBD);
+    for (const id of FEDERATION) {
+      const { port, stbd } = lights(id);
+      assert.ok(port.length > 0, `${id} shows no port light`);
+      assert.ok(stbd.length > 0, `${id} shows no starboard light`);
+    }
+  });
+
+  test('red to port, green to starboard, and never the other way round', () => {
+    // +z is starboard by this renderer's convention. A sign error here, or a
+    // navLights call that ended up inside a mirrored() block, would put a red
+    // light on the starboard beam — the one mistake this whole feature exists
+    // to avoid, and one no triangle count would notice.
+    for (const id of FEDERATION) {
+      const { port, stbd } = lights(id);
+      for (const v of port) assert.ok(v.z < 0, `${id} has a port-red face at z ${v.z}`);
+      for (const v of stbd) assert.ok(v.z > 0, `${id} has a starboard-green face at z ${v.z}`);
+    }
+  });
+
+  test('they are lit, not painted', () => {
+    // Colour alone draws a dark red smudge. The glow channel is what makes it
+    // a light: at glow 1 the shader outputs vColor * uTint and skips lighting.
+    for (const id of FEDERATION) {
+      const { port, stbd } = lights(id);
+      for (const v of [...port, ...stbd]) {
+        assert.ok(v.glow > 0.9, `${id} has a nav face at glow ${v.glow}`);
+      }
+    }
+  });
+
+  test('they sit out on the beam, not buried amidships', () => {
+    // A running light inboard of the hull is a light nobody can see from
+    // abeam, which is the only angle it is for. Not asserted as the widest
+    // point outright: on a Miranda the rollbar and on a Constellation the
+    // outboard nacelles are wider than the saucer the lights ride on.
+    for (const id of FEDERATION) {
+      const { port, stbd, hullMax } = lights(id);
+      const inner = Math.min(...[...port, ...stbd].map((v) => Math.abs(v.z)));
+      assert.ok(inner > hullMax * 0.7,
+        `${id} carries its nav lights at ${inner.toFixed(3)} on a beam of ${hullMax.toFixed(3)}`);
+    }
+  });
+});
+
 // =============================================== one shape per class of ship
 
 describe('no two Federation classes are the same shape', () => {
@@ -2302,7 +2390,12 @@ describe('no two Federation classes are the same shape', () => {
     const P = paletteFor('federation');
     const near = (a2, b2) => Math.abs(a2[0] - b2[0]) < 0.02
       && Math.abs(a2[1] - b2[1]) < 0.02 && Math.abs(a2[2] - b2[2]) < 0.02;
-    const accents = [P.glow, P.bussard, P.impulse, P.dish];
+    // Running lights are lit and are not an accent colour, so they read as
+    // ports to a purely structural scan — and they are not ports. They sit
+    // outboard of the rim, one to a side, and counting them here would let a
+    // Defiant's two nav lights answer "yes" to "does this wedge have a rim
+    // band". Excluded by their own two constants and nothing else.
+    const accents = [P.glow, P.bussard, P.impulse, P.dish, NAV_PORT, NAV_STBD];
     const portsOf = (id) => {
       const m = hullMesh(id, 'federation');
       const f = m.stride / 4;
@@ -2425,7 +2518,12 @@ describe('no two Federation classes are the same shape', () => {
     const P = paletteFor('federation');
     const near = (a2, b2) => Math.abs(a2[0] - b2[0]) < 0.02
       && Math.abs(a2[1] - b2[1]) < 0.02 && Math.abs(a2[2] - b2[2]) < 0.02;
-    const accents = [P.glow, P.bussard, P.impulse, P.dish];
+    // Nav lights excluded for the same reason as above, and with a sharper
+    // consequence here: a running light is a BOX, so it has an underside, and
+    // an underside is a face with ny = -1 on it. Counted as a deck port that
+    // is six vertices of "facing down into the plate" per side on every saucer
+    // ship — a true statement about a box and a false one about a window.
+    const accents = [P.glow, P.bussard, P.impulse, P.dish, NAV_PORT, NAV_STBD];
 
     for (const id of ['constitution', 'galaxy', 'miranda', 'intrepid']) {
       const m = hullMesh(id, 'federation');

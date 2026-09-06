@@ -6581,6 +6581,129 @@ stage and `stand` only on the other.
 Act spread **5 → 4**. Episodes **25 → 26**.
 
 
+## 79. Thirteen Starfleet hulls with no running lights on them
+
+The "better models" work order asks for hulls that look real. This is the
+smallest thing on any real ship that reads at a glance, and it was the one
+detail the player's own ship did not have.
+
+### Found by counting, not by looking
+
+The question asked was deliberately mechanical: **how many faces on each hull
+are lit and carry a colour that is not the hull's own?** Counted at glow > 0.9
+across all thirty-one classes in `SHIP_LIST`:
+
+| class | faction | lit accent triangles |
+| --- | --- | --- |
+| warbird | romulan | 316 |
+| galor | cardassian | 220 |
+| bird_of_prey | klingon | 216 |
+| orion_raider | orion | 216 |
+| marauder | ferengi | 120 |
+| borg_cube | borg | 120 |
+| tholian_web_spinner | tholian | 84 |
+| jem_hadar_attack | dominion | 84 |
+| transport / freighter | independent | 69 |
+| **all thirteen federation classes** | | **0** |
+
+Every other faction in the game got theirs for free, from the `greebles`
+helper's `litEvery` — a lit face every nth greeble, which is what makes a
+Klingon hull look inhabited from two hundred metres. The Federation forms do not
+call `greebles`; they call `windowRing`, `windowBelt`, `windowDeck` and
+`portRow`, all of which are *habitation* and all of which are the same warm
+cream. So the picture was thirteen hulls of grey plate and cream windows and no
+other lit colour anywhere on them — including on the Constitution the player
+spends the whole commission flying.
+
+### Their own two colours, and why not the faction accent
+
+The obvious implementation is the one every other faction uses: light them in
+the faction accent. It is wrong here twice over. A Starfleet accent is the blue
+of a warp grille, so a blue running light reads as more grille; and red-to-port,
+green-to-starboard is the one lighting convention a viewer already knows without
+being told, which is worth more at phone scale than any amount of extra
+geometry. `NAV_PORT` and `NAV_STBD` are therefore the only two colours in
+`mesh.js` that are not part of a palette.
+
+Twenty-four triangles a ship — two boxes — on every Federation class.
+
+### Sized against a window rather than by eye
+
+The first draft used a box of 1.5s x 0.85s at s = 0.03 of the hull radius, which
+looked reasonable in the source and rendered as a dot smaller than the windows
+either side of it. A running light dimmer than the accommodation is backwards,
+so the size was derived instead of guessed.
+
+One `windowRing` port is an arc of `(2*pi/24) * 0.45` by `2 * 0.008` of the
+radius: about **0.0019 r-squared** of outward-facing face. The first draft was
+**0.0011** — sixty per cent of a window. The shipped proportions, 2.2s x 0.7s at
+s = 0.05, are about **0.0039**, roughly twice a port, and long rather than tall
+so the lamp sits on the rim instead of standing off it. Rendered at 5x
+magnification the difference is the whole feature: a red bar on the port rim and
+a green one to starboard, both about as bright as a window and unmistakably not
+one.
+
+### The two hulls the first fix missed
+
+Eleven of thirteen came from one call in `primaryLights`, which every saucer form
+routes through. `defiant` and `runabout` do not have a saucer — both use the
+`compact` form, a single swept wedge — so they never reached it and rendered with
+nothing, while every guard written against the saucer forms passed. Their lights
+go on the outboard face of the wedge, and because `box`'s `sweep` rakes the +z
+corners aft, the light has to be displaced aft with them or it hangs off the
+front of nothing.
+
+That is the recurring shape of this dossier again: **a fix that is correct for
+the case you were looking at and silent about the case you were not.** The guard
+is derived from `SHIP_LIST.filter(faction === 'federation')` rather than written
+as a list, precisely so the class somebody adds next cannot slip through it.
+
+### Four guards, each confirmed against its own broken arm
+
+Plus a fifth line that is not a guard on the game at all: the derived list is
+asserted non-empty before the four loops run over it, because a filter that
+matched nothing would make every one of them loop zero times and report green.
+
+
+| guard | control | result |
+| --- | --- | --- |
+| all thirteen carry both colours | delete the `compact` call | fails |
+| red to port, green to starboard | swap the two colours in the loop | fails |
+| they are lit, not painted | `glow: 1` to `glow: 0` | fails |
+| they sit out on the beam | `out` 1.012 to 0.3 | fails |
+
+The third control is worth recording because it **did not fail on the first
+attempt** — the patch that was supposed to break it never applied, the
+indentation in the replacement string being wrong by four spaces, and the run
+reported all guards green. A control that silently does not run is
+indistinguishable from a guard that works. Verified the arm was broken by
+reading the file back before believing the verdict, which is the rule §-passim
+keeps having to relearn.
+
+### Two existing tests that were right to fail
+
+Adding the lights turned two long-standing assertions red, and both were correct
+to go red:
+
+- *"a primary hull has a band of lit ports round its rim"* finds ports
+  **structurally** — a fully lit vertex whose colour is none of the hull's
+  accents — and a running light is exactly that. Its Defiant control asserts a
+  wedge has no rim band, and two nav lights out on the beam answered "yes, it
+  does".
+- *"the ports on a saucer deck face the camera"* counts flat-lying lit faces
+  with a downward normal. A running light is a **box**, and a box has an
+  underside: twelve vertices per saucer ship of "deck ports facing down into the
+  plate" — a true statement about a box and a false one about a window.
+
+Both were fixed by excluding the two nav constants from the port scan, which is
+the honest fix: a running light is not a port and never was. The alternative —
+loosening either threshold — would have kept the tests green while making them
+stop meaning anything.
+
+Zero triangles of budget consequence: 24 a hull, against a frame cap of 8,000
+and a measured ~31 draw calls unchanged.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

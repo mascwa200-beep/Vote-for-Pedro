@@ -318,6 +318,50 @@ export const PORT_LIGHT = [1.0, 0.93, 0.72];
 const WINDOW = PORT_LIGHT;
 
 /**
+ * Port red and starboard green: the two lights every vessel at sea or in space
+ * carries, and the ones no Federation hull in this game had.
+ *
+ * Measured across the fleet, every faction already ran them off `greebles`
+ * with `litEvery` — Klingon 204 to 264 triangles of them, Romulan up to 316,
+ * even an independent freighter 69. All thirteen Federation classes had zero,
+ * including the Constitution the player is flying.
+ *
+ * Their own colours rather than the faction accent, for two reasons. A
+ * Starfleet hull's accent is the blue of a warp grille and a blue running light
+ * reads as more grille; and red-and-green is the one lighting convention a
+ * viewer already knows without being told, which is worth more at phone scale
+ * than any amount of detail.
+ *
+ * -z is port and +z is starboard, which is the convention this whole file is
+ * written in. Twenty-four triangles a ship.
+ */
+export const NAV_PORT = [1.0, 0.26, 0.20];
+export const NAV_STBD = [0.26, 1.0, 0.42];
+
+export function navLights(mb, {
+  origin = vec3(), radius = 1, y = 0, size = 0.05, out = 1.012,
+} = {}) {
+  // Sized against the window band it sits in rather than by eye. A rim port
+  // is one `windowRing` quad — an arc of (2pi/24)*0.45 by 2*0.008 of the
+  // radius, about 0.0019 r^2 of outward-facing face. The first draft of this
+  // helper was 1.5s by 0.85s at s = 0.03r, which is 0.0011 r^2: SIXTY PER CENT
+  // of a window, and rendered it looked exactly like that — a light dimmer
+  // than the windows either side of it, which is backwards. These proportions
+  // put it at about twice a port's face, and long rather than tall, so it
+  // reads as a lamp on the rim and not a lump standing off it.
+  const s = radius * size;
+  for (const [z, color] of [[-1, NAV_PORT], [1, NAV_STBD]]) {
+    box(mb, {
+      center: at(origin, 0, y, z * radius * out),
+      size: vec3(s * 2.2, s * 0.7, s),
+      color,
+      glow: 1,
+    });
+  }
+  return mb;
+}
+
+/**
  * A band of lit windows around a horizontal circle — a saucer rim.
  *
  * WHY THIS IS GEOMETRY AND NOT A BRIGHTER COLOUR.
