@@ -823,6 +823,152 @@ describe('the view out of the window', () => {
 
 });
 
+describe('the worlds in the sky are worlds', () => {
+  // `bodyMesh` was `sphere(..., banding: 0.35)` — and `banding` is a single
+  // per-ring hash multiplier, so a planet was twelve horizontal stripes of flat
+  // colour. Its own comment called it a stand-in for "a texture, which this
+  // renderer has no way to load". It did not need one: the field that makes the
+  // ORBITAL globe a world is a pure function of a unit normal, and sampling it
+  // at the sky body's existing resolution costs nothing at all.
+  //
+  // These read the built mesh rather than the source, and they compare the two
+  // globes against EACH OTHER rather than against numbers picked from one run.
+
+  /**
+   * The per-facet luminance of every non-cap ring, in emission order.
+   *
+   * `globe` emits ring-major and segment-minor — the first and last rings are
+   * SEG triangles and the middle ones SEG quads — so consecutive entries in a
+   * row are laterally adjacent facets, and the last wraps round to the first.
+   */
+  const facetRows = (m, SEG, RINGS) => {
+    const lum = (v) => {
+      const o = v * 10;
+      return 0.299 * m.data[o + 6] + 0.587 * m.data[o + 7] + 0.114 * m.data[o + 8];
+    };
+    const rows = [];
+    let v = 0;
+    for (let ring = 0; ring < RINGS; ring++) {
+      const cap = ring === 0 || ring === RINGS - 1;
+      const row = [];
+      for (let i = 0; i < SEG; i++) { row.push(lum(v)); v += cap ? 3 : 6; }
+      if (!cap) rows.push(row);
+    }
+    // If this ever walks off the end the rows are silently short and every
+    // measurement below is quietly wrong, so say so instead.
+    assert.equal(v, m.vertexCount, 'the facet walk did not consume the whole mesh');
+    return rows;
+  };
+
+  /** Mean absolute luminance step between two facets side by side. */
+  const step = (rows) => {
+    let sum = 0; let n = 0;
+    for (const r of rows) for (let i = 0; i < r.length; i++) { sum += Math.abs(r[i] - r[(i + 1) % r.length]); n++; }
+    return sum / n;
+  };
+
+  const KINDS = ['planet', 'desert', 'ice', 'moon', 'gas'];
+
+  test('a ring is no longer one flat colour, which is what a stripe is', () => {
+    // The control is the mesh this replaced, built here rather than described:
+    // `banding` gives every facet in a ring the SAME shade, so its within-ring
+    // step is exactly zero. That is the definition of a stripe, and it is the
+    // number the new mesh has to not have.
+    const mb = new MeshBuilder();
+    sphere(mb, { radius: 1, segments: 20, rings: 12, color: [0.34, 0.48, 0.66], banding: 0.35 });
+    assert.equal(step(facetRows(mb.build(), 20, 12)), 0,
+      'the control is not striped, so it cannot show that the new mesh is not');
+
+    for (const kind of KINDS) {
+      assert.ok(step(facetRows(bodyMesh(kind, 0), 20, 12)) > 0.01, `${kind} is still banded`);
+    }
+  });
+
+  test('and it is as coherent as the globe you orbit, not confetti', () => {
+    // The point of sampling the field COARSELY for a distant world. A sky body
+    // has facets nearly three times the area of an orbital globe's, so running
+    // the same frequency over it puts more than one feature inside a facet and
+    // the result is noise. The relation is what matters — a world across the
+    // system should not be much steppier per facet than the one overhead — so
+    // this compares the two meshes rather than asserting a tuned constant.
+    for (const kind of KINDS) {
+      const near = step(facetRows(worldMesh(kind, 0), 56, 28));
+      const far = step(facetRows(bodyMesh(kind, 0), 20, 12));
+      assert.ok(far < near * 1.6,
+        `${kind}: sky body steps ${far.toFixed(4)} per facet against the orbital globe's ${near.toFixed(4)}`);
+    }
+  });
+
+  test('and two worlds of a kind are two different worlds', () => {
+    // The seed was hardcoded to 0 at both draw sites, so every planet in the
+    // galaxy was the same planet.
+    for (const kind of KINDS) {
+      const a = bodyMesh(kind, 0);
+      const b = bodyMesh(kind, 3);
+      assert.notDeepEqual(Array.from(a.data), Array.from(b.data), `every ${kind} is identical`);
+    }
+  });
+
+  test('and it costs exactly what the stripes cost', () => {
+    // Zero triangles added. The scenery budget above is asserted against the
+    // same meshes, and this says why it still holds.
+    for (const kind of KINDS) {
+      assert.equal(bodyMesh(kind, 0).vertexCount / 3, 440, kind);
+    }
+  });
+
+  test('and a star is still a disc, because a star has no surface', () => {
+    // It is drawn emissive, so a noise field on it would be mottling on a light
+    // source. One colour, as before.
+    const rows = facetRows(bodyMesh('star', 0), 20, 12);
+    assert.equal(step(rows), 0);
+  });
+
+  test('and no world is brighter than a screen can show', () => {
+    // What the lift actually did, measured on the meshes rather than argued.
+    //
+    // The old sky body was one mid-tone colour multiplied by 1.5 on every
+    // channel. For an ice world that is 0.74/0.84/0.92 times 1.5 — an albedo of
+    // 1.38 BEFORE any light fell on it, so the lit half was pinned to white and
+    // the terminator, which is the only cue that a disc is a sphere, could not
+    // be seen at all.
+    //
+    // The real palette spans ocean to icecap and tops out just under 1, so a
+    // sub-solar facet renders at full brightness and everything else grades
+    // below it. Nothing to compensate for and nothing to clip.
+    const OLD_FLAT = {
+      planet: [0.34, 0.48, 0.66], desert: [0.7, 0.56, 0.36],
+      ice: [0.74, 0.84, 0.92], moon: [0.5, 0.5, 0.52], gas: [0.66, 0.56, 0.42],
+    };
+    for (const kind of KINDS) {
+      const m = bodyMesh(kind, 0);
+      let peak = 0;
+      for (let i = 0; i < m.vertexCount; i++) {
+        const o = i * 10;
+        peak = Math.max(peak, m.data[o + 6], m.data[o + 7], m.data[o + 8]);
+      }
+      assert.ok(peak <= 1.0001, `${kind} carries ${peak.toFixed(3)} before it is even lit`);
+    }
+    // And the control, so this is not a test that would pass on anything: the
+    // arrangement it replaced does NOT satisfy it.
+    const worstOld = Math.max(...Object.values(OLD_FLAT).map((c) => Math.max(...c) * 1.5));
+    assert.ok(worstOld > 1, `the old lift peaked at ${worstOld.toFixed(2)}, so there was nothing to fix`);
+  });
+
+  test('and the lift that clipped the bright half is gone', () => {
+    // `tint: [1.5, 1.5, 1.5]` multiplied every channel past 1.0, which flattens
+    // the terminator that is the only cue a sphere is a sphere. The bodies are
+    // lit from the system's own primary now, so there is nothing to compensate.
+    for (const type of ['core', 'homeworld', 'colony', 'outpost']) {
+      for (const b of vistaFor(`t:${type}`, type).bodies) {
+        if (b.kind === 'star') continue;
+        assert.ok(b.tint.every((c) => c <= 1), `${type} still lifts a world to ${b.tint}`);
+        assert.equal(typeof b.seed, 'number', `${type} has a world with no identity`);
+      }
+    }
+  });
+});
+
 describe('the rooms are lit like places', () => {
   test('occlusion darkens the deck at the bulkhead and leaves the bulkhead alone', () => {
     // A wall must not occlude ITSELF. Every vertex of a flat bulkhead sits at

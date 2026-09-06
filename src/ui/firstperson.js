@@ -597,6 +597,11 @@ export class FirstPersonView {
     if (sys) {
       const v = vista(sys.id, sys.type);
       const ahead = world ? this._look : nose;
+      // The primary, which lights everything else out there. Same argument as
+      // the orbit pass above and as `drawVista` in tactical3d.js: the
+      // terminator on a world is not drawn, it is where aiming the light at the
+      // actual star puts it.
+      const star = v.bodies.find((x) => x.kind === 'star') ?? null;
       let drawn = 0;
       for (const b of v.bodies) {
         if (drawn >= 3) break;
@@ -607,7 +612,14 @@ export class FirstPersonView {
         if ((dx * ahead[0] + dy * ahead[1] + dz * ahead[2]) / d < 0.2 - slack) continue;
         this._pos[0] = b.x; this._pos[1] = b.y; this._pos[2] = b.z;
         compose(this._pos, quat(), b.radius, this._model);
-        r.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
+        if (star && b !== star) {
+          r.setLighting({
+            key: [star.x - b.x, star.y - b.y, star.z - b.z],
+            fill: [b.x - star.x, b.y - star.y, b.z - star.z],
+            ambient: 0.20, keyPower: 0.9, eye,
+          });
+        }
+        r.draw(`body:${b.kind}:${b.seed ?? 0}`, bodyMesh(b.kind, b.seed ?? 0), {
           model: this._model,
           normalMatrix: normalMatrix(this._model, this._normal),
           emissive: emisOf(b.emissive),
@@ -615,6 +627,14 @@ export class FirstPersonView {
           fogFar: 90000,
         });
         drawn++;
+      }
+      // Back to the screen's own vacuum preset before the hulls are drawn
+      // below, or the ships out there are lit by whichever planet came last.
+      if (star && drawn) {
+        r.setLighting({
+          key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
+          ambient: 0.20, keyPower: 0.9, gloss: 0, eye,
+        });
       }
     }
 
