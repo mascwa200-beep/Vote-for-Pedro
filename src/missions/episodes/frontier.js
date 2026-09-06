@@ -603,8 +603,29 @@ export const FRONTIER_EPISODES = [
         text: 'It does not manoeuvre. It does not hail. It absorbs the first full spread and continues at the same speed, and then it fires.',
         speaker: 'Tactical',
         choices: [
+          // `survive`, because every ending this fight can reach says the cube
+          // is not destroyed — "You slowed it by four hours" — and a `destroy`
+          // fight can only be won by destroying it. Measured, the cube kills
+          // the player 8 times out of 8 in every hull tried, so both of this
+          // episode's authored endings and their experience were unreachable.
+          //
+          // Fifteen seconds, and the same fifteen on the other road: the forty
+          // hours of study buys SURVIVABILITY, not a shorter job. Measured over
+          // twelve seeds a hull, that clock is the only one the prepared road
+          // reliably beats in every ship while the unprepared road stays hard
+          // in the ones a captain plausibly flies here.
+          //
+          // Its own order line because the objective's — "Hold on. Help is
+          // coming." — is false here. Nothing is coming.
           { id: 'fight', label: 'Fight it', outcome: 'engaged',
-            effects: { combat: { faction: 'borg', ships: ['borg_cube'] }, damage: 0.25, xp: 1800 } },
+            effects: {
+              combat: {
+                faction: 'borg', ships: ['borg_cube'],
+                objective: 'survive', objectiveTime: 15,
+                orderLine: 'Stay on it. Every second we hold is a second Starfleet gets.',
+              },
+              damage: 0.25, xp: 1800,
+            } },
           { id: 'break', label: 'Break off while we still can', outcome: 'survived',
             effects: { xp: 600, damage: 0.15 } },
         ],
@@ -618,7 +639,11 @@ export const FRONTIER_EPISODES = [
               // Nine seconds is the whole advantage. It is not a different
               // cube: same hull, same guns, same forty-two thousand tonnes of
               // it — the shields are simply not there when the spread lands.
-              combat: { faction: 'borg', ships: ['borg_cube'], shieldsAt: 0 },
+              combat: {
+                faction: 'borg', ships: ['borg_cube'], shieldsAt: 0,
+                objective: 'survive', objectiveTime: 15,
+                orderLine: 'Stay on it. Every second we hold is a second Starfleet gets.',
+              },
               damage: 0.12, xp: 2400,
             } },
           { id: 'break', label: 'Let it pass. We have what Starfleet needs', outcome: 'survived',

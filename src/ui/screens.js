@@ -750,11 +750,18 @@ export function tacticalScreen(app) {
   // ship crippled rather than killed had to ask in prose and hope.
   if (eng.objective && eng.objective !== 'destroy') {
     side.append(panel('Orders', [
-      el('p', { text: OBJECTIVES[eng.objective]?.line ?? '' }),
-      eng.objective === 'protect' && eng.allies?.length
+      el('p', { text: eng.orderLine ?? OBJECTIVES[eng.objective]?.line ?? '' }),
+      // `protectees`, not `allies`. The two are different lists and this line
+      // was reading the wrong one: `allies` also collects the escort a
+      // reputation perk buys and the relief ship `callForHelp` pushes in
+      // mid-fight, neither of which is the convoy. `Engagement.settle` was
+      // changed to read the snapshot and this readout was not changed with it,
+      // so a captain holding an escort perk could be told two ships were still
+      // with them on the tick the objective failed.
+      eng.objective === 'protect' && eng.protectees?.length
         ? el('p', {
           class: 'hint',
-          text: `${eng.allies.filter((a) => !a.destroyed).length} of ${eng.allies.length} still with us.`,
+          text: `${eng.protectees.filter((a) => !a.destroyed).length} of ${eng.protectees.length} still with us.`,
         })
         : null,
     ], 'accent'));

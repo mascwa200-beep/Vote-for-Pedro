@@ -2666,6 +2666,18 @@ class App {
         el('div', { class: 'chip', text: `Speed ${Math.round(p.throttle * 100)}%` }),
         p.breaching ? el('div', { class: 'chip danger', text: `BREACH ${p.breachTimer.toFixed(0)}s` }) : null,
         eng.warpOutTimer > 0 ? el('div', { class: 'chip warn', text: `Warp in ${eng.warpOutTimer.toFixed(0)}s` }) : null,
+        // The one objective whose whole content is a clock, and the clock was
+        // not on the screen anywhere. Here rather than in the Orders panel
+        // because the panels re-render every eighth sim tick and a countdown
+        // that jumps in quarter-seconds is worse than none; this row is redrawn
+        // every frame, which is why the breach and warp timers already live in
+        // it. Same shape as both of them.
+        eng.objective === 'survive' && eng.objectiveTime > 0 && !eng.over
+          ? el('div', {
+            class: 'chip warn',
+            text: `Hold ${Math.max(0, Math.ceil(eng.objectiveTime - eng.time))}s`,
+          })
+          : null,
         el('div', { class: 'chip', text: `Crew ${p.crew}` }),
       ].filter(Boolean)),
     );

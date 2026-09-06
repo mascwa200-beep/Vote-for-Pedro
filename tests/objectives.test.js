@@ -26,6 +26,7 @@ import { Game } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
 import { OUTCOMES, OBJECTIVES, disarmed } from '../src/sim/combat.js';
 import { Character } from '../src/rules/character.js';
+import { readFileSync } from 'node:fs';
 import { EPISODES } from '../src/missions/episodes/index.js';
 
 /**
@@ -361,5 +362,101 @@ describe('the objectives the episodes ask for', () => {
     }
     assert.deepEqual(wrong, [],
       'these fights can only be won by killing, and land on a stage that says otherwise');
+  });
+
+  test('a survive fight is won by lasting, with the hostile untouched', () => {
+    // The shipped spec, not a synthetic one. Before this objective existed the
+    // only way to end these fights was to destroy a Borg cube, which cannot be
+    // done — measured, the cube killed the player 8 times out of 8 in every
+    // hull tried, so both of the endings they carry were unreachable.
+    const entries = SPECS.filter((s) => s.spec.objective === 'survive');
+    assert.ok(entries.length >= 2, `only ${entries.length} survive fights`);
+    for (const entry of entries) {
+      const { g, eng } = order(entry);
+      assert.ok(eng.objectiveTime > 0,
+        `${entry.ep.id}/${entry.sid}/${entry.c.id} has no clock, which makes survive inert`);
+      // Held, not fought: the captain does nothing but stay alive.
+      //
+      // The hull is topped up every tick rather than set once, and NOT with a
+      // flag — the first draft of this used `ship.invulnerable`, which does not
+      // exist anywhere in `src/`, so it was a no-op and the assertion below
+      // passed for a reason that had nothing to do with the objective.
+      let ticks = 0;
+      while (!eng.over && ticks < 40000) {
+        g.ship.hull = g.ship.maxHull;
+        g.update(1 / 30);
+        ticks++;
+      }
+      assert.equal(eng.over, true, 'the fight never ended');
+      assert.equal(eng.outcome, 'victory');
+      assert.ok(eng.time >= eng.objectiveTime,
+        `it ended at ${eng.time.toFixed(1)}s, before the ${eng.objectiveTime} it had to last`);
+      assert.equal(eng.hostiles.every((h) => !h.destroyed), true,
+        'it was won by killing them after all, which is not what was asked');
+    }
+  });
+
+  test('both roads through a fight carry the same clock', () => {
+    // The guard that normally holds sibling fights together groups on a string
+    // `next`, and these two are terminal — they carry an `outcome` instead — so
+    // it cannot see them. Derived from the data rather than written twice.
+    const byEpisode = new Map();
+    for (const { ep, spec } of SPECS.filter((s) => s.spec.objective === 'survive')) {
+      if (!byEpisode.has(ep.id)) byEpisode.set(ep.id, new Set());
+      byEpisode.get(ep.id).add(spec.objectiveTime ?? 0);
+    }
+    assert.ok(byEpisode.size > 0, 'no episode asks anyone to survive');
+    for (const [id, clocks] of byEpisode) {
+      assert.equal(clocks.size, 1,
+        `${id} asks for ${[...clocks].join(' and ')} seconds on different roads through it`);
+    }
+  });
+
+  test('a fight whose orders would be a lie brings its own line', () => {
+    // `OBJECTIVES.survive.line` is "Hold on. Help is coming." — true of a ship
+    // holding until relief arrives and false of a cube nobody is coming to
+    // stop, whose own endings say so. A fight may override it, and the override
+    // has to reach the engagement rather than sit in the data.
+    const entries = SPECS.filter((s) => s.spec.orderLine);
+    assert.ok(entries.length >= 1, 'no fight overrides its order line');
+    for (const entry of entries) {
+      const { eng } = order(entry);
+      assert.equal(eng.orderLine, entry.spec.orderLine);
+      assert.notEqual(eng.orderLine, OBJECTIVES[eng.objective].line,
+        `${entry.ep.id} overrides its order line with the line it already had`);
+    }
+  });
+
+  test('the escort readout counts the convoy, not whoever else turned up', () => {
+    // `settle` was changed to read `protectees` because `allies` also collects
+    // the escort a reputation perk buys and the relief ship `callForHelp`
+    // pushes in mid-fight. The Orders panel that reports "N of M still with us"
+    // was NOT changed with it, so a captain holding an escort perk could be
+    // told two ships were still with them on the tick the objective failed.
+    //
+    // Read from the source because this line is DOM built inside a screen
+    // function with no seam to call; what is being guarded is that the readout
+    // and the rule agree about which list they mean.
+    const screens = readFileSync('src/ui/screens.js', 'utf8');
+    const i = screens.indexOf("eng.objective === 'protect'");
+    assert.ok(i > 0, 'the Orders panel has moved');
+    const block = screens.slice(i, screens.indexOf('], \'accent\'));', i));
+    assert.ok(/eng\.protectees/.test(block), 'the escort readout does not read protectees');
+    assert.ok(!/eng\.allies/.test(block),
+      'the escort readout still counts eng.allies, which is not the escort');
+  });
+
+  test('the seconds left to hold are on the screen', () => {
+    // A survive objective is a clock, and there was no clock anywhere in the
+    // UI. Guarded in `main.js` rather than the Orders panel deliberately: the
+    // panels re-render every eighth sim tick, so a countdown there jumps in
+    // quarter-seconds, while this row is redrawn every frame — which is why the
+    // breach and warp timers already live in it.
+    const main = readFileSync('src/main.js', 'utf8');
+    const i = main.indexOf('BREACH ${p.breachTimer');
+    assert.ok(i > 0, 'the chip row has moved');
+    const row = main.slice(i, main.indexOf(']', i));
+    assert.ok(/objective === 'survive'/.test(row) && /objectiveTime/.test(row),
+      'the chip row shows a breach timer and a warp timer and no hold timer');
   });
 });

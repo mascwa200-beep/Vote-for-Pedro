@@ -702,6 +702,7 @@ export class Game {
       // Plain data, like everything else in this record, so it survives a save
       // — see the note on `effects.combat` in missions/engine.js.
       objective: spec.objective, objectiveTime: spec.objectiveTime,
+      orderLine: spec.orderLine,
     };
     return id;
   }
@@ -4759,7 +4760,7 @@ export class Game {
     // A mission stage queued a fight; start it once the UI has caught up.
     if (this.pendingCombat && this.mode !== MODES.COMBAT) {
       const {
-        ships, escort, canWarpOut, shieldsAt, fightId, objective, objectiveTime,
+        ships, escort, canWarpOut, shieldsAt, fightId, objective, objectiveTime, orderLine,
       } = this.pendingCombat;
       this.pendingCombat = null;
       const eng = this.startCombat(ships, {
@@ -4769,6 +4770,7 @@ export class Game {
         ...(objective ? { objective } : {}),
         ...(objectiveTime != null ? { objectiveTime } : {}),
         ...(escort?.length ? { allies: escort } : {}),
+        ...(orderLine ? { orderLine } : {}),
       });
       // The fight now on the screen answers for the episode only if the
       // episode's enemies are actually in it. `startCombat` does not always
