@@ -628,6 +628,18 @@ export class Character {
     // second time is how a promise drifts from what the game does.
     const accuracyBonus = this.mechanic('accuracyBonus');
     if (accuracyBonus) add('accuracy', 1 + accuracyBonus);
+    // "Wide Spectrum Vision — cloaked ships are detected at longer range." The
+    // Saurian declared `cloakDetect: 0.4` and nothing read it, while the thing
+    // it describes is a live ship mod with a live consumer: `stealthDetect`,
+    // read at combat.js as `0.5 / mod('stealthDetect')`, contributed by a skill
+    // (0.15), by a console (0.4) and by this captain's Science ability.
+    //
+    // The same 0.4 the console declares, and applied the same way: `1 + v`,
+    // because `stealthDetect` is multiplicative and passing the raw 0.4 would
+    // have MULTIPLIED detection range by four tenths — making a Saurian worse
+    // at the one thing the card says they are good at.
+    const cloakDetect = this.mechanic('cloakDetect');
+    if (cloakDetect) add('stealthDetect', 1 + cloakDetect);
     if (this.species.mechanic?.critBonus) bump('critChance', this.species.mechanic.critBonus * 0.1);
     return mods;
   }

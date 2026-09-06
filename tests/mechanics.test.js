@@ -110,7 +110,7 @@ describe('the sweep, and the instrument that produced it', () => {
     assert.equal(consumed().has('thisKeyIsDeclaredByNobodyAtAll'), false);
   });
 
-  test('the ratchet: no more than 18 declared mechanics are read by nothing', () => {
+  test('the ratchet: no more than 16 declared mechanics are read by nothing', () => {
     // It may go down — by wiring one, or by deleting one honestly — and it may
     // not go up. A new trait that declares a mechanic and forgets to wire it
     // fails here rather than shipping as a card that promises something.
@@ -118,7 +118,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     const dead = [...keys.keys()].filter((k) => !read.has(k)).sort();
     assert.ok(keys.size >= 55, `only ${keys.size} mechanics declared; has the sheet shrunk?`);
-    assert.ok(dead.length <= 18,
+    assert.ok(dead.length <= 16,
       `${dead.length} declared mechanics are read by nothing:\n  ${dead.join('\n  ')}`);
   });
 
@@ -126,7 +126,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty',
       'accuracyBonus', 'hazardDisadvantage',
-      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor', 'ignorePressure']) {
+      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor', 'ignorePressure', 'cloakDetect', 'directivePenalty']) {
       assert.ok(read.has(k), `${k} is read by nothing again`);
     }
   });
@@ -575,5 +575,87 @@ describe('a circumstance channel with no caller, and the trait that removed noth
     const trait = CHARACTER.TRAITS.find((t) => t.id === 'cool_under_fire');
     assert.doesNotMatch(trait.text, /outnumbered/i,
       'the card promises relief from a circumstance that cannot arise');
+  });
+});
+
+describe('a sixth writer to a mod that was fixed without it', () => {
+  // `combat.js` records that `stealthDetect` was written by five things and
+  // read by none: the ship baseline, a science skill node, a console, the
+  // captain's Science ability and a watch officer's expertise. That was fixed.
+  //
+  // The Saurian's "cloaked ships are detected at longer range" was a SIXTH
+  // writer — `cloakDetect: 0.4`, the same 0.4 the console declares — and it was
+  // not converted with the others, so the species kept promising a thing the
+  // ship mod had started doing for everybody else.
+  test('a Saurian detects cloaks better than a human of the same career', () => {
+    const detect = (speciesId) => captain({ speciesId }).ship.mod('stealthDetect');
+    assert.ok(detect('saurian') > detect('human') * 1.2,
+      `${detect('saurian')} against ${detect('human')}`);
+  });
+
+  test('and the 0.4 is applied the way the console applies it, not raw', () => {
+    // `stealthDetect` is MULTIPLICATIVE, and `loadout.shipMods` turns a
+    // declared 0.4 into x1.4. Passing the raw 0.4 would have multiplied
+    // detection by four tenths — making a Saurian worse at the one thing the
+    // card says they are good at, which is the sign error worth checking for.
+    const human = captain({ speciesId: 'human' }).ship.mod('stealthDetect');
+    const saurian = captain({ speciesId: 'saurian' }).ship.mod('stealthDetect');
+    assert.ok(saurian > 1, `a Saurian is below the baseline at ${saurian}`);
+    assert.ok(saurian > human, 'the trait made them worse');
+  });
+
+  test('and it reaches the fight, where a cloak is worth less against them', () => {
+    // Directional, and deliberately a wide margin: the species also carries
+    // +1 Science, which feeds the same mod, so this is not an isolated
+    // measurement of the 0.4 alone. The two assertions above are.
+    const dealt = (speciesId, runs = 20) => {
+      let total = 0;
+      for (let seed = 0; seed < runs; seed++) {
+        const g = captain({ speciesId, careerId: 'tactical', seed: BigInt(seed + 1) });
+        const foe = new Ship('bird_of_prey', { faction: 'klingon', name: 'T' });
+        const start = foe.maxHull;
+        g.startCombat([foe]);
+        for (let i = 0; i < 1800 && g.engagement && !g.engagement.over; i++) {
+          foe.cloaked = true;
+          g.engagement.update(1 / 30);
+        }
+        total += start - foe.hull;
+      }
+      return total / runs;
+    };
+    assert.ok(dealt('saurian') > dealt('human') * 1.2, 'a cloak is worth the same against both');
+  });
+});
+
+describe('the price of a Maverick’s advantage', () => {
+  // "Advantage on any check the regulations forbid. Prime Directive violations
+  // cost double." The second sentence is what pays for the first, and
+  // `directivePenalty` was read by nothing.
+  test('a violation costs a maverick twice what it costs anybody else', () => {
+    const plain = captain();
+    const wild = captain({ traits: ['maverick'] });
+    assert.equal(wild.directiveCost(-18), plain.directiveCost(-18) * 2);
+  });
+
+  test('and it is charged at both places the Directive charges you', () => {
+    // The recorded violation, and being seen by a pre-warp culture during a
+    // covert landing — whose own log line says "that will be in the report to
+    // the Prime Directive board". A trait that doubled one of the two would be
+    // doubling the bookkeeping rather than the rule.
+    const code = readFileSync('src/core/state.js', 'utf8')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    const calls = [...code.matchAll(/directiveCost\(/g)].length;
+    assert.ok(calls >= 3, `directiveCost is called ${calls} times; both sites plus its own definition`);
+    assert.doesNotMatch(code, /adjustStanding\('federation', STANDING_EFFECTS\.prime_directive_violation/,
+      'the violation is charged without going through the helper');
+    assert.doesNotMatch(code, /adjustStanding\('federation', STANDING_EFFECTS\.observed_during_survey/,
+      'being seen is charged without going through the helper');
+  });
+
+  test('and nothing else on the sheet changes what a violation costs', () => {
+    for (const traits of [[], ['by_the_book'], ['idealist'], ['reckless']]) {
+      const g = captain({ traits });
+      assert.equal(g.directiveCost(-18), -18, `${traits[0] ?? 'plain'} moved it`);
+    }
   });
 });

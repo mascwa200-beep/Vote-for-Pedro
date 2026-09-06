@@ -5705,6 +5705,42 @@ They stay in the ratchet with that as the recorded reason. What did change is
 that Cool Under Fire no longer *promises* relief from it: **a card should not
 offer protection against something that cannot arise.** Ratchet **19 → 18**.
 
+### Seventh pass: a sixth writer, and the price of an advantage
+
+`combat.js` carries a note about `stealthDetect` being *"written by five things
+and read by none"* — the ship baseline, a science skill node, a console, the
+captain's Science ability, a watch officer's expertise — and that was fixed.
+
+The Saurian's *"cloaked ships are detected at longer range"* was a **sixth
+writer**, `cloakDetect: 0.4`, and it was not converted with the others. So the
+species went on promising the thing the mod had started doing for everybody
+else.
+
+**The sign was the risk, and it is why this was measured rather than written.**
+`stealthDetect` is multiplicative, and `loadout.shipMods` turns a console's
+declared `0.4` into **×1.4**. Passing the raw 0.4 straight through would have
+multiplied detection by four tenths — making a Saurian *worse* at the one thing
+their card names. A test now fails on exactly that mistake.
+
+| | `stealthDetect` |
+| --- | --- |
+| human, command | 1.120 |
+| Saurian, command | **1.568** |
+
+`directivePenalty` went with it. *"Maverick — advantage on any check the
+regulations forbid. Prime Directive violations cost double."* The second sentence
+is what pays for the first, and it was read by nothing: −18 became −36, and being
+seen by a pre-warp culture −6 became −12.
+
+**Charged at both places the Directive charges you.** The recorded violation, and
+the covert landing whose own log line reads *"that will be in the report to the
+Prime Directive board"*. A trait that doubled one of the two would be doubling
+the bookkeeping rather than the rule. Both go through one helper, for the reason
+`peaceGain` and `critSeverity` already record: a number written out in two places
+is a promise that can drift.
+
+Ratchet **18 → 16**.
+
 
 ## Attribution
 
