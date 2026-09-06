@@ -813,20 +813,44 @@ try {
   // hazard into a 6% chance somebody does not come back and nineteen hours of
   // commission time. The code already knew — `target.check` picked the spoken
   // phrase "survey that" — and neither the label nor the subtitle used it.
+  //
+  // Read in BOTH states, because the scenario above has already surveyed this
+  // feature. `surveyFeature` has always refused a second survey — "We have
+  // already been over that one, Captain." — and nothing on any screen read
+  // `g.surveyed`, so the button went on offering a science team and nineteen
+  // hours for work that was finished. Now it greys out and says so, which is
+  // what the first read below checks; the risk line is checked on the same
+  // button with the record cleared, which is the state a captain meets it in.
   const surveyButton = await page.evaluate(() => {
     const app = globalThis.__app;
+    const g = app.game;
+    const read = () => {
+      app.render();
+      const btns = [...document.querySelectorAll('.screen button')];
+      const b = btns.find((x) => /survey|use /i.test(x.textContent));
+      return b ? { text: b.textContent, disabled: b.disabled } : null;
+    };
+    const afterSurvey = read();
+    const kept = g.surveyed;
+    g.surveyed = {};
+    const fresh = read();
+    g.surveyed = kept;
     app.render();
-    const btns = [...document.querySelectorAll('.screen button')];
-    const b = btns.find((x) => /survey|use /i.test(x.textContent));
-    return b ? { text: b.textContent, looking: app.game.walk.looking?.kind ?? null } : null;
+    return { afterSurvey, fresh, looking: g.walk.looking?.kind ?? null };
   });
-  check('the survey button says survey, not use', 
-    !!surveyButton && /^Survey /.test(surveyButton.text), JSON.stringify(surveyButton));
+  const fresh = surveyButton?.fresh;
+  check('the survey button says survey, not use',
+    !!fresh && /^Survey /.test(fresh.text), JSON.stringify(surveyButton));
   check('and it does not call a rock a console',
-    !!surveyButton && !/console/i.test(surveyButton.text), JSON.stringify(surveyButton));
+    !!fresh && !/console/i.test(fresh.text), JSON.stringify(surveyButton));
   check('and it says what the away team is being asked to risk',
-    !!surveyButton && /(Routine|Elevated|Dangerous|Extreme)/.test(surveyButton.text)
-      && /\d+ hours/.test(surveyButton.text), JSON.stringify(surveyButton));
+    !!fresh && /(Routine|Elevated|Dangerous|Extreme)/.test(fresh.text)
+      && /\d+ hours/.test(fresh.text), JSON.stringify(surveyButton));
+  check('and once it is done it stops offering itself',
+    !!surveyButton?.afterSurvey
+      && /already been over that one/i.test(surveyButton.afterSurvey.text)
+      && surveyButton.afterSurvey.disabled === true,
+    JSON.stringify(surveyButton?.afterSurvey));
   await page.screenshot({ path: join(SHOTS, '03d-surface.png') });
 
   const backAboard = await page.evaluate(async () => {

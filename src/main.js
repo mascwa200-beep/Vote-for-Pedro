@@ -947,14 +947,18 @@ class App {
       case 'turbolift': {
         const stops = g.walk.liftStops();
         body.push(el('p', { class: 'muted', text: 'Turbolift control. Name a deck.' }));
+        // This answered a refused tap (`ui_deny`, and the log line below) but
+        // said nothing before it: every deck drawn enabled during a fight.
+        const may = g.mayWalk?.() ?? { ok: true };
+        if (!may.ok) body.push(el('p', { class: 'hint', text: may.reason }));
         for (const e of stops) {
-          body.push(button(e.label ?? e.to, () => {
+          body.push(button(e.label ?? e.to, !may.ok ? null : () => {
             this.closeModal();
             const ride = g.useExitAhead(e.to);
             audio.play(ride.ok ? 'door' : 'ui_deny');
             if (!ride.ok && ride.reason) g.pushLog(ride.reason, 'computer');
             this.render();
-          }, { color: 'blue', sub: g.deckLabel(e.to) ?? '' }));
+          }, { color: may.ok ? 'blue' : 'ghost', disabled: !may.ok, sub: g.deckLabel(e.to) ?? '' }));
         }
         break;
       }

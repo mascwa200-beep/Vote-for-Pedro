@@ -22154,7 +22154,21 @@ const SYSTEMS = [
   {
     id: 'frontier_1', name: 'Beta Reticuli', sector: 'frontier', x: 14.0, y: 4.0, type: 'anomaly', faction: 'none',
     facilities: [],
-    description: 'Charted once, briefly, by a survey ship that did not file a second report.',
+    // Debris, for the same reason Wolf 359 carries it: this is where something
+    // was destroyed and the pieces are still here. `beta_reticuli` — "What the
+    // Cube Left" — is gated on having finished `the_cube` at Gamma Hydra next
+    // door, and the survey ship that did not file a second report is part of
+    // what a fight here is now flying through.
+    //
+    // Nine systems are typed `anomaly` and four carried terrain, so the whole
+    // arena layer — four kinds, doctrine-tuned cover thresholds, blocking,
+    // clouds — was live in four systems out of forty-three. This is the one
+    // addition the fiction actually asks for; the rest of the anomalies are a
+    // wormhole, its far terminus and two unsurveyed grids, and inventing
+    // hazards for those would be terrain for the sake of terrain.
+    hazard: 'debris',
+    description: 'Charted once, briefly, by a survey ship that did not file a second report. '
+      + 'What the sensors return now is wreckage in a slow tumble, and not all of it is hers.',
     links: ['wolf359', 'frontier_2', 'deep_2'],
   },
   {
@@ -45684,7 +45698,7 @@ const SUBSYSTEM_TARGET_LABEL = {
 // `DECKS` was imported here too and used only in a comment. The deck label is
 // `game.deckLabel` now, which is the one place that knows which hull this is.
 const { ROOMS } = __require("src/world/interiors.data.js");
-const { listBackups, downloadSave } = __require("src/core/save.js");
+const { listBackups, downloadSave, listSaves, deleteSave } = __require("src/core/save.js");
 const { RECIPE_BY_ID, availableRecipes, MATERIAL_LIST } = __require("src/sim/fabrication.js");
 const { DIVISIONS, SPECIALITIES, ASSIGNMENTS, availableAssignments, dutySlots } = __require("src/sim/duty.js");
 const { SCENARIO: KOBAYASHI, GAMBIT_TIER } = __require("src/missions/kobayashi.js");
@@ -45823,15 +45837,27 @@ function bridgeScreen(app) {
     // being asked to spend a day and to risk a death by a button that said
     // "Open this console".
     const survey = target.check ? (HAZARD_LEVEL[target.hazard] ?? null) : null;
+    // A survey already done. `surveyFeature` has refused a second one since it
+    // was written — "We have already been over that one, Captain." — and
+    // NOTHING on any screen read `g.surveyed`, so the button stayed
+    // full-strength orange and went on promising a science team and nineteen
+    // hours for work that was finished.
+    //
+    // Truthy, not `=== 'found'`: the key is set to 'found' or 'empty' and both
+    // of them mean the away team has been over it.
+    const done = survey && !!g.surveyed?.[`${w.room.world}:${target.id}`];
     hand.push(button(
       survey ? `Survey ${lowerFirst(target.label)}`
         : target.panel || target.id ? `Use ${target.label ?? ROOMS[target.to]?.name}` : 'Use',
-      tap(() => app.useWhatIsInFront()),
+      done ? null : tap(() => app.useWhatIsInFront()),
       {
-        color: 'orange',
-        sub: survey
-          ? `${survey.label} — ${target.check} team, ${awayHours(target)} hours`
-          : target.panel ? 'Open this console' : 'Through the door',
+        color: done ? 'ghost' : 'orange',
+        disabled: !!done,
+        sub: done
+          ? 'We have already been over that one'
+          : survey
+            ? `${survey.label} — ${target.check} team, ${awayHours(target)} hours`
+            : target.panel ? 'Open this console' : 'Through the door',
         say: target.check ? 'survey that' : target.panel ? 'use it' : 'through the door',
       },
     ));
@@ -45866,11 +45892,28 @@ function bridgeScreen(app) {
   // Somewhere to walk, without having to aim at a door.
   const doors = w.room.lift ? w.liftStops() : (w.room.exits ?? []);
   if (!walking && doors.length) {
+    // Whether the ship will let the captain leave the room at all, asked ONCE
+    // for the row rather than per door: `mayWalk` is a fact about the ship, not
+    // about which bulkhead you are pointed at.
+    //
+    // Every one of these was drawn blue during a fight and did NOTHING. The
+    // handler read `.ok` and threw the reason away, so tapping a door under
+    // fire produced no message, no log entry and not even a deny cue — the
+    // chip simply absorbed the tap. The rule is real and worth keeping; being
+    // told about it is the part that was missing.
+    const may = g.mayWalk?.() ?? { ok: true };
     hand.push(el('div', { class: 'chip-row' }, doors.slice(0, 6).map((e) => button(
       ROOMS[e.to]?.name ?? e.to,
-      tap(() => { if (g.goToRoom(e.to).ok) audio.play('door'); app.render(); }),
-      { color: 'blue', say: `take me to the ${(ROOMS[e.to]?.name ?? e.to).toLowerCase()}` },
+      may.ok ? tap(() => { if (g.goToRoom(e.to).ok) audio.play('door'); app.render(); }) : null,
+      {
+        color: may.ok ? 'blue' : 'ghost',
+        disabled: !may.ok,
+        say: `take me to the ${(ROOMS[e.to]?.name ?? e.to).toLowerCase()}`,
+      },
     ))));
+    // Said once under the row, for the same reason it is asked once: six chips
+    // each carrying the same sentence is a wall of text about one rule.
+    if (!may.ok) hand.push(el('p', { class: 'hint', text: may.reason }));
   }
 
   side.append(panel(w.room.name, hand, walking ? 'accent' : ''));
@@ -46199,8 +46242,20 @@ function orbitPanel(app) {
       pill(`day ${day < 48 ? `${day.toFixed(1)} h` : `${(day / 24).toFixed(0)} d`}`),
     ]),
     el('p', { class: 'hint', text: 'She is on the viewer.' }),
-    button('Break orbit', tap(() => { g.breakOrbit(); app.render(); }),
-      { color: 'ghost', say: 'break orbit' }),
+    // The return value was discarded outright, so breaking orbit while ashore
+    // was a button that accepted the tap and did nothing at all. `breakOrbit`
+    // has always refused it, and always had the right sentence for why: "You
+    // are on the surface, Captain. We are not leaving without you."
+    button('Break orbit', g.ashore ? null : tap(() => {
+      const r = g.breakOrbit();
+      if (!r.ok) app.showMessage('Helm', [r.error ?? r.reason]);
+      app.render();
+    }), {
+      color: 'ghost',
+      disabled: !!g.ashore,
+      sub: g.ashore ? 'Not with the captain on the surface' : undefined,
+      say: 'break orbit',
+    }),
   ], 'accent'));
 
   return wrap;
@@ -47612,6 +47667,52 @@ function optionsScreen(app) {
     button('Export the record', tap(() => {
       if (app.game) downloadSave(app.game);
     }), { color: 'blue', sub: 'Downloads a file you can keep' }),
+  ]));
+
+  // ---- The saves themselves ----
+  //
+  // `listSaves` and `deleteSave` have been written, complete and exported since
+  // the save system was built, and nothing imported either of them. So the slot
+  // machinery existed — an autosave and three named slots, each with a label
+  // and a timestamp — and a captain had no way to see what was in them or to
+  // clear one. The file's own header argues at length about a save surviving
+  // "five years of storage pressure, a phone running out of space mid-write",
+  // and then gave the player no way to manage the storage.
+  //
+  // Deleting is behind a confirm, because it is the one button on this screen
+  // that destroys a commission.
+  const saves = listSaves();
+  root.append(panel('Saved Commissions', [
+    saves.length
+      ? el('div', {}, saves.flatMap((sv) => [
+        el('p', { class: 'muted', text: `${sv.slot === 'auto' ? 'Autosave' : `Slot ${sv.slot}`}: `
+          + `${sv.label ?? 'unnamed'} — ${new Date(sv.savedAt).toLocaleString()}` }),
+        button(`Delete ${sv.slot === 'auto' ? 'the autosave' : `slot ${sv.slot}`}`, tap(() => {
+          // Through `showMessage`'s own actions, which is how this app asks a
+          // question — the same shape as `confirmNewGame` in `main.js`: the
+          // destructive answer in red, the way out in ghost, and no spoken
+          // phrase on either. The first draft reached for a confirm helper that
+          // does not exist on `app`, and the optional call fell straight
+          // through to deleting a five-year commission on one tap.
+          const what = sv.slot === 'auto' ? 'the autosave' : `slot ${sv.slot}`;
+          app.showMessage('Delete a saved commission', [
+            `Delete ${what} — ${sv.label ?? 'unnamed'}?`,
+            sv.slot === 'auto'
+              ? 'This also clears the three autosave backups behind it. It cannot be undone.'
+              : 'It cannot be undone.',
+          ], [
+            // Neither of these advertises a spoken phrase. `showMessage` only
+            // registers a voice route for its DEFAULT action — see the
+            // `if (!actions)` in `main.js` — so a modal carrying its own
+            // buttons cannot be answered by speaking, and a phrase printed here
+            // would be one more promise the game does not keep.
+            button('Delete it', () => { deleteSave(sv.slot); app.closeModal(); app.render(); },
+              { color: 'red' }),
+            button('Cancel', () => { app.closeModal(); }, { color: 'ghost' }),
+          ]);
+        }), { color: 'red', sub: sv.slot === 'auto' ? 'Also clears the three backups' : 'Cannot be undone' }),
+      ]))
+      : el('p', { class: 'muted', text: 'Nothing saved yet. The game keeps an autosave as you play.' }),
   ]));
 
   root.append(panel('Audio', [
@@ -49928,14 +50029,18 @@ class App {
       case 'turbolift': {
         const stops = g.walk.liftStops();
         body.push(el('p', { class: 'muted', text: 'Turbolift control. Name a deck.' }));
+        // This answered a refused tap (`ui_deny`, and the log line below) but
+        // said nothing before it: every deck drawn enabled during a fight.
+        const may = g.mayWalk?.() ?? { ok: true };
+        if (!may.ok) body.push(el('p', { class: 'hint', text: may.reason }));
         for (const e of stops) {
-          body.push(button(e.label ?? e.to, () => {
+          body.push(button(e.label ?? e.to, !may.ok ? null : () => {
             this.closeModal();
             const ride = g.useExitAhead(e.to);
             audio.play(ride.ok ? 'door' : 'ui_deny');
             if (!ride.ok && ride.reason) g.pushLog(ride.reason, 'computer');
             this.render();
-          }, { color: 'blue', sub: g.deckLabel(e.to) ?? '' }));
+          }, { color: may.ok ? 'blue' : 'ghost', disabled: !may.ok, sub: g.deckLabel(e.to) ?? '' }));
         }
         break;
       }
