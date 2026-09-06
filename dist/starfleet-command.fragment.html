@@ -22437,6 +22437,25 @@ __exports.systemDepth = systemDepth;
 
 __define("src/missions/episodes/core.js", function (__exports, __require) {
 // Episodes 1-8: the Federation interior and the Klingon border.
+
+/**
+ * Which finding the board returns — read off the board that returned it.
+ *
+ * By the time this runs the engine has already sat the board (`inquiry: true`
+ * on the choice) and put its verdict on `applied.finding`. `rules/inquiry.js`
+ * names the three verdicts; this names the three rooms they are read in.
+ *
+ * NOT `ledger.assessment()`, which is what the finale's `byRecord` reads: it
+ * reports 'inquiry' for as long as a board is sitting (ledger.js:312), which
+ * is true and useless here, because a court-martial is the one scene where a
+ * board is always sitting. Every captain would have walked into the same room.
+ *
+ * The default is 'reprimanded' rather than 'exonerated' because that is what
+ * `findingFor` returns on a record with nothing on it — a captain nobody has
+ * assessed is not a captain the board clears.
+ */
+const byFinding = (m, applied) => applied?.finding?.verdict ?? 'reprimanded';
+byFinding.targets = ['exonerated', 'reprimanded', 'reduced'];
 const CORE_EPISODES = [
   // -------------------------------------------------------------------------
   {
@@ -23139,6 +23158,29 @@ const CORE_EPISODES = [
             effects: { xp: 300, standing: { federation: 6 } } },
           { id: 'blame', label: 'Cite your orders and the conditions', next: 'defence',
             effects: { xp: 150, flag: 'deflected_blame' } },
+          // What the room hears about the rest of the commission.
+          //
+          // The board already READS all of it: `serviceScore` weighs every
+          // record entry from act 1 onward and `findingFor` turns that into
+          // the verdict. What was missing is that the room never said any of
+          // it out loud — so a captain who reported a cloaking device instead
+          // of keeping it sat through a hearing that never mentioned it.
+          //
+          // Testimony, not evidence: experience, standing and a flag, and no
+          // `record`. A choice at the hearing that wrote a record entry would
+          // be the captain entering evidence about the hearing into the log
+          // the hearing is reading — and this file's own doctrine is that the
+          // log is incontrovertible (rules/inquiry.js).
+          { id: 'cloak', label: 'Ask that the Outpost 4 report be entered',
+            next: 'defence', requires: { flag: 'romulan_cloak_reported' },
+            effects: { xp: 400, standing: { federation: 8 } } },
+          // Six ranks and a whole commission ago, and the earliest room in
+          // which it can be owned. `homecoming` offers the same correction at
+          // the end of the five years; a captain gets to make it once, and
+          // making it here costs more and is worth more.
+          { id: 'trials', label: 'Correct the shakedown report before they reach it',
+            next: 'accept', requires: { flag: 'falsified_report' },
+            effects: { xp: 350, standing: { federation: 10 }, flag: 'came_clean' } },
         ],
       },
       defence: {
@@ -23150,6 +23192,12 @@ const CORE_EPISODES = [
             effects: { xp: 400 } },
           { id: 'object', label: 'Object to the question', next: 'verdict',
             effects: { xp: 100, standing: { federation: -6 } } },
+          // The thing a board would actually ask about, offered before they
+          // ask. The Romulans think better of a captain who says it in a
+          // Federation hearing than of one who lets it be found.
+          { id: 'concede', label: 'Concede that you fired first in the Neutral Zone',
+            next: 'verdict', requires: { flag: 'fired_first_neutral_zone' },
+            effects: { xp: 300, standing: { federation: 4, romulan: 6 } } },
         ],
       },
       accept: {
@@ -23162,18 +23210,73 @@ const CORE_EPISODES = [
       },
       verdict: {
         where: 'anywhere',
-        text: 'The board withdraws for four hours and returns.',
+        text: 'The board withdraws for four hours and returns. The president has one page in front of him, and he does not sit down to read it.',
         speaker: 'Board of Inquiry',
         choices: [
-          { id: 'hear', label: 'Stand for the finding', outcome: 'verdict',
-            effects: { xp: 600 } },
+          // `inquiry: true` is the board actually sitting — the same call
+          // docking makes, through the same door on the Game, so the rank
+          // ladder unfreezes and no second board sits later for this one.
+          // `time: 2` is the two days a hearing costs, which the dock charged
+          // and the episode did not.
+          { id: 'hear', label: 'Stand for the finding', next: byFinding,
+            effects: { inquiry: true, xp: 600, time: 2 } },
+        ],
+      },
+      // The three rooms the three verdicts are read in.
+      //
+      // Each has to be true in both orders: the paper may have been signed in
+      // this room ten minutes ago, or at the dock last week by the board this
+      // hearing is about. So none of them says "the board has decided" — they
+      // say what the finding IS and what it does, which does not change with
+      // where it was signed.
+      exonerated: {
+        where: 'anywhere',
+        text: 'No fault. The president reads it in four sentences and none of them is about you: the circumstances, the decisions available, and the finding that a reasonable officer in that chair would have done what you did. The advocate closes the file. Somebody at the back of the room starts collecting the chairs.',
+        speaker: 'Board of Inquiry',
+        choices: [
+          { id: 'accept_clear', label: 'Thank the board and stand down', outcome: 'exonerated',
+            effects: { xp: 500, standing: { federation: 8 } } },
+          { id: 'the_dead', label: 'Ask that the names be read anyway', outcome: 'exonerated',
+            effects: { xp: 700, standing: { federation: 12 } } },
+        ],
+      },
+      reprimanded: {
+        where: 'anywhere',
+        text: 'A formal reprimand. It is two paragraphs, it is on your record permanently, and it is read out in a room with four people in it and no press. The president says the board considered the alternative and did not reach it. He does not say which alternative.',
+        speaker: 'Board of Inquiry',
+        choices: [
+          { id: 'accept_rep', label: 'Accept it without comment', outcome: 'reprimanded',
+            effects: { xp: 400 } },
+          { id: 'ask_terms', label: 'Ask what it will mean for the ship', outcome: 'reprimanded',
+            effects: { xp: 600, standing: { federation: 4 } } },
+        ],
+      },
+      reduced: {
+        where: 'anywhere',
+        text: 'The finding is against you and the board takes a rank for it. The president reads the reduction, the reasons, and the sentence that says you retain command — because Starfleet is short of hulls and shorter of people who have sat in that chair. Nobody in the room enjoys any part of it.',
+        speaker: 'Board of Inquiry',
+        choices: [
+          { id: 'accept_red', label: 'Accept the reduction', outcome: 'reduced',
+            effects: { xp: 500 } },
+          { id: 'the_ship', label: 'Ask only whether you keep the ship', outcome: 'reduced',
+            effects: { xp: 700, standing: { federation: 6 } } },
         ],
       },
     },
     start: 'start',
     endings: {
-      verdict: { label: 'Finding delivered',
-        text: 'The finding is entered into your record, where it stays.',
+      // All three carry `inquiry_resolved`. It is the flag `homecoming` reads
+      // five years later when a captain in front of the final board refers
+      // them to the inquiry's own finding — and that referral is worth making
+      // whichever way this one went.
+      exonerated: { label: 'Exonerated',
+        text: 'The finding is entered into your record, where it stays, and what it says is that there was nothing to answer.',
+        effects: { flag: 'inquiry_resolved' } },
+      reprimanded: { label: 'Formal reprimand',
+        text: 'The finding is entered into your record, where it stays. So is the reprimand, and it will be read by everyone who reads the record.',
+        effects: { flag: 'inquiry_resolved' } },
+      reduced: { label: 'Reduced in rank',
+        text: 'The finding is entered into your record, where it stays. The rank is gone, and it is gone the way ranks go: quietly, in a room, on a page. You will have to fly the gap again.',
         effects: { flag: 'inquiry_resolved' } },
     },
   },
@@ -37780,6 +37883,46 @@ class Mission {
       for (const f of [].concat(effects.flag)) g.ledger.setFlag(f);
     }
 
+    // The board of inquiry the episode is about is the board the game keeps.
+    //
+    // `court_martial` dramatised a hearing while `rules/inquiry.js` held a real
+    // one, and the two had never met. Its verdict stage read no state at all,
+    // so a captain scoring 0 and a captain scoring -220 heard the same
+    // sentence — "the board withdraws for four hours and returns" — and it
+    // returned nothing: no finding on the record, the inquiry still open, the
+    // promotion still held, and then the mechanical board sitting a SECOND
+    // time at the dock and taking a rank for a hearing already held on screen.
+    //
+    // Through the Game rather than through `convene` directly, so the rank
+    // ladder unfreezes and the bookkeeping is exactly what docking does.
+    //
+    // BEFORE the experience, deliberately. `addXP` banks the points but
+    // refuses the promotion while a board is open (skills.js:115), and grants
+    // a rank only at the moment of an award — never retroactively. Applied
+    // after the experience, a captain who had earned the next rank in that
+    // very scene would sit at the old one until some unrelated later payout.
+    if (effects.inquiry) {
+      const board = g.concludeInquiry?.({ hours: 0 }) ?? { sat: false, finding: null };
+      out.finding = board.finding;
+      out.inquirySat = board.sat;
+      if (board.sat) {
+        out.messages.push(board.finding.text);
+        if (board.finding.reducedTo) {
+          out.messages.push(`Your rank is now ${board.finding.reducedTo}.`);
+        }
+      } else if (g.ledger.findings.length) {
+        // The board reported at the dock before the captain sat down in the
+        // room. The finding is real and already on the record; saying so is
+        // true in a way that re-announcing it would not be.
+        out.messages.push(`The finding already on your record stands: ${board.finding.label}.`);
+      }
+      // And nothing at all when no board was ever held. The third arm of the
+      // fallback is `findingFor`, which the Record screen renders as "on the
+      // record as it stands the finding WOULD be" — a forecast. It is a sound
+      // routing input, because it guarantees the stage after this one exists.
+      // It is not a thing to put in the log as a verdict nobody returned.
+    }
+
     // "Silent Partnership — every mission reward is increased by half. They
     // take their cut invisibly." Two hundred and eighty Bars of Latinum for
     // nothing at all: the perk went into a Set no code read.
@@ -39392,9 +39535,28 @@ function convene(game) {
     if (p && p.rankIndex > floor) {
       p.rankIndex--;
       finding.reducedTo = p.rank?.name ?? null;
+      // And the experience that earned the rank goes with it.
+      //
+      // `rankIndex--` on its own was the whole demotion, and it lasted until
+      // the next thing that happened. `addXP` promotes when the banked total
+      // passes the next threshold (skills.js:115-120) — and after a reduction
+      // the "next" threshold is one the captain went past long ago, so:
+      //
+      //     rank before dock : Fleet Captain
+      //     finding          : Reduced in rank -> Captain
+      //     one more xp point: promoted -> Fleet Captain, +5 skill points
+      //
+      // The heaviest penalty in the game was undone by a single point, and
+      // paid five skill points for the privilege. Setting the total back to
+      // the threshold of the rank he now holds means the gap has to be flown
+      // again, which is what a reduction in rank is. The surplus that went
+      // with it was a claim on the rank ABOVE the one taken, and he has no
+      // claim on that either.
+      //
       // Skill points already spent are NOT clawed back. Nothing in
       // CaptainProgress can unspend one, and a demotion that silently
       // corrupted a skill tree would be a worse bug than the one this fixes.
+      p.xp = RANKS[p.rankIndex]?.xp ?? p.xp;
     } else {
       // Already at the floor: the finding stands on the record, but there is
       // no rank to take. The verdict changes with the label, so nothing
@@ -44488,6 +44650,42 @@ class Game {
     return { ok: true };
   }
 
+  /**
+   * Sit the board of inquiry, wherever the order to sit it came from.
+   *
+   * Two things convene one: putting in at a starbase, and standing in
+   * conference room four at Starbase 11 while the episode about it runs. Both
+   * come through this door, because `convene` is only half of what happens.
+   * The other half is `promotionHeld`, a said-once latch set in `awardXP` and
+   * cleared in exactly one place — inside `dock()`. A board that sat any other
+   * way would have left it latched, and the NEXT board would then have held a
+   * promotion in total silence: a flag set in one place and cleared in one
+   * unrelated place, which is the shape of the bug §22 exists to record.
+   *
+   * `finding` is always something to say; `sat` is whether THIS call is what
+   * said it. False means either that the board had already reported — its
+   * finding is on `ledger.findings` — or that there was never a board at all
+   * and this is only what the record would read as, the same forecast the
+   * Record screen prints. A caller that narrates must read `sat` first.
+   *
+   * @returns {{sat: boolean, finding: object}}
+   */
+  concludeInquiry({ hours = 48 } = {}) {
+    const sat = convene(this);
+    if (sat) {
+      // A rank held by a closed board can be earned again, and should be said
+      // again if a second board ever holds it.
+      this.promotionHeld = false;
+      // Two days for it. A hearing is not a formality you attend between
+      // resupply and departure.
+      if (hours) this.spendHours(hours);
+    }
+    return {
+      sat: !!sat,
+      finding: sat ?? this.ledger.findings.at(-1) ?? findingFor(this.ledger),
+    };
+  }
+
   dock() {
     const done = this.noLongerInCommand();
     if (done) return done;
@@ -44533,20 +44731,18 @@ class Game {
     // Directive violations froze the rank ladder for the rest of a five-year
     // commission — under a screen promising it lasted only until the board
     // concluded.
-    const finding = convene(this);
-    if (finding) {
-      // A rank held by a closed board can be earned again, and should be said
-      // again if a second board ever holds it.
-      this.promotionHeld = false;
-      // Two days for it. A hearing is not a formality you attend between
-      // resupply and departure.
-      this.spendHours(48);
+    const { sat, finding } = this.concludeInquiry();
+    if (sat) {
       this.pushLog(finding.text, 'comms');
       if (finding.reducedTo) {
         this.pushLog(`Your rank is now ${finding.reducedTo}.`, 'captain');
       }
     }
-    return { ok: true, finding: finding ?? null };
+    // `sat ? finding : null` and not the finding itself: `concludeInquiry`
+    // always hands back something to say, and the screen raises a modal on
+    // whatever this returns. Handing back the forecast would pop a verdict
+    // nobody delivered on every routine dock, forever.
+    return { ok: true, finding: sat ? finding : null };
   }
 
   // ------------------------------------------------------------------ tick

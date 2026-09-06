@@ -4720,6 +4720,42 @@ export class Game {
     return { ok: true };
   }
 
+  /**
+   * Sit the board of inquiry, wherever the order to sit it came from.
+   *
+   * Two things convene one: putting in at a starbase, and standing in
+   * conference room four at Starbase 11 while the episode about it runs. Both
+   * come through this door, because `convene` is only half of what happens.
+   * The other half is `promotionHeld`, a said-once latch set in `awardXP` and
+   * cleared in exactly one place — inside `dock()`. A board that sat any other
+   * way would have left it latched, and the NEXT board would then have held a
+   * promotion in total silence: a flag set in one place and cleared in one
+   * unrelated place, which is the shape of the bug §22 exists to record.
+   *
+   * `finding` is always something to say; `sat` is whether THIS call is what
+   * said it. False means either that the board had already reported — its
+   * finding is on `ledger.findings` — or that there was never a board at all
+   * and this is only what the record would read as, the same forecast the
+   * Record screen prints. A caller that narrates must read `sat` first.
+   *
+   * @returns {{sat: boolean, finding: object}}
+   */
+  concludeInquiry({ hours = 48 } = {}) {
+    const sat = convene(this);
+    if (sat) {
+      // A rank held by a closed board can be earned again, and should be said
+      // again if a second board ever holds it.
+      this.promotionHeld = false;
+      // Two days for it. A hearing is not a formality you attend between
+      // resupply and departure.
+      if (hours) this.spendHours(hours);
+    }
+    return {
+      sat: !!sat,
+      finding: sat ?? this.ledger.findings.at(-1) ?? findingFor(this.ledger),
+    };
+  }
+
   dock() {
     const done = this.noLongerInCommand();
     if (done) return done;
@@ -4765,20 +4801,18 @@ export class Game {
     // Directive violations froze the rank ladder for the rest of a five-year
     // commission — under a screen promising it lasted only until the board
     // concluded.
-    const finding = convene(this);
-    if (finding) {
-      // A rank held by a closed board can be earned again, and should be said
-      // again if a second board ever holds it.
-      this.promotionHeld = false;
-      // Two days for it. A hearing is not a formality you attend between
-      // resupply and departure.
-      this.spendHours(48);
+    const { sat, finding } = this.concludeInquiry();
+    if (sat) {
       this.pushLog(finding.text, 'comms');
       if (finding.reducedTo) {
         this.pushLog(`Your rank is now ${finding.reducedTo}.`, 'captain');
       }
     }
-    return { ok: true, finding: finding ?? null };
+    // `sat ? finding : null` and not the finding itself: `concludeInquiry`
+    // always hands back something to say, and the screen raises a modal on
+    // whatever this returns. Handing back the forecast would pop a verdict
+    // nobody delivered on every routine dock, forever.
+    return { ok: true, finding: sat ? finding : null };
   }
 
   // ------------------------------------------------------------------ tick

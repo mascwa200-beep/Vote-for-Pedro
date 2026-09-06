@@ -128,9 +128,28 @@ export function convene(game) {
     if (p && p.rankIndex > floor) {
       p.rankIndex--;
       finding.reducedTo = p.rank?.name ?? null;
+      // And the experience that earned the rank goes with it.
+      //
+      // `rankIndex--` on its own was the whole demotion, and it lasted until
+      // the next thing that happened. `addXP` promotes when the banked total
+      // passes the next threshold (skills.js:115-120) — and after a reduction
+      // the "next" threshold is one the captain went past long ago, so:
+      //
+      //     rank before dock : Fleet Captain
+      //     finding          : Reduced in rank -> Captain
+      //     one more xp point: promoted -> Fleet Captain, +5 skill points
+      //
+      // The heaviest penalty in the game was undone by a single point, and
+      // paid five skill points for the privilege. Setting the total back to
+      // the threshold of the rank he now holds means the gap has to be flown
+      // again, which is what a reduction in rank is. The surplus that went
+      // with it was a claim on the rank ABOVE the one taken, and he has no
+      // claim on that either.
+      //
       // Skill points already spent are NOT clawed back. Nothing in
       // CaptainProgress can unspend one, and a demotion that silently
       // corrupted a skill tree would be a worse bug than the one this fixes.
+      p.xp = RANKS[p.rankIndex]?.xp ?? p.xp;
     } else {
       // Already at the floor: the finding stands on the record, but there is
       // no rank to take. The verdict changes with the label, so nothing
