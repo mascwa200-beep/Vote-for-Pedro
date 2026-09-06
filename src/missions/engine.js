@@ -371,6 +371,19 @@ export class Mission {
     if (!pending) return null;
     this.pending = null;
 
+    // Losing the thing the fight was FOR is not breaking off.
+    //
+    // `failed` is the outcome `Engagement.settle` reaches when a `protect`
+    // objective's escort is gone: the ship came through and the convoy did not.
+    // Routed through the branch below it landed in the same bucket as walking
+    // away — for a non-terminal fight, `null`, which drops the captain back on
+    // the stage they started from with the freighters they were escorting
+    // destroyed and the option to try again. An episode says where that goes by
+    // naming an outcome on the fight itself; without one, nothing changes.
+    if (combatOutcome === 'failed' && pending.combat?.failedOutcome) {
+      return this.finish(pending.combat.failedOutcome);
+    }
+
     const won = combatOutcome === 'victory' || combatOutcome === 'routed';
     if (!won) {
       return pending.terminal

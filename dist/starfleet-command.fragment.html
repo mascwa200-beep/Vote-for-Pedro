@@ -17221,6 +17221,21 @@ class Engagement {
     this.player = player;
     this.hostiles = hostiles;
     this.allies = opts.allies ?? [];
+    // The ships a `protect` objective is actually ABOUT, which is not the same
+    // list as `allies` and must not be one.
+    //
+    // Two things append to `allies` that have nothing to do with the escort: a
+    // reputation perk's escort, added before the engagement is built, and the
+    // relief ship `callForHelp` pushes in mid-fight. `settle` fails a protect
+    // objective only when every ship in the list is dead, so either of those
+    // makes the objective UNFAILABLE — the convoy dies, the perk Miranda is
+    // still flying, and the fight goes on being winnable. A captain who had
+    // bought an escort could never lose a convoy.
+    //
+    // Snapshotted with `slice()` for the same reason: a live reference would
+    // pick up whoever joined later. The `?? this.allies` fallback keeps every
+    // caller that stages allies without distinguishing them working as before.
+    this.protectees = (opts.protectees ?? this.allies).slice();
     this.rng = rng;
     this.name = opts.name ?? 'Engagement';
     this.objective = OBJECTIVES[opts.objective] ? opts.objective : 'destroy';
@@ -17953,7 +17968,7 @@ class Engagement {
     // and letting the player go on to kill every hostile and be told they won
     // would be the game reporting the opposite of what happened.
     if (this.objective === 'protect') {
-      const escort = this.allies.filter((s) => s && !s.withdrawn);
+      const escort = this.protectees.filter((s) => s && !s.withdrawn);
       if (escort.length && escort.every((s) => s.destroyed)) {
         this.pushLog('They are gone, Captain. That was what we were here for.', 'tactical');
         this.end('failed');
@@ -22339,9 +22354,14 @@ const CORE_EPISODES = [
             effects: { standing: { klingon: -4 }, xp: 150 } },
           { id: 'talk', label: 'Ask to see his orders', next: 'orders',
             requires: { skill: 'diplomacy', ranks: 1 }, effects: { xp: 200 } },
+          // `disable`, because the button says so and the stage it leads to
+          // says so twice. `battle` opens "The D7 is crippled and drifting.
+          // Kang's ship has forty-two survivors and no life support in the
+          // forward sections", and then offers to finish them — none of which
+          // is true of a hull the fight required you to remove from the board.
           { id: 'attack', label: 'Arm weapons and target his engines', next: 'battle',
-            effects: { combat: { faction: 'klingon', ships: ['d7'] }, standing: { klingon: -20 },
-              flag: 'fired_first_archanis' } },
+            effects: { combat: { faction: 'klingon', ships: ['d7'], objective: 'disable' },
+              standing: { klingon: -20 }, flag: 'fired_first_archanis' } },
         ],
       },
       orders: {
@@ -22367,8 +22387,10 @@ const CORE_EPISODES = [
         text: 'He does not move. Neither do you. Ninety seconds pass, and then his disruptors come online.',
         speaker: 'Tactical',
         choices: [
+          // The other road into `battle`, and it has to arrive in the same
+          // state the stage describes.
           { id: 'fight', label: 'Fight', next: 'battle',
-            effects: { combat: { faction: 'klingon', ships: ['d7'] } } },
+            effects: { combat: { faction: 'klingon', ships: ['d7'], objective: 'disable' } } },
           { id: 'withdraw', label: 'Withdraw and let the diplomats have it', outcome: 'ceded',
             effects: { standing: { federation: -14, klingon: 6 }, record: { colony_lost: 1 }, xp: 200 } },
         ],
@@ -22952,8 +22974,13 @@ const FRONTIER_EPISODES = [
         choices: [
           { id: 'hail', label: 'Demand an explanation', next: 'negotiate',
             effects: { xp: 300 } },
+          // All four roads out of this episode's fights end at `battle`, and
+          // `battle` opens "The warbird is dead in space, venting, and its
+          // commander is still alive on an open channel. He asks you not to
+          // board." A commander who can ask anything is aboard a hull that was
+          // stopped, not emptied — so every one of those fights is a `disable`.
           { id: 'fire', label: 'Fire before they can cloak again', next: 'battle',
-            effects: { combat: { faction: 'romulan', ships: ['warbird'] },
+            effects: { combat: { faction: 'romulan', ships: ['warbird'], objective: 'disable' },
               standing: { romulan: -25 }, flag: 'fired_first_neutral_zone',
               record: { violated_border: 1 } } },
         ],
@@ -22963,7 +22990,8 @@ const FRONTIER_EPISODES = [
         speaker: 'Tactical',
         choices: [
           { id: 'fight', label: 'Return fire', next: 'battle',
-            effects: { combat: { faction: 'romulan', ships: ['warbird'] }, damage: 0.15 } },
+            effects: { combat: { faction: 'romulan', ships: ['warbird'], objective: 'disable' },
+              damage: 0.15 } },
         ],
       },
       sighted: {
@@ -22977,7 +23005,9 @@ const FRONTIER_EPISODES = [
             effects: {
               // Decloaked and not expecting it. The warbird is the same ship;
               // it simply has not raised anything yet.
-              combat: { faction: 'romulan', ships: ['warbird'], shieldsAt: 0.15 },
+              combat: {
+                faction: 'romulan', ships: ['warbird'], shieldsAt: 0.15, objective: 'disable',
+              },
               xp: 700, standing: { romulan: -20 }, flag: 'fired_first_neutral_zone',
             } },
           { id: 'watch', label: 'Let it go and follow it', next: 'revealed',
@@ -22991,8 +23021,10 @@ const FRONTIER_EPISODES = [
           { id: 'let_go', label: 'Let him go. Report the weapon', outcome: 'reported',
             effects: { xp: 900, record: { anomaly_catalogued: 2 }, standing: { romulan: 10, federation: 6 },
               flag: 'romulan_cloak_reported' } },
+          // "Stop him" is the order, and he has just said he expects you to
+          // try to stop him leaving. Stopping is not killing.
           { id: 'stop', label: 'Stop him', next: 'battle',
-            effects: { combat: { faction: 'romulan', ships: ['warbird'] } } },
+            effects: { combat: { faction: 'romulan', ships: ['warbird'], objective: 'disable' } } },
         ],
       },
       battle: {
@@ -23124,8 +23156,29 @@ const FRONTIER_EPISODES = [
         text: 'Two hours in, a storm front takes out the lead freighter’s shields, and sensors pick up three impulse signatures moving in formation. Nobody flies formation in here by accident.',
         speaker: 'Tactical',
         choices: [
+          // The convoy is in the fight now.
+          //
+          // The order is "put the ship between them and the convoy" and the
+          // stage it leads to opens "The Galor breaks off. The convoy is
+          // intact" — an assertion about six ships that were not on the board.
+          // Whatever the captain did, the freighters could not be hit, could
+          // not be lost, and the line was true before the fight started.
           { id: 'shield', label: 'Put the ship between them and the convoy', next: 'fight',
-            effects: { combat: { faction: 'cardassian', ships: ['galor'] }, damage: 0.1, xp: 400 } },
+            effects: {
+              combat: {
+                faction: 'cardassian', ships: ['galor'], objective: 'protect',
+                // ONE hull, and the count is forced rather than chosen.
+                // `settle` fails a protect objective only when EVERY escort is
+                // dead, so with a convoy of three the fight is still won when
+                // two of them burn — and the stage this leads to would then
+                // say "The convoy is intact" over two wrecks. One ship makes
+                // both outcomes exactly true: she lives and the line is right,
+                // or she does not and the episode ends saying so.
+                escort: ['freighter'],
+                failedOutcome: 'lost',
+              },
+              damage: 0.1, xp: 400,
+            } },
           { id: 'storm', label: 'Lead them into the storm front', next: 'storm',
             requires: { skill: 'impulse_thrusters', ranks: 2 }, effects: { xp: 600 } },
           { id: 'scatter', label: 'Order the convoy to scatter', next: 'scatter',
@@ -23165,6 +23218,14 @@ const FRONTIER_EPISODES = [
       delivered: { label: 'Delivered', text: 'Bajor gets its vaccine with three hours to spare.' },
       partial: { label: 'Partially delivered', text: 'Half the doses. The triage decisions are somebody else’s now.' },
       late: { label: 'Arrived late', text: 'The long route was safe. Nine hundred people did not have that long.' },
+      // Reachable only by losing the convoy in the fight, which is a thing that
+      // could not happen until the freighters were put on the board.
+      lost: {
+        label: 'The convoy was lost',
+        text: 'You came out of the Badlands alone, with your shields holding and nothing behind you. '
+          + 'Six thousand doses are scattered across four hundred kilometres of plasma front. '
+          + 'Bajor is told by somebody else.',
+      },
     },
   },
 
@@ -36879,6 +36940,19 @@ class Mission {
     if (!pending) return null;
     this.pending = null;
 
+    // Losing the thing the fight was FOR is not breaking off.
+    //
+    // `failed` is the outcome `Engagement.settle` reaches when a `protect`
+    // objective's escort is gone: the ship came through and the convoy did not.
+    // Routed through the branch below it landed in the same bucket as walking
+    // away — for a non-terminal fight, `null`, which drops the captain back on
+    // the stage they started from with the freighters they were escorting
+    // destroyed and the option to try again. An episode says where that goes by
+    // naming an outcome on the fight itself; without one, nothing changes.
+    if (combatOutcome === 'failed' && pending.combat?.failedOutcome) {
+      return this.finish(pending.combat.failedOutcome);
+    }
+
     const won = combatOutcome === 'victory' || combatOutcome === 'routed';
     if (!won) {
       return pending.terminal
@@ -39471,10 +39545,24 @@ class Game {
     const ships = (spec.ships ?? []).map((cls, i) =>
       new Ship(cls, { name: hostileName(spec.faction, i), faction: spec.faction }));
     if (!ships.length) return null;
+    // The ships the fight is FOR, when it is for anything.
+    //
+    // `Engagement` has taken `opts.allies` since it was written and mission
+    // fights were the last caller that never passed any — encounters have done
+    // it all along, `allies: enc.victims ?? []` below. Without this a `protect`
+    // objective is inert rather than wrong: `settle` only fails it when the
+    // escort exists AND is all dead, so an empty list is an objective that can
+    // never be missed, on a stage whose next line asserts the convoy is intact.
+    //
+    // Named like the hostiles are, from the same table, for the same reason:
+    // "freighter 1" is not what a convoy is called.
+    const escortFaction = spec.escortFaction ?? 'independent';
+    const escort = (spec.escort ?? []).map((cls, i) =>
+      new Ship(cls, { name: hostileName(escortFaction, i), faction: escortFaction }));
     const id = fightId ?? ++this.missionFightSeq;
     if (fightId != null) this.missionFightSeq = Math.max(this.missionFightSeq, fightId);
     this.pendingCombat = {
-      ships, canWarpOut: spec.canWarpOut, shieldsAt: spec.shieldsAt, fightId: id,
+      ships, escort, canWarpOut: spec.canWarpOut, shieldsAt: spec.shieldsAt, fightId: id,
       // What the episode wants out of this fight, rather than "kill them all".
       // Plain data, like everything else in this record, so it survives a save
       // — see the note on `effects.combat` in missions/engine.js.
@@ -41981,7 +42069,10 @@ class Game {
     // Names come from a DERIVED stream. Drawing from `game.rng` for a name
     // would shift every seeded outcome downstream of the fight, so the same
     // battle would play out differently depending on which perks were held.
-    const allies = [...(opts.allies ?? [])];
+    // What the CALLER staged, kept apart from what the perks add below.
+    // `protect` is about the first list and must never be about the second.
+    const staged = [...(opts.allies ?? [])];
+    const allies = [...staged];
     if (!opts.scripted) {
       for (const e of Game.ESCORTS) {
         if (!this.perk(e.perk)) continue;
@@ -42098,7 +42189,8 @@ class Game {
     // `onEnd` is how a fight settles itself the moment it ends, from wherever
     // it ends. See Engagement.end.
     this.engagement = new Engagement(this.ship, fleet, this.rng, {
-      ...opts, allies, hazard, arenaRng, onEnd: () => this.resolveCombat(),
+      ...opts, allies, protectees: staged, hazard, arenaRng,
+      onEnd: () => this.resolveCombat(),
       // `enemyRelentless` — declared on the top three rungs and, until now,
       // read by nothing at all. `Engagement.relentless` has existed the whole
       // time and disables breaking off; the only thing that ever set it was
@@ -43532,7 +43624,7 @@ class Game {
     // A mission stage queued a fight; start it once the UI has caught up.
     if (this.pendingCombat && this.mode !== MODES.COMBAT) {
       const {
-        ships, canWarpOut, shieldsAt, fightId, objective, objectiveTime,
+        ships, escort, canWarpOut, shieldsAt, fightId, objective, objectiveTime,
       } = this.pendingCombat;
       this.pendingCombat = null;
       const eng = this.startCombat(ships, {
@@ -43541,6 +43633,7 @@ class Game {
         ...(shieldsAt != null ? { shieldsAt } : {}),
         ...(objective ? { objective } : {}),
         ...(objectiveTime != null ? { objectiveTime } : {}),
+        ...(escort?.length ? { allies: escort } : {}),
       });
       // The fight now on the screen answers for the episode only if the
       // episode's enemies are actually in it. `startCombat` does not always

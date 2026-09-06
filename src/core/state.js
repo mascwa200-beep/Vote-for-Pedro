@@ -680,10 +680,24 @@ export class Game {
     const ships = (spec.ships ?? []).map((cls, i) =>
       new Ship(cls, { name: hostileName(spec.faction, i), faction: spec.faction }));
     if (!ships.length) return null;
+    // The ships the fight is FOR, when it is for anything.
+    //
+    // `Engagement` has taken `opts.allies` since it was written and mission
+    // fights were the last caller that never passed any — encounters have done
+    // it all along, `allies: enc.victims ?? []` below. Without this a `protect`
+    // objective is inert rather than wrong: `settle` only fails it when the
+    // escort exists AND is all dead, so an empty list is an objective that can
+    // never be missed, on a stage whose next line asserts the convoy is intact.
+    //
+    // Named like the hostiles are, from the same table, for the same reason:
+    // "freighter 1" is not what a convoy is called.
+    const escortFaction = spec.escortFaction ?? 'independent';
+    const escort = (spec.escort ?? []).map((cls, i) =>
+      new Ship(cls, { name: hostileName(escortFaction, i), faction: escortFaction }));
     const id = fightId ?? ++this.missionFightSeq;
     if (fightId != null) this.missionFightSeq = Math.max(this.missionFightSeq, fightId);
     this.pendingCombat = {
-      ships, canWarpOut: spec.canWarpOut, shieldsAt: spec.shieldsAt, fightId: id,
+      ships, escort, canWarpOut: spec.canWarpOut, shieldsAt: spec.shieldsAt, fightId: id,
       // What the episode wants out of this fight, rather than "kill them all".
       // Plain data, like everything else in this record, so it survives a save
       // — see the note on `effects.combat` in missions/engine.js.
@@ -3190,7 +3204,10 @@ export class Game {
     // Names come from a DERIVED stream. Drawing from `game.rng` for a name
     // would shift every seeded outcome downstream of the fight, so the same
     // battle would play out differently depending on which perks were held.
-    const allies = [...(opts.allies ?? [])];
+    // What the CALLER staged, kept apart from what the perks add below.
+    // `protect` is about the first list and must never be about the second.
+    const staged = [...(opts.allies ?? [])];
+    const allies = [...staged];
     if (!opts.scripted) {
       for (const e of Game.ESCORTS) {
         if (!this.perk(e.perk)) continue;
@@ -3307,7 +3324,8 @@ export class Game {
     // `onEnd` is how a fight settles itself the moment it ends, from wherever
     // it ends. See Engagement.end.
     this.engagement = new Engagement(this.ship, fleet, this.rng, {
-      ...opts, allies, hazard, arenaRng, onEnd: () => this.resolveCombat(),
+      ...opts, allies, protectees: staged, hazard, arenaRng,
+      onEnd: () => this.resolveCombat(),
       // `enemyRelentless` — declared on the top three rungs and, until now,
       // read by nothing at all. `Engagement.relentless` has existed the whole
       // time and disables breaking off; the only thing that ever set it was
@@ -4741,7 +4759,7 @@ export class Game {
     // A mission stage queued a fight; start it once the UI has caught up.
     if (this.pendingCombat && this.mode !== MODES.COMBAT) {
       const {
-        ships, canWarpOut, shieldsAt, fightId, objective, objectiveTime,
+        ships, escort, canWarpOut, shieldsAt, fightId, objective, objectiveTime,
       } = this.pendingCombat;
       this.pendingCombat = null;
       const eng = this.startCombat(ships, {
@@ -4750,6 +4768,7 @@ export class Game {
         ...(shieldsAt != null ? { shieldsAt } : {}),
         ...(objective ? { objective } : {}),
         ...(objectiveTime != null ? { objectiveTime } : {}),
+        ...(escort?.length ? { allies: escort } : {}),
       });
       // The fight now on the screen answers for the episode only if the
       // episode's enemies are actually in it. `startCombat` does not always

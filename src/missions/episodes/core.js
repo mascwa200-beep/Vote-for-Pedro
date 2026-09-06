@@ -166,9 +166,14 @@ export const CORE_EPISODES = [
             effects: { standing: { klingon: -4 }, xp: 150 } },
           { id: 'talk', label: 'Ask to see his orders', next: 'orders',
             requires: { skill: 'diplomacy', ranks: 1 }, effects: { xp: 200 } },
+          // `disable`, because the button says so and the stage it leads to
+          // says so twice. `battle` opens "The D7 is crippled and drifting.
+          // Kang's ship has forty-two survivors and no life support in the
+          // forward sections", and then offers to finish them — none of which
+          // is true of a hull the fight required you to remove from the board.
           { id: 'attack', label: 'Arm weapons and target his engines', next: 'battle',
-            effects: { combat: { faction: 'klingon', ships: ['d7'] }, standing: { klingon: -20 },
-              flag: 'fired_first_archanis' } },
+            effects: { combat: { faction: 'klingon', ships: ['d7'], objective: 'disable' },
+              standing: { klingon: -20 }, flag: 'fired_first_archanis' } },
         ],
       },
       orders: {
@@ -194,8 +199,10 @@ export const CORE_EPISODES = [
         text: 'He does not move. Neither do you. Ninety seconds pass, and then his disruptors come online.',
         speaker: 'Tactical',
         choices: [
+          // The other road into `battle`, and it has to arrive in the same
+          // state the stage describes.
           { id: 'fight', label: 'Fight', next: 'battle',
-            effects: { combat: { faction: 'klingon', ships: ['d7'] } } },
+            effects: { combat: { faction: 'klingon', ships: ['d7'], objective: 'disable' } } },
           { id: 'withdraw', label: 'Withdraw and let the diplomats have it', outcome: 'ceded',
             effects: { standing: { federation: -14, klingon: 6 }, record: { colony_lost: 1 }, xp: 200 } },
         ],
