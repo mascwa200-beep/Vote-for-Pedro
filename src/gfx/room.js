@@ -823,13 +823,37 @@ function prop3d(solid, glow, prop) {
       break;
     }
 
-    case 'wallpanel':
-      glow.quad(
-        vec3(x - 0.02, 1.1, z - 0.4), vec3(x - 0.02, 1.1, z + 0.4),
-        vec3(x - 0.02, 1.7, z + 0.4), vec3(x - 0.02, 1.7, z - 0.4),
-        PALETTE.panelTurquoise,
-      );
+    case 'wallpanel': {
+      // Turned onto the bulkhead it is actually against, from `prop.facing`.
+      //
+      // This drew a quad spanning z-0.4 to z+0.4 at a fixed x — a panel lying
+      // in the y-z plane, which is a panel on an EAST OR WEST wall — and the
+      // axis was hardcoded. The three corridors are on such walls and came out
+      // right. The brig's three detention fields are on its aft bulkhead, and
+      // came out rotated ninety degrees: each spanned z from 2.0 to 2.8 in a
+      // room whose wall is at 2.6, so half of every field was outside the room
+      // inside the bulkhead and the half still in the cell block was edge-on to
+      // anybody standing in it.
+      //
+      // Every prop in the ship has declared a `facing` all along — the
+      // corridors -PI/2, the brig 0 — and nothing had ever read one.
+      //
+      // `facing` is the direction the panel looks INTO the room. The inward
+      // normal is (sin, -cos): at -PI/2 that is (-1, 0), which reproduces the
+      // old hardcoded offset on an east wall exactly, and at 0 it is (0, -1),
+      // which is what the brig needs. The tangent is perpendicular to it, and
+      // carries the same 0.8 m span the panel always had.
+      const th = prop.facing ?? 0;
+      const nx = Math.sin(th); const nz = -Math.cos(th);
+      const tx = Math.cos(th); const tz = Math.sin(th);
+      const px = x + nx * 0.02; const pz = z + nz * 0.02;
+      const a = vec3(px - tx * 0.4, 1.1, pz - tz * 0.4);
+      const b = vec3(px + tx * 0.4, 1.1, pz + tz * 0.4);
+      const c = vec3(px + tx * 0.4, 1.7, pz + tz * 0.4);
+      const d = vec3(px - tx * 0.4, 1.7, pz - tz * 0.4);
+      glow.quad(a, b, c, d, PALETTE.panelTurquoise);
       break;
+    }
 
     default:
       if (prop.solid) {

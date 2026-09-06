@@ -22,10 +22,13 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { Game } from '../src/core/state.js';
+import { roomMeshes } from '../src/gfx/room.js';
+import { Walker } from '../src/sim/walk.js';
 import { EPISODES, EPISODE_BY_ID } from '../src/missions/episodes/index.js';
-import { ROOMS } from '../src/world/interiors.data.js';
+import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
 
 const game = (seed = 4n) => new Game({ seed, crewMode: 'original' });
 
@@ -294,6 +297,129 @@ describe('the panel and the engine give one answer', () => {
         if (Object.prototype.hasOwnProperty.call(stage, 'system') && stage.system) {
           assert.ok(!ROOMS[stage.system], `${ep.id}/${sid}: system "${stage.system}" is a room`);
         }
+      }
+    }
+  });
+});
+
+// ================= the fields every prop declares, and nobody was reading
+
+describe('a prop is drawn the way it says it is', () => {
+  /** The wallpanel quads: glow geometry in the band the panel occupies. */
+  const panelExtent = (roomId) => {
+    const m = roomMeshes(roomId).glow;
+    const f = m.stride / 4;
+    let minX = Infinity; let maxX = -Infinity;
+    let minZ = Infinity; let maxZ = -Infinity; let n = 0;
+    for (let i = 0; i < m.vertexCount; i++) {
+      const o = i * f;
+      const y = m.data[o + 1];
+      // The panel's own two heights, exactly. A band catches whatever else the
+      // room has glowing at chest height — the brig has three other pieces of
+      // it — and an extent taken over those measures the room, not the panel.
+      // Float32 in the buffer, so this compares with a tolerance rather than
+      // for equality.
+      if (Math.abs(y - 1.1) > 1e-3 && Math.abs(y - 1.7) > 1e-3) continue;
+      n++;
+      minX = Math.min(minX, m.data[o]); maxX = Math.max(maxX, m.data[o]);
+      minZ = Math.min(minZ, m.data[o + 2]); maxZ = Math.max(maxZ, m.data[o + 2]);
+    }
+    return { n, minX, maxX, minZ, maxZ };
+  };
+
+  test('a wall panel is inside the room it is mounted in', () => {
+    // `case 'wallpanel'` drew a quad spanning z-0.4 to z+0.4 at a fixed x — a
+    // panel on an east or west wall — with the axis hardcoded. The brig's three
+    // detention fields are on its aft bulkhead, so each spanned z from 2.0 to
+    // 2.8 in a room whose wall is at 2.6: half of every field was outside the
+    // room, inside the bulkhead.
+    for (const room of ROOM_LIST) {
+      const panels = (room.props ?? []).filter((p) => p.kind === 'wallpanel');
+      if (!panels.length) continue;
+      const hw = room.shape.width / 2;
+      const hd = room.shape.depth / 2;
+      const e = panelExtent(room.id);
+      assert.ok(e.n > 0, `${room.id}: no panel geometry at all`);
+      assert.ok(e.maxX <= hw + 1e-4 && e.minX >= -hw - 1e-4,
+        `${room.id}: a wall panel reaches x ${e.minX.toFixed(2)}..${e.maxX.toFixed(2)} in a room ${hw * 2} across`);
+      assert.ok(e.maxZ <= hd + 1e-4 && e.minZ >= -hd - 1e-4,
+        `${room.id}: a wall panel reaches z ${e.minZ.toFixed(2)}..${e.maxZ.toFixed(2)} in a room ${hd * 2} deep`);
+    }
+  });
+
+  test('and it is turned by the facing its own entry declares', () => {
+    // The data was right the whole time: the corridors declare -PI/2 and the
+    // brig declares 0, and the builder never asked. Tested on the OUTCOME
+    // rather than by calling the builder — the brig's panels are on its aft
+    // bulkhead, so with the facing read they run across the room in x and sit
+    // at one z; with it ignored they run in z and punch through the wall.
+    const brig = ROOMS.brig;
+    const panels = (brig.props ?? []).filter((p) => p.kind === 'wallpanel');
+    assert.equal(panels.length, 3, 'the detention fields are gone');
+    const e = panelExtent('brig');
+    assert.ok(e.maxX - e.minX > 2.5,
+      `the detention fields do not run along the bulkhead: x spans ${(e.maxX - e.minX).toFixed(2)}`);
+    assert.ok(e.maxZ - e.minZ < 0.9,
+      `the detention fields still run into the bulkhead: z spans ${(e.maxZ - e.minZ).toFixed(2)}`);
+    // And they are proud of the wall, on the room side of it.
+    assert.ok(e.maxZ < brig.shape.depth / 2,
+      `a detention field is flush with or through the bulkhead at z ${e.maxZ}`);
+  });
+
+  test('and the corridors did not move', () => {
+    // They were already right — on east walls, with the facing that matches the
+    // orientation the old code hardcoded. A change that fixes the brig by
+    // turning everything ninety degrees would break these instead.
+    const e = panelExtent('corridor_a');
+    assert.ok(Math.abs(e.minX - 1.13) < 1e-4 && Math.abs(e.maxX - 1.13) < 1e-4,
+      `corridor_a's panel left the wall: x ${e.minX}..${e.maxX}`);
+    assert.ok(Math.abs(e.minZ - 2.6) < 1e-4 && Math.abs(e.maxZ - 3.4) < 1e-4,
+      `corridor_a's panel changed span: z ${e.minZ}..${e.maxZ}`);
+  });
+});
+
+describe('and told to the captain standing in front of it', () => {
+  test('every labelled prop can be named from where it stands', () => {
+    // Forty-three props, every one of them carrying a label, and nothing had
+    // ever read one. A station or an exit still answers FIRST — the crosshair
+    // must agree with the button under it — so a prop inside a console's reach
+    // is legitimately named by the console.
+    const missed = [];
+    for (const room of ROOM_LIST) {
+      for (const p of room.props ?? []) {
+        if (!p.label) continue;
+        const w = new Walker({ roomId: room.id, x: p.at[0], z: p.at[1] });
+        w.step({}, 1 / 30);
+        if (w.naming === p) continue;
+        // Allowed only when something operable is in reach and answers first.
+        if (w.atStation || w.atExit) continue;
+        missed.push(`${room.id}/${p.kind} "${p.label}"`);
+      }
+    }
+    assert.deepEqual(missed, [], 'a prop with a name nobody can be told');
+  });
+
+  test('and the crosshair is the thing that reads it', () => {
+    // The accessor existing is not the accessor being used. `firstperson.js` is
+    // DOM-bound and cannot be imported here, so this reads it as text the way
+    // the rest of the suite does — without this, the whole naming path could be
+    // unwired from the reticle and every other check here would still pass.
+    const fp = readFileSync(new URL('../src/ui/firstperson.js', import.meta.url), 'utf8');
+    const at = fp.indexOf('drawReticle');
+    const body = at > 0 ? fp.slice(at, at + 2600) : fp;
+    assert.ok(/walker\.naming/.test(body), 'the reticle does not ask what it is looking at');
+  });
+
+  test('but naming a thing never makes it operable', () => {
+    // `looking` drives `useWhatIsInFront` and the Use button. A bunk is not a
+    // console, and offering "Use a cell bunk" is the shape of the vent that
+    // read "Open this console" until it was caught.
+    for (const room of ROOM_LIST) {
+      for (const p of room.props ?? []) {
+        const w = new Walker({ roomId: room.id, x: p.at[0], z: p.at[1] });
+        w.step({}, 1 / 30);
+        assert.ok(!(room.props ?? []).includes(w.looking),
+          `${room.id}: ${p.label ?? p.kind} is offered as something to use`);
       }
     }
   });
