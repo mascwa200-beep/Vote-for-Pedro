@@ -6812,6 +6812,96 @@ from reading two files — and simply not what was happening. Reading the source
 generates hypotheses; only the measurement closes them.
 
 
+## 81. The door that was only there from one side
+
+Seventeen rooms, and one of them had a doorway you could walk through in one
+direction only.
+
+### Found by comparing a table with itself
+
+The sweep was a single question asked of `interiors.data.js`: **for every room,
+does the set of rooms it exits to match the set of rooms that exit to it?** Every
+room in the ship answered yes except one.
+
+| room | exits to | entered from |
+| --- | --- | --- |
+| sickbay | corridor_a | corridor_a |
+| armoury | corridor_sec | corridor_sec |
+| cargo | corridor_sec, hangar | corridor_sec, hangar |
+| hangar | cargo, turbolift | turbolift, cargo |
+| **transporter** | **turbolift** | **turbolift, corridor_sec** |
+
+`corridor_sec` had always carried a door labelled "Transporter Room". The
+transporter room had no door back. You walked in, and the doorway behind you was
+a wall.
+
+Stated as the thing a player would feel, every other room hanging off a corridor
+is **two hops out and two back**. This one was two out and **three back** — and
+the extra hop was a turbolift ride from deck 7 to deck 7.
+
+### Why the guard that exists could not see it
+
+`tests/walk.test.js` already asserts *"every room is reachable from every
+other"*, and it passed — correctly. `connectivity()` is all-pairs and follows
+`exits` directionally, so it asks whether a route exists, and one did: out
+through the lift and back down the corridor. **The ship was strongly connected
+and still wrong.**
+
+Reachability is the wrong question for this. A doorway is one opening cut
+through one wall: it is in both rooms or it is in neither, and that is a
+statement about reciprocity, not about routes. The new guard asserts exactly
+that, and a second states the consequence — a room off a corridor is no further
+from it than it is to it.
+
+Two doors is not itself an anomaly, which is what settled the fix. The hangar
+has had a lift door and a neighbour door the whole time, both two-way. The
+transporter now matches it.
+
+### The second guard was blind to its own bug, and the control said so
+
+Written the obvious way — walk each room, find its corridor door, compare hops
+out and back — the hop guard **passed on the control**. The room with the
+missing door has no corridor exit to iterate, so the guard examined it **zero
+times** and reported green. Rewritten to walk from the CORRIDOR's side, which is
+the side that knows the door is supposed to be there, it fails as it should.
+
+**A guard that enumerates from the broken side cannot see a thing that is
+missing.** It is the same shape as the list-that-vouches-for-its-own-
+completeness in earlier sections: the absent case is never the case that gets
+checked. Only the control exposed it — the guard read perfectly well, passed on
+the real code, and would have shipped as coverage that covered nothing.
+
+### And an existing guard caught the fix
+
+The first placement mirrored the lift door at `[3.1, -1.6]`, and
+`tests/occupancy.test.js` failed it: the route to that doorway passes **0.16 m**
+from the transporter console, which is through whoever is standing at it. Moved
+forward beside the pads to `[3.1, 0.6]`.
+
+That one is worth recording as the counterweight to the rest of this dossier.
+The suite is usually the thing that fails to see a defect; here it saw one being
+introduced, in a file the change had no reason to think about.
+
+### A dead lead, recorded
+
+The sweep that led here started somewhere else and found nothing. Measuring the
+hull fraction at which each hostile class actually breaks off against the
+declared `base * ARCHETYPE_NERVE`, **every class in the game fled well below its
+own threshold** — a freighter meant to run at 0.20 fought to 0.027, a Tholian
+declared at 0.32 to 0.156. It looked like a systematic defect across eighteen
+classes.
+
+It is not. Tracing the tick the flag flips against the first tick the hull went
+below the threshold, **the lag is exactly one frame in every case**. The hull
+crosses the threshold and lands far below it *within a single tick*, because a
+Sovereign's salvo takes a freighter from 0.20 to 0.027 at once. The flee logic
+is correct and the apparent overshoot is burst damage.
+
+Recorded because the aggregate looked damning and the per-event trace exonerated
+it: **an average over crossings tells you nothing about whether the crossing was
+handled.**
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

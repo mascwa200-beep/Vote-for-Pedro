@@ -64,6 +64,50 @@ describe('the ship is a coherent place', () => {
     assert.deepEqual(misplaced, []);
   });
 
+  test('a door is a door from both sides', () => {
+    // `connectivity()` is all-pairs and directional, and it PASSED on a
+    // one-way door for the life of that door — because there was another way
+    // round. `corridor_sec` had a door labelled "Transporter Room" and the
+    // transporter room had no door back, so you walked in and the doorway
+    // behind you was a wall; the way out was a turbolift ride from deck 7 to
+    // deck 7. Strongly connected, and still wrong.
+    //
+    // Reachability cannot see this. Reciprocity can: a doorway is one opening
+    // cut through one wall, and it is in both rooms or it is in neither.
+    const oneWay = [];
+    for (const room of ROOM_LIST) {
+      for (const e of room.exits ?? []) {
+        const back = (ROOMS[e.to]?.exits ?? []).some((b) => b.to === room.id);
+        if (!back) oneWay.push(`${room.id} -> ${e.to}, with no door back`);
+      }
+    }
+    assert.deepEqual(oneWay, []);
+  });
+
+  test('a room off a corridor is no further from it than any other', () => {
+    // The consequence, stated as the thing a player would actually feel. Every
+    // room hanging off a corridor is the same distance back to it as out to
+    // it. Measured before the fix: two hops out and three back, for exactly
+    // one room in the ship.
+    //
+    // Walked from the CORRIDOR's side, not the room's. Asking each room about
+    // its own corridor door is blind to precisely this bug: the room with the
+    // missing door has no corridor exit to iterate, so the guard examines it
+    // zero times and passes. The corridor is the side that knows the door is
+    // supposed to be there.
+    for (const corridor of ROOM_LIST.filter((r) => r.id.startsWith('corridor'))) {
+      for (const e of corridor.exits ?? []) {
+        if (e.to === 'turbolift') continue;
+        const out = route(corridor.id, e.to) ?? [];
+        const back = route(e.to, corridor.id) ?? [];
+        assert.ok(out.length > 0 && back.length > 0,
+          `no route between ${corridor.id} and ${e.to}`);
+        assert.equal(back.length, out.length,
+          `${e.to} is ${out.length} hops from ${corridor.id} and ${back.length} back`);
+      }
+    }
+  });
+
   test('every room is reachable from every other', () => {
     // A ship with an unreachable deck is a bug that only shows up when
     // somebody tries to go there, which on a five-year commission could be
