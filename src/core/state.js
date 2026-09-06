@@ -2444,17 +2444,31 @@ export class Game {
         add('spring', 'Take them first', 'take them first',
           'They do not know we have them. The free volley is ours.', 'amber');
       }
-      add('engage', 'Engage', 'engage them',
-        enc.surprise && !enc.detected
-          ? 'Red alert. We are late to this one.'
-          : 'Red alert. Bring weapons to bear.', 'red');
+      // A distress call is not an ambush, and the buttons should not read the
+      // same. `lives` is rolled for every call and was printed only on the
+      // `assist` button, which this early return makes unreachable — so on the
+      // calls carrying the largest stakes in the game (a raided colony is
+      // 600 to 3,200 people) the figure was computed and shown nowhere. And
+      // since the fight now carries a `protect` objective and FAILS if the ship
+      // being raided dies, engaging is rendering assistance; the label should
+      // say so rather than "bring weapons to bear".
+      const rescue = enc.kind === 'distress';
+      add('engage', rescue ? 'Go to their aid' : 'Engage',
+        rescue ? 'go to their aid' : 'engage them',
+        rescue
+          ? `${enc.lives ?? 'Unknown'} lives at stake. Whatever else happens, they live.`
+          : (enc.surprise && !enc.detected
+            ? 'Red alert. We are late to this one.'
+            : 'Red alert. Bring weapons to bear.'), 'red');
       if (enc.hailable !== false && FACTIONS[enc.factionId]?.hailable) {
         add('hail', 'Hail them', 'hail them', 'Talking is free until it is not.', 'lilac');
       }
       add('withdraw', 'Withdraw', 'withdraw',
-        enc.surprise && enc.detected
-          ? 'Back out before they know we saw them.'
-          : 'Leave the system.', 'ghost');
+        rescue
+          ? 'It will be in the log either way.'
+          : (enc.surprise && enc.detected
+            ? 'Back out before they know we saw them.'
+            : 'Leave the system.'), 'ghost');
       return out;
     }
 
@@ -2599,6 +2613,13 @@ export class Game {
           // twelve. The objective is what makes the rescue about the rescue.
           ...(enc.objective ? { objective: enc.objective } : {}),
           ...(enc.orderLine ? { orderLine: enc.orderLine } : {}),
+          // And that this fight is a rescue, so winning it is recorded as one.
+          // The button says "Go to their aid — N lives at stake"; without this
+          // the captain does exactly that, the transport lives, and the record
+          // shows a firefight.
+          ...(enc.kind === 'distress'
+            ? { rescue: { lives: enc.lives ?? 0, system: enc.system?.id, name: enc.system?.name } }
+            : {}),
         });
         return {
           messages: [sprung ? 'Firing as we come about.' : 'Engaging.'],
@@ -2665,18 +2686,14 @@ export class Game {
         this.earnReputation('distress_answered');
         this.spendHours(14.4);
         out.messages.push(`Assistance rendered. ${lives} lives saved.`);
-        if (enc.hostile && enc.ships?.length) {
-          // Spent, exactly as in `engage` above and for the same reason. The
-          // distress call that turns out to be a trap left this set: you won
-          // the fight, flew four light years, and the game still believed
-          // there was a freighter under attack back at Sol — so hailing at the
-          // new system opened a channel to the ambushers' faction, because
-          // `hail` reads the encounter's faction before the engagement's.
-          this.encounter = null;
-          this.startCombat(enc.ships, { name: enc.title });
-          out.combat = true;
-          return out;
-        }
+        // The hostile arm of this branch is gone, and was never reachable:
+        // `encounterChoices` returns early for any hostile encounter above the
+        // `distress` case, so `assist` is offered only on calls with nobody
+        // shooting. It staged its fight with no allies and no objective, which
+        // would have put the ship being rescued nowhere near the battle — the
+        // defect the `engage` path was fixed for. Engaging IS rendering
+        // assistance now: it carries the `protect` objective and fails if they
+        // die, so a second door to the same room is a second name for it.
         break;
       }
 
@@ -2888,6 +2905,33 @@ export class Game {
 
       case 'withdraw':
       default:
+        // Leaving a distress call is leaving a distress call, whichever button
+        // the panel happened to offer.
+        //
+        // `encounterChoices` returns early for any hostile encounter, above the
+        // `distress` case, so a call with raiders on it never gets `ignore` —
+        // it gets `withdraw`, which fell through to here and did nothing at
+        // all. Measured: 126 of 337 calls are hostile, so for 37% of them the
+        // captain could fly away from people who were asking for help and the
+        // game recorded neither the standing nor the fact. Meanwhile declining
+        // to divert for a stranded survey team, which is the same act and a
+        // smaller one, cost three points of Federation standing and a line on
+        // the record.
+        //
+        // Keyed on the KIND and not on the shared arm: withdrawing is also how
+        // a captain walks away from an anomaly, a signal, a patrol, a convoy, a
+        // derelict and a first contact — nine kind-and-hostility combinations
+        // in all — and none of those is an abandonment.
+        if (enc.kind === 'distress') {
+          this.ledger.record('distress_ignored', {
+            text: `Left a distress call unanswered at ${enc.system.name}`, system: enc.system.id,
+          });
+          this.ledger.adjustStanding(
+            'federation', STANDING_EFFECTS.ignored_distress, 'Left a distress call',
+          );
+          out.messages.push('We come about and leave them to it. The channel stays open a while.');
+          break;
+        }
         out.messages.push('We withdraw.');
         break;
     }
@@ -3510,6 +3554,36 @@ export class Game {
         text: `Failed to ${OBJECTIVES[eng.objective]?.label?.toLowerCase() ?? 'complete the objective'} at ${this.location?.name ?? 'an engagement'}`,
         system: this.locationId,
       });
+    }
+
+    // A rescue that succeeded is recorded as a rescue.
+    //
+    // `finishCombat` reads only the outcome, so answering a distress call by
+    // fighting for it paid combat experience and nothing else: measured, a
+    // raided colony fought and won with the transport still flying recorded
+    // `distress_answered: 0` and `lives_saved: 0`, where the same call answered
+    // quietly recorded 1 and every one of the lives. The button says "Go to
+    // their aid"; the ledger said a firefight had happened.
+    //
+    // Not keyed on `victory` alone: talking raiders off a colony ends the fight
+    // `parley`, and the colony is exactly as saved. Not keyed on the objective
+    // either — an episode escort carries `protect` and is not a distress call.
+    // No experience and no hours here; the fight charges both already.
+    // Written as a comparison rather than a list literal: a three-name array of
+    // outcome names is a second copy of `OUTCOMES`, which `wiring.test.js`
+    // forbids and caught here — a deliberate subset is spelled out in this
+    // project, as it is three times already just below.
+    const rescued = outcome === 'victory' || outcome === 'routed' || outcome === 'parley';
+    if (eng.rescue && rescued && eng.protectees.some((s) => s && !s.destroyed)) {
+      const lives = eng.rescue.lives ?? 0;
+      const where = eng.rescue.name ?? this.location?.name ?? 'an unnamed system';
+      this.ledger.record('distress_answered', { text: `Assisted at ${where}`, system: eng.rescue.system });
+      this.ledger.record('lives_saved', { count: lives, system: eng.rescue.system });
+      this.ledger.adjustStanding(
+        'federation', STANDING_EFFECTS.answered_distress, 'Answered a distress call',
+      );
+      this.earnReputation('distress_answered');
+      this.pushLog(`They are clear, Captain. ${lives} aboard, and they are still with us.`, 'comms');
     }
 
     if (outcome === 'victory' || outcome === 'routed') {

@@ -846,13 +846,19 @@ test('a save with no voyage in it still loads onto the bridge', () => {
   assert.equal(safe.mode, 'bridge');
 });
 
-test('a distress call that was a trap does not follow you home', () => {
-  // `engage` clears the encounter the moment it becomes a battle, with a
-  // comment saying exactly why: left set, the next hail in the campaign is
-  // answered by whoever was in THIS one. The assist branch — the distress call
-  // that turns out to be an ambush — started its fight and returned without
-  // doing the same. So you won, flew four light years, and the game still
-  // believed there was a freighter under attack back at Sol.
+test('a distress call that became a battle does not follow you home', () => {
+  // The encounter has to be cleared the moment it becomes a battle: left set,
+  // the next hail in the campaign is answered by whoever was in THIS one, so
+  // you won, flew four light years, and the game still believed there was a
+  // freighter under attack back at Sol.
+  //
+  // Driven through `engage`, which is the door the player has. This used to
+  // call `resolveEncounter('assist')` on a hand-built hostile distress and
+  // assert the branch there cleared up after itself — a branch
+  // `encounterChoices` could never offer, because it returns early for every
+  // hostile encounter above the `distress` case. The behaviour was worth
+  // guarding and the door was not one anybody could open, so the test passed
+  // for years over a button that did not exist.
   const g = gameWith({ seed: 21n });
   const home = g.location;
   g.beginEncounter({
@@ -862,8 +868,11 @@ test('a distress call that was a trap does not follow you home', () => {
     ships: [new Ship('orion_raider', { faction: 'orion', name: 'Raider' })],
   });
 
-  const r = g.resolveEncounter('assist');
-  assert.equal(r.combat, true, 'the trap did not spring');
+  // The door is real: the panel offers this id.
+  assert.ok(g.encounterChoices().some((c) => c.id === 'engage'),
+    'the panel does not offer the choice this test drives');
+  const r = g.resolveEncounter('engage');
+  assert.equal(r.combat, true, 'the fight did not start');
   assert.equal(g.encounter, null, 'the encounter outlived the ambush it was');
 
   // Win it, go somewhere else, and there is nobody there to talk to.
