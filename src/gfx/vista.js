@@ -209,11 +209,20 @@ export function vistaFor(systemId, type = 'colony') {
       // the viewer's width. The first pass used a third of these and every
       // world came out a pea.
       radius: dist * (kind === 'gas' ? 0.26 : kind === 'moon' ? 0.11 : 0.18),
-      // The body palette in scene.js is mid-tone, and mid-tone under a 0.22
-      // ambient with the key light coming from above reads as near-black on a
-      // phone. The lift is applied here rather than in the palette because the
-      // same meshes are lit differently everywhere else they are used.
-      tint: [1.5, 1.5, 1.5],
+      // Which world this is, of the eight the mesh builder can make.
+      //
+      // Hardcoded to 0 at both draw sites until now, so every planet in the
+      // galaxy was the same planet. Hashed from the system and the index rather
+      // than drawn from `rnd` ON PURPOSE: a new draw here would shift the
+      // stream and re-place every body in every system. This consumes nothing,
+      // so the sky is where it always was and only its surfaces changed.
+      seed: Number(hashSeed(`${systemId}:world:${i}`) & 7n),
+      // No lift. It used to be [1.5, 1.5, 1.5] — a mid-tone palette pushed past
+      // 1.0 on all three channels, which clipped light-coloured worlds toward
+      // white and flattened the terminator that is the whole cue for a sphere.
+      // The bodies are lit from the system's own primary now, so there is
+      // nothing to compensate for.
+      tint: [1, 1, 1],
       emissive: 0,
       // A slow roll so a parked ship is not a still photograph. Purely visual;
       // nothing in the simulation reads it.

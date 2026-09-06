@@ -156,27 +156,22 @@ export function warpfield(count = 230) {
   });
 }
 
-/** A star or planet. `kind` picks the palette; `seed` varies the banding. */
+/**
+ * A world in the sky. `kind` picks the palette; `seed` picks which world.
+ *
+ * The same globe the orbital view uses, sampled coarsely — see `globe` below.
+ * It was twelve latitude stripes of flat colour until the field that was
+ * already here was pointed at it; the triangle count is unchanged at 440, which
+ * is what keeps four of them inside the scenery budget.
+ *
+ * `seed` was hardcoded to 0 at both call sites, so every planet of a kind was
+ * the same planet in every system. It is real now — and note that the DRAW KEY
+ * has to carry it too: `Renderer.upload` caches the GPU buffer by key alone and
+ * ignores the mesh it is handed, so two seeds under one key would silently
+ * share one buffer and draw as twins.
+ */
 export function bodyMesh(kind = 'planet', seed = 0) {
-  return memo(`body:${kind}:${seed & 7}`, () => {
-    const mb = new MeshBuilder();
-    const palettes = {
-      star: [1.0, 0.86, 0.5],
-      planet: [0.34, 0.48, 0.66],
-      desert: [0.7, 0.56, 0.36],
-      ice: [0.74, 0.84, 0.92],
-      gas: [0.66, 0.56, 0.42],
-      moon: [0.5, 0.5, 0.52],
-    };
-    sphere(mb, {
-      radius: 1,
-      segments: 20,
-      rings: 12,
-      color: palettes[kind] ?? palettes.planet,
-      banding: kind === 'star' ? 0 : 0.35,
-    });
-    return mb;
-  });
+  return memo(`body:${kind}:${seed & 7}`, () => globe(kind, seed, 20, 12, true));
 }
 
 /**
@@ -327,10 +322,16 @@ function valueNoise(x, y, z, seed) {
   );
 }
 
-/** Four octaves, halving amplitude. Enough for coastlines that are not circles. */
-function terrain(x, y, z, seed, freq = 2.4) {
+/**
+ * Four octaves, halving amplitude. Enough for coastlines that are not circles.
+ *
+ * The octave count is a parameter because the same field is now sampled at two
+ * resolutions. Detail finer than one facet is not detail, it is noise — see
+ * `COARSE` below.
+ */
+function terrain(x, y, z, seed, freq = 2.4, octaves = 4) {
   let sum = 0; let amp = 1; let norm = 0; let f = freq;
-  for (let o = 0; o < 4; o++) {
+  for (let o = 0; o < octaves; o++) {
     sum += valueNoise(x * f, y * f, z * f, seed + o * 7919) * amp;
     norm += amp;
     amp *= 0.5;
@@ -350,15 +351,40 @@ const SURFACE = {
   star: [[1.0, 0.72, 0.30], [1.0, 0.82, 0.42], [1.0, 0.90, 0.58], [1.0, 0.96, 0.78]],
 };
 
+/**
+ * How much to slow the field down when the facets are big.
+ *
+ * The frequencies below were chosen for a globe seen from orbit at 56 by 28,
+ * where a facet is about 6.4°. A world in the sky is drawn at 20 by 12, where a
+ * facet covers nearly three times as much of the sphere — and a feature smaller
+ * than a facet is not a feature, it is a facet with an arbitrary colour.
+ *
+ * Measured, by counting how often two laterally adjacent facets land in
+ * different elevation bands:
+ *
+ *   orbit globe 56x28, freq 2.4, 4 octaves    26.4%   <- the look to match
+ *   sky body   20x12, freq 2.4, 4 octaves     53.3%   <- confetti
+ *   sky body   20x12, scaled by 0.42, 2 oct   24.6%   <- coastlines again
+ *
+ * So this is not a taste constant: it is the factor that makes a distant world
+ * as coherent as the one you are in orbit around, and the test asserts the two
+ * against each other rather than against either number.
+ */
+const COARSE = 0.42;
+
 /** Ice at the poles, cloud on top, banding on a gas giant. */
-function surfaceColor(kind, nx, ny, nz, seed) {
+function surfaceColor(kind, nx, ny, nz, seed, coarse = false) {
   const bands = SURFACE[kind] ?? SURFACE.planet;
+  // Every frequency scales together, so a coarse world is the same world seen
+  // with less detail rather than a differently-shaped one.
+  const k = coarse ? COARSE : 1;
+  const oct = coarse ? 2 : 4;
   // A gas giant has no surface to have relief: its colour is latitude, pushed
   // sideways by turbulence, which is what makes the bands wander instead of
   // being stripes.
   const e = kind === 'gas'
-    ? (Math.sin(ny * 11 + terrain(nx, ny, nz, seed, 1.6) * 3.4) * 0.5 + 0.5)
-    : terrain(nx, ny, nz, seed);
+    ? (Math.sin(ny * 11 + terrain(nx, ny, nz, seed, 1.6 * k, oct) * 3.4) * 0.5 + 0.5)
+    : terrain(nx, ny, nz, seed, 2.4 * k, oct);
 
   const i = e < 0.46 ? 0 : e < 0.54 ? 1 : e < 0.72 ? 2 : 3;
   const c = bands[i];
@@ -368,7 +394,7 @@ function surfaceColor(kind, nx, ny, nz, seed) {
   // circle drawn on the globe.
   if (kind !== 'gas' && kind !== 'star') {
     const lat = Math.abs(ny);
-    const edge = 0.68 + terrain(nx, ny, nz, seed + 4001, 5.5) * 0.22;
+    const edge = 0.68 + terrain(nx, ny, nz, seed + 4001, 5.5 * k, oct) * 0.22;
     if (lat > edge) {
       const t = Math.min(1, (lat - edge) / 0.2);
       r += (0.94 - r) * t; g += (0.96 - g) * t; b += (0.99 - b) * t;
@@ -379,7 +405,7 @@ function surfaceColor(kind, nx, ny, nz, seed) {
   // it is broken cloud and not overcast — an unbroken white world reads as an
   // ice world, which is a different thing the palette above already does.
   if (kind === 'planet' || kind === 'gas') {
-    const cloud = terrain(nx, ny, nz, seed + 9173, 3.1);
+    const cloud = terrain(nx, ny, nz, seed + 9173, 3.1 * k, oct);
     if (cloud > 0.56) {
       const t = Math.min(1, (cloud - 0.56) / 0.26) * 0.85;
       r += (0.92 - r) * t; g += (0.94 - g) * t; b += (0.96 - b) * t;
@@ -401,14 +427,38 @@ function surfaceColor(kind, nx, ny, nz, seed) {
  * inventing physics to decorate a picture.
  */
 export function worldMesh(kind = 'planet', seed = 0) {
-  return memo(`world:${kind}:${seed & 7}`, () => {
+  // 56 around and 28 down puts a facet at about 6.4°, which at the 21° disc
+  // this is seen as works out to roughly two degrees of frame per edge — the
+  // point where the silhouette stops reading as a polygon.
+  return memo(`world:${kind}:${seed & 7}`, () => globe(kind, seed, 56, 28, false));
+}
+
+/**
+ * One globe, at whichever resolution the distance deserves.
+ *
+ * This loop used to exist once, inside `worldMesh`, and served only the world
+ * you are in orbit around. The worlds in the SKY were a different thing
+ * entirely: `sphere(..., banding: 0.35)`, where `banding` is a single per-ring
+ * hash multiplier — twelve horizontal stripes of flat colour, standing in for
+ * "a texture, which this renderer has no way to load", as its own comment put
+ * it. The renderer could not load one and did not need to: the field that makes
+ * the orbital globe a world is a pure function of a unit normal and costs
+ * nothing to sample at any resolution.
+ *
+ * So there is one builder now and two callers, and the only thing that differs
+ * between a world overhead and a world across the system is how finely each is
+ * sampled — which is what `coarse` is for. Same field, same palettes, same
+ * winding, same triangle count as the stripes it replaces.
+ */
+function globe(kind, seed, SEG, RINGS, coarse) {
+  {
     const mb = new MeshBuilder();
-    // 56 around and 28 down puts a facet at about 6.4°, which at the 21° disc
-    // this is seen as works out to roughly two degrees of frame per edge — the
-    // point where the silhouette stops reading as a polygon.
-    const SEG = 56;
-    const RINGS = 28;
     const s = (seed & 7) * 1013 + 17;
+    // A star has no surface to have a surface. It is drawn emissive, so a noise
+    // field on it would be mottling on a light source rather than terrain, and
+    // at this distance a primary is a featureless disc. Its palette's brightest
+    // band, flat, is what it was before and what it stays.
+    const flat = kind === 'star' ? SURFACE.star[3] : null;
 
     for (let ring = 0; ring < RINGS; ring++) {
       const a0 = (ring / RINGS) * Math.PI;
@@ -429,7 +479,7 @@ export function worldMesh(kind = 'planet', seed = 0) {
         const my = (inner0[1] + outer1[1]) * 0.5;
         const mz = (inner0[2] + outer1[2]) * 0.5;
         const len = Math.hypot(mx, my, mz) || 1;
-        const color = surfaceColor(kind, mx / len, my / len, mz / len, s);
+        const color = flat ?? surfaceColor(kind, mx / len, my / len, mz / len, s, coarse);
         // Wound so the face points AWAY from the centre — round the ring first
         // and outward second. Culling is on: get this backwards and the planet
         // is not dark, it is absent.
@@ -443,7 +493,7 @@ export function worldMesh(kind = 'planet', seed = 0) {
       }
     }
     return mb;
-  });
+  }
 }
 
 /**

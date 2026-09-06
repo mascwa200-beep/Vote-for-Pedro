@@ -6051,6 +6051,106 @@ inapplicable to a convex exterior seen from outside. The codebase had already
 answered the question; the sweep only had to read the answer.
 
 
+## 73. The worlds in the sky, and a field that was already here
+
+§72 found a shading channel built and connected to nothing. This is the other
+half of the same stretch and a different shape of defect: **two things that do
+the same job, one of them good, and the good one wired to only one caller.**
+
+`worldMesh` — the planet you are in orbit around — is built from a four-octave
+value-noise field with coastlines, ragged ice caps and broken cloud, sampled per
+quad from the facet's own normal. `bodyMesh` — every world in the sky, in every
+system — was `sphere(..., banding: 0.35)`, and `banding` is a **single per-ring
+hash multiplier**: twelve horizontal stripes of flat colour. Its own comment
+conceded it was standing in for "a texture, which this renderer has no way to
+load".
+
+It did not need one. `surfaceColor` is a **pure function of a unit normal**, so
+it can be sampled at any resolution for nothing. The two are one builder now,
+called at 56×28 and at 20×12, and the sky body's **triangle count is unchanged
+at 440** — which is what keeps four of them inside the scenery budget.
+
+### Detail finer than a facet is not detail
+
+The orbital frequencies are tuned for a 6.4° facet. A sky body's facets are
+nearly three times the area, and running the same field over them puts more than
+one feature inside a single flat-shaded quad. Counting how often two laterally
+adjacent facets land in different elevation bands:
+
+| | adjacent facets in different bands |
+| --- | --- |
+| orbital globe 56×28, freq 2.4, 4 octaves | **26.4%** ← the look to match |
+| sky body 20×12, same frequencies | 53.3% |
+| sky body 20×12, scaled by 0.42, 2 octaves | **24.6%** |
+
+So the coarsening factor is not a taste constant: it is what makes a world
+across the system as coherent as the one overhead. The test asserts the two
+meshes **against each other** rather than against either number.
+
+### Three things wrong in one place
+
+**The lift.** Every sky body carried `tint: [1.5, 1.5, 1.5]` — a mid-tone
+palette multiplied past 1.0 on all three channels. For an ice world that is an
+albedo of **1.38 before any light fell on it**, so the lit half was pinned to
+white and the terminator, the one cue that a disc is a sphere, could not be seen.
+It is gone, and the bodies are lit from the system's own primary instead — the
+terminator is not drawn, it is where aiming the light at the actual star puts it.
+
+**The seed.** `bodyMesh` memoizes on `seed & 7`, so eight worlds of each kind
+were available. Both draw sites passed `0`. Every planet in the galaxy was the
+same planet. It is hashed per system and per index now, and **deliberately not
+drawn from the vista's own stream** — a new draw there would shift every
+subsequent placement and move every body in every system. This consumes nothing,
+so the sky is exactly where it was and only its surfaces changed.
+
+**And the trap that would have made the seed do nothing.** Both call sites drew
+under the key `body:<kind>`, and `Renderer.upload` returns the cached GPU buffer
+**by key alone, ignoring the mesh it is handed**. Passing a real seed without
+putting it in the draw key would have uploaded the first planet of each kind and
+silently reused that buffer for all the others — correct-looking source, correct
+meshes, identical planets. Caught by reading `upload` before writing the change
+rather than after.
+
+### The instrument saturated before it discriminated
+
+The first coherence measurement counted how often two adjacent facets had
+*different colours at all*. It reported **68.5% for the sky body and 69.4% for
+the orbital globe** — nearly identical, and nearly saturated. That number cannot
+tell a coastline from confetti, because the continuous ice-cap and cloud blends
+give almost every facet its own exact colour whatever the frequency.
+
+What discriminates is the **size of the step** between neighbours, not whether
+there is one. On that measure the sky body sits at 1.12–1.34× the orbital
+globe's step despite facets three times the area, which is the claim worth
+making and the relation the guard asserts.
+
+**And the control is the mesh this replaced, built inside the test rather than
+described**: `banding` gives every facet in a ring the same shade, so its
+within-ring step is *exactly zero*. That is the definition of a stripe, and it is
+the number the new mesh has to not have.
+
+### What "do not make it worse" cost, and what it was worth
+
+The new palette runs from ocean to icecap, so its **mean** albedo is 0.62–0.68×
+the flat mid-tone it replaces. That is a real risk on a phone in daylight and it
+was measured rather than assumed: the same frozen frame rendered on both builds
+came out at **31.11 against 32.09** mean luminance — slightly *brighter*, not
+darker, because a proper terminator puts light where the flat version had a
+uniform wash and the peak bands reach further than the old mid-tone ever did.
+
+Nothing clips at either end now, where the ice world used to clip before it was
+lit.
+
+### And a preset that existed twice
+
+`beginFrame` set the vacuum lighting inline, and any pass that lights something
+differently has to put it back afterwards — which `drawVista` now does, because
+it runs **before** the hulls and without the restore every ship in the fight
+would be lit by whichever planet was drawn last. Two copies of four numbers is
+two places for the vacuum to drift apart from itself, so it is one exported
+object used by both.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

@@ -8096,6 +8096,22 @@ function link(gl, vertSrc, fragSrc) {
   }
   return program;
 }
+
+/**
+ * The lighting a scene in space gets when nothing asks for anything else.
+ *
+ * One hard sun and nothing to bounce off. It lives here, as one object, because
+ * `beginFrame` sets it at the top of every frame AND any pass that lights
+ * something differently has to be able to put it back afterwards — and two
+ * copies of four numbers is two places for the vacuum to drift apart from
+ * itself.
+ */
+const VACUUM_LIGHT = {
+  key: [0.55, 0.72, 0.42],
+  fill: [-0.6, -0.2, -0.5],
+  ambient: 0.22,
+  keyPower: 0.85,
+};
 class Renderer {
   /**
    * @returns {Renderer|null} null when WebGL is unavailable, which is a
@@ -8242,11 +8258,12 @@ class Renderer {
     this.triangles = 0;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.useProgram(this.program);
-    gl.uniform3f(this.uniform.key, 0.55, 0.72, 0.42);
-    gl.uniform3f(this.uniform.fill, -0.6, -0.2, -0.5);
     // Vacuum by default: one hard sun and nothing to bounce off.
-    gl.uniform1f(this.uniform.ambient, 0.22);
-    gl.uniform1f(this.uniform.keyPower, 0.85);
+    const { key, fill, ambient, keyPower } = VACUUM_LIGHT;
+    gl.uniform3f(this.uniform.key, key[0], key[1], key[2]);
+    gl.uniform3f(this.uniform.fill, fill[0], fill[1], fill[2]);
+    gl.uniform1f(this.uniform.ambient, ambient);
+    gl.uniform1f(this.uniform.keyPower, keyPower);
     this._gloss = 0;
     this._shine = 24;
     this._rim = 0;
@@ -8451,6 +8468,7 @@ class Renderer {
   }
 }
 
+__exports.VACUUM_LIGHT = VACUUM_LIGHT;
 __exports.Renderer = Renderer;
 
 });
@@ -11428,27 +11446,22 @@ function warpfield(count = 230) {
   });
 }
 
-/** A star or planet. `kind` picks the palette; `seed` varies the banding. */
+/**
+ * A world in the sky. `kind` picks the palette; `seed` picks which world.
+ *
+ * The same globe the orbital view uses, sampled coarsely — see `globe` below.
+ * It was twelve latitude stripes of flat colour until the field that was
+ * already here was pointed at it; the triangle count is unchanged at 440, which
+ * is what keeps four of them inside the scenery budget.
+ *
+ * `seed` was hardcoded to 0 at both call sites, so every planet of a kind was
+ * the same planet in every system. It is real now — and note that the DRAW KEY
+ * has to carry it too: `Renderer.upload` caches the GPU buffer by key alone and
+ * ignores the mesh it is handed, so two seeds under one key would silently
+ * share one buffer and draw as twins.
+ */
 function bodyMesh(kind = 'planet', seed = 0) {
-  return memo(`body:${kind}:${seed & 7}`, () => {
-    const mb = new MeshBuilder();
-    const palettes = {
-      star: [1.0, 0.86, 0.5],
-      planet: [0.34, 0.48, 0.66],
-      desert: [0.7, 0.56, 0.36],
-      ice: [0.74, 0.84, 0.92],
-      gas: [0.66, 0.56, 0.42],
-      moon: [0.5, 0.5, 0.52],
-    };
-    sphere(mb, {
-      radius: 1,
-      segments: 20,
-      rings: 12,
-      color: palettes[kind] ?? palettes.planet,
-      banding: kind === 'star' ? 0 : 0.35,
-    });
-    return mb;
-  });
+  return memo(`body:${kind}:${seed & 7}`, () => globe(kind, seed, 20, 12, true));
 }
 
 /**
@@ -11599,10 +11612,16 @@ function valueNoise(x, y, z, seed) {
   );
 }
 
-/** Four octaves, halving amplitude. Enough for coastlines that are not circles. */
-function terrain(x, y, z, seed, freq = 2.4) {
+/**
+ * Four octaves, halving amplitude. Enough for coastlines that are not circles.
+ *
+ * The octave count is a parameter because the same field is now sampled at two
+ * resolutions. Detail finer than one facet is not detail, it is noise — see
+ * `COARSE` below.
+ */
+function terrain(x, y, z, seed, freq = 2.4, octaves = 4) {
   let sum = 0; let amp = 1; let norm = 0; let f = freq;
-  for (let o = 0; o < 4; o++) {
+  for (let o = 0; o < octaves; o++) {
     sum += valueNoise(x * f, y * f, z * f, seed + o * 7919) * amp;
     norm += amp;
     amp *= 0.5;
@@ -11622,15 +11641,40 @@ const SURFACE = {
   star: [[1.0, 0.72, 0.30], [1.0, 0.82, 0.42], [1.0, 0.90, 0.58], [1.0, 0.96, 0.78]],
 };
 
+/**
+ * How much to slow the field down when the facets are big.
+ *
+ * The frequencies below were chosen for a globe seen from orbit at 56 by 28,
+ * where a facet is about 6.4°. A world in the sky is drawn at 20 by 12, where a
+ * facet covers nearly three times as much of the sphere — and a feature smaller
+ * than a facet is not a feature, it is a facet with an arbitrary colour.
+ *
+ * Measured, by counting how often two laterally adjacent facets land in
+ * different elevation bands:
+ *
+ *   orbit globe 56x28, freq 2.4, 4 octaves    26.4%   <- the look to match
+ *   sky body   20x12, freq 2.4, 4 octaves     53.3%   <- confetti
+ *   sky body   20x12, scaled by 0.42, 2 oct   24.6%   <- coastlines again
+ *
+ * So this is not a taste constant: it is the factor that makes a distant world
+ * as coherent as the one you are in orbit around, and the test asserts the two
+ * against each other rather than against either number.
+ */
+const COARSE = 0.42;
+
 /** Ice at the poles, cloud on top, banding on a gas giant. */
-function surfaceColor(kind, nx, ny, nz, seed) {
+function surfaceColor(kind, nx, ny, nz, seed, coarse = false) {
   const bands = SURFACE[kind] ?? SURFACE.planet;
+  // Every frequency scales together, so a coarse world is the same world seen
+  // with less detail rather than a differently-shaped one.
+  const k = coarse ? COARSE : 1;
+  const oct = coarse ? 2 : 4;
   // A gas giant has no surface to have relief: its colour is latitude, pushed
   // sideways by turbulence, which is what makes the bands wander instead of
   // being stripes.
   const e = kind === 'gas'
-    ? (Math.sin(ny * 11 + terrain(nx, ny, nz, seed, 1.6) * 3.4) * 0.5 + 0.5)
-    : terrain(nx, ny, nz, seed);
+    ? (Math.sin(ny * 11 + terrain(nx, ny, nz, seed, 1.6 * k, oct) * 3.4) * 0.5 + 0.5)
+    : terrain(nx, ny, nz, seed, 2.4 * k, oct);
 
   const i = e < 0.46 ? 0 : e < 0.54 ? 1 : e < 0.72 ? 2 : 3;
   const c = bands[i];
@@ -11640,7 +11684,7 @@ function surfaceColor(kind, nx, ny, nz, seed) {
   // circle drawn on the globe.
   if (kind !== 'gas' && kind !== 'star') {
     const lat = Math.abs(ny);
-    const edge = 0.68 + terrain(nx, ny, nz, seed + 4001, 5.5) * 0.22;
+    const edge = 0.68 + terrain(nx, ny, nz, seed + 4001, 5.5 * k, oct) * 0.22;
     if (lat > edge) {
       const t = Math.min(1, (lat - edge) / 0.2);
       r += (0.94 - r) * t; g += (0.96 - g) * t; b += (0.99 - b) * t;
@@ -11651,7 +11695,7 @@ function surfaceColor(kind, nx, ny, nz, seed) {
   // it is broken cloud and not overcast — an unbroken white world reads as an
   // ice world, which is a different thing the palette above already does.
   if (kind === 'planet' || kind === 'gas') {
-    const cloud = terrain(nx, ny, nz, seed + 9173, 3.1);
+    const cloud = terrain(nx, ny, nz, seed + 9173, 3.1 * k, oct);
     if (cloud > 0.56) {
       const t = Math.min(1, (cloud - 0.56) / 0.26) * 0.85;
       r += (0.92 - r) * t; g += (0.94 - g) * t; b += (0.96 - b) * t;
@@ -11673,14 +11717,38 @@ function surfaceColor(kind, nx, ny, nz, seed) {
  * inventing physics to decorate a picture.
  */
 function worldMesh(kind = 'planet', seed = 0) {
-  return memo(`world:${kind}:${seed & 7}`, () => {
+  // 56 around and 28 down puts a facet at about 6.4°, which at the 21° disc
+  // this is seen as works out to roughly two degrees of frame per edge — the
+  // point where the silhouette stops reading as a polygon.
+  return memo(`world:${kind}:${seed & 7}`, () => globe(kind, seed, 56, 28, false));
+}
+
+/**
+ * One globe, at whichever resolution the distance deserves.
+ *
+ * This loop used to exist once, inside `worldMesh`, and served only the world
+ * you are in orbit around. The worlds in the SKY were a different thing
+ * entirely: `sphere(..., banding: 0.35)`, where `banding` is a single per-ring
+ * hash multiplier — twelve horizontal stripes of flat colour, standing in for
+ * "a texture, which this renderer has no way to load", as its own comment put
+ * it. The renderer could not load one and did not need to: the field that makes
+ * the orbital globe a world is a pure function of a unit normal and costs
+ * nothing to sample at any resolution.
+ *
+ * So there is one builder now and two callers, and the only thing that differs
+ * between a world overhead and a world across the system is how finely each is
+ * sampled — which is what `coarse` is for. Same field, same palettes, same
+ * winding, same triangle count as the stripes it replaces.
+ */
+function globe(kind, seed, SEG, RINGS, coarse) {
+  {
     const mb = new MeshBuilder();
-    // 56 around and 28 down puts a facet at about 6.4°, which at the 21° disc
-    // this is seen as works out to roughly two degrees of frame per edge — the
-    // point where the silhouette stops reading as a polygon.
-    const SEG = 56;
-    const RINGS = 28;
     const s = (seed & 7) * 1013 + 17;
+    // A star has no surface to have a surface. It is drawn emissive, so a noise
+    // field on it would be mottling on a light source rather than terrain, and
+    // at this distance a primary is a featureless disc. Its palette's brightest
+    // band, flat, is what it was before and what it stays.
+    const flat = kind === 'star' ? SURFACE.star[3] : null;
 
     for (let ring = 0; ring < RINGS; ring++) {
       const a0 = (ring / RINGS) * Math.PI;
@@ -11701,7 +11769,7 @@ function worldMesh(kind = 'planet', seed = 0) {
         const my = (inner0[1] + outer1[1]) * 0.5;
         const mz = (inner0[2] + outer1[2]) * 0.5;
         const len = Math.hypot(mx, my, mz) || 1;
-        const color = surfaceColor(kind, mx / len, my / len, mz / len, s);
+        const color = flat ?? surfaceColor(kind, mx / len, my / len, mz / len, s, coarse);
         // Wound so the face points AWAY from the centre — round the ring first
         // and outward second. Culling is on: get this backwards and the planet
         // is not dark, it is absent.
@@ -11715,7 +11783,7 @@ function worldMesh(kind = 'planet', seed = 0) {
       }
     }
     return mb;
-  });
+  }
 }
 
 /**
@@ -12195,11 +12263,20 @@ function vistaFor(systemId, type = 'colony') {
       // the viewer's width. The first pass used a third of these and every
       // world came out a pea.
       radius: dist * (kind === 'gas' ? 0.26 : kind === 'moon' ? 0.11 : 0.18),
-      // The body palette in scene.js is mid-tone, and mid-tone under a 0.22
-      // ambient with the key light coming from above reads as near-black on a
-      // phone. The lift is applied here rather than in the palette because the
-      // same meshes are lit differently everywhere else they are used.
-      tint: [1.5, 1.5, 1.5],
+      // Which world this is, of the eight the mesh builder can make.
+      //
+      // Hardcoded to 0 at both draw sites until now, so every planet in the
+      // galaxy was the same planet. Hashed from the system and the index rather
+      // than drawn from `rnd` ON PURPOSE: a new draw here would shift the
+      // stream and re-place every body in every system. This consumes nothing,
+      // so the sky is where it always was and only its surfaces changed.
+      seed: Number(hashSeed(`${systemId}:world:${i}`) & 7n),
+      // No lift. It used to be [1.5, 1.5, 1.5] — a mid-tone palette pushed past
+      // 1.0 on all three channels, which clipped light-coloured worlds toward
+      // white and flattened the terminator that is the whole cue for a sphere.
+      // The bodies are lit from the system's own primary now, so there is
+      // nothing to compensate for.
+      tint: [1, 1, 1],
       emissive: 0,
       // A slow roll so a parked ship is not a still photograph. Purely visual;
       // nothing in the simulation reads it.
@@ -18571,7 +18648,7 @@ __define("src/ui/tactical3d.js", function (__exports, __require) {
 // ship assets.
 
 const { vec3, mat4, quat, identity, multiply, perspective, lookAt, compose, normalMatrix, quatFromEuler, quatAxisAngle, quatMultiply, project, sub, length: vlength, normalize, cross } = __require("src/gfx/math.js");
-const { Renderer } = __require("src/gfx/gl.js");
+const { Renderer, VACUUM_LIGHT } = __require("src/gfx/gl.js");
 const { hullMesh, hullScale, paletteFor, HULL_GLOSS, HULL_SHINE, HULL_RIM } = __require("src/gfx/blueprint.js");
 const { starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, arcMesh, VOLUME } = __require("src/gfx/scene.js");
 const { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } = __require("src/gfx/vista.js");
@@ -19167,6 +19244,9 @@ class TacticalView3D {
     const flen = Math.hypot(fx, fy, fz) || 1;
     fx /= flen; fy /= flen; fz /= flen;
 
+    // The primary. Everything else in the sky is lit by it.
+    const star = v.bodies.find((x) => x.kind === 'star') ?? null;
+
     let drawn = 0;
     for (const b of v.bodies) {
       if (drawn >= VISTA_DRAW_CAP) break;
@@ -19180,7 +19260,26 @@ class TacticalView3D {
       quatFromEuler(0, b.spin * this.vistaSpin, 0, this._quat);
       this._pos[0] = b.x; this._pos[1] = b.y; this._pos[2] = b.z;
       compose(this._pos, this._quat, b.radius, this._model);
-      this.renderer.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
+      // Lit by the system's own primary, so the terminator on a world out there
+      // is not drawn — it is where pointing the light at the actual star puts
+      // it. Same argument the orbit pass in firstperson.js already makes, and
+      // the reason the [1.5, 1.5, 1.5] lift in vista.js could go: that existed
+      // to rescue a mid-tone palette from a key aimed at nothing in particular,
+      // by multiplying every channel past 1.0 and clipping the bright half.
+      //
+      // Per body, because each one is somewhere different relative to the star.
+      // Four of them at most — VISTA_DRAW_CAP — so this is at worst four sets
+      // of uniform writes and not one extra draw call.
+      if (star && b !== star) {
+        this.renderer.setLighting({
+          key: [star.x - b.x, star.y - b.y, star.z - b.z],
+          fill: [b.x - star.x, b.y - star.y, b.z - star.z],
+          ambient: VACUUM_LIGHT.ambient,
+          keyPower: VACUUM_LIGHT.keyPower,
+          eye,
+        });
+      }
+      this.renderer.draw(`body:${b.kind}:${b.seed ?? 0}`, bodyMesh(b.kind, b.seed ?? 0), {
         model: this._model,
         normalMatrix: normalMatrix(this._model, this._normal),
         emissive: b.emissive,
@@ -19192,6 +19291,10 @@ class TacticalView3D {
       });
       drawn++;
     }
+    // Back to vacuum, and this is load-bearing rather than tidy: `drawVista`
+    // runs BEFORE the hulls in `render`, so without it every ship in the fight
+    // would be lit by whichever planet happened to be drawn last.
+    if (star && drawn) this.renderer.setLighting({ ...VACUUM_LIGHT, eye });
     this.stats.bodiesDrawn = drawn;
   }
 
@@ -20907,6 +21010,11 @@ class FirstPersonView {
     if (sys) {
       const v = vista(sys.id, sys.type);
       const ahead = world ? this._look : nose;
+      // The primary, which lights everything else out there. Same argument as
+      // the orbit pass above and as `drawVista` in tactical3d.js: the
+      // terminator on a world is not drawn, it is where aiming the light at the
+      // actual star puts it.
+      const star = v.bodies.find((x) => x.kind === 'star') ?? null;
       let drawn = 0;
       for (const b of v.bodies) {
         if (drawn >= 3) break;
@@ -20917,7 +21025,14 @@ class FirstPersonView {
         if ((dx * ahead[0] + dy * ahead[1] + dz * ahead[2]) / d < 0.2 - slack) continue;
         this._pos[0] = b.x; this._pos[1] = b.y; this._pos[2] = b.z;
         compose(this._pos, quat(), b.radius, this._model);
-        r.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
+        if (star && b !== star) {
+          r.setLighting({
+            key: [star.x - b.x, star.y - b.y, star.z - b.z],
+            fill: [b.x - star.x, b.y - star.y, b.z - star.z],
+            ambient: 0.20, keyPower: 0.9, eye,
+          });
+        }
+        r.draw(`body:${b.kind}:${b.seed ?? 0}`, bodyMesh(b.kind, b.seed ?? 0), {
           model: this._model,
           normalMatrix: normalMatrix(this._model, this._normal),
           emissive: emisOf(b.emissive),
@@ -20925,6 +21040,14 @@ class FirstPersonView {
           fogFar: 90000,
         });
         drawn++;
+      }
+      // Back to the screen's own vacuum preset before the hulls are drawn
+      // below, or the ships out there are lit by whichever planet came last.
+      if (star && drawn) {
+        r.setLighting({
+          key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
+          ambient: 0.20, keyPower: 0.9, gloss: 0, eye,
+        });
       }
     }
 

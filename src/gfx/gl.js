@@ -203,6 +203,22 @@ function link(gl, vertSrc, fragSrc) {
   return program;
 }
 
+/**
+ * The lighting a scene in space gets when nothing asks for anything else.
+ *
+ * One hard sun and nothing to bounce off. It lives here, as one object, because
+ * `beginFrame` sets it at the top of every frame AND any pass that lights
+ * something differently has to be able to put it back afterwards — and two
+ * copies of four numbers is two places for the vacuum to drift apart from
+ * itself.
+ */
+export const VACUUM_LIGHT = {
+  key: [0.55, 0.72, 0.42],
+  fill: [-0.6, -0.2, -0.5],
+  ambient: 0.22,
+  keyPower: 0.85,
+};
+
 export class Renderer {
   /**
    * @returns {Renderer|null} null when WebGL is unavailable, which is a
@@ -349,11 +365,12 @@ export class Renderer {
     this.triangles = 0;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.useProgram(this.program);
-    gl.uniform3f(this.uniform.key, 0.55, 0.72, 0.42);
-    gl.uniform3f(this.uniform.fill, -0.6, -0.2, -0.5);
     // Vacuum by default: one hard sun and nothing to bounce off.
-    gl.uniform1f(this.uniform.ambient, 0.22);
-    gl.uniform1f(this.uniform.keyPower, 0.85);
+    const { key, fill, ambient, keyPower } = VACUUM_LIGHT;
+    gl.uniform3f(this.uniform.key, key[0], key[1], key[2]);
+    gl.uniform3f(this.uniform.fill, fill[0], fill[1], fill[2]);
+    gl.uniform1f(this.uniform.ambient, ambient);
+    gl.uniform1f(this.uniform.keyPower, keyPower);
     this._gloss = 0;
     this._shine = 24;
     this._rim = 0;

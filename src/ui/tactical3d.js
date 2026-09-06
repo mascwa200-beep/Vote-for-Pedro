@@ -23,7 +23,7 @@ import {
   normalMatrix, quatFromEuler, quatAxisAngle, quatMultiply,
   project, sub, length as vlength, normalize, cross,
 } from '../gfx/math.js';
-import { Renderer } from '../gfx/gl.js';
+import { Renderer, VACUUM_LIGHT } from '../gfx/gl.js';
 import { hullMesh, hullScale, paletteFor, HULL_GLOSS, HULL_SHINE, HULL_RIM } from '../gfx/blueprint.js';
 import {
   starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, arcMesh, VOLUME,
@@ -622,6 +622,9 @@ export class TacticalView3D {
     const flen = Math.hypot(fx, fy, fz) || 1;
     fx /= flen; fy /= flen; fz /= flen;
 
+    // The primary. Everything else in the sky is lit by it.
+    const star = v.bodies.find((x) => x.kind === 'star') ?? null;
+
     let drawn = 0;
     for (const b of v.bodies) {
       if (drawn >= VISTA_DRAW_CAP) break;
@@ -635,7 +638,26 @@ export class TacticalView3D {
       quatFromEuler(0, b.spin * this.vistaSpin, 0, this._quat);
       this._pos[0] = b.x; this._pos[1] = b.y; this._pos[2] = b.z;
       compose(this._pos, this._quat, b.radius, this._model);
-      this.renderer.draw(`body:${b.kind}`, bodyMesh(b.kind, 0), {
+      // Lit by the system's own primary, so the terminator on a world out there
+      // is not drawn — it is where pointing the light at the actual star puts
+      // it. Same argument the orbit pass in firstperson.js already makes, and
+      // the reason the [1.5, 1.5, 1.5] lift in vista.js could go: that existed
+      // to rescue a mid-tone palette from a key aimed at nothing in particular,
+      // by multiplying every channel past 1.0 and clipping the bright half.
+      //
+      // Per body, because each one is somewhere different relative to the star.
+      // Four of them at most — VISTA_DRAW_CAP — so this is at worst four sets
+      // of uniform writes and not one extra draw call.
+      if (star && b !== star) {
+        this.renderer.setLighting({
+          key: [star.x - b.x, star.y - b.y, star.z - b.z],
+          fill: [b.x - star.x, b.y - star.y, b.z - star.z],
+          ambient: VACUUM_LIGHT.ambient,
+          keyPower: VACUUM_LIGHT.keyPower,
+          eye,
+        });
+      }
+      this.renderer.draw(`body:${b.kind}:${b.seed ?? 0}`, bodyMesh(b.kind, b.seed ?? 0), {
         model: this._model,
         normalMatrix: normalMatrix(this._model, this._normal),
         emissive: b.emissive,
@@ -647,6 +669,10 @@ export class TacticalView3D {
       });
       drawn++;
     }
+    // Back to vacuum, and this is load-bearing rather than tidy: `drawVista`
+    // runs BEFORE the hulls in `render`, so without it every ship in the fight
+    // would be lit by whichever planet happened to be drawn last.
+    if (star && drawn) this.renderer.setLighting({ ...VACUUM_LIGHT, eye });
     this.stats.bodiesDrawn = drawn;
   }
 
