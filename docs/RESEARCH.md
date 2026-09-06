@@ -5777,6 +5777,50 @@ is not the same as remembering it at the moment you build the instrument.**
 
 Ratchet **16 → 14**.
 
+### Ninth pass: two traits about seeing, and neither of them saw anything
+
+Both of the remaining "you just know" traits were unread, and both of them ask
+for something the game had **already computed** and was not showing.
+
+*"Natural Tactician — you always know the enemy's weakest shield facing without
+scanning."* `weakestFacing()` has been in `powers.js` since the science scan was
+written, and the scan reports it. The trait says you get the same answer without
+spending the scan. It is now an amber pill on the Target panel, beside distance,
+cloak and withdrawing — one word, sitting with the other one-word facts, rather
+than a line of its own.
+
+*"Empathic — you can sense a hail's true intent before answering it."* The two
+things a hail can be are both decided before the channel opens: `resolveHail`
+returns `'ignored'` outright for a `fanatic` or `assimilate` doctrine unless the
+hearing has been forced, and `factionMemory` has carried a weight and a line
+since faction memory was written. A Betazoid reads both **before spending the
+hail**, which is the whole of what the card promises and what nobody else gets:
+
+| what the empath is told | when |
+| --- | --- |
+| *nothing on the other end intends to answer* | doctrine refuses the channel |
+| *better disposed than the record says* | memory weight above +0.05 |
+| *something is in the way before you speak* | memory weight below −0.05 |
+| *nothing is weighing on this either way* | otherwise |
+
+Neither trait declares a number of its own, and a unit test now asserts that:
+they are both **windows onto arithmetic that already existed**, so there is no
+second constant to drift away from a first. That is the shape this section keeps
+preferring — §70's third pass folded a duplicate away for the same reason.
+
+**And the instrument lied again, in the quietest way yet.** The verify-app check
+for the empath built its "with the trait" arm by giving the captain a trait id
+`betazoid_sense_probe`. There is no such trait. `Character` ignored it, so both
+arms were the same captain, the two renders were identical, the comparison was
+satisfied, and the check **passed while measuring nothing**. A check that passes
+in both states is the failure mode this dossier has now written down four times;
+this one is worse than the others because the difference it thought it was
+setting was never applied at all. Replaced with a stub over
+`g.character.mechanic`, and confirmed by unwiring each trait in turn — the
+tactician check fires, and the empath fires two.
+
+Ratchet **14 → 12**.
+
 
 ## Attribution
 

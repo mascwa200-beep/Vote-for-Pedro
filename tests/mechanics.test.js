@@ -50,6 +50,8 @@ import { Game } from '../src/core/state.js';
 import { Character } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { Ship } from '../src/sim/ship.js';
+import { weakestFacing } from '../src/sim/powers.js';
+import { FACTIONS } from '../src/world/factions.data.js';
 
 /** Every .js file under src/, as one string. */
 function sourceText() {
@@ -110,7 +112,7 @@ describe('the sweep, and the instrument that produced it', () => {
     assert.equal(consumed().has('thisKeyIsDeclaredByNobodyAtAll'), false);
   });
 
-  test('the ratchet: no more than 14 declared mechanics are read by nothing', () => {
+  test('the ratchet: no more than 12 declared mechanics are read by nothing', () => {
     // It may go down — by wiring one, or by deleting one honestly — and it may
     // not go up. A new trait that declares a mechanic and forgets to wire it
     // fails here rather than shipping as a card that promises something.
@@ -118,7 +120,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     const dead = [...keys.keys()].filter((k) => !read.has(k)).sort();
     assert.ok(keys.size >= 55, `only ${keys.size} mechanics declared; has the sheet shrunk?`);
-    assert.ok(dead.length <= 14,
+    assert.ok(dead.length <= 12,
       `${dead.length} declared mechanics are read by nothing:\n  ${dead.join('\n  ')}`);
   });
 
@@ -126,7 +128,7 @@ describe('the sweep, and the instrument that produced it', () => {
     const read = consumed();
     for (const k of ['xpRate', 'inquiryImmune', 'federationGain', 'peaceGain', 'killPenalty',
       'accuracyBonus', 'hazardDisadvantage',
-      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor', 'ignorePressure', 'cloakDetect', 'directivePenalty', 'contactFloor', 'reachUnhailable']) {
+      'compensation', 'panicBelowQuarter', 'diplomacyDisadvantage', 'fearFactor', 'ignorePressure', 'cloakDetect', 'directivePenalty', 'contactFloor', 'reachUnhailable', 'autoWeakFacing', 'senseIntent']) {
       assert.ok(read.has(k), `${k} is read by nothing again`);
     }
   });
@@ -739,5 +741,53 @@ describe('the trait that talks to people who do not take calls', () => {
     const back = Game.load(JSON.parse(JSON.stringify(g.save())));
     assert.equal(back.xenolinguistHailUsed, true);
     assert.equal(back.mayReachUnhailable('borg'), false, 'a reload gave it back');
+  });
+});
+
+describe('two traits about seeing what the game already knows', () => {
+  // "Natural Tactician — you always know the enemy's weakest shield facing
+  // without scanning" and "Empathic — you can sense a hail's true intent before
+  // answering it". Neither needed a new calculation: `weakestFacing` has
+  // existed since the science scan power was written and is reported BY that
+  // power, and `factionMemory` has carried a weight and a line since faction
+  // memory was. Both traits promised the same answers without the spend, and
+  // both were read by nothing.
+  //
+  // The rendering is checked in the browser harness, because a trait about
+  // seeing something is only wired when the captain can see it. What is checked
+  // here is that the data those screens read is real and moves.
+  test('the weakest facing is a real answer, not a constant', () => {
+    const g = captain();
+    const foe = new Ship('d7', { faction: 'klingon', name: 'T' });
+    const seen = new Set();
+    for (const f of ['fore', 'aft', 'port', 'starboard']) {
+      for (const k of Object.keys(foe.shields)) foe.shields[k] = foe.maxShield;
+      foe.shields[f] = 0;
+      seen.add(weakestFacing(foe));
+    }
+    assert.equal(seen.size, 4, `weakestFacing returned ${[...seen].join(',')}`);
+  });
+
+  test('and the empath’s two facts are both computed before the channel opens', () => {
+    const g = captain();
+    // Whether they will hear it at all.
+    assert.equal(FACTIONS.borg.doctrine, 'assimilate');
+    assert.equal(FACTIONS.klingon.doctrine, 'aggressive');
+    // And what they remember. Zero on a fresh commission, and it moves.
+    const fresh = g.factionMemory('klingon');
+    assert.equal(fresh.weight, 0);
+    for (const e of Game.FACTION_MEMORY.klingon ?? []) g.ledger.setFlag(e.flag);
+    const remembered = g.factionMemory('klingon');
+    assert.notEqual(remembered.weight, 0, 'faction memory does not move');
+    assert.ok(remembered.line, 'and it has nothing to say about it');
+  });
+
+  test('and neither trait invents a number the game did not already have', () => {
+    // The whole point of both: no new calculation, no new balance surface.
+    // If either of these grows a number of its own, it stops being a display.
+    const trait = CHARACTER.TRAITS.find((t) => t.id === 'tactician');
+    const species = CHARACTER.PLAYER_SPECIES.find((x) => x.id === 'betazoid');
+    assert.equal(trait.mechanic.autoWeakFacing, true);
+    assert.equal(species.mechanic.senseIntent, true);
   });
 });

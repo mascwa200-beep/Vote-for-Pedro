@@ -23,6 +23,7 @@ import { commandReference } from './orders.js';
 import { namesFor } from '../sim/address.js';
 import { inArc, SUBSYSTEM_KEYS } from '../sim/ship.js';
 import { OBJECTIVES } from '../sim/combat.js';
+import { weakestFacing } from '../sim/powers.js';
 
 /** What each targetable subsystem is called on a button, and out loud. */
 const SUBSYSTEM_TARGET_LABEL = {
@@ -721,6 +722,18 @@ export function tacticalScreen(app) {
           pill(`${Math.round(g.ship.distanceTo(target))} km`),
           target.cloaked ? pill('cloaked', 'red') : null,
           target.fleeing ? pill('withdrawing', 'amber') : null,
+          // "Natural Tactician — you always know the enemy's weakest shield
+          // facing without scanning." `weakestFacing` has existed since the
+          // science scan power was written and is reported by it; the trait
+          // says you get the same answer without spending the scan, and it was
+          // read by nothing at all.
+          //
+          // Shown as a pill beside the rest of what the board already knows
+          // about this contact, rather than as a line of its own: it is one
+          // word, and it belongs with the other one-word facts.
+          g.character?.mechanic('autoWeakFacing')
+            ? pill(`weakest: ${weakestFacing(target)}`, 'amber')
+            : null,
         ]),
       ])
       : el('p', { class: 'muted', text: 'No target locked.' }),
@@ -2257,9 +2270,36 @@ export function hailOptions(app, factionId, onPick) {
   });
   const faction = FACTIONS[factionId];
 
+  // "Empathic — you can sense a hail's true intent before answering it."
+  //
+  // Read by nothing, and the two things it would tell you are both already
+  // computed before the channel opens: whether these people will hear it at
+  // all, and what they remember of you. `resolveHail` returns 'ignored' outright
+  // for a fanatic or assimilating doctrine unless the hearing is forced, and
+  // `factionMemory` has carried a weight and a line since faction memory was
+  // written. A Betazoid gets to know both BEFORE spending the hail, which is
+  // exactly what the card says and what nobody else gets.
+  const sense = [];
+  if (g.character?.mechanic('senseIntent')) {
+    const deaf = faction?.doctrine === 'fanatic' || faction?.doctrine === 'assimilate';
+    const memory = g.factionMemory?.(factionId) ?? { weight: 0, line: null };
+    sense.push(el('p', {
+      class: deaf ? 'danger' : 'hint',
+      text: deaf
+        ? 'There is nothing on the other end of this that intends to answer. You can feel it.'
+        : memory.weight > 0.05
+          ? 'They are better disposed than the record says. Something you did is remembered well.'
+          : memory.weight < -0.05
+            ? 'Something is in the way before you speak. They have not forgotten.'
+            : 'Nothing is weighing on this either way. It will go as it goes.',
+    }));
+    if (memory.line) sense.push(el('p', { class: 'muted', text: memory.line }));
+  }
+
   return [
     el('p', { class: 'muted', text: faction?.description ?? '' }),
     el('p', { class: 'hint', text: `Current standing: ${standingTier(g.ledger.standingOf(factionId)).label}` }),
+    ...sense,
     ...options.map((o) => button(o.label, tap(() => onPick(o.id), 'ui_select'), {
       color: 'lilac', sub: o.description,
     })),
