@@ -28,6 +28,8 @@ import {
   checkCombat, checkGame, checkAll, Watchdog, LIMITS, bySeverity, LEGAL_MODES,
 } from '../src/sim/invariants.js';
 import { Game, MODES } from '../src/core/state.js';
+import { DIFFICULTIES } from '../src/rules/difficulty.js';
+import { SHIP_LIST } from '../src/world/ships.data.js';
 import { Ship } from '../src/sim/ship.js';
 import {
   ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES, OUTCOMES,
@@ -218,18 +220,38 @@ describe('the watchdog', () => {
 // ticks AFTER each fight resolves, because "combat's done and the stuff that
 // comes after is messed up" is its own failure mode.
 test('no rule is ever broken, in any fight, at any difficulty', () => {
-  const HOSTILES = [
-    'bird_of_prey', 'd7', 'ktinga', 'vorcha', 'neghvar', 'warbird', 'scoutship',
-    'galor', 'keldon', 'marauder', 'orion_raider', 'tholian_web_spinner',
-    'jem_hadar_attack', 'jem_hadar_battleship', 'borg_cube', 'freighter', 'transport',
-  ];
-  const DIFFS = ['story', 'cadet', 'lieutenant', 'commander', 'captain', 'admiral', 'fleet_admiral'];
+  // Derived, not remembered.
+  //
+  // This was a hand-written seventeen of the eighteen non-Federation hulls —
+  // `bioship` had never been through it — and seven of the twelve rungs, under
+  // a title that says "at any difficulty". The five it never visited include
+  // `commodore`, `rear_admiral` and `vice_admiral`, which are three of the five
+  // rungs where the ship can be lost for good and the record cannot be taken
+  // back. A rule broken only under permadeath would have had nowhere to show.
+  //
+  // Widened to the whole matrix, nothing broke — the game was sound across all
+  // of it. But a guard that says "any" has to mean any, or the next change gets
+  // the same free pass this one had.
+  const HOSTILES = SHIP_LIST.filter((c) => c.faction !== 'federation').map((c) => c.id);
+  const DIFFS = DIFFICULTIES.map((d) => d.id);
+
+  // The instrument, before anything is believed about what it found. A
+  // derivation that silently narrows is the same defect as a list that
+  // silently drifts, and it fails more quietly.
+  assert.equal(DIFFS.length, DIFFICULTIES.length, 'the ladder lost rungs on the way in');
+  assert.ok(DIFFS.length >= 12, `only ${DIFFS.length} rungs`);
+  assert.ok(HOSTILES.length >= 18, `only ${HOSTILES.length} hostile hulls`);
+  assert.equal(HOSTILES.includes('constitution'), false, 'the player\u2019s own hull is in the enemy list');
+  // Every one is actually reached: 216 fights over 18 hulls and 12 rungs walks
+  // both lists whole, and the modulo arithmetic below is what makes that true.
+  assert.equal(216 % HOSTILES.length, 0, 'the hull rotation does not divide the run');
+  assert.equal(216 % DIFFS.length, 0, 'the rung rotation does not divide the run');
 
   const dog = new Watchdog();
   let unresolved = 0;
   let ticks = 0;
 
-  for (let i = 0; i < 68; i++) {
+  for (let i = 0; i < 216; i++) {
     const g = new Game({
       seed: BigInt(84000 + i), crewMode: 'original', difficulty: DIFFS[i % DIFFS.length],
     });

@@ -6444,6 +6444,65 @@ carry enough prose that its opening is not read more than twice a commission.
 Anomalies at one sentence scored 21.6 and would fail it by a factor of ten.
 
 
+## 77. "At any difficulty", over seven rungs of twelve
+
+§75 found a guard whose coverage was a hand-written list under a comment
+claiming it was everything, and §76 found a coverage assertion that was a
+lottery ticket. That is twice in two changes, so the next thing to do was look
+for the **class** rather than the instance: every test in the suite that
+hand-writes a list of the things it says it covers.
+
+Two of them make universal claims in their own titles.
+
+| test | claims | covers |
+| --- | --- | --- |
+| `invariants.test.js` | *"no rule is ever broken, in any fight, **at any difficulty**"* | 7 rungs of 12, 17 hostile hulls of 18 |
+| `sim.test.js` | *"**every fight** ends, and nothing leaves the arena"* | 4 rungs of 12, 11 hulls of 18 |
+
+The five rungs the invariant checker never visited are `ensign`, `lt_commander`,
+`commodore`, `rear_admiral` and `vice_admiral` — and **three of those are rungs
+where the ship can be lost for good and the record cannot be taken back**. A
+rule broken only under permadeath had nowhere to show. The one hull it never
+fought was `bioship`.
+
+### Widened, and nothing was broken
+
+Both matrices now derive from the source of truth — `DIFFICULTIES` for the
+ladder, and `SHIP_LIST` filtered on the `faction` field the ship table already
+carries — at 216 fights each, and **the game came through the whole matrix
+clean**.
+
+That is the honest result and it is worth stating plainly: this found no defect.
+What it found was a guard that had been claiming more than it did, and the next
+change to combat now gets checked against the twelve rungs and eighteen hulls
+the title always implied rather than the subset somebody typed once.
+
+The derivation is itself guarded, because a derivation that silently narrows is
+the same defect arriving more quietly: the rung count is asserted against
+`DIFFICULTIES.length`, the hull count against a floor, the player's own hull is
+asserted **not** to be in the enemy list, and the 216 iterations are asserted to
+divide by both list lengths so the modulo rotation actually walks each one whole.
+
+### Two controls, one of which was measuring nothing
+
+Removing a rung from the ladder must fail the guard. The first attempt at that
+control used a regular expression that assumed `{ id: 'commodore'` on one line;
+the file puts the brace and the id on separate lines, so **it matched nothing,
+changed nothing, and the guard passed** — which for a moment looked like the
+guard being weak.
+
+It was the control that was weak. Written properly, by finding the entry and
+cutting from its opening brace, the ladder drops to eleven rungs and the guard
+fails with `only 11 rungs`.
+
+That is the third control in three sections to fail for a reason that had
+nothing to do with the thing under test — §76 had two of them. The lesson has
+stopped being about any particular bug: **a control is an experiment, and an
+experiment that does not perturb what it claims to perturb is not evidence of
+anything.** Check that the arm you meant to break is broken, before reading what
+the guard did about it.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
