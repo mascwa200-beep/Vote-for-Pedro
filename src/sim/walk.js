@@ -159,6 +159,7 @@ export class Walker {
     // The station you are close enough to operate, recomputed each step.
     this.atStation = null;
     this.atExit = null;
+    this.atProp = null;
   }
 
   get room() { return ROOMS[this.roomId]; }
@@ -200,6 +201,7 @@ export class Walker {
 
     this.atStation = this.nearestStation();
     this.atExit = this.nearestExit();
+    this.atProp = this.nearestProp();
     return this;
   }
 
@@ -244,8 +246,47 @@ export class Walker {
     return best;
   }
 
+  /**
+   * The prop within reach, if any — for NAMING it, and for nothing else.
+   *
+   * Every prop in the ship carries a `label`: "A detention field", "A cell
+   * bunk", "The intermix monitor". Forty-three of them, written and read by
+   * nobody, so a captain could stand in front of a thing the deck plan has a
+   * name for and be told nothing at all about it.
+   *
+   * Deliberately NOT folded into `looking` below. That accessor drives
+   * `useWhatIsInFront` and the Use button, and a bunk is not a console: putting
+   * props in it would offer "Use a cell bunk" and send the captain's hand at a
+   * mattress — the same shape as the vent that was labelled "Open this console"
+   * until `verify-app` caught it. A prop is a thing you can be told the name
+   * of. It is not a thing you can operate.
+   */
+  nearestProp() {
+    const room = this.room;
+    if (!room) return null;
+    let best = null;
+    let bestD = REACH;
+    for (const p of room.props ?? []) {
+      if (!p.label) continue;
+      // To the surface, the way `nearestStation` measures it: a bunk and a
+      // conduit have a radius and standing at one means standing at its edge.
+      const d = Math.hypot(this.x - p.at[0], this.z - p.at[1]) - (p.radius ?? p.drawRadius ?? 0);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
   /** Anything worth naming that you are standing at. */
   get looking() { return this.atStation ?? this.atExit ?? null; }
+
+  /**
+   * The same question, for the reticle rather than for the hand.
+   *
+   * A station or an exit answers first, because those are the things you can
+   * act on and the crosshair should agree with the button. When neither is in
+   * reach, the room still has furniture in it with names.
+   */
+  get naming() { return this.atStation ?? this.atExit ?? this.atProp ?? null; }
 
   /**
    * Go through a door into another room.

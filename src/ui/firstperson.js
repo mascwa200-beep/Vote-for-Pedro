@@ -861,7 +861,12 @@ export class FirstPersonView {
     ctx.clearRect(0, 0, width, height);
 
     const walker = game.walk;
-    const target = walker.looking;
+    // `naming`, not `looking`. The reticle's job is to tell you what you are
+    // looking at; `looking` is what your hand can reach, and it answers first
+    // so the crosshair never disagrees with the button underneath it. When
+    // there is no console and no door in reach, the room is still full of
+    // things the deck plan has names for.
+    const target = walker.naming ?? walker.looking;
 
     // A reticle, so you know where "use this" is pointed.
     ctx.strokeStyle = target ? 'rgba(235, 92, 13, 0.95)' : 'rgba(255,255,255,0.28)';

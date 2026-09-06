@@ -3658,13 +3658,37 @@ function prop3d(solid, glow, prop) {
       break;
     }
 
-    case 'wallpanel':
-      glow.quad(
-        vec3(x - 0.02, 1.1, z - 0.4), vec3(x - 0.02, 1.1, z + 0.4),
-        vec3(x - 0.02, 1.7, z + 0.4), vec3(x - 0.02, 1.7, z - 0.4),
-        PALETTE.panelTurquoise,
-      );
+    case 'wallpanel': {
+      // Turned onto the bulkhead it is actually against, from `prop.facing`.
+      //
+      // This drew a quad spanning z-0.4 to z+0.4 at a fixed x — a panel lying
+      // in the y-z plane, which is a panel on an EAST OR WEST wall — and the
+      // axis was hardcoded. The three corridors are on such walls and came out
+      // right. The brig's three detention fields are on its aft bulkhead, and
+      // came out rotated ninety degrees: each spanned z from 2.0 to 2.8 in a
+      // room whose wall is at 2.6, so half of every field was outside the room
+      // inside the bulkhead and the half still in the cell block was edge-on to
+      // anybody standing in it.
+      //
+      // Every prop in the ship has declared a `facing` all along — the
+      // corridors -PI/2, the brig 0 — and nothing had ever read one.
+      //
+      // `facing` is the direction the panel looks INTO the room. The inward
+      // normal is (sin, -cos): at -PI/2 that is (-1, 0), which reproduces the
+      // old hardcoded offset on an east wall exactly, and at 0 it is (0, -1),
+      // which is what the brig needs. The tangent is perpendicular to it, and
+      // carries the same 0.8 m span the panel always had.
+      const th = prop.facing ?? 0;
+      const nx = Math.sin(th); const nz = -Math.cos(th);
+      const tx = Math.cos(th); const tz = Math.sin(th);
+      const px = x + nx * 0.02; const pz = z + nz * 0.02;
+      const a = vec3(px - tx * 0.4, 1.1, pz - tz * 0.4);
+      const b = vec3(px + tx * 0.4, 1.1, pz + tz * 0.4);
+      const c = vec3(px + tx * 0.4, 1.7, pz + tz * 0.4);
+      const d = vec3(px - tx * 0.4, 1.7, pz - tz * 0.4);
+      glow.quad(a, b, c, d, PALETTE.panelTurquoise);
       break;
+    }
 
     default:
       if (prop.solid) {
@@ -21597,7 +21621,12 @@ class FirstPersonView {
     ctx.clearRect(0, 0, width, height);
 
     const walker = game.walk;
-    const target = walker.looking;
+    // `naming`, not `looking`. The reticle's job is to tell you what you are
+    // looking at; `looking` is what your hand can reach, and it answers first
+    // so the crosshair never disagrees with the button underneath it. When
+    // there is no console and no door in reach, the room is still full of
+    // things the deck plan has names for.
+    const target = walker.naming ?? walker.looking;
 
     // A reticle, so you know where "use this" is pointed.
     ctx.strokeStyle = target ? 'rgba(235, 92, 13, 0.95)' : 'rgba(255,255,255,0.28)';
@@ -33207,6 +33236,7 @@ class Walker {
     // The station you are close enough to operate, recomputed each step.
     this.atStation = null;
     this.atExit = null;
+    this.atProp = null;
   }
 
   get room() { return ROOMS[this.roomId]; }
@@ -33248,6 +33278,7 @@ class Walker {
 
     this.atStation = this.nearestStation();
     this.atExit = this.nearestExit();
+    this.atProp = this.nearestProp();
     return this;
   }
 
@@ -33292,8 +33323,47 @@ class Walker {
     return best;
   }
 
+  /**
+   * The prop within reach, if any — for NAMING it, and for nothing else.
+   *
+   * Every prop in the ship carries a `label`: "A detention field", "A cell
+   * bunk", "The intermix monitor". Forty-three of them, written and read by
+   * nobody, so a captain could stand in front of a thing the deck plan has a
+   * name for and be told nothing at all about it.
+   *
+   * Deliberately NOT folded into `looking` below. That accessor drives
+   * `useWhatIsInFront` and the Use button, and a bunk is not a console: putting
+   * props in it would offer "Use a cell bunk" and send the captain's hand at a
+   * mattress — the same shape as the vent that was labelled "Open this console"
+   * until `verify-app` caught it. A prop is a thing you can be told the name
+   * of. It is not a thing you can operate.
+   */
+  nearestProp() {
+    const room = this.room;
+    if (!room) return null;
+    let best = null;
+    let bestD = REACH;
+    for (const p of room.props ?? []) {
+      if (!p.label) continue;
+      // To the surface, the way `nearestStation` measures it: a bunk and a
+      // conduit have a radius and standing at one means standing at its edge.
+      const d = Math.hypot(this.x - p.at[0], this.z - p.at[1]) - (p.radius ?? p.drawRadius ?? 0);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
   /** Anything worth naming that you are standing at. */
   get looking() { return this.atStation ?? this.atExit ?? null; }
+
+  /**
+   * The same question, for the reticle rather than for the hand.
+   *
+   * A station or an exit answers first, because those are the things you can
+   * act on and the crosshair should agree with the button. When neither is in
+   * reach, the room still has furniture in it with names.
+   */
+  get naming() { return this.atStation ?? this.atExit ?? this.atProp ?? null; }
 
   /**
    * Go through a door into another room.

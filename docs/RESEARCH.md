@@ -8158,6 +8158,120 @@ And the combat measurements above were re-run after every change and are
 byte-identical. This section moved no fight.
 
 
+## 90. Forty-three names nobody could read, and three cells inside the bulkhead
+
+The fifth change running to find the same shape: a field declared on every
+instance, carrying the right value, and read by nothing — so the thing it was
+written to prevent is live. `headcountOf` (§86), `cacheKey` (§87), `check` with
+`branch` (§88), `listSaves` (§89), and now the props.
+
+### Every prop declares two fields; nothing read either
+
+Measured across `ROOMS`: **43 props in 17 rooms, and all 43 declare both a
+`label` and a `facing`.** `prop3d` reads exactly seven fields — `at`, `color`,
+`drawRadius`, `glow`, `kind`, `radius`, `solid` — and neither of those.
+
+Nor did anything else. `.facing` is read in several places, but for **stations**,
+weapons and occupants. And `walk.looking`, which is what the reticle named, is
+`atStation ?? atExit` — so a prop could never be what you were looking at, and
+`prop.label` had no reader anywhere in the program.
+
+### The unread `facing` had a visible cost
+
+`case 'wallpanel'` drew a quad spanning **z−0.4 to z+0.4 at a fixed x**: a panel
+lying in the y-z plane, which is a panel on an east or west wall. The axis was
+hardcoded. Over all six wallpanels in the ship:
+
+```
+corridor_a    at [1.15, 3]     room 2.6x14    nearest bulkhead: x   facing=-PI/2  correct
+corridor_rec  at [1.15, 2.2]   room 2.6x12    nearest bulkhead: x   facing=-PI/2  correct
+corridor_sec  at [1.15, -1.6]  room 2.6x13    nearest bulkhead: x   facing=-PI/2  correct
+brig          at [-1.5, 2.4]   room 5.6x5.2   nearest bulkhead: z   facing=0      ROTATED 90 deg
+brig          at [0, 2.4]      room 5.6x5.2   nearest bulkhead: z   facing=0      ROTATED 90 deg
+brig          at [1.5, 2.4]    room 5.6x5.2   nearest bulkhead: z   facing=0      ROTATED 90 deg
+```
+
+The three corridors are on east walls and came out right. The brig's three
+detention fields are on its **aft** bulkhead and came out rotated ninety
+degrees. Measured on the built mesh: they reached **z = 2.80 in a room whose
+wall is at 2.6**, so half of every detention field was outside the room inside
+the bulkhead, and the half still in the cell block was edge-on to anybody
+standing in it.
+
+**The data had been right the whole time.** The corridors declare
+`facing: -PI/2` and the brig declares `facing: 0` — the difference between the
+two orientations is recorded, per prop, and the builder never asked.
+
+After, on the same mesh: the brig's panels run **x −1.90 to 1.90 at z 2.38** —
+across the bulkhead they are actually against, two centimetres proud of it, zero
+overshoot. The corridors are byte-identical.
+
+### The orientation, derived rather than guessed
+
+`facing` is the direction the panel looks INTO the room. So the inward normal is
+`(sin, -cos)`: at `-PI/2` that is `(-1, 0)`, which reproduces the old hardcoded
+offset on an east wall exactly, and at `0` it is `(0, -1)`, which is what the
+brig needs. The tangent is perpendicular and carries the same 0.8 m span. Both
+cases fall out of one expression, and the corridors do not move — which is the
+point of deriving it rather than picking the rotation that happens to fix the
+brig.
+
+### Naming a thing is not operating it
+
+Forty-two of the forty-three labels now reach the reticle. The forty-third is a
+chair on the rec deck standing inside a wall terminal's reach, and the terminal
+answers first — which is correct: the crosshair must agree with the button
+underneath it.
+
+That constraint shaped the design. `walk.looking` drives `useWhatIsInFront` and
+the Use button, so folding props into it would have put **"Use a cell bunk"** on
+the panel and sent the captain's hand at a mattress — the same shape as the
+thermal vent labelled "Open this console" that `verify-app` caught. So `looking`
+is untouched and the reticle got its own accessor, `naming`, which asks for a
+station and an exit first and falls back to the furniture. A prop is a thing you
+can be told the name of. It is not a thing you can operate.
+
+There is a guard for exactly that, and its control — folding props back into
+`looking` — reports **"bridge: The command chair is offered as something to
+use."**
+
+### Two mistakes worth recording, both mine
+
+**A backup taken at the wrong moment is not a backup.** Restoring
+`src/gfx/room.js` from a copy made *before* the fix, to undo a control, silently
+reverted the fix — the same class of error as the `git checkout` that cost four
+episode edits in §88, and caught this time only because the next control failed
+to apply. The rule is not "take a backup"; it is **take the backup of the state
+you want to return to**, which after a fix is the fixed state.
+
+**A guard that measures a band measures whatever else is in it.** The first
+version of the panel-extent helper collected every glow vertex between y 1.05
+and 1.75 and reported the brig's panels spanning 4.97 m in z. The brig has three
+other pieces of glow in that band; the panels are at exactly 1.1 and 1.7. An
+extent taken over a neighbourhood measures the room, not the thing. And the
+buffer is float32, so the corridor check comparing to nine decimal places failed
+on a value that was right — `1.1299999952316284` against `1.13`.
+
+### Measured and dropped
+
+**`connectivity` does not belong in `sim/invariants.js`**, and the note saying it
+did was wrong. It is all-pairs route-finding over the static `ROOMS` table — a
+data invariant, not a game-state one — already exercised where it belongs, in
+`tests/walk.test.js`. Wiring it into the watchdog would run O(n²) pathfinding
+thirty times a second to re-derive a fact about a table that cannot change while
+the game is running. **Sixth recorded lead in this session to dissolve when
+measured rather than believed.**
+
+### Guards and controls
+
+Five guards, each confirmed failing against its own control: the hardcoded axis
+restored (reports *"brig: a wall panel reaches z 2.00..2.80 in a room 5.2
+deep"*); an orientation convention rotated ninety degrees, which fixes nothing
+and breaks the corridors instead; the reticle reading `looking` again
+(*"the reticle does not ask what it is looking at"*); props folded into
+`looking`; and `nearestProp` returning nothing.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
