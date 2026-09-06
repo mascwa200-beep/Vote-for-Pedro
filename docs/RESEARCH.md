@@ -7849,6 +7849,164 @@ own edits landed, checked the module still parsed, and only then read the
 verdict.
 
 
+## 88. The captain you built did not matter inside an episode
+
+The campaign has a full risk system and, measured, almost never used it.
+
+`AwayTeam.check` is deep and finished: seven check types, each mapping to an
+ability, a set of stations and an officer trait; four hazard bands carrying real
+injury and death chances; a per-choice `declared` difficulty on a 0.05 grid;
+species advantage, `desperateAdvantage` below half hull, `switchableAdvantage`,
+disadvantage; the commission's difficulty setting; the best-qualified officer
+chosen by station and trait. **It can kill an officer** — `result.killed` routes
+to `ledger.loseOfficer`, permanently.
+
+And `Mission.choose` supports `branch: { success, failure }`, so a resolved
+check can send the episode somewhere else.
+
+Over 26 episodes and 309 choices, before:
+
+```
+checks   11, of which branch:              0
+branches  1, of which read the captain:    0
+```
+
+**The two halves of the mechanic were perfectly disjoint.** Eleven choices
+consulted the captain and not one of them changed where the story went; one
+choice changed where the story went, and it was `shakedown`'s "Push the core to
+its limit" on `roll: 0.7` — a flat coin that consulted neither the captain, the
+crew, nor the chief engineer standing in front of him.
+
+The game taught the mechanic in episode one, with a coin, and then never used it
+again. Twenty-two of twenty-six episodes contained no check at all, and the
+effect tally says what an episode was instead: `xp` 292, `standing` 147,
+`flag` 86, `record` 78, against `check` 11 and `roll` 1. Read text, pick an
+option, receive experience.
+
+### What was actually wrong with the eleven
+
+The four episodes that DID carry checks were the sharper finding, because the
+rolls were already there and decided nothing:
+
+- **`vega_raid`** rolled a `dangerous` engineering check to get a colony's
+  defence grid up, and went to the same stage either way — where the grid always
+  came up and four hundred people were always saved.
+- **`wolf359_salvage`** put a survivor of eight years in a stasis pod on the
+  table with the CMO saying the revival was "survivable. Barely.", rolled for
+  it, and woke her every time. Worse, it made the careful option pointless:
+  `transport` is slower, easier and safer, and against an outcome that could not
+  fail it was strictly worse than `revive`.
+- **`rigel_syndicate`** ran an **extreme**-hazard extraction on a Syndicate
+  world, against "more guards than the intelligence suggested", and banked
+  `lives_saved: 1` whatever came up.
+- **`organia_question`** rolled to get a hearing from the Organian council and
+  was received regardless.
+
+A hazard band that cannot fail is a hazard in name. `dangerous` is a 6% chance
+somebody does not come back; `extreme` is 14%. Those numbers were being quoted
+to the player and charged to nobody.
+
+### The change
+
+Twelve episodes — the ten a fresh captain is offered, plus `the_cube` and
+`long_watch` — now each carry one decisive choice that reads the captain and
+sends the story somewhere else when it goes wrong, with the failure scene
+authored rather than implied.
+
+```
+checks   19, of which branch:             14
+branches 14, of which read the captain:   14
+```
+
+Every branch in the campaign now reads the captain, and all seven check types
+are in use — the stakes are spread across the crew rather than making the whole
+book about the science officer.
+
+**No engine change.** Every capability used here already existed and was already
+tested. This is content reaching for machinery that was built, documented and
+left idle — the same shape as `headcountOf` in §86 and `cacheKey` in §87, and
+the third in a row.
+
+### Where a check must not go
+
+`long_watch` is the one episode in the book whose climax is a moral choice
+rather than a skill: a petty officer stands in a doorway at 0300 with a case in
+her hand and says nothing in her own defence. A captain should not roll dice on
+what to do about Marchetti. The check went instead on whether a rec deck that
+has covered for her for a month will give her name to her captain when **asked**
+rather than ordered — which is a thing about the captain — and failing it is not
+a wall: they tell you nothing, and 0300 is still 0300.
+
+Two hazard choices are worth recording for the same reason. `shakedown`'s core
+push is `routine`, not `dangerous`, because the failure it branches to says "two
+injured, nothing worse" — a 4% injury band, not a 28% one, and the hazard has to
+mean what the scene says. `archanis_claim`'s is `command` rather than
+`diplomacy`, because a diplomacy gate already decides whether the offer exists
+and what Kang is weighing is not the phrasing but whether the officer saying it
+is somebody he can withdraw in front of.
+
+### The trap: a choice that already decides where it goes
+
+`Mission.choose` resolves a functional `next` and then **overwrites it** from
+`branch`:
+
+```js
+let nextId = choice.next;
+if (typeof nextId === 'function') nextId = nextId(this, applied);
+if (choice.branch) nextId = applied.success ? choice.branch.success : choice.branch.failure;
+```
+
+The first draft put `long_watch`'s check on "Ask her which two", whose `next` is
+`onVar('went_below', 'dark_room', 'the_summary')`. Branching there would have
+thrown that routing away silently — every captain who went below would have gone
+to the wrong stage, with nothing failing. Caught by reading the engine before
+trusting the edit, and the check moved to a choice with a plain `next`. There is
+now a guard that refuses any choice carrying both.
+
+### Two guards caught this change, and one of them caught it correctly
+
+`tests/rooms.test.js` keeps a table of every stage placed in a compartment,
+**with the speaker line that justifies it**, and asserts the table is the whole
+list rather than a sample — "otherwise the justifications drift out of date
+silently: a stage placed without a line here would be placed for no recorded
+reason." Two new failure scenes are placed — a revival that does not take, in
+sickbay; a rec deck declining to answer, on the rec deck — and the guard
+demanded their reasons before it would pass. That is a guard working exactly as
+designed.
+
+`tests/episodevars.test.js` failed differently. It drives `the_cube` down a
+fixed list of choice ids to measure what the nine-second window is worth in a
+fight, and a fixed list cannot walk a branch: once finding the window became a
+check that can fail, the harness sometimes landed on the failure stage and
+measured a fight the captain never got to have. The fix was in the harness — the
+roll is held open there, because those tests are about what the window is worth
+once you have it, not about the roll that finds it.
+
+### And one self-inflicted, worth recording
+
+Undoing a control on `frontier.js` with `git checkout` reverted **all four**
+uncommitted episode edits in that file, not the control. Backups had been taken
+for every other file touched and not that one. Everything was rebuilt from the
+same scripts and re-verified end to end, and nothing was lost but the time —
+but the rule is the rule: **`git checkout` is not an undo for a control, it is
+an undo for the file.** Restore a control from the copy you took before you
+applied it.
+
+### Guards and controls
+
+Six guards, each confirmed failing against its own control: `shakedown`'s branch
+back to a coin flip (reported *"branches on something that is not a check"*); a
+branch whose two arms are the same stage (*"branches to the same stage either
+way"*); a branch on a choice whose `next` is a function (*"has both a next and a
+branch; the branch wins"* — the trap above, made to fire); an opening episode
+with nothing in it the captain can fail; and a check difficulty off the declared
+grid.
+
+Each of the twelve was then played to **both** ends of its branch, through the
+real location and room gates rather than around them, and the failure scene read
+back to confirm it differs in substance rather than in adjectives.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

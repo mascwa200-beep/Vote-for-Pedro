@@ -68,8 +68,20 @@ export const FRONTIER_EPISODES = [
         text: 'The outpost is a shell. And on the very edge of sensor range, something is moving without registering — a distortion, not a contact. Your science officer has seen the theoretical papers on this and did not believe them.',
         speaker: 'Science',
         choices: [
-          { id: 'tachyon', label: 'Flood the area with tachyons', next: 'revealed',
-            requires: { skill: 'sensors', ranks: 1 }, effects: { xp: 400 } },
+          // A tachyon sweep for a cloak nobody has confirmed exists is the
+          // most science-officer thing in the game, and it worked every time
+          // it was pressed. The gate decided whether the button was THERE; the
+          // check decides whether the sweep resolves the distortion before the
+          // distortion resolves you.
+          //
+          // Failure goes to `ambushed`, which the episode already had for
+          // exactly this — "It moves first" — and which until now only the
+          // `wait` branch could reach. Flooding the area announces the ship
+          // that flooded it, so a sweep that fails is worse than no sweep.
+          { id: 'tachyon', label: 'Flood the area with tachyons',
+            requires: { skill: 'sensors', ranks: 1 },
+            effects: { check: { type: 'science', difficulty: 0.5, hazard: 'elevated' }, xp: 400 },
+            branch: { success: 'revealed', failure: 'ambushed' } },
           { id: 'wait', label: 'Hold position and wait for it to move first', next: whoSeesWhoFirst,
             effects: { xp: 200 } },
           { id: 'withdraw', label: 'Withdraw and report', outcome: 'reported',
@@ -288,10 +300,40 @@ export const FRONTIER_EPISODES = [
               },
               damage: 0.1, xp: 400,
             } },
-          { id: 'storm', label: 'Lead them into the storm front', next: 'storm',
-            requires: { skill: 'impulse_thrusters', ranks: 2 }, effects: { xp: 600 } },
+          // Leading six loaded freighters into a plasma front at full impulse,
+          // to shake off three Cardassian hulls, and only your ship comes out
+          // flying — every time it was pressed. Six thousand doses delivered on
+          // a button. The skill gate decided whether the manoeuvre was OFFERED;
+          // nothing decided whether it worked.
+          //
+          // `engineering`, because what is being asked is whether the
+          // structural integrity fields hold through the differential — the
+          // same thing the scene says killed the Cardassians.
+          { id: 'storm', label: 'Lead them into the storm front',
+            requires: { skill: 'impulse_thrusters', ranks: 2 },
+            effects: { check: { type: 'engineering', difficulty: 0.55, hazard: 'dangerous' }, xp: 300 },
+            branch: { success: 'storm', failure: 'storm_bad' } },
           { id: 'scatter', label: 'Order the convoy to scatter', next: 'scatter',
             effects: { xp: 200 } },
+        ],
+      },
+      storm_bad: {
+        // The manoeuvre works on the Cardassians and not on the convoy. That
+        // is the honest failure: it was always the freighters that could not
+        // take the differential, and your ship was never the one at risk.
+        text: 'The Cardassian hulls break off, and so do two of ours. A loaded freighter is not a '
+          + 'starship and the differential does not care which flag is on it — Ekaterina Voss goes '
+          + 'first, and the Tobruk eleven minutes later, and there is no going back in for either '
+          + 'of them. Four ships come out the other side and the Badlands keep the rest.',
+        speaker: 'Helm',
+        choices: [
+          { id: 'continue', label: 'Reform what is left and continue', outcome: 'partial',
+            effects: {
+              xp: 700,
+              record: { lives_saved: 4000, lives_lost: 22, distress_answered: 1 },
+              standing: { federation: 6, cardassian: -8 },
+              flag: 'badlands_run',
+            } },
         ],
       },
       storm: {
@@ -429,10 +471,41 @@ export const FRONTIER_EPISODES = [
         text: 'The Assembly answers, which is itself unusual. The response is a precise statement of the border violation, the time of the violation, and the schedule on which the web will complete. It is not a threat. It is a timetable.',
         speaker: 'Tholian Assembly',
         choices: [
-          { id: 'apologise', label: 'Acknowledge the violation formally and request release', next: 'released',
-            requires: { skill: 'diplomacy', ranks: 3 }, effects: { xp: 900 } },
+          // Eighty-two people off a Tholian web for pressing a button. The
+          // diplomacy gate decided whether the OFFER existed; whether the
+          // Assembly accepted it was never in question, which is a strange
+          // thing to say about the Tholians.
+          //
+          // The check is whether the formal acknowledgement is precise enough
+          // to be worth their stopping for. `routine`: nobody is off the ship.
+          // Hard, because they answered with a timetable rather than a threat.
+          { id: 'apologise', label: 'Acknowledge the violation formally and request release',
+            requires: { skill: 'diplomacy', ranks: 3 },
+            effects: { check: { type: 'diplomacy', difficulty: 0.6, hazard: 'routine' }, xp: 400 },
+            branch: { success: 'released', failure: 'timetable' } },
           { id: 'enter', label: 'Cross anyway', next: 'inside',
             effects: { standing: { tholian: -20 }, record: { violated_border: 1 } } },
+        ],
+      },
+      timetable: {
+        // The failure is not refusal. It is being answered exactly, which is
+        // worse: they restate the schedule and go on spinning, and the ninety
+        // minutes are now sixty.
+        text: 'The Assembly receives the acknowledgement. They confirm its receipt, restate the '
+          + 'time of the violation to the second, and repeat the schedule on which the web will '
+          + 'complete. Nothing in the reply is hostile and nothing in it has changed. Your comms '
+          + 'officer says, quietly, that she does not think they were ever going to stop.',
+        speaker: 'Tholian Assembly',
+        choices: [
+          { id: 'cross', label: 'Then we cross the line', next: 'inside',
+            effects: { xp: 300, standing: { tholian: -20 }, record: { violated_border: 1 } } },
+          { id: 'hold', label: 'Hold at the line', outcome: 'web_closed',
+            effects: {
+              xp: 400,
+              record: { lives_lost: 82 },
+              standing: { tholian: 6, federation: -16 },
+              flag: 'merrimack_lost',
+            } },
         ],
       },
       released: {
@@ -468,6 +541,10 @@ export const FRONTIER_EPISODES = [
     },
     start: 'start',
     endings: {
+      web_closed: { label: 'The web closed',
+        text: 'It finishes on the schedule they gave, to the minute. The Merrimack is inside it, '
+          + 'and the Assembly does not answer again. Eighty-two names, and a border that was not '
+          + 'crossed.' },
       released: { label: 'Released by protocol',
         text: 'A formal acknowledgement of error is now the standing Starfleet procedure for the Tholian border. It is named after this ship.' },
       crew_saved: { label: 'Crew recovered', text: 'Eighty-two alive, one hull lost. Starfleet calls that a good day.' },
@@ -559,10 +636,43 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'engage', label: 'Engage. Slow it down', next: 'engage',
             effects: { xp: 600 } },
-          { id: 'study', label: 'Shadow it and gather everything you can', next: 'study',
-            effects: { xp: 800, flag: 'borg_data' } },
+          // Forty hours alongside a Borg cube, and the science officer always
+          // found the nine-second regeneration window. The single most valuable
+          // discovery in the campaign — it redirects two fleets and saves forty
+          // thousand people — arrived for pressing a button.
+          //
+          // `science`, obviously, and `dangerous`: this is shadowing a hull
+          // twenty-eight kilometres on a side that has already silenced a
+          // listening post, and being noticed is the risk the scene is made of.
+          { id: 'study', label: 'Shadow it and gather everything you can',
+            effects: {
+              check: { type: 'science', difficulty: 0.55, hazard: 'dangerous' },
+              xp: 500, flag: 'borg_data',
+            },
+            branch: { success: 'study', failure: 'no_window' } },
           { id: 'evacuate', label: 'Break off. Warn every colony on its route', next: 'evacuate',
             effects: { xp: 700, record: { lives_saved: 12000 }, flag: 'borg_warned' } },
+        ],
+      },
+      no_window: {
+        // Forty hours and nothing usable. The cube is not hiding anything; it
+        // simply does not care, and a shield harmonic that never desynchronises
+        // where you can see it is the likelier reading of a Borg cube than one
+        // that does.
+        text: 'Forty hours of passive observation and the harmonics do not open. Either the cycle '
+          + 'is longer than the time you have or there is no cycle, and your science officer will '
+          + 'not guess which on the record. What you have is a great deal of telemetry about a '
+          + 'shield nobody knows how to get through, and a cube eleven hours closer to Earth.',
+        speaker: 'Science',
+        choices: [
+          { id: 'send', label: 'Send what we have and warn the route', outcome: 'evacuated',
+            effects: {
+              xp: 900, standing: { federation: 12 },
+              record: { lives_saved: 12000, anomaly_catalogued: 1 },
+              flag: 'borg_warned',
+            } },
+          { id: 'anyway', label: 'Engage without it', next: 'engage',
+            effects: { xp: 400 } },
         ],
       },
       study: {

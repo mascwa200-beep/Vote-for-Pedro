@@ -44,6 +44,14 @@ function captain({ seed = 3n, shipClass = 'sovereign' } = {}) {
 function playToFight(g, episodeId, systemId, choices) {
   const m = g.missions.start(episodeId, g);
   g.locationId = systemId;
+  // Finding the window is now a `science` check that can fail — forty hours
+  // alongside a Borg cube used to hand it over for pressing the button. These
+  // tests are about what the window is WORTH once you have it, so the roll
+  // that finds it is held open here rather than left to chance: a fixed list
+  // of choice ids cannot walk a branch, and a harness that silently landed on
+  // the failure stage would measure a fight the captain never got to have.
+  g.awayTeam = g.buildAwayTeam();
+  g.awayTeam.check = () => ({ success: true, text: 'the window is there', killed: null, securityLost: 0 });
   for (const id of choices) {
     // A stage is somewhere. The captain flies to it, the way the episode
     // walker in wiring.test.js does — a stage gate is not what is under test
@@ -409,5 +417,123 @@ describe('a stage can order a fight it already has an advantage in', () => {
       assert.equal(cube.shields[f], 0, `the ${f} shield came back up across the save`);
     }
     assert.ok(m.pending || true);
+  });
+});
+
+// ===================== the captain, inside an episode rather than beside one
+
+describe('an episode reads the captain, and failing it goes somewhere', () => {
+  const withChecks = () => {
+    const out = [];
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          if (c.effects?.check) out.push({ ep, sid, c });
+        }
+      }
+    }
+    return out;
+  };
+
+  test('a decisive moment reads the captain rather than a coin', () => {
+    // The two halves of this mechanic existed and were never once combined.
+    // Measured on the tree before this change: eleven choices carried
+    // `effects.check` and NOT ONE of them branched, while the single choice in
+    // twenty-six episodes that did branch — `shakedown`'s "Push the core to its
+    // limit" — did it on `roll: 0.7`, a flat coin that consulted neither the
+    // captain, the crew, nor the chief engineer standing in front of him.
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          if (!c.branch) continue;
+          assert.ok(c.effects?.check,
+            `${ep.id}/${sid}/${c.id} branches on something that is not a check`);
+          assert.ok(!c.effects?.roll,
+            `${ep.id}/${sid}/${c.id} still branches on a bare roll`);
+        }
+      }
+    }
+  });
+
+  test('and failure goes somewhere else, in the same episode', () => {
+    // A branch whose two arms are the same stage is a check that decides
+    // nothing, which is what eleven of them were doing by other means.
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          if (!c.branch) continue;
+          const { success, failure } = c.branch;
+          assert.ok(success && failure, `${ep.id}/${sid}/${c.id} branches to nowhere`);
+          assert.notEqual(success, failure,
+            `${ep.id}/${sid}/${c.id} branches to the same stage either way`);
+          assert.ok(ep.stages[success], `${ep.id}/${sid}/${c.id} success -> missing ${success}`);
+          assert.ok(ep.stages[failure], `${ep.id}/${sid}/${c.id} failure -> missing ${failure}`);
+        }
+      }
+    }
+  });
+
+  test('and a choice that already decides where it goes does not also branch', () => {
+    // `Mission.choose` resolves a functional `next` and then OVERWRITES it from
+    // `branch` — so a choice carrying both silently throws its routing away.
+    // Nearly done to `long_watch`'s "Ask her which two", whose `next` is
+    // `onVar('went_below', 'dark_room', 'the_summary')`: branching there would
+    // have sent every captain who went below to the wrong stage, quietly.
+    for (const ep of EPISODES) {
+      for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          if (!c.branch) continue;
+          assert.equal(typeof c.next, 'undefined',
+            `${ep.id}/${sid}/${c.id} has both a next and a branch; the branch wins`);
+          assert.equal(typeof c.outcome, 'undefined',
+            `${ep.id}/${sid}/${c.id} ends the episode AND branches`);
+        }
+      }
+    }
+  });
+
+  test('every episode a fresh captain can start puts the captain at stake', () => {
+    // The ten offered at the rank a commission begins at. Twenty-two of the
+    // twenty-six episodes had no check in them anywhere.
+    const OPENING = [
+      'shakedown', 'centauri_drift', 'vega_raid', 'wolf359_salvage', 'rigel_syndicate',
+      'archanis_claim', 'organia_question', 'outpost_silence', 'badlands_run', 'tholian_border',
+    ];
+    for (const id of OPENING) {
+      const ep = EPISODES.find((e) => e.id === id);
+      assert.ok(ep, `${id} is gone`);
+      const gambles = Object.entries(ep.stages).flatMap(([, st]) =>
+        (st.choices ?? []).filter((c) => c.effects?.check && c.branch));
+      assert.ok(gambles.length > 0, `${id} has nothing in it the captain can fail`);
+    }
+  });
+
+  test('and the stakes are spread across the whole crew', () => {
+    // Otherwise "the captain matters" means one officer matters. Seven check
+    // types exist, each mapping to an ability, a set of stations and an officer
+    // trait — a campaign that only ever rolls `science` is a campaign about the
+    // science officer.
+    const types = new Set(withChecks().map((x) => x.c.effects.check.type));
+    assert.ok(types.size >= 5,
+      `only ${types.size} check types in the whole book: ${[...types].join(', ')}`);
+  });
+
+  test('and every check declares a difficulty the resolver can read', () => {
+    // `difficulty` is mapped as `(declared - 0.5) * 20` — a nudge of at most
+    // two points of DC inside the hazard band, on a 0.05 grid. It is NOT a
+    // second difficulty scale, and a value off the grid is somebody inventing
+    // one. `away.js` records that eleven of these were destructured into
+    // nothing for a long time, so the grid is worth holding.
+    const HAZARDS = new Set(['routine', 'elevated', 'dangerous', 'extreme']);
+    for (const { ep, sid, c } of withChecks()) {
+      const chk = c.effects.check;
+      assert.ok(chk.type, `${ep.id}/${sid}/${c.id} has a check with no type`);
+      assert.ok(HAZARDS.has(chk.hazard ?? 'elevated'),
+        `${ep.id}/${sid}/${c.id} hazard ${chk.hazard}`);
+      const d = chk.difficulty ?? 0.5;
+      assert.ok(d >= 0.35 && d <= 0.65, `${ep.id}/${sid}/${c.id} difficulty ${d} is off the band`);
+      assert.ok(Math.abs(Math.round(d * 20) - d * 20) < 1e-9,
+        `${ep.id}/${sid}/${c.id} difficulty ${d} is off the 0.05 grid`);
+    }
   });
 });

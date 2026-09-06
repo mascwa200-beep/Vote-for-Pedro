@@ -139,8 +139,27 @@ export const LONG_WATCH_EPISODES = [
         text: 'The rec deck holds more of your people at once than any other compartment aboard, and every one of them stops talking when you come in, which is its own answer. They have known for a month. Two of them have been standing her watches so she could be somewhere else. Nobody will say her name and nobody has to.',
         speaker: 'Recreation deck',
         choices: [
+          // The check goes HERE and not on the engineering trace, and not
+          // within a mile of the doorway at 0300. This is the one episode in
+          // the book whose climax is a moral choice rather than a skill, and a
+          // captain should not roll dice on what to do about Marchetti — but
+          // whether a rec deck that has covered for her for a month will give
+          // her name to her captain, when asked rather than ordered, is
+          // exactly a thing about the captain.
+          //
+          // `command`, `routine`, and hard: two of them have been standing her
+          // watches. Failing it is not a wall — it is being told nothing, which
+          // still leaves the door open and 0300 to be somewhere.
+          //
+          // Deliberately not the trace choice, whose `next` is a FUNCTION —
+          // `onVar('went_below', ...)`. `branch` overwrites `next` and does not
+          // resolve a function, so branching there would have silently thrown
+          // away the routing that sends a captain who went below to the dark
+          // room. A choice that already decides where it goes cannot also
+          // branch, and this one does not.
           { id: 'ask', label: 'Ask them, and let them decide whether to answer',
-            next: 'middle_watch', effects: { xp: 900 } },
+            effects: { check: { type: 'command', difficulty: 0.55, hazard: 'routine' }, xp: 500 },
+            branch: { success: 'middle_watch', failure: 'closed_ranks' } },
           { id: 'order', label: 'Make it an order', next: 'middle_watch',
             effects: { xp: 500, standing: { federation: -2 } } },
           { id: 'leave', label: 'Say nothing, and be in auxiliary control at 0300',
@@ -148,6 +167,22 @@ export const LONG_WATCH_EPISODES = [
         ],
       },
 
+      closed_ranks: {
+        where: 'rec', system: null,
+        text: 'Nobody says anything at all. Not sullenly — carefully, the way people are careful '
+          + 'when they have already decided together and are waiting to see whether it costs them. '
+          + 'A crewman near the back says that the ship has been running fine, Captain, and that is '
+          + 'the whole of it. They will not give her to you, and you find you do not think less of '
+          + 'them for it.',
+        speaker: 'Recreation deck',
+        choices: [
+          { id: 'order', label: 'Make it an order after all', next: 'middle_watch',
+            effects: { xp: 400, standing: { federation: -4 }, flag: 'ordered_the_deck' } },
+          { id: 'be_there', label: 'Let it go, and be in auxiliary control at 0300',
+            next: 'middle_watch',
+            effects: { xp: 900, setVar: { sat_in_the_dark: true } } },
+        ],
+      },
       middle_watch: {
         where: 'auxcontrol', system: null,
         // Trimmed after rendering it at 412 px. The first draft ran 461
