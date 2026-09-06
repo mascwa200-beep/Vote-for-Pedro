@@ -15305,8 +15305,34 @@ const DOCTRINE_TACTICS = {
   attrition: ['emergency_power_shields', 'brace_for_impact'],
   territorial: ['emergency_power_shields', 'brace_for_impact'],
   fanatic: ['attack_pattern_alpha', 'brace_for_impact'],
-  assimilate: ['polarize_hull', 'emergency_power_shields'],
-  opportunist: ['evasive_maneuvers', 'brace_for_impact'],
+  // Narrower order first, and that ordering is forced rather than chosen. Once
+  // `polarize_hull` learned to read the shields, its trigger (a facing under
+  // 0.5) strictly CONTAINED `emergency_power_shields`'s (a facing under 0.3
+  // with hull left) — so listed above it, the fix for one dead order would
+  // have put the order below it into the same shadow that killed
+  // `brace_for_impact` on the opportunist. Reversed, the two split the range:
+  // shields nearly gone gets the power, shields merely failing gets the
+  // plating. Measured either way at 2 and 14 firings, so this costs nothing
+  // and stops the list from being a trap for the next person to widen a
+  // trigger.
+  assimilate: ['emergency_power_shields', 'polarize_hull'],
+  // `brace_for_impact` was the second order here and could never be given:
+  // zero times in 32 fights across four difficulties.
+  //
+  // Not because the state was unreachable — a marauder is driven to 0.197 hull
+  // still taking orders, well under the 0.45 the brace wants. Because the order
+  // ABOVE it swallows it. `evasive_maneuvers` fires at `hullPct < 0.5`, which
+  // strictly contains `brace_for_impact`'s `hullPct < 0.45`, and this list is
+  // first-match-wins: every state that wanted the brace had already asked for
+  // the evasion, so the brace could only ever land inside the evasion's
+  // cooldown shadow, and in 32 fights that shadow never opened while the hull
+  // was still in range.
+  //
+  // `emergency_power_shields` overlaps it but is not contained by it — a ship
+  // at 0.29 shields and 0.9 hull wants the power and does not want to jink —
+  // so the two split the work instead of one eating the other. Measured after
+  // the change: 27 firings each.
+  opportunist: ['evasive_maneuvers', 'emergency_power_shields'],
   defensive: ['brace_for_impact', 'emergency_power_shields'],
   // Starfleet, which in a fight means the escorts a reputation buys — the only
   // ships in the game flying this doctrine are on the player's side. No kill
@@ -15323,6 +15349,12 @@ const DOCTRINE_TACTICS = {
  * for impact are both a captain who has taken enough.
  *
  * `self` is the ship considering it, `foe` whoever she is fighting.
+ *
+ * Exported so a guard can ask the real predicates two questions no test could
+ * ask while they were private: whether any state a ship actually reaches
+ * triggers an order at all, and whether every state that wants an order has
+ * already asked for one listed above it. Two orders failed one or the other
+ * for years, and both read perfectly well in the source.
  */
 const WHEN = {
   // Shields nearly gone and still in the fight. This is the one that changes
@@ -15330,7 +15362,19 @@ const WHEN = {
   emergency_power_shields: (self) => weakestShield(self) < 0.3 && self.hullPct > 0.25,
   // Badly hurt. Not a comeback — a way to survive the next thirty seconds.
   brace_for_impact: (self) => self.hullPct < 0.45,
-  polarize_hull: (self) => self.hullPct < 0.55,
+  // The Borg's signature order, and for a long time the one thing the
+  // `assimilate` doctrine could never do. Keyed on hull alone it needed
+  // `hullPct < 0.55`, and Borg hulls do not go there: measured over six seeds
+  // apiece at Captain, the worst a cube ever reached was 0.995 against a
+  // Constitution and 0.976 against a Sovereign, and a bioship 0.755. Zero
+  // firings, ever, of the first order in the list.
+  //
+  // Their SHIELDS are a different story — stripped to 0.000 in three of those
+  // four matchups. Which is also the truer trigger: polarising the hull
+  // plating is what you do when the shields have stopped holding, not when the
+  // hull is already open. A cube a Constitution can barely scratch still never
+  // bothers, which is the correct answer for that fight.
+  polarize_hull: (self) => weakestShield(self) < 0.5 || self.hullPct < 0.55,
   // Going for the kill: they are hurt, we are not, and we are in range.
   attack_pattern_alpha: (self, foe) => foe.hullPct < 0.32 && self.hullPct > 0.4,
   // Hurt and quick. A raider that starts jinking is a raider about to leave.
@@ -15444,6 +15488,7 @@ function tickTactics(ship, dt) {
 }
 
 __exports.DOCTRINE_TACTICS = DOCTRINE_TACTICS;
+__exports.WHEN = WHEN;
 __exports.chooseTactic = chooseTactic;
 __exports.tickTactics = tickTactics;
 
