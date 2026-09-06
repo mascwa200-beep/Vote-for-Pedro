@@ -1788,8 +1788,31 @@ try {
     g.ship.x = 0; g.ship.y = 0; g.ship.z = 0;
     foe.x = 35; foe.y = 0; foe.z = 0;
     app.render();
+    // "Natural Tactician — you always know the enemy's weakest shield facing
+    // without scanning." Read off the Target panel with the mechanic stubbed
+    // and again without it, in the fight this check has already staged rather
+    // than in one of its own: staging a second fight here is what displaced ten
+    // later checks the last two times.
+    const realMechanic = g.character.mechanic.bind(g.character);
+    app.go('tactical'); app.render();
+    const plainPanel = document.body.innerText;
+    g.character.mechanic = (k) => (k === 'autoWeakFacing' ? true : realMechanic(k));
+    app.render();
+    const tacticianPanel = document.body.innerText;
+    g.character.mechanic = realMechanic;
+    globalThis.__weakest = {
+      plain: /weakest:/i.test(plainPanel),
+      tactician: /weakest:/i.test(tacticianPanel),
+      restored: g.character.mechanic('autoWeakFacing') === realMechanic('autoWeakFacing'),
+    };
     return (app.tactical?.lastLabels ?? []).map((l) => ({ ...l }));
   });
+  const weakest = await page.evaluate(() => globalThis.__weakest);
+  check('the weakest facing is not on the board for an ordinary captain',
+    weakest.plain === false, JSON.stringify(weakest));
+  check('and a Natural Tactician sees it without spending a scan',
+    weakest.tactician === true, JSON.stringify(weakest));
+  check('and that stub was put back too', weakest.restored === true, JSON.stringify(weakest));
   const near = (a, b) => Math.abs(a.x - b.x) < 46;
   check('two contacts close aboard both get a name on the plot',
     labels.length === 2, JSON.stringify(labels));
@@ -3305,6 +3328,69 @@ try {
   // No screenshot of the modal here: the restore above closes it, and a
   // screenshot taken after that would be a picture of the roster labelled
   // sickbay — which is the exact confusion this whole check exists to end.
+
+  // ---- Two traits about SEEING what the game already knows ----
+  //
+  // "Natural Tactician — you always know the enemy's weakest shield facing
+  // without scanning" and "Empathic — you can sense a hail's true intent before
+  // answering it". Both were read by nothing, and both are displays of state
+  // the game already computes: `weakestFacing` has existed since the science
+  // scan power was written, and `factionMemory` has carried a weight and a line
+  // since faction memory was.
+  //
+  // Rendered rather than asserted from the data, because a trait about seeing
+  // something is only wired when the captain can see it.
+  const seeing = await page.evaluate(async () => {
+    const app = globalThis.__app;
+    const g = app.game;
+    const was = { screen: app.screen, traits: [...(g.character.traits ?? [])] };
+    const out = {};
+
+    // The mechanic itself, stubbed for the duration. `senseIntent` comes off
+    // the Betazoid species and this captain is a Vulcan; swapping the species
+    // mid-run would change a dozen other numbers. What is being checked here is
+    // that the SCREEN reacts to the mechanic — the unit tests cover which
+    // species declares it — so the honest stub is the mechanic itself.
+    //
+    // A first draft set `traits = ['betazoid_sense_probe']`, a trait id that
+    // does not exist, so the "with the trait" arm was identical to the without
+    // and the check measured nothing while passing.
+    const realMechanic = g.character.mechanic.bind(g.character);
+    const withMechanic = (key, fn) => {
+      g.character.mechanic = (k) => (k === key ? true : realMechanic(k));
+      const r = fn();
+      g.character.mechanic = realMechanic;
+      return r;
+    };
+
+    const { hailOptions } = await import('./src/ui/screens.js');
+    const read = (factionId) => hailOptions(app, factionId, () => {})
+      .filter(Boolean).map((n) => n.textContent ?? '').join(' | ');
+    out.hailPlain = read('borg');
+    out.hailSenseDeaf = withMechanic('senseIntent', () => read('borg'));
+    out.hailSenseTalks = withMechanic('senseIntent', () => read('klingon'));
+    out.mechanicRestored = g.character.mechanic('senseIntent') === realMechanic('senseIntent');
+
+    app.go(was.screen);
+    app.render();
+    out.restored = app.screen === was.screen
+      && JSON.stringify(g.character.traits) === JSON.stringify(was.traits);
+    return out;
+  });
+  check('the hail screen tells an ordinary captain nothing about intent',
+    !/intends to answer|weighing on this/i.test(seeing.hailPlain ?? ''),
+    JSON.stringify(seeing.hailPlain).slice(0, 200));
+  check('and an empath is told the Borg will not answer before spending the hail',
+    /intends to answer/i.test(seeing.hailSenseDeaf ?? ''),
+    JSON.stringify(seeing.hailSenseDeaf).slice(0, 220));
+  check('and told something different about a faction that does talk',
+    /weighing on this|better disposed|not forgotten/i.test(seeing.hailSenseTalks ?? '')
+      && !/intends to answer/i.test(seeing.hailSenseTalks ?? ''),
+    JSON.stringify(seeing.hailSenseTalks).slice(0, 220));
+  check('and the stubbed mechanic was put back',
+    seeing.mechanicRestored === true, JSON.stringify(seeing.mechanicRestored));
+  check('and the seeing check put the captain back where it found them',
+    seeing.restored === true, JSON.stringify(seeing));
 
   // ---- The two boards that reported the hull ----
   //
