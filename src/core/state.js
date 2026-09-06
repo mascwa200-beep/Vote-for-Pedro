@@ -98,6 +98,65 @@ const MAX_HOSTILES = MAX_FORCE_HULLS;
 const LIVED_SLICE_HOURS = 0.25;
 
 /**
+ * How far a ship can be put right with her own crew and no yard.
+ *
+ * The "Effect repairs" button has said "Cannot fully repair without a starbase"
+ * since it was written, and the completion text says "the best she can do
+ * without a starbase" in two more places. Nothing enforced any of it: eight
+ * presses took a wreck at 15% hull, every subsystem at 0.2 and all three gun
+ * mounts dead to a hull at 100%, every subsystem at 1.0 and every mount back
+ * online — a full starbase overhaul, from the bridge, in the middle of a
+ * battle.
+ *
+ * This is the sentence made true. It is a ceiling on this one order and NOT on
+ * `Ship.repair`, which has six callers: passive damage control, the machine
+ * shop, two ship powers and mission effects all still reach 100%, because
+ * capping in there would silently cap every one of them.
+ *
+ * `MOUNT_RESTORED_AT` is 0.35, so a capped repair still brings dead weapon
+ * mounts back on line. The cap costs a ship her condition, never her ability to
+ * fight — the point is that a berth is worth flying to, not that a captain far
+ * from one is helpless.
+ */
+const UNDERWAY_REPAIR_CAP = 0.85;
+
+/**
+ * Repair a ship with her own crew, up to what her own crew can reach.
+ *
+ * Both things that put a ship right underway go through here: the "Effect
+ * repairs" order, and the hours of damage control that `passTime` runs whether
+ * anybody ordered them or not. They are the same act at two speeds, so they
+ * take the same ceiling — and it has to be BOTH, because the order spends 19.2
+ * hours and those hours run the passive path. Capping only the order left the
+ * hours it costs to lift the ship over the cap on the way out, which is how
+ * the first draft of this reported 90.5% against a ceiling of 85%.
+ *
+ * NOT `Ship.repair` itself. A hull patch off the machine shop bench, a ship
+ * power spent, a starbase, and a repair an episode hands you are all authored,
+ * finite events rather than the crew working, and they still reach 100%.
+ *
+ * The ceiling can only hold a figure down TO itself, never pull one down to it:
+ * anything already above the cap when this runs is left exactly where it is.
+ */
+function repairUnderway(ship, amount) {
+  const wasHull = ship.hull;
+  const wasSubs = { ...ship.subsystems };
+  const wasMounts = ship.weapons.map((w) => w.integrity);
+
+  ship.repair(amount);
+
+  // In fractions, which is what a subsystem and a mount are; the hull is an
+  // absolute figure, so its ceiling is scaled by `maxHull`.
+  const hold = (now, was, ceiling = UNDERWAY_REPAIR_CAP) => Math.min(now, Math.max(ceiling, was));
+  ship.hull = hold(ship.hull, wasHull, ship.maxHull * UNDERWAY_REPAIR_CAP);
+  for (const k of Object.keys(ship.subsystems)) {
+    ship.subsystems[k] = hold(ship.subsystems[k], wasSubs[k]);
+  }
+  ship.weapons.forEach((w, i) => { w.integrity = hold(w.integrity, wasMounts[i]); });
+  return ship.hull;
+}
+
+/**
  * Away templates that are about a place rather than about a target.
  *
  * These are the ones a world is done with once. The other two are gated by the
@@ -1339,15 +1398,36 @@ export class Game {
    * hazard conditions — the states where the crew is at maintenance stations
    * rather than battle stations — so calling it before you start work is worth
    * half as much again, and is refused in a fight for the obvious reason.
+   *
+   * That last clause was the whole of the guard for a long time: a sentence in
+   * this comment and nothing in the body. `seeToTheWounded` below calls itself
+   * "`effectRepairs` for the crew, and deliberately built the same way", and it
+   * has the engagement guard, a room guard AND a per-use cap — the copy was
+   * stricter than the thing it was copied from. The wording of the refusal here
+   * is taken from it, because it is the same refusal.
+   *
+   * The cap is `UNDERWAY_REPAIR_CAP`, applied so it can only ever hold a figure
+   * DOWN to the ceiling, never pull one down to it: a hull a starbase or a
+   * mission effect already put above the cap is left where it is. Hull,
+   * subsystems and weapon mounts all ride it, because `Ship.repair` raises all
+   * three on one scale and "nothing reaches full underway" is the rule.
    */
   effectRepairs() {
     const done = this.noLongerInCommand();
     if (done) return { ok: false, reason: done.reason };
+    if (this.engagement && !this.engagement.over) {
+      return { ok: false, reason: 'Not while we are under fire, Captain.' };
+    }
     const s = this.ship;
     if (s.hullPct >= 1) return { ok: false, reason: 'The hull is sound, Captain.' };
+    // At the ceiling with nothing left to gain, said in the words the
+    // completion text has always used.
+    if (!this.repairsWouldHelp()) {
+      return { ok: false, reason: 'That is the best she can do without a starbase, Captain.' };
+    }
     const blue = this.alert === 'blue';
     const before = s.hullPct;
-    s.repair(s.maxHull * (blue ? 0.18 : 0.12));
+    repairUnderway(s, s.maxHull * (blue ? 0.18 : 0.12));
     this.spendHours(blue ? 14.4 : 19.2);
     this.pushLog(
       `Repair teams restored hull integrity to ${Math.round(s.hullPct * 100)}%.`
@@ -1355,6 +1435,22 @@ export class Game {
       'engineering',
     );
     return { ok: true, before, after: s.hullPct, blue };
+  }
+
+  /**
+   * Whether there is anything left for the crew to put right without a yard.
+   *
+   * Its own method because the bridge screen needs the same answer to decide
+   * whether to offer the button at all, and a ceiling checked in one place and
+   * offered from another is the drift this change exists to stop.
+   */
+  repairsWouldHelp() {
+    const s = this.ship;
+    if (!s) return false;
+    const room = (now) => now < UNDERWAY_REPAIR_CAP - 1e-9;
+    return room(s.hullPct)
+      || Object.values(s.subsystems).some(room)
+      || s.weapons.some((w) => room(w.integrity));
   }
 
   /**
@@ -2096,25 +2192,67 @@ export class Game {
    * transporter room and you stand on the pad, because that is what the room is
    * for and because a command you can give from anywhere is a menu.
    */
+  /**
+   * Why the transporter cannot put the captain on the ground, or null.
+   *
+   * The four conditions `beamDown` has always had, in one place, so the board
+   * that offers the order and the method that performs it cannot disagree about
+   * it. They did: `panel: 'transport'` is declared on TWO stations — the
+   * transporter console and the cargo transporter down in the hold — and the
+   * panel coloured "Energise" on whether the ship was in orbit and nothing
+   * else. Standing at the cargo transporter in orbit of a world, a captain read
+   * "Transporter ready", pressed a button in the enabled colour, and was told
+   * he would have to be in the transporter room.
+   *
+   * The panel's own comment says it "refuses for reasons rather than being
+   * absent, because 'why can I not beam down' is a question the room should
+   * answer standing in it". The one reason it never gave was the one that
+   * applied in the room it was being read in.
+   *
+   * Same shape as `leftACallUnanswered` and `directiveCost`: a rule written in
+   * two places is a rule that drifts. `who` rides along because the refusals
+   * are not all in the same officer's voice — a gas giant is the science
+   * officer's answer, not the transporter chief's.
+   *
+   * @returns {{reason: string, who: string}|null}
+   */
+  beamDownBlocker() {
+    if (this.ashore) {
+      return { reason: 'We are already on the surface, Captain.', who: 'transporter' };
+    }
+    if (this.mode === MODES.COMBAT) {
+      return { reason: 'Not while we are under fire, Captain.', who: 'transporter' };
+    }
+    if (!this.orbitBody) {
+      return { reason: 'We would have to make orbit first, Captain.', who: 'transporter' };
+    }
+    if (this.orbitBody.kind === 'gas') {
+      return { reason: `${this.orbitLabel} has no surface to beam down to.`, who: 'science' };
+    }
+    if (this.walk?.roomId !== 'transporter') {
+      // Named for the room it is refused in. Standing at the cargo transporter
+      // the honest answer is what that machine is for; anywhere else it is
+      // simply the wrong compartment.
+      return {
+        reason: this.walk?.roomId === 'cargo'
+          ? 'This one is rated for cargo, Captain. People go from the transporter room.'
+          : 'You would have to be in the transporter room, Captain.',
+        who: 'transporter',
+      };
+    }
+    return null;
+  }
+
   beamDown() {
-    if (this.ashore) return { ok: false, error: 'We are already on the surface, Captain.' };
-    if (this.mode === MODES.COMBAT) return { ok: false, error: 'Not while we are under fire, Captain.' };
+    const no = this.beamDownBlocker();
+    if (no) {
+      // The first two never spoke, because they were the two a player could
+      // only reach by typing an order rather than by standing at a board. They
+      // speak now: every refusal on this path is somebody answering.
+      this.officerSays(no.who, no.reason, 'object');
+      return { ok: false, error: no.reason, reason: no.reason };
+    }
     const body = this.orbitBody;
-    if (!body) {
-      const err = 'We would have to make orbit first, Captain.';
-      this.officerSays('transporter', err, 'object');
-      return { ok: false, error: err };
-    }
-    if (body.kind === 'gas') {
-      const err = `${this.orbitLabel} has no surface to beam down to.`;
-      this.officerSays('science', err, 'object');
-      return { ok: false, error: err };
-    }
-    if (this.walk.roomId !== 'transporter') {
-      const err = 'You would have to be in the transporter room, Captain.';
-      this.officerSays('transporter', err, 'object');
-      return { ok: false, error: err };
-    }
 
     const label = this.orbitLabel;
     makeSurface(body, label);
@@ -5331,10 +5469,12 @@ export class Game {
 
     const ship = this.ship;
 
-    // Repair: a full hull from nothing would take about a fortnight underway,
-    // which is slower than a starbase and faster than nothing. Nothing in
-    // `Ship.update` repairs hull — that is deliberate and stated there — so
-    // this is the only thing that does it under way, watched or not.
+    // Repair: from nothing to what a crew can reach without a yard takes about
+    // a fortnight underway, which is slower than a starbase and faster than
+    // nothing. Nothing in `Ship.update` repairs hull — that is deliberate and
+    // stated there — so this is the only thing that does it under way, watched
+    // or not. Through `repairUnderway`, so the hours that pass and the order a
+    // captain gives share one ceiling.
     if (ship.hullPct < 1 && !ship.destroyed) {
       const perHour = ship.maxHull / (14 * 24);
       // `fieldRepair` belongs HERE and not on `ship.mod('repairRate')`, which
@@ -5343,7 +5483,7 @@ export class Game {
       // starbases; that is a different claim from being better at patching her
       // while she is being shot at, and the card says the first one.
       const field = this.character?.mechanic('fieldRepair') ?? 1;
-      ship.repair(perHour * hours * ship.mod('repairRate') * field);
+      repairUnderway(ship, perHour * hours * ship.mod('repairRate') * field);
     }
 
     if (!livedThrough) {
@@ -5652,8 +5792,13 @@ export class Game {
     // The machine shop is not a combat action. Left unguarded, a hull patch
     // could be started and finished under fire — hours of work compressed into
     // a battle, repeatedly, which is a free repair with extra steps.
+    // `reason`, not `error`. This branch was the one refusal in the file that
+    // used the other key, and both consumers read `reason` — so the modal
+    // printed "Engineering / undefined" and the spoken order had the engineer
+    // say `undefined` out loud, on the seven recipes that were affordable
+    // enough to be offered mid-fight.
     if (this.engagement && !this.engagement.over) {
-      return { ok: false, error: 'The shop is sealed at red alert, Captain.' };
+      return { ok: false, reason: 'The shop is sealed at red alert, Captain.' };
     }
     return beginFabrication(this, recipeId);
   }
@@ -5666,7 +5811,7 @@ export class Game {
     const done = this.noLongerInCommand();
     if (done) return done;
     if (this.engagement && !this.engagement.over) {
-      return { ok: false, error: 'Not while we are under fire, Captain.' };
+      return { ok: false, reason: 'Not while we are under fire, Captain.' };
     }
     // The details out are not the machine shop, and they do not wait on it.
     // Spending hours is spending hours: this used to sit below the guard

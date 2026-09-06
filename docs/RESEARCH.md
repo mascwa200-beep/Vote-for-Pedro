@@ -7491,6 +7491,194 @@ id `encounterChoices` actually offers and requires the resolver's distress
 branches to be among them.
 
 
+## 86. Eight taps rebuilt the ship in the middle of the battle
+
+`Game.effectRepairs` has carried a doc comment ending *"…and is refused in a
+fight for the obvious reason"* since it was written. There was no such guard in
+the body. Its only refusals were `noLongerInCommand()` and a sound hull.
+
+Combat deliberately does not take the screen — `main.js` says so at length,
+*"You are on the bridge and they are on the viewer, which is where a fight is
+supposed to happen"* — so the **Effect repairs** button sat on the bridge for
+the whole battle. Measured, in a live engagement against an Orion raider:
+
+```
+crippled, mid-fight:
+  hull 15%   subs all 0.20   mounts 0.10 OFF ×3
+
+after 8 taps of "Effect repairs" (fight still live):
+  hull 100%  subs all 1.00   mounts 1.00 ×3
+```
+
+A wreck became a factory-fresh starship, guns back on line, without the enemy
+getting a tick. That is a full starbase overhaul, from the chair, in a battle —
+and it is the combat layer, which the whole simulator is built around, defeated
+by one button pressed eight times.
+
+### Three promises, in one block of code
+
+- **The method's own doc comment** said it was refused in a fight. It was not.
+- **The button's own subtitle** said *"Costs time. Cannot fully repair without
+  a starbase."* It could, and did.
+- **The completion text** repeated it — *"the chief says that is the best she
+  can do without a starbase"* — in two more places. `grep` found the sentence in
+  three strings and the rule in none.
+
+### The sibling settles it
+
+`Game.seeToTheWounded` documents itself as *"`effectRepairs` for the crew, and
+**deliberately built the same way**"*, and it has an engagement guard, a room
+guard, and a per-use cap whose comment reads *"The cap is what keeps this an
+order rather than a way to skip a week."*
+
+The copy was stricter than the thing it was copied from. `effectRepairs` got
+the sentence about the guard and never the guard. The refusal wording here is
+taken from the sibling, because it is the same refusal.
+
+### The ceiling had to cover the hours, not just the order
+
+The fix was written as a cap on the order and measured immediately, which is
+the only reason this section is not wrong. It reported **90.5% against a
+ceiling of 85%**.
+
+`effectRepairs` costs 19.2 hours, and `passTime` runs damage control across
+whatever hours pass — the passive twin of the same act, whose own comment says
+*"a full hull from nothing would take about a fortnight underway"* and *"this is
+the only thing that does it under way, watched or not."* Capping the order alone
+left the hours the order spends to carry the ship back over the top on the way
+out. The order paid for its own defeat.
+
+So both go through one `repairUnderway`, and both take the ceiling. What does
+**not** take it is `Ship.repair` itself, which has six callers: a hull patch off
+the machine shop bench, two ship powers, an episode's scripted repair and a
+starbase are authored, finite events rather than the crew working between
+systems, and a whole ship is still reachable through every one of them.
+
+The ceiling is applied as `min(now, max(CAP, before))` rather than
+`min(now, CAP)`, so it can only ever hold a figure **down to** itself and never
+pull one **down to** itself: a hull a starbase already put at 95% is not clawed
+back to 85% because the captain asked the crew to look at the sensors. That
+distinction has its own guard, because the obvious one-liner gets it wrong.
+
+### The same moment, two more boards
+
+A captain under fire has three ways to spend time on their own ship. The other
+two failed differently, and both failed silently or worse:
+
+**The machine shop printed the literal word `undefined`.** `fabricate`'s combat
+branch returned `{ ok: false, **error**: … }` where every other refusal in the
+file — and its own delegate `beginFabrication` — returns `reason`. Both
+consumers read `reason`. Measured mid-fight, **7 of 13 recipes were drawn in the
+enabled colour**, and pressing one gave the captain:
+
+```
+Engineering
+undefined
+```
+
+The spoken order was the same bug in the other voice: the engineer said
+`undefined` out loud.
+
+**"Put the hours in" refused in total silence.** `workTheShop` returned a
+refusal the handler never read — it inspected only `r.done` — so there was no
+message, no log entry and no deny cue. The button did nothing and said nothing.
+The spoken path was worse still: the refusal fell through to the progress
+report, so ordering the shop on during a battle answered with the hours
+remaining on a job nobody was working.
+
+Both are fixed at the source rather than at the two screens each: one key, one
+guard, and `availableRecipes` now treats a fight as a blocking reason so the
+seven buttons grey out *with the reason on them* instead of refusing after the
+tap. The guard inside `fabricate` stays, because a screen is not a rule.
+
+### And two boards that misreported the room they stood in
+
+**`headcountOf` was dead.** Exported from `sim/occupancy.js`, doc-commented with
+its own reason — *"computing one from the other at the call site is how two
+counts come to disagree"* — imported and asserted by `tests/occupancy.test.js`,
+and **called by nothing in `src/`.** So every board in `sim/consoles.js`
+recomputed the number from `occupantsOf` alone and dropped the `stations` term,
+and the two counts came to disagree exactly as described. Walking versus true,
+by room:
+
+| room | manned stations | normal | red |
+| --- | --- | --- | --- |
+| hangar | 2 | 2 / 4 | **0 / 2** |
+| brig | 1 | 1 / 2 | 2 / 3 |
+| cargo | 2 | 2 / 4 | 0 / 2 |
+| sickbay | 3 | 0 / 3 | 0 / 3 |
+| auxcontrol | 4 | 0 / 4 | 2 / 6 |
+
+`ui/firstperson.js` draws a figure for **every** station carrying `crew`,
+unconditionally. So at red alert the shuttlebay board printed
+
+> The deck is clear. Nobody is working down here.
+
+to a captain looking at two of the flight deck crew — and the `bay_doors`
+station declares `crew: 'shuttlebay'` itself, so **the crewman reading it out
+was standing at it.** The board said the person in front of it was not there.
+
+One site is deliberately left alone: the chief surgeon's desk counts *patients*,
+and sickbay's occupancy rule genuinely is the sick list — injured officers plus
+casualties over twelve. Wiring `headcountOf` there would have added the three
+medical staff and made the number wrong in the other direction. The sentence was
+what needed fixing: *"413 aboard, 1 of them in here"* is false about the room and
+true about the sick list, so it now says **under care**.
+
+**The cargo transporter offered a beam-down it always refused.**
+`panel: 'transport'` is declared on two stations — the transporter console and
+the cargo transporter in the hold — and the panel coloured "Energise" on whether
+the ship was in orbit and nothing else, while `beamDown` also required the room.
+Measured in orbit of Sol I:
+
+```
+standing in transporter : "Transporter ready. Sol I is below us."  [blue]  -> BEAMED DOWN
+standing in cargo       : "Transporter ready. Sol I is below us."  [blue]  -> REFUSED
+```
+
+The panel's own comment says it *"refuses for reasons rather than being absent,
+because 'why can I not beam down' is a question the room should answer standing
+in it."* The one reason it never gave was the one that applied in the room it
+was being read in. It is now one `beamDownBlocker()` — the four conditions in a
+single place, called by the method for its refusals and by the board to colour
+its button — for the reason `directiveCost` and `leftACallUnanswered` (§85) both
+give: a rule written in two places is a rule that drifts. `transport` is the
+only cross-room panel whose action carries a room precondition, so this was the
+sole instance of that exact shape.
+
+### What the guards had to be written against
+
+Fourteen guards, each confirmed failing against its own control: the engagement
+guard removed (2 fail); the ceiling removed entirely (2); the ceiling written as
+the obvious `min(x, CAP)` (1); the ceiling moved inside `Ship.repair` (2);
+`fabricate` refusing on `error` again (1); `availableRecipes` blind to the fight
+again (1); the boards recomputing their counts at the call site (2 — and the
+control reproduced *"The deck is clear. Nobody is working down here."* verbatim,
+with two people in the room); the transport panel coloured on `orbitLabel` alone
+(1); and `beamDown` no longer routing through the blocker, so the two drift
+apart (3).
+
+Two things about the guards are worth recording, because both are patterns this
+dossier keeps meeting.
+
+**A title claimed the guard that did not exist.** `wiring.test.js` has a test
+called *"blue alert makes repairs go further, **and is refused under fire**"*.
+What it asserts is that *blue alert* is refused mid-engagement — a different
+sentence about a different thing. For as long as that name sat in the file, the
+place where this guard belonged looked occupied.
+
+**A guard can assert a function's arithmetic and prove nothing about its
+wiring.** `tests/occupancy.test.js` checks that `headcountOf` returns
+`stationed + walking` — re-deriving the answer from the same two terms the
+function uses. It passed happily for the entire period during which nothing in
+`src/` called the function at all. The new guard reads the number through
+`stationReport`, which is the layer that was actually broken.
+
+And the whole existing suite — 1,920 tests — passed against every one of these
+defects before a line was changed. Nothing had ever asserted that a ship could
+not be rebuilt in a battle, because nothing had ever asked.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

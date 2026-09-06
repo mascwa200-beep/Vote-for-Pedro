@@ -24,6 +24,7 @@ import { Game } from '../src/core/state.js';
 import { getShipClass, SHIP_LIST } from '../src/world/ships.data.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { SYSTEMS, SYSTEM_BY_ID } from '../src/world/systems.data.js';
+import { ROOMS } from '../src/world/interiors.data.js';
 import { buildRoster, STATIONS } from '../src/world/crews.data.js';
 import { resolveHail, HAIL_ENDING } from '../src/sim/diplomacy.js';
 import { ABILITIES, ABILITY_LIST, abilityPool, Officer } from '../src/sim/officers.js';
@@ -1509,6 +1510,67 @@ test('beaming down needs an orbit, a room, and a world to stand on', () => {
   assert.ok(g.ashore, 'the order succeeded and the captain is still aboard');
   assert.equal(g.walk.roomId, 'surface');
   assert.equal(g.walk.room.name, r.label);
+});
+
+test('a transporter panel offered in a room is one that works in that room', () => {
+  // `panel: 'transport'` is declared on TWO stations — the transporter console
+  // and the cargo transporter down in the hold — and the panel coloured
+  // "Energise — beam down" on `g.orbitLabel` and nothing else. Standing at the
+  // cargo transporter in orbit of a world, a captain read "Transporter ready",
+  // pressed a button in the enabled blue, and was told he would have to be in
+  // the transporter room. The panel's own comment says it "refuses for reasons
+  // rather than being absent, because 'why can I not beam down' is a question
+  // the room should answer standing in it"; the one reason it never gave was
+  // the one that applied where it was being read.
+  const rooms = Object.keys(ROOMS)
+    .filter((id) => (ROOMS[id].stations ?? []).some((s) => s.panel === 'transport'));
+  assert.ok(rooms.length >= 2,
+    `only ${rooms.length} room declares the transport panel, so this proves nothing`);
+  assert.ok(rooms.includes('cargo'), 'the cargo hold stopped carrying a transporter');
+
+  for (const room of rooms) {
+    const g = new Game({ seed: 8080 });
+    g.enterOrbit();
+    g.walk.enter(room);
+    const blocker = g.beamDownBlocker();
+    const r = g.beamDown();
+    // The panel colours the button on `blocker`; the method refuses on the
+    // same call. Whatever the answer is, it has to be the same answer.
+    assert.equal(!blocker, r.ok,
+      `in ${room} the board and the transporter disagree: `
+        + `blocker=${JSON.stringify(blocker)} beamDown=${JSON.stringify(r)}`);
+    if (blocker) {
+      assert.equal(typeof blocker.reason, 'string');
+      assert.ok(blocker.reason.length > 0, `${room}: refused with nothing to print`);
+      assert.ok(blocker.who, `${room}: nobody is saying it`);
+    }
+  }
+});
+
+test('and every compartment agrees with itself about the transporter', () => {
+  // The property, over the whole ship rather than the two rooms above: the
+  // predicate the screens read and the method the button calls cannot come
+  // apart anywhere.
+  for (const room of Object.keys(ROOMS)) {
+    const g = new Game({ seed: 8080 });
+    g.enterOrbit();
+    g.walk.enter(room);
+    assert.equal(!g.beamDownBlocker(), g.beamDown().ok, `${room} disagrees with itself`);
+  }
+});
+
+test('and the panel asks the transporter rather than guessing', () => {
+  // `main.js` is DOM-bound and cannot be imported here, so this reads it as
+  // text the way `wiring.test.js` does. The defect was arithmetic on
+  // `orbitLabel` standing in for the method's four conditions.
+  const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  const at = main.indexOf("case 'transport': {");
+  assert.ok(at > 0, 'the transport panel moved');
+  const body = main.slice(at, at + 2000);
+  assert.ok(/beamDownBlocker\(\)/.test(body),
+    'the transport panel decides for itself whether a beam-down is possible');
+  assert.ok(!/color: world \? 'blue' : 'ghost'/.test(body),
+    'the button is coloured on whether the ship is in orbit again');
 });
 
 test('a gas giant has nothing to beam down to', async () => {

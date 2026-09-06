@@ -883,10 +883,14 @@ class App {
         // question the room should answer standing in it.
         const g2 = this.game;
         const world = g2.orbitLabel;
+        // Two stations declare this panel — the transporter console and the
+        // cargo transporter — so it says which machine is being read, rather
+        // than announcing a transporter room the captain may not be standing
+        // in.
+        const cargo = g2.walk?.roomId === 'cargo';
         body.push(el('p', {
-          text: world
-            ? `Transporter ready. ${world} is below us.`
-            : 'Transporter ready. The ship is not in orbit of anything.',
+          text: `${cargo ? 'Cargo transporter' : 'Transporter'} ready. `
+            + (world ? `${world} is below us.` : 'The ship is not in orbit of anything.'),
         }));
         if (g2.ashore) {
           body.push(button('Energise — beam up', () => {
@@ -894,13 +898,16 @@ class App {
             this.executeOrder({ action: 'transport' }, 'energize');
           }, { color: 'blue', say: 'energise' }));
         } else {
-          body.push(button('Energise — beam down', () => {
+          // The same question the method asks, asked here rather than a
+          // different one. This checked whether the ship was in orbit and
+          // nothing else, so from the cargo hold it drew an enabled button that
+          // was refused every single time it was pressed.
+          const no = g2.beamDownBlocker();
+          body.push(button('Energise — beam down', no ? null : () => {
             this.closeModal();
             this.executeOrder({ action: 'beam_down' }, 'beam down');
-          }, { color: world ? 'blue' : 'ghost', say: 'two to beam down' }));
-          if (!world) {
-            body.push(el('p', { class: 'hint', text: 'Make standard orbit first, and there will be somewhere to go.' }));
-          }
+          }, { color: no ? 'ghost' : 'blue', disabled: !!no, say: 'two to beam down' }));
+          if (no) body.push(el('p', { class: 'hint', text: no.reason }));
         }
         break;
       }
@@ -2054,7 +2061,13 @@ class App {
         // to put the time in, and the time is real.
         const spend = Math.min(status.hoursRemaining, 8);
         const r = g.workTheShop(spend);
-        if (r.done) {
+        // A refusal fell through to the progress report below, so ordering the
+        // shop on during a battle answered with the hours left on a job nobody
+        // was working. Say no, and say why.
+        if (!r.ok) {
+          audio.play('ui_deny');
+          g.officerSays('engineering', r.reason, 'object');
+        } else if (r.done) {
           this.showMessage(r.done.recipe.name, [r.done.text]);
         } else {
           g.officerSays('engineering',

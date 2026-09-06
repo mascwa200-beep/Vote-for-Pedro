@@ -35,7 +35,7 @@ import { Game } from '../src/core/state.js';
 import { Character } from '../src/rules/character.js';
 import { ROOMS } from '../src/world/interiors.data.js';
 import { stationReport, REPORTING_STATIONS } from '../src/sim/consoles.js';
-import { boardedRooms, occupantsOf } from '../src/sim/occupancy.js';
+import { boardedRooms, occupantsOf, headcountOf } from '../src/sim/occupancy.js';
 
 const ship = (fn) => {
   const g = new Game({
@@ -270,5 +270,90 @@ describe('the two that opened the wrong panel rather than none', () => {
         assert.doesNotMatch(s, /shuttlecraft|shuttles ready|prisoner|inmate/i, `${id}: ${s}`);
       }
     }
+  });
+});
+
+// ============================================ the boards and the room they are in
+
+describe('a board counts the people standing in front of it', () => {
+  /** Which compartment each reporting station is bolted to. */
+  const roomOf = (stationId) => Object.keys(ROOMS)
+    .find((id) => (ROOMS[id].stations ?? []).some((s) => s.id === stationId));
+
+  test('every station that answers is in a room, or this suite is testing air', () => {
+    for (const id of REPORTING_STATIONS) {
+      assert.ok(roomOf(id), `${id} answers from no compartment on the ship`);
+    }
+  });
+
+  test('no board says its own compartment is empty while people are drawn in it', () => {
+    // The defect, stated as the thing that must not come back.
+    //
+    // `sim/consoles.js` recomputed its headcounts from `occupantsOf` alone and
+    // dropped the `stations` term that `headcountOf` carries, while
+    // `ui/firstperson.js` draws a figure for EVERY station with `crew` on it.
+    // So at red alert the shuttlebay board printed "The deck is clear. Nobody
+    // is working down here." to a captain looking at two of the flight deck
+    // crew — one of them standing at that very board, which declares
+    // `crew: 'shuttlebay'` itself.
+    const empty = /nobody is (?:working|in here)|the deck is clear|there is nobody/i;
+    for (const alert of ['normal', 'yellow', 'red', 'blue']) {
+      for (const id of REPORTING_STATIONS) {
+        const g = ship((x) => x.setAlert(alert));
+        const s = said(g, id);
+        if (!empty.test(s)) continue;
+        const room = roomOf(id);
+        assert.equal(headcountOf(g, room).crew, 0,
+          `${id} at ${alert} says its compartment is empty with `
+            + `${headcountOf(g, room).crew} drawn in it: ${s}`);
+      }
+    }
+  });
+
+  test('and the number a board prints is the number in the room', () => {
+    // Read through `stationReport`, not by calling `headcountOf` and comparing
+    // it to itself. `tests/occupancy.test.js` already asserts the arithmetic
+    // inside the function — it re-derives `stationed + walking` from the same
+    // two terms — and that assertion passed happily for as long as nothing in
+    // `src/` called the function at all. This is the one that would not have.
+    const cases = [
+      ['bay_doors', 'hangar', /(\d+) of the flight deck crew/],
+      ['brig_control', 'brig', /(\d+) on the door here/],
+      ['brig_control', 'corridor_sec', /(\d+) more on the deck/],
+      ['security', 'corridor_sec', /(\d+) of the security detail/],
+      ['rec_food', 'rec', /(\d+) of them are in here/],
+    ];
+    let checked = 0;
+    for (const alert of ['normal', 'yellow', 'red', 'blue']) {
+      for (const [id, room, pattern] of cases) {
+        const g = ship((x) => x.setAlert(alert));
+        const m = said(g, id).match(pattern);
+        if (!m) continue;
+        checked++;
+        assert.equal(Number(m[1]), headcountOf(g, room).crew,
+          `${id} at ${alert} reports ${m[1]} in ${room}, `
+            + `where ${headcountOf(g, room).crew} are standing`);
+      }
+    }
+    assert.ok(checked >= 8, `only ${checked} boards printed a number to check`);
+  });
+
+  test('and the sickbay desk counts patients, which is a different question', () => {
+    // Deliberately NOT wired to `headcountOf`. Sickbay's occupancy rule IS the
+    // patient list — injured officers plus casualties over twelve — so adding
+    // the three medical staff standing at the biobed, the lab and the desk
+    // would make the number wrong in the other direction. The sentence was
+    // what needed fixing: it read "413 aboard, 1 of them in here", which is
+    // false about the room and true about the sick list.
+    const g = ship((x) => { x.ship.crew = x.ship.maxCrew - 17; });
+    const s = said(g, 'cmo_desk');
+    assert.match(s, /under care/, s);
+    assert.doesNotMatch(s, /of them in here/, s);
+    const m = s.match(/(\d+) under care/);
+    assert.ok(m, s);
+    assert.equal(Number(m[1]), occupantsOf(g, 'sickbay').filter((o) => !o.intruder).length,
+      'the desk stopped counting the sick list');
+    assert.notEqual(Number(m[1]), headcountOf(g, 'sickbay').crew,
+      'the desk is now counting the staff as patients, which is the other bug');
   });
 });

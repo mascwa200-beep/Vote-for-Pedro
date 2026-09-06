@@ -457,6 +457,18 @@ export function boardedRooms(boarders) {
  * Separate from the list because the panel wants a number and the renderer
  * wants positions, and computing one from the other at the call site is how
  * two counts come to disagree.
+ *
+ * Which is exactly what happened, because for a long time nothing in `src/`
+ * called this. Every board in `sim/consoles.js` recomputed the number from
+ * `occupantsOf` alone and dropped the `stations` term, so every compartment
+ * with a manned console under-reported itself by the number of consoles in it.
+ * `ui/firstperson.js` draws a figure for every station with `crew` on it, so
+ * the people were standing there while the board said they were not: at red
+ * alert the shuttlebay reported "the deck is clear" to a captain looking at
+ * two of the flight deck crew, one of them at the very board printing it.
+ *
+ * The doc comment above was right about the failure mode and did not prevent
+ * it, because a function nothing calls prevents nothing.
  */
 export function headcountOf(game, roomId) {
   const all = occupantsOf(game, roomId);

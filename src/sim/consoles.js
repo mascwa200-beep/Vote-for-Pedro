@@ -16,7 +16,7 @@
 // "what is here is everything a power DOES; what stays in main.js is what a
 // power SOUNDS like". A report is data. The modal that shows it is not.
 
-import { occupantsOf, boardedRooms } from './occupancy.js';
+import { occupantsOf, headcountOf, boardedRooms } from './occupancy.js';
 
 /** A percentage, said the way a bridge officer says one. */
 const pc = (v) => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
@@ -106,7 +106,7 @@ const REPORTS = {
     } else {
       lines.push('No unauthorised personnel aboard.');
     }
-    const detail = occupantsOf(g, 'corridor_sec').filter((o) => !o.intruder).length;
+    const detail = headcountOf(g, 'corridor_sec').crew;
     lines.push(`${detail} of the security detail on watch on deck seven.`);
     lines.push(g.alert === 'red'
       ? 'The armoury is issuing sidearms.'
@@ -134,7 +134,7 @@ const REPORTS = {
     const dead = Math.max(0, (s.maxCrew ?? 0) - (s.crew ?? 0));
     lines.push(dead > 0
       ? `${dead} of the complement lost since we sailed. `
-        + `${s.crew} aboard, ${occupantsOf(g, 'sickbay').length} of them in here.`
+        + `${s.crew} aboard, ${occupantsOf(g, 'sickbay').filter((o) => !o.intruder).length} under care.`
       : `${s.crew} aboard and none of them lost. Long may it last.`);
     if (lost.length) {
       lines.push(`We are without ${lost.map((o) => o.name).join(', ')}.`);
@@ -174,8 +174,8 @@ const REPORTS = {
       // better than inventing one or than saying nothing.
       lines.push('Nobody is being held. The cells have been empty since we sailed.');
     }
-    const guard = occupantsOf(g, 'brig').filter((o) => !o.intruder).length;
-    const deck = occupantsOf(g, 'corridor_sec').filter((o) => !o.intruder).length;
+    const guard = headcountOf(g, 'brig').crew;
+    const deck = headcountOf(g, 'corridor_sec').crew;
     lines.push(`${guard} on the door here, ${deck} more on the deck.`);
     lines.push(g.alert === 'red'
       ? 'The armoury is issuing sidearms two compartments forward.'
@@ -197,7 +197,7 @@ const REPORTS = {
   bay_doors: (g) => {
     const s = g.ship;
     const air = s.subsystems?.lifesupport ?? 1;
-    const hands = occupantsOf(g, 'hangar').filter((o) => !o.intruder).length;
+    const hands = headcountOf(g, 'hangar').crew;
     const lines = [`Bay doors closed and locked. Deck pressure ${condition(air)} at ${pc(air)}.`];
     // Whether they could be opened, which is a different question from whether
     // they are — and the reason to have a board rather than a switch.
@@ -235,7 +235,7 @@ const REPORTS = {
    */
   rec_food: (g) => {
     const s = g.ship;
-    const here = occupantsOf(g, 'rec').filter((o) => !o.intruder).length;
+    const here = headcountOf(g, 'rec').crew;
     const lines = [];
     if (g.alert === 'red') {
       // Non-essential load, shed. The room being empty is the point.
