@@ -2906,6 +2906,12 @@ export class Game {
       { flag: 'khitomer_signed', weight: 0.15, line: 'Our name is on the Khitomer accord, Captain.' },
       { flag: 'kang_owes_you', weight: 0.20, line: 'Kang said what he said at Qo\'noS because of us, Captain.' },
       { flag: 'long_peace_signed', weight: 0.18, line: 'We put our name to the widened accord at Vulcan, Captain.' },
+      // Act one, three weeks into a commission, at the star the shakedown
+      // trials happen at. Whichever way it went, they are still referring to
+      // it in year five — which is the whole reason an act-one episode is
+      // worth writing rather than a sixth act-three one.
+      { flag: 'centauri_aid', weight: 0.14, line: 'We took eleven of theirs off a dying ship at Centauri, Captain.' },
+      { flag: 'centauri_watched', weight: -0.14, line: 'They remember that we watched at Centauri, Captain.' },
     ],
     romulan: [
       { flag: 'spared_warbird', weight: 0.15, line: 'We let one of theirs go home once, Captain.' },

@@ -552,4 +552,140 @@ export const CORE_EPISODES = [
         effects: { flag: 'inquiry_resolved' } },
     },
   },
+
+  // -------------------------------------------------------------------------
+  // Act 1 had two episodes and act 3 had seven, and act 1 is the one every
+  // captain plays. It is also the only act that can grow: `echoes.test.js`
+  // holds the spread across acts to five and it sits at exactly five, so an
+  // episode anywhere else fails that guard and one here loosens it.
+  //
+  // Set where `shakedown` already sends you. The trials happen at Alpha
+  // Centauri, so this is what is waiting when the ship arrives — a decision
+  // three weeks into a commission, taken by somebody with no record yet, that
+  // the Klingons are still referring to in year five.
+  {
+    id: 'centauri_drift', title: 'The Drift at Alpha Centauri', system: 'alpha_centauri', act: 1,
+    summary: 'A Klingon scout is adrift inside Federation space, and has not asked for help.',
+    stages: {
+      start: {
+        text: 'A hull on the long-range sensors, eleven million kilometres out and not under power. '
+          + 'The configuration is a Klingon scout — a small one, the kind that carries eleven or twelve '
+          + 'people. It is inside Federation space by three light-years and it is not transmitting.',
+        speaker: 'Communications',
+        choices: [
+          { id: 'scan', label: 'Take a close look before anything else', next: 'scanned',
+            effects: { xp: 80 } },
+          { id: 'hail', label: 'Open a channel', next: 'hailed',
+            effects: { xp: 60 } },
+          { id: 'report', label: 'Signal Starfleet and hold station', next: 'orders',
+            effects: { xp: 40, flag: 'centauri_reported' } },
+        ],
+      },
+      scanned: {
+        text: 'Their reactor is failing — not failed, failing, which is a slower and worse thing. '
+          + 'Eleven life signs, all forward of the breach. Weapons are cold and have been for hours. '
+          + 'Science puts the reactor somewhere under nine hours from the end of its argument.',
+        speaker: 'Science',
+        choices: [
+          { id: 'hail_now', label: 'Open a channel', next: 'hailed',
+            effects: { xp: 100, record: { anomaly_catalogued: 1 } } },
+          { id: 'stand_off', label: 'Hold at this range and keep watching', next: 'orders',
+            effects: { xp: 60, flag: 'centauri_reported' } },
+        ],
+      },
+      hailed: {
+        text: 'The channel opens on the fourth attempt. The officer who answers is a lieutenant, '
+          + 'because everybody senior to her is dead or holding the bulkhead shut. She says the ship '
+          + 'is under control, that they require nothing, and that we are to note in our log that they '
+          + 'require nothing. Behind her somebody is shouting numbers.',
+        speaker: 'Klingon lieutenant',
+        choices: [
+          { id: 'press', label: 'Tell her what our sensors say', next: 'orders',
+            effects: { xp: 140, setVar: { refused: false } } },
+          { id: 'accept', label: 'Note it in the log, as asked', next: 'orders',
+            effects: { xp: 80, setVar: { refused: true } } },
+        ],
+      },
+      orders: {
+        text: 'Starfleet Command acknowledges at four hours and eleven minutes. The reply is that '
+          + 'a foreign warship inside Federation space is a matter for Starfleet Command, that '
+          + 'Starfleet Command is considering it, and that the ship on station is best placed to '
+          + 'judge. Your first officer reads it twice and says that it means nothing at all.',
+        speaker: 'Starfleet Command',
+        choices: [
+          {
+            id: 'proceed',
+            label: 'Decide it here',
+            next: Object.assign((m) => (m.vars.refused ? 'decision_refused' : 'decision'), {
+              targets: ['decision', 'decision_refused'],
+              reads: 'refused',
+            }),
+            effects: { xp: 120 },
+          },
+          { id: 'defer', label: 'Wait for a real answer', outcome: 'handed_over',
+            effects: { xp: 200, record: { order_disobeyed: 0 } } },
+        ],
+      },
+      decision: {
+        text: 'Six hours left on the reactor, by our numbers and now by theirs too. The transporter '
+          + 'room can reach them. Engineering thinks two people and a bypass could hold the '
+          + 'containment long enough to get the ship home. Neither is a thing anybody has to do.',
+        speaker: 'First Officer',
+        choices: [
+          { id: 'beam', label: 'Take them off', outcome: 'towed',
+            effects: {
+              xp: 900, time: 0.4,
+              record: { lives_saved: 11, distress_answered: 1 },
+              standing: { klingon: 14 },
+              flag: 'centauri_aid',
+            } },
+          { id: 'repair', label: 'Send two people across with a bypass', outcome: 'towed',
+            effects: {
+              xp: 1100, time: 0.6, damage: 0.04,
+              record: { lives_saved: 11, distress_answered: 1 },
+              standing: { klingon: 18 },
+              flag: 'centauri_aid',
+            } },
+          { id: 'watch', label: 'Hold station and watch', outcome: 'watched',
+            effects: { xp: 300, standing: { klingon: -10 }, flag: 'centauri_watched' } },
+        ],
+      },
+      decision_refused: {
+        text: 'She said they required nothing and we wrote it down. Six hours left on their reactor. '
+          + 'The log will show that they refused, which is true, and that we believed them, which is '
+          + 'a different kind of true.',
+        speaker: 'First Officer',
+        choices: [
+          { id: 'anyway', label: 'Take them off anyway', outcome: 'towed',
+            effects: {
+              xp: 1000, time: 0.4,
+              record: { lives_saved: 11, distress_answered: 1 },
+              standing: { klingon: 10 },
+              flag: 'centauri_aid',
+            } },
+          { id: 'stand', label: 'Stand by the log', outcome: 'watched',
+            effects: { xp: 400, standing: { klingon: -6 }, flag: 'centauri_watched' } },
+        ],
+      },
+    },
+    start: 'start',
+    endings: {
+      towed: {
+        label: 'Eleven aboard',
+        text: 'They come across in threes, and the lieutenant comes last, which is correct. She does '
+          + 'not thank anybody and does not have to. The scout is under tow to the nearest yard '
+          + 'before the reactor finishes what it started.',
+      },
+      watched: {
+        label: 'We watched',
+        text: 'The reactor goes at seven hours and forty minutes. It is very bright and very quick '
+          + 'and then there is nothing on the sensors at all. The log is accurate in every particular.',
+      },
+      handed_over: {
+        label: 'Referred to Command',
+        text: 'A cruiser arrives in eleven hours with orders and a tractor beam. Whatever happened '
+          + 'aboard that scout in the meantime happened without us, and is somebody else\u2019s report.',
+      },
+    },
+  },
 ];

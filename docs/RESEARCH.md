@@ -6503,6 +6503,84 @@ anything.** Check that the arm you meant to break is broken, before reading what
 the guard did about it.
 
 
+## 78. The act every captain plays, and the two episodes in it
+
+The book is twenty-five episodes. Where they sit:
+
+| act | episodes |
+| --- | --- |
+| **1** | **2** — `shakedown`, `vega_raid` |
+| 2 | 5 |
+| 3 | **7** |
+| 4 | 6 |
+| 5 | 5 |
+
+**Act one is the thinnest act and the one every single captain plays.** It is the
+first hours of a five-year commission — the part that decides whether anybody
+has a sixth hour — and it had a tutorial and a fight in it.
+
+It is also **the only act that can grow**. `echoes.test.js` holds the spread
+across acts to five, and 7 − 2 is exactly five: an episode added to any other
+act fails that guard, and one added here loosens it to four. The constraint and
+the need pointed at the same place, which is the most comfortable a content
+decision ever gets.
+
+### Where it goes, and why there
+
+`shakedown` sends a new ship to Alpha Centauri for her trials — it says so, and
+one of its stages carries `system: 'alpha_centauri'` so the fiction and the gate
+agree. No episode is *set* there. So this is what is waiting when the ship
+arrives, at the star a new captain is already being sent to.
+
+**A Klingon scout, adrift inside Federation space, that has not asked for help
+and will not.** A failing reactor, eleven people, weapons cold for hours. Command
+acknowledges after four hours to say that it is a matter for Command, that
+Command is considering it, and that the ship on station is best placed to judge.
+
+Three endings: take them off, stand by the log, or hand it to the cruiser that
+arrives eleven hours later.
+
+### The reason for an act-one episode rather than a sixth act-three one
+
+Both outcomes write a flag that `Game.FACTION_MEMORY` reads, so **how Klingons
+open a channel with you for the rest of the commission depends on something
+decided in week three by a captain with no record yet**:
+
+| | weight | what the bridge says before you speak |
+| --- | --- | --- |
+| `centauri_aid` | +0.14 | *We took eleven of theirs off a dying ship at Centauri, Captain.* |
+| `centauri_watched` | −0.14 | *They remember that we watched at Centauri, Captain.* |
+
+That is the whole argument for filling act one first. A decision in act three has
+two acts left to echo in; this one has four.
+
+### What the structural guards demanded, and gave back
+
+An episode is not free-form — the suite holds a new one to a long list, and
+every item on it is a thing that would otherwise be discovered by a player:
+
+- every `next`, `branch` arm and functional-`next` target names a real stage;
+- a functional `next` must expose `.targets` and `.reads`, so the walker can
+  follow it and the var guard can see what it consumes;
+- every `setVar` must have a reader and every var read must be written by the
+  same episode — `refused` is written at the hail and routes the decision;
+- every stage keeps at least one choice with no `requires.var`, so nothing is
+  reachable only by having done something;
+- every `outcome` has an ending and every ending is reachable from an outcome;
+- **every flag set must be read by a gate or by `FACTION_MEMORY`** — which is
+  what turned a decision into a consequence rather than a variable;
+- 30 random walks must reach `complete` in under 120 steps;
+- and the record kinds it writes must be weighted or explicitly weightless,
+  which is §74's guard doing its job on content written after it.
+
+Walked by hand as well as by the validators, because a graph that satisfies a
+walker is not the same as a scene that reads: three paths, three endings, and
+the var routing proven by the fact that `repair` exists only on one decision
+stage and `stand` only on the other.
+
+Act spread **5 → 4**. Episodes **25 → 26**.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
