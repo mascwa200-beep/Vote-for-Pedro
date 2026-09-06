@@ -83,8 +83,13 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'hail', label: 'Demand an explanation', next: 'negotiate',
             effects: { xp: 300 } },
+          // All four roads out of this episode's fights end at `battle`, and
+          // `battle` opens "The warbird is dead in space, venting, and its
+          // commander is still alive on an open channel. He asks you not to
+          // board." A commander who can ask anything is aboard a hull that was
+          // stopped, not emptied — so every one of those fights is a `disable`.
           { id: 'fire', label: 'Fire before they can cloak again', next: 'battle',
-            effects: { combat: { faction: 'romulan', ships: ['warbird'] },
+            effects: { combat: { faction: 'romulan', ships: ['warbird'], objective: 'disable' },
               standing: { romulan: -25 }, flag: 'fired_first_neutral_zone',
               record: { violated_border: 1 } } },
         ],
@@ -94,7 +99,8 @@ export const FRONTIER_EPISODES = [
         speaker: 'Tactical',
         choices: [
           { id: 'fight', label: 'Return fire', next: 'battle',
-            effects: { combat: { faction: 'romulan', ships: ['warbird'] }, damage: 0.15 } },
+            effects: { combat: { faction: 'romulan', ships: ['warbird'], objective: 'disable' },
+              damage: 0.15 } },
         ],
       },
       sighted: {
@@ -108,7 +114,9 @@ export const FRONTIER_EPISODES = [
             effects: {
               // Decloaked and not expecting it. The warbird is the same ship;
               // it simply has not raised anything yet.
-              combat: { faction: 'romulan', ships: ['warbird'], shieldsAt: 0.15 },
+              combat: {
+                faction: 'romulan', ships: ['warbird'], shieldsAt: 0.15, objective: 'disable',
+              },
               xp: 700, standing: { romulan: -20 }, flag: 'fired_first_neutral_zone',
             } },
           { id: 'watch', label: 'Let it go and follow it', next: 'revealed',
@@ -122,8 +130,10 @@ export const FRONTIER_EPISODES = [
           { id: 'let_go', label: 'Let him go. Report the weapon', outcome: 'reported',
             effects: { xp: 900, record: { anomaly_catalogued: 2 }, standing: { romulan: 10, federation: 6 },
               flag: 'romulan_cloak_reported' } },
+          // "Stop him" is the order, and he has just said he expects you to
+          // try to stop him leaving. Stopping is not killing.
           { id: 'stop', label: 'Stop him', next: 'battle',
-            effects: { combat: { faction: 'romulan', ships: ['warbird'] } } },
+            effects: { combat: { faction: 'romulan', ships: ['warbird'], objective: 'disable' } } },
         ],
       },
       battle: {
@@ -255,8 +265,29 @@ export const FRONTIER_EPISODES = [
         text: 'Two hours in, a storm front takes out the lead freighter’s shields, and sensors pick up three impulse signatures moving in formation. Nobody flies formation in here by accident.',
         speaker: 'Tactical',
         choices: [
+          // The convoy is in the fight now.
+          //
+          // The order is "put the ship between them and the convoy" and the
+          // stage it leads to opens "The Galor breaks off. The convoy is
+          // intact" — an assertion about six ships that were not on the board.
+          // Whatever the captain did, the freighters could not be hit, could
+          // not be lost, and the line was true before the fight started.
           { id: 'shield', label: 'Put the ship between them and the convoy', next: 'fight',
-            effects: { combat: { faction: 'cardassian', ships: ['galor'] }, damage: 0.1, xp: 400 } },
+            effects: {
+              combat: {
+                faction: 'cardassian', ships: ['galor'], objective: 'protect',
+                // ONE hull, and the count is forced rather than chosen.
+                // `settle` fails a protect objective only when EVERY escort is
+                // dead, so with a convoy of three the fight is still won when
+                // two of them burn — and the stage this leads to would then
+                // say "The convoy is intact" over two wrecks. One ship makes
+                // both outcomes exactly true: she lives and the line is right,
+                // or she does not and the episode ends saying so.
+                escort: ['freighter'],
+                failedOutcome: 'lost',
+              },
+              damage: 0.1, xp: 400,
+            } },
           { id: 'storm', label: 'Lead them into the storm front', next: 'storm',
             requires: { skill: 'impulse_thrusters', ranks: 2 }, effects: { xp: 600 } },
           { id: 'scatter', label: 'Order the convoy to scatter', next: 'scatter',
@@ -296,6 +327,14 @@ export const FRONTIER_EPISODES = [
       delivered: { label: 'Delivered', text: 'Bajor gets its vaccine with three hours to spare.' },
       partial: { label: 'Partially delivered', text: 'Half the doses. The triage decisions are somebody else’s now.' },
       late: { label: 'Arrived late', text: 'The long route was safe. Nine hundred people did not have that long.' },
+      // Reachable only by losing the convoy in the fight, which is a thing that
+      // could not happen until the freighters were put on the board.
+      lost: {
+        label: 'The convoy was lost',
+        text: 'You came out of the Badlands alone, with your shields holding and nothing behind you. '
+          + 'Six thousand doses are scattered across four hundred kilometres of plasma front. '
+          + 'Bajor is told by somebody else.',
+      },
     },
   },
 

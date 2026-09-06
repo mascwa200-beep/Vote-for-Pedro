@@ -25,6 +25,8 @@ import assert from 'node:assert/strict';
 import { Game } from '../src/core/state.js';
 import { Ship } from '../src/sim/ship.js';
 import { OUTCOMES, OBJECTIVES, disarmed } from '../src/sim/combat.js';
+import { Character } from '../src/rules/character.js';
+import { EPISODES } from '../src/missions/episodes/index.js';
 
 /**
  * Knock every gun off a hull, properly.
@@ -190,5 +192,174 @@ describe('and a mission can ask for one', () => {
     assert.ok(g.pendingCombat, 'no fight was queued, so this proves nothing');
     assert.equal(g.pendingCombat.objective, 'disable');
     assert.ok(id != null);
+  });
+});
+
+// ================================ the fights the mission book actually orders
+
+/**
+ * The engine had all four objectives and no episode had ever asked for one.
+ *
+ * Probed before any of this: 16 episode fights, 0 objectives. Every scripted
+ * battle in the game was won by emptying the board — including the six whose
+ * next stage is already written as though the enemy survived it.
+ *
+ * These guards are about the SHIPPED EPISODE DATA reaching a real engagement.
+ * Asserting `effects.combat.objective === 'disable'` would only re-read the
+ * line that was just written; every one of these stages the choice through the
+ * game and reads the `Engagement` that comes out the other side.
+ */
+describe('the objectives the episodes ask for', () => {
+  /** Every combat spec in the book, with where it came from. */
+  const SPECS = [];
+  for (const ep of EPISODES) {
+    for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
+      for (const c of stage.choices ?? []) {
+        if (c.effects?.combat) SPECS.push({ ep, sid, c, spec: c.effects.combat });
+      }
+    }
+  }
+
+  /** Stage one choice for real and hand back the engagement it produced. */
+  function order(entry, { seed = 5n } = {}) {
+    const g = new Game({
+      seed, crewMode: 'original', shipClass: 'constitution', difficulty: 'lieutenant',
+      character: new Character({ speciesId: 'human', careerId: 'command' }),
+    });
+    g.progress.addXP(200000, { ledger: g.ledger });
+    const m = g.missions.start(entry.ep.id, g);
+    m.stageId = entry.sid;
+    const need = m.stageLocation(m.stage);
+    if (need) g.locationId = need;
+    m.choose(entry.c.id);
+    // Both halves, exactly as `state.js` does it: the id has to land on the
+    // mission or `finishCombat` will not recognise the fight as this one's.
+    const fid = g.orderTheStagesFight(m.pending.combat);
+    if (m.pending && fid != null) m.pending.fightId = fid;
+    g.update(1 / 30);
+    return { g, m, eng: g.engagement };
+  }
+
+  test('every objective an episode names is one the engine implements', () => {
+    // A name the engine does not know is silently downgraded to `destroy` by
+    // the constructor, and the Orders panel is hidden for `destroy` — so a typo
+    // produces a working, wrong fight that looks exactly like a correct one.
+    assert.ok(SPECS.length >= 16, `only ${SPECS.length} episode fights found`);
+    for (const { ep, sid, c, spec } of SPECS) {
+      assert.ok(OBJECTIVES[spec.objective ?? 'destroy'],
+        `${ep.id}/${sid}/${c.id} asks for "${spec.objective}", which is not an objective`);
+    }
+  });
+
+  test('the objective an episode asks for is the one the fight is given', () => {
+    const named = SPECS.filter((s) => s.spec.objective);
+    assert.ok(named.length >= 7,
+      `only ${named.length} episode fights name an objective — this suite would prove little`);
+    for (const entry of named) {
+      const { eng } = order(entry);
+      assert.ok(eng, `${entry.ep.id}/${entry.sid}/${entry.c.id} started no fight`);
+      assert.equal(eng.objective, entry.spec.objective,
+        `${entry.ep.id}/${entry.sid}/${entry.c.id} asked for ${entry.spec.objective}`);
+      assert.equal(eng.objectiveTime, entry.spec.objectiveTime ?? 0,
+        `${entry.ep.id}/${entry.sid}/${entry.c.id} lost its clock`);
+    }
+  });
+
+  test('fights that share an aftermath stage share an objective', () => {
+    // Derived, not listed. Both roads into `archanis_claim/battle` describe the
+    // same crippled D7, and all four into `outpost_silence/battle` the same
+    // living commander — so if one of them is a `disable` every one of them is,
+    // or the shared prose is true down one road and false down another.
+    const groups = new Map();
+    for (const { ep, sid, c, spec } of SPECS) {
+      if (typeof c.next !== 'string') continue;
+      const key = `${ep.id}/${c.next}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ from: `${sid}/${c.id}`, objective: spec.objective ?? 'destroy' });
+    }
+    const shared = [...groups].filter(([, v]) => v.length > 1);
+    assert.ok(shared.length >= 2, 'no aftermath stage is shared, so this proves nothing');
+    for (const [key, arms] of shared) {
+      const kinds = new Set(arms.map((a) => a.objective));
+      assert.equal(kinds.size, 1,
+        `${key} is reached by ${arms.map((a) => `${a.from} (${a.objective})`).join(' and ')}`);
+    }
+  });
+
+  test('a disable fight ends with the hostile alive, on the shipped spec', () => {
+    const entries = SPECS.filter((s) => s.spec.objective === 'disable');
+    assert.ok(entries.length >= 6, `only ${entries.length} disable fights`);
+    for (const entry of entries) {
+      const { eng } = order(entry);
+      for (const h of eng.hostiles) disarm(h);
+      eng.update(1 / 30);
+      assert.equal(eng.over, true,
+        `${entry.ep.id}/${entry.sid}/${entry.c.id}: every gun is out and the fight went on`);
+      assert.equal(eng.hostiles.every((h) => !h.destroyed), true,
+        `${entry.ep.id}/${entry.sid}/${entry.c.id}: won by killing, which is not disabling`);
+    }
+  });
+
+  test('the convoy is on the board, and is what the objective is about', () => {
+    const entry = SPECS.find((s) => s.spec.objective === 'protect');
+    assert.ok(entry, 'no episode asks for a protect objective');
+    const { eng } = order(entry);
+    assert.equal(eng.protectees.length, entry.spec.escort.length,
+      'the escort the episode staged is not the escort the objective is about');
+    assert.ok(eng.protectees.length > 0, 'an empty escort makes protect a no-op that always passes');
+    for (const s of eng.protectees) assert.ok(eng.allies.includes(s), 'the escort is not in the fight');
+  });
+
+  test('a ship that joins later does not make the objective unfailable', () => {
+    // The trap this whole `protectees` split exists for. A reputation perk's
+    // escort and the relief ship `callForHelp` pushes in mid-fight both land in
+    // `eng.allies`, and `settle` fails a protect objective only when EVERY ship
+    // in the list it reads is dead. Reading `allies`, a captain who had bought
+    // an escort could watch the convoy burn and never lose the objective.
+    const entry = SPECS.find((s) => s.spec.objective === 'protect');
+    const { eng } = order(entry);
+    eng.allies.push(new Ship('miranda', { faction: 'federation', name: 'USS Late' }));
+    for (const s of eng.protectees) s.destroyed = true;
+    eng.update(1 / 30);
+    assert.equal(eng.over, true, 'the convoy is gone and the fight went on');
+    assert.equal(eng.outcome, 'failed');
+  });
+
+  test('losing the convoy is not the same as breaking off', () => {
+    const entry = SPECS.find((s) => s.spec.objective === 'protect');
+
+    const a = order(entry);
+    for (const s of a.eng.protectees) s.destroyed = true;
+    a.g.update(1 / 30);
+
+    const b = order(entry);
+    b.eng.end('escaped');
+    b.g.update(1 / 30);
+
+    assert.equal(a.eng.outcome, 'failed');
+    assert.equal(b.eng.outcome, 'escaped');
+    assert.equal(a.m.complete, true, 'the convoy was lost and the episode carried on regardless');
+    assert.equal(a.m.outcome, entry.spec.failedOutcome);
+    assert.notEqual(a.m.outcome, b.m.outcome,
+      'losing the escort and walking away end the episode the same way');
+  });
+
+  test('every fight whose aftermath describes a survivor is not a destroy fight', () => {
+    // The relation the whole change is for, derived from the prose rather than
+    // from a list of episode ids. If the stage a fight lands on says the enemy
+    // is crippled, venting, still alive or intact, then a fight that can only
+    // be won by emptying the board is telling the player something untrue.
+    const SURVIVED = /crippled|drifting|venting|dead in space|still alive|is intact|survivors/i;
+    const wrong = [];
+    for (const { ep, sid, c, spec } of SPECS) {
+      if (typeof c.next !== 'string') continue;
+      const after = ep.stages?.[c.next];
+      if (!after?.text || !SURVIVED.test(after.text)) continue;
+      if ((spec.objective ?? 'destroy') === 'destroy') {
+        wrong.push(`${ep.id}/${sid}/${c.id} -> ${c.next}`);
+      }
+    }
+    assert.deepEqual(wrong, [],
+      'these fights can only be won by killing, and land on a stage that says otherwise');
   });
 });

@@ -174,6 +174,21 @@ export class Engagement {
     this.player = player;
     this.hostiles = hostiles;
     this.allies = opts.allies ?? [];
+    // The ships a `protect` objective is actually ABOUT, which is not the same
+    // list as `allies` and must not be one.
+    //
+    // Two things append to `allies` that have nothing to do with the escort: a
+    // reputation perk's escort, added before the engagement is built, and the
+    // relief ship `callForHelp` pushes in mid-fight. `settle` fails a protect
+    // objective only when every ship in the list is dead, so either of those
+    // makes the objective UNFAILABLE — the convoy dies, the perk Miranda is
+    // still flying, and the fight goes on being winnable. A captain who had
+    // bought an escort could never lose a convoy.
+    //
+    // Snapshotted with `slice()` for the same reason: a live reference would
+    // pick up whoever joined later. The `?? this.allies` fallback keeps every
+    // caller that stages allies without distinguishing them working as before.
+    this.protectees = (opts.protectees ?? this.allies).slice();
     this.rng = rng;
     this.name = opts.name ?? 'Engagement';
     this.objective = OBJECTIVES[opts.objective] ? opts.objective : 'destroy';
@@ -906,7 +921,7 @@ export class Engagement {
     // and letting the player go on to kill every hostile and be told they won
     // would be the game reporting the opposite of what happened.
     if (this.objective === 'protect') {
-      const escort = this.allies.filter((s) => s && !s.withdrawn);
+      const escort = this.protectees.filter((s) => s && !s.withdrawn);
       if (escort.length && escort.every((s) => s.destroyed)) {
         this.pushLog('They are gone, Captain. That was what we were here for.', 'tactical');
         this.end('failed');

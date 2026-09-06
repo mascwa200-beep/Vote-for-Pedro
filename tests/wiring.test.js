@@ -1228,6 +1228,18 @@ describe('every episode graph is sound', () => {
       const declared = new Set();
       for (const [sid, stage] of Object.entries(ep.stages ?? {})) {
         for (const c of stage.choices ?? []) {
+          // A fight can end in the objective being missed rather than in the
+          // captain choosing anything, and that lands on an ending too. It is
+          // a SECOND outcome the same choice declares — `settleCombat` calls
+          // `finish` with it when the engagement comes back `failed` — so it
+          // is checked exactly as strictly as `outcome`, in both directions.
+          const failed = c.effects?.combat?.failedOutcome;
+          if (failed) {
+            declared.add(failed);
+            if (!endings.has(failed)) {
+              orphans.push(`${ep.id}/${sid}/${c.id} -> failedOutcome "${failed}"`);
+            }
+          }
           if (!c.outcome) continue;
           declared.add(c.outcome);
           if (!endings.has(c.outcome)) orphans.push(`${ep.id}/${sid}/${c.id} -> "${c.outcome}"`);

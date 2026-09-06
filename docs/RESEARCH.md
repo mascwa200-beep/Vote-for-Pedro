@@ -6902,6 +6902,155 @@ it: **an average over crossings tells you nothing about whether the crossing was
 handled.**
 
 
+## 82. Sixteen scripted battles, and every one of them was "kill them all"
+
+`src/sim/combat.js` defines four combat objectives — `destroy`, `disable`,
+`protect`, `survive` — and `Engagement.settle` implements all four, including a
+dedicated `failed` outcome for "the ship came through it and the thing the fight
+was FOR did not". `tests/objectives.test.js` proves the mechanism works, every
+assertion with its own control.
+
+**No episode had ever asked for one.** Probed across all 26 episodes: **16
+episode fights, 0 objectives.**
+
+### The prose had been describing the other outcome for years
+
+That would be an ordinary content gap if the writing agreed with the code. It
+does not. Six of those sixteen fights land on a stage **already written as
+though the enemy survived**:
+
+- `archanis_claim`. The button reads **"Arm weapons and target his engines"**.
+  Both roads into the aftermath open *"The D7 is crippled and drifting. Kang's
+  ship has forty-two survivors and no life support in the forward sections"* —
+  and offer **Beam them aboard / Leave them to their own fleet / Finish them**.
+  All three need a hull with a crew on it.
+- `outpost_silence`. All four of its fights land on *"The warbird is dead in
+  space, venting, and its commander is still alive on an open channel. He asks
+  you not to board."* One of the choices there is to board her and take the
+  cloaking device.
+
+A captain who won either fight **the only way the fight could be won** was then
+told about survivors aboard a ship that no longer existed, and invited to finish
+off people who were already dead.
+
+And a seventh, which is worse because nothing was simulated at all:
+
+- `badlands_run`. The button reads **"Put the ship between them and the
+  convoy"**, and the next stage asserts *"The Galor breaks off. The convoy is
+  intact"*. **There was no convoy in the engagement.** The freighters could not
+  be shot, could not be lost, and that sentence was true before the fight
+  started, whatever the captain did.
+
+Five fights were **rejected** on the same evidence. `vega_raid`'s aftermath is
+*"The raiders are dealt with"* — neutral, and true of a kill. The fights in
+`organia_question`, `donatu_standoff`, `tholian_border` and `the_cube` have no
+`next` at all: they are terminal, and no stage claims anything.
+
+### The trap that would have shipped a protect objective nobody could fail
+
+`settle` fails a `protect` objective only when **every** ship in the escort list
+is dead. The list it read was `Engagement.allies` — and two other things push
+into that array:
+
+- the escort a **reputation perk** buys (`state.js:3196`), added before the
+  engagement is built;
+- the **relief ship** `callForHelp` pushes in mid-fight (`state.js:4317`).
+
+Either one keeps `escort.every(destroyed)` false for ever. **A captain who had
+bought an escort could watch the convoy burn and never lose the objective**, and
+no fresh-captain test run would ever have noticed. The fix is a snapshot,
+`Engagement.protectees`, taken from what the caller staged and nothing else —
+`slice()`d, because a live reference would pick up whoever joined later.
+
+### One freighter, and the count is forced rather than chosen
+
+The first draft escorted three. It is wrong, for the same reason the whole
+section exists: with three hulls the fight is still **won** when two of them
+burn, and the aftermath stage would then say *"The convoy is intact"* over two
+wrecks — a new falsehood, introduced by the change meant to remove one. Because
+the objective is all-or-nothing, the escort has to be. One ship makes both
+outcomes exactly true.
+
+### Where a lost convoy goes
+
+`MissionEngine.settleCombat` computed `won = victory || routed` and routed
+everything else identically, so losing the convoy ended the episode exactly as
+walking away would — and told the captain "the engagement ended before it was
+settled", which is a description of the wrong event. `failed` now takes a route
+the fight itself names, and `badlands_run` gained the ending it could never
+reach. The captain is told *"we did not do what we came to do"*, then **"The
+convoy was lost"**.
+
+The reachability guard had to learn about this. `wiring.test.js` asserts every
+ending is named by some choice's `outcome` and every outcome has an ending — and
+it flagged the new ending as unreachable, correctly, because its model of
+reachability had no idea a fight could fail. It now treats a fight's
+`failedOutcome` as a second declared outcome, checked in both directions exactly
+as strictly.
+
+### Two instruments, and only one of them was mine to be proud of
+
+The guard that losing the convoy differs from breaking off **passed both arms
+identically on the first run** — `mission outcome: null` either way — which
+looked like the fix not working. It was the test: it called `eng.update()`
+directly, so `resolveCombat` never ran and `settleCombat` was never invoked at
+all. It also had to mirror `state.js:3789-3790` and put the fight id back on the
+mission, or `finishCombat` does not recognise the fight as that episode's. **A
+harness that skips the layer under test cannot distinguish a working fix from a
+missing one.**
+
+The `allies` contamination above was caught by an independent design pass over
+the same code, not by the implementation — which is the argument for reading the
+change back with fresh eyes before believing it. It was not visible from the
+diff; it is visible only from asking who else writes to that array.
+
+### Eight guards, six controls, all confirmed
+
+Guards assert relations over the shipped data rather than lists: every named
+objective is one the engine implements; the objective **and its clock** reach a
+real `Engagement` staged through the game; fights sharing an aftermath stage
+share an objective; a `disable` fight ends with the hostile alive; the convoy is
+on the board and is what the objective is about; a ship that joins later does
+not make it unfailable; losing the convoy differs from breaking off; and — the
+relation the whole change is for — **every fight whose aftermath describes a
+survivor is not a `destroy` fight**, matched against the prose rather than a
+list of episode ids.
+
+Controls, each confirmed failing: drop `objective` from the `pendingCombat`
+destructure (6 fail); never pass the escort as `allies` (3); read `allies`
+instead of `protectees`, which is the shipped code as it stood (1); revert the
+`failed` route (1); give only one of the two Archanis roads its objective (4);
+empty the escort (3).
+
+### The one cliff in it, measured and left standing
+
+The convoy survives at every rung of the ladder but the top one:
+
+| difficulty | hostiles fielded | convoy lost, of 8 |
+| --- | --- | --- |
+| Ensign → Commodore | 1 | **0** |
+| **Fleet Admiral** | **2** | **8** |
+
+`scaleHostileFleet` multiplies the Galor and the escort does not scale with it,
+so at the last rung shielding one freighter from two Galors inside a plasma
+front fails every time. Left as it is, deliberately: the other three routes
+through the episode do not involve the fight, and a captain who takes this one
+at Fleet Admiral now gets an authored ending that says the convoy was lost —
+where before the change the same captain was told *"The convoy is intact"*.
+Making it winnable there would mean either a tougher escort or a smaller enemy,
+and both are balance decisions nobody asked for. Recorded rather than hidden.
+
+### Recorded, and the strongest one is still open
+
+`the_cube` asks to **"Engage. Slow it down"**, and its two endings read *"You
+slowed it by four hours"* and *"it arrives at Wolf 359 leaking atmosphere"* —
+both saying in as many words that the cube is not destroyed, which is the only
+way the fight can be won. Measured, the cube kills the player 8 times out of 8.
+**Both authored endings, and their 1,800 and 2,400 experience, are unreachable
+in ordinary play.** That is a `survive` objective with a clock, it is a bigger
+change than this one, and it is the next thing to do here.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
