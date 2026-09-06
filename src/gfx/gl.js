@@ -46,9 +46,15 @@ void main() {
 }
 `;
 
-// Two lights and a rim term, all constant. There is no light in space, but
-// there is no ship in space either, and a hull lit from exactly one direction
-// loses half its faces to solid black.
+// Two lights, a highlight and a rim term. There is no light in space, but there
+// is no ship in space either, and a hull lit from exactly one direction loses
+// half its faces to solid black.
+//
+// This note used to say "two lights and a rim term, all constant", and both
+// halves of that were wrong. There was no rim term at all — the sentence above
+// stated the problem one should solve and then nothing solved it — and nothing
+// here has been constant since ambient and key strength became per-frame. The
+// rim exists now, and the four terms below say for themselves which they are.
 const FRAG = `
 precision mediump float;
 
@@ -68,6 +74,8 @@ uniform float uAmbient;   // how much light a surface facing away still gets
 uniform float uKeyPower;  // strength of the key
 uniform vec3 uEye;        // where the camera is, for the specular
 uniform float uGloss;     // 0 for matte, 1 for painted metal and moulded plastic
+uniform float uShine;     // the specular exponent: high is tight, low is broad
+uniform float uRim;       // light picked up along the silhouette; 0 disables
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -90,11 +98,57 @@ void main() {
   // coloured polygon, and the same bulkhead with a soft sheen sliding across it
   // as you turn your head is a wall. It is also the cheapest possible cue that
   // the camera is MOVING through a real place rather than panning a picture.
+  vec3 v = normalize(uEye - vWorld);
+
   if (uGloss > 0.001) {
-    vec3 v = normalize(uEye - vWorld);
     vec3 halfway = normalize(normalize(uKey) + v);
-    float spec = pow(max(dot(n, halfway), 0.0), 24.0) * uGloss;
-    lit += vec3(spec);
+    float spec = pow(max(dot(n, halfway), 0.0), uShine) * uGloss;
+    // Weighted by the surface's own brightness, which is the material channel
+    // this mesh already carries. Within one hull the trim colour is a scaled
+    // down version of the plate colour, so luminance separates panel from plate
+    // with no new vertex attribute; across hulls it makes matte Klingon green
+    // less glossy than Starfleet enamel, which is what those two hulls are.
+    //
+    // Nothing extra is needed to keep the highlight off a window: the mix below
+    // replaces the lit colour outright at vGlow = 1, so this term is already
+    // multiplied by (1 - vGlow) for free. Measured on the fleet rather than
+    // assumed — every painted surface carries glow 0 and every self-lit one
+    // carries glow above 0.45.
+    //
+    // (No backticks anywhere in this shader source: it is a JS template
+    // literal, and one in a comment ends the string.)
+    lit += vec3(spec * (0.35 + 0.65 * dot(vColor, vec3(0.299, 0.587, 0.114))));
+  }
+
+  // The rim the header at the top of this file has been promising since it was
+  // written, and which was not here.
+  //
+  // It is the term that works where the specular one does not, and the reason
+  // is geometric rather than a matter of taste. A highlight needs the normal to
+  // line up with the half-vector, which on a flat-shaded hull a few dozen
+  // pixels across is luck: the facets point where they point, the lobe is
+  // narrower than the gap between them, and the whole ship samples the lobe at
+  // one instant of one direction. Measured, wiring the specular alone moved the
+  // brightest pixel on a hull by thirteen levels out of 255 and was invisible
+  // at four times the clipping ceiling.
+  //
+  // A rim needs the normal to be PERPENDICULAR to the view, which every closed
+  // shape guarantees all the way round its own outline, on every frame, at
+  // every angle. That is why the header's complaint — a hull lit from one
+  // direction loses half its faces to solid black — is answered by this and not
+  // by a highlight: it puts light exactly where there is none, along the edge
+  // that separates the ship from the starfield.
+  //
+  // In the surface's OWN colour, not white. White hangs a halo round the hull
+  // and greys out the faction palette; multiplying the albedo can only lift a
+  // surface toward more of what it already is, so a Klingon hull rims green and
+  // a Starfleet one rims white without either being told to.
+  //
+  // Cubed, so it is confined to the facets that are genuinely edge-on. Squared
+  // reaches too far inboard and reads as fog on the hull.
+  if (uRim > 0.001) {
+    float rim = 1.0 - max(dot(n, v), 0.0);
+    lit += vColor * uTint * (rim * rim * rim * uRim);
   }
   // Per-vertex glow, or the whole-draw uniform, whichever is higher.
   //
@@ -218,6 +272,8 @@ export class Renderer {
       keyPower: gl.getUniformLocation(this.program, 'uKeyPower'),
       eye: gl.getUniformLocation(this.program, 'uEye'),
       gloss: gl.getUniformLocation(this.program, 'uGloss'),
+      shine: gl.getUniformLocation(this.program, 'uShine'),
+      rim: gl.getUniformLocation(this.program, 'uRim'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -226,6 +282,10 @@ export class Renderer {
     this._m4a = new Float32Array(16);
     this._m4b = new Float32Array(16);
     this._m3 = new Float32Array(9);
+    /** The frame's sheen and its tightness, for draws that name neither. */
+    this._gloss = 0;
+    this._shine = 24;
+    this._rim = 0;
 
     this._onLost = (e) => { e.preventDefault(); this.lost = true; this.buffers.clear(); };
     this._onRestored = () => { this.lost = false; this.restore(); };
@@ -294,7 +354,12 @@ export class Renderer {
     // Vacuum by default: one hard sun and nothing to bounce off.
     gl.uniform1f(this.uniform.ambient, 0.22);
     gl.uniform1f(this.uniform.keyPower, 0.85);
+    this._gloss = 0;
+    this._shine = 24;
+    this._rim = 0;
     gl.uniform1f(this.uniform.gloss, 0);
+    gl.uniform1f(this.uniform.shine, 24);
+    gl.uniform1f(this.uniform.rim, 0);
     return true;
   }
 
@@ -305,7 +370,9 @@ export class Renderer {
    * surface facing away from both still receives, which in a room is most of
    * the light and in space is almost none.
    */
-  setLighting({ key, fill, ambient = 0.22, keyPower = 0.85, eye, gloss = 0 } = {}) {
+  setLighting({
+    key, fill, ambient = 0.22, keyPower = 0.85, eye, gloss = 0, shine = 24, rim = 0,
+  } = {}) {
     if (this.lost) return;
     const { gl } = this;
     if (key) gl.uniform3f(this.uniform.key, key[0], key[1], key[2]);
@@ -313,7 +380,15 @@ export class Renderer {
     if (eye) gl.uniform3f(this.uniform.eye, eye[0], eye[1], eye[2]);
     gl.uniform1f(this.uniform.ambient, ambient);
     gl.uniform1f(this.uniform.keyPower, keyPower);
+    // The scene's default sheen. A draw may override it for one mesh; see
+    // `draw`. Remembered so that an overriding draw does not leak its value
+    // into the next one.
+    this._gloss = gloss;
     gl.uniform1f(this.uniform.gloss, gloss);
+    this._shine = shine;
+    gl.uniform1f(this.uniform.shine, shine);
+    this._rim = rim;
+    gl.uniform1f(this.uniform.rim, rim);
   }
 
   /**
@@ -421,10 +496,19 @@ export class Renderer {
 
   /**
    * Draw an uploaded mesh.
-   * @param {object} opts { model, normalMatrix, tint, alpha, emissive }
+   *
+   * `gloss` is per-DRAW rather than per-frame, which is what makes it a
+   * material and not a lighting setting. A painted hull and the asteroid it is
+   * flying past are lit by the same sun and are not the same substance; a
+   * single frame-wide sheen either puts a highlight on the rock or takes it off
+   * the ship. Everything else in a frame keeps whatever the last `setLighting`
+   * asked for, so a draw that says nothing about gloss is unchanged.
+   *
+   * @param {object} opts { model, normalMatrix, tint, alpha, emissive, gloss }
    */
   draw(key, mesh, {
     model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0,
+    gloss = null, shine = null, rim = null,
     // Default is the engagement volume, which is what almost every draw is.
     fogFar = 9000,
   }) {
@@ -454,6 +538,9 @@ export class Renderer {
     gl.uniform1f(this.uniform.alpha, alpha);
     gl.uniform1f(this.uniform.emissive, emissive);
     gl.uniform1f(this.uniform.fogFar, fogFar);
+    gl.uniform1f(this.uniform.gloss, gloss ?? this._gloss);
+    gl.uniform1f(this.uniform.shine, shine ?? this._shine);
+    gl.uniform1f(this.uniform.rim, rim ?? this._rim);
 
     gl.drawArrays(gl.TRIANGLES, 0, entry.vertexCount);
     this.drawCalls++;

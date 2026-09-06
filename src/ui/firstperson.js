@@ -38,7 +38,7 @@ import {
 import {
   orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE,
 } from '../world/orbit.js';
-import { hullMesh, hullScale } from '../gfx/blueprint.js';
+import { hullMesh, hullScale, HULL_GLOSS, HULL_SHINE, HULL_RIM } from '../gfx/blueprint.js';
 import { vista, fovFor, noseOf, joltShake, joltTint } from '../gfx/vista.js';
 import { drawCombatEffects } from '../gfx/effects.js';
 import { ROOMS } from '../world/interiors.data.js';
@@ -426,12 +426,10 @@ export class FirstPersonView {
     // stars contains, on average, less than one of them.
     r.setViewport(screen.x, screen.y, screen.w, screen.h);
     const lens = screen.h > 0 ? screen.w / screen.h : aspect;
-    // Back to vacuum inside the screen: one hard sun, deep shadow, which is
-    // what a hull a thousand kilometres away actually looks like.
-    r.setLighting({
-      key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
-      ambient: 0.20, keyPower: 0.9, gloss: 0,
-    });
+    // The vacuum lighting used to be set here, before the camera for this pass
+    // had been worked out. It is set below instead, once `eye` exists: the
+    // specular half-vector needs to know where the viewer is, and this is the
+    // only call that can tell it. Nothing draws between here and there.
     // The whole depth range, so the exterior sorts against itself properly —
     // a planet behind a ship stays behind it. What keeps the ROOM in front of
     // all of it is the depth clear after this pass, not a reserved slice.
@@ -498,6 +496,18 @@ export class FirstPersonView {
     lookAt(eye, at, this._up, this._view);
     multiply(this._proj, this._view, this._screenVP);
     r.setCamera(this._screenVP);
+
+    // Back to vacuum inside the screen: one hard sun, deep shadow, which is
+    // what a hull a thousand kilometres away actually looks like.
+    //
+    // `gloss` stays 0 for the SCENE — a starfield and a planet do not shine —
+    // and the hulls below ask for their own. `eye` is the addition: it is the
+    // only thing the specular needs that the renderer cannot work out for
+    // itself, and it is why this call had to move below the camera.
+    r.setLighting({
+      key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
+      ambient: 0.20, keyPower: 0.9, gloss: 0, eye,
+    });
 
     // The key light is the system's own primary, not a studio lamp. Which is
     // the whole terminator: the line between day and night on the world below
@@ -638,6 +648,9 @@ export class FirstPersonView {
           emissive: emisOf(0),
           alpha: s.cloaked ? 0.22 : 1,
           fogFar: VOLUME * 6,
+          gloss: HULL_GLOSS,
+          shine: HULL_SHINE,
+          rim: HULL_RIM,
         });
       }
 

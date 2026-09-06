@@ -7961,9 +7961,15 @@ void main() {
 }
 `;
 
-// Two lights and a rim term, all constant. There is no light in space, but
-// there is no ship in space either, and a hull lit from exactly one direction
-// loses half its faces to solid black.
+// Two lights, a highlight and a rim term. There is no light in space, but there
+// is no ship in space either, and a hull lit from exactly one direction loses
+// half its faces to solid black.
+//
+// This note used to say "two lights and a rim term, all constant", and both
+// halves of that were wrong. There was no rim term at all — the sentence above
+// stated the problem one should solve and then nothing solved it — and nothing
+// here has been constant since ambient and key strength became per-frame. The
+// rim exists now, and the four terms below say for themselves which they are.
 const FRAG = `
 precision mediump float;
 
@@ -7983,6 +7989,8 @@ uniform float uAmbient;   // how much light a surface facing away still gets
 uniform float uKeyPower;  // strength of the key
 uniform vec3 uEye;        // where the camera is, for the specular
 uniform float uGloss;     // 0 for matte, 1 for painted metal and moulded plastic
+uniform float uShine;     // the specular exponent: high is tight, low is broad
+uniform float uRim;       // light picked up along the silhouette; 0 disables
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -8005,11 +8013,57 @@ void main() {
   // coloured polygon, and the same bulkhead with a soft sheen sliding across it
   // as you turn your head is a wall. It is also the cheapest possible cue that
   // the camera is MOVING through a real place rather than panning a picture.
+  vec3 v = normalize(uEye - vWorld);
+
   if (uGloss > 0.001) {
-    vec3 v = normalize(uEye - vWorld);
     vec3 halfway = normalize(normalize(uKey) + v);
-    float spec = pow(max(dot(n, halfway), 0.0), 24.0) * uGloss;
-    lit += vec3(spec);
+    float spec = pow(max(dot(n, halfway), 0.0), uShine) * uGloss;
+    // Weighted by the surface's own brightness, which is the material channel
+    // this mesh already carries. Within one hull the trim colour is a scaled
+    // down version of the plate colour, so luminance separates panel from plate
+    // with no new vertex attribute; across hulls it makes matte Klingon green
+    // less glossy than Starfleet enamel, which is what those two hulls are.
+    //
+    // Nothing extra is needed to keep the highlight off a window: the mix below
+    // replaces the lit colour outright at vGlow = 1, so this term is already
+    // multiplied by (1 - vGlow) for free. Measured on the fleet rather than
+    // assumed — every painted surface carries glow 0 and every self-lit one
+    // carries glow above 0.45.
+    //
+    // (No backticks anywhere in this shader source: it is a JS template
+    // literal, and one in a comment ends the string.)
+    lit += vec3(spec * (0.35 + 0.65 * dot(vColor, vec3(0.299, 0.587, 0.114))));
+  }
+
+  // The rim the header at the top of this file has been promising since it was
+  // written, and which was not here.
+  //
+  // It is the term that works where the specular one does not, and the reason
+  // is geometric rather than a matter of taste. A highlight needs the normal to
+  // line up with the half-vector, which on a flat-shaded hull a few dozen
+  // pixels across is luck: the facets point where they point, the lobe is
+  // narrower than the gap between them, and the whole ship samples the lobe at
+  // one instant of one direction. Measured, wiring the specular alone moved the
+  // brightest pixel on a hull by thirteen levels out of 255 and was invisible
+  // at four times the clipping ceiling.
+  //
+  // A rim needs the normal to be PERPENDICULAR to the view, which every closed
+  // shape guarantees all the way round its own outline, on every frame, at
+  // every angle. That is why the header's complaint — a hull lit from one
+  // direction loses half its faces to solid black — is answered by this and not
+  // by a highlight: it puts light exactly where there is none, along the edge
+  // that separates the ship from the starfield.
+  //
+  // In the surface's OWN colour, not white. White hangs a halo round the hull
+  // and greys out the faction palette; multiplying the albedo can only lift a
+  // surface toward more of what it already is, so a Klingon hull rims green and
+  // a Starfleet one rims white without either being told to.
+  //
+  // Cubed, so it is confined to the facets that are genuinely edge-on. Squared
+  // reaches too far inboard and reads as fog on the hull.
+  if (uRim > 0.001) {
+    float rim = 1.0 - max(dot(n, v), 0.0);
+    lit += vColor * uTint * (rim * rim * rim * uRim);
   }
   // Per-vertex glow, or the whole-draw uniform, whichever is higher.
   //
@@ -8132,6 +8186,8 @@ class Renderer {
       keyPower: gl.getUniformLocation(this.program, 'uKeyPower'),
       eye: gl.getUniformLocation(this.program, 'uEye'),
       gloss: gl.getUniformLocation(this.program, 'uGloss'),
+      shine: gl.getUniformLocation(this.program, 'uShine'),
+      rim: gl.getUniformLocation(this.program, 'uRim'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -8140,6 +8196,10 @@ class Renderer {
     this._m4a = new Float32Array(16);
     this._m4b = new Float32Array(16);
     this._m3 = new Float32Array(9);
+    /** The frame's sheen and its tightness, for draws that name neither. */
+    this._gloss = 0;
+    this._shine = 24;
+    this._rim = 0;
 
     this._onLost = (e) => { e.preventDefault(); this.lost = true; this.buffers.clear(); };
     this._onRestored = () => { this.lost = false; this.restore(); };
@@ -8208,7 +8268,12 @@ class Renderer {
     // Vacuum by default: one hard sun and nothing to bounce off.
     gl.uniform1f(this.uniform.ambient, 0.22);
     gl.uniform1f(this.uniform.keyPower, 0.85);
+    this._gloss = 0;
+    this._shine = 24;
+    this._rim = 0;
     gl.uniform1f(this.uniform.gloss, 0);
+    gl.uniform1f(this.uniform.shine, 24);
+    gl.uniform1f(this.uniform.rim, 0);
     return true;
   }
 
@@ -8219,7 +8284,9 @@ class Renderer {
    * surface facing away from both still receives, which in a room is most of
    * the light and in space is almost none.
    */
-  setLighting({ key, fill, ambient = 0.22, keyPower = 0.85, eye, gloss = 0 } = {}) {
+  setLighting({
+    key, fill, ambient = 0.22, keyPower = 0.85, eye, gloss = 0, shine = 24, rim = 0,
+  } = {}) {
     if (this.lost) return;
     const { gl } = this;
     if (key) gl.uniform3f(this.uniform.key, key[0], key[1], key[2]);
@@ -8227,7 +8294,15 @@ class Renderer {
     if (eye) gl.uniform3f(this.uniform.eye, eye[0], eye[1], eye[2]);
     gl.uniform1f(this.uniform.ambient, ambient);
     gl.uniform1f(this.uniform.keyPower, keyPower);
+    // The scene's default sheen. A draw may override it for one mesh; see
+    // `draw`. Remembered so that an overriding draw does not leak its value
+    // into the next one.
+    this._gloss = gloss;
     gl.uniform1f(this.uniform.gloss, gloss);
+    this._shine = shine;
+    gl.uniform1f(this.uniform.shine, shine);
+    this._rim = rim;
+    gl.uniform1f(this.uniform.rim, rim);
   }
 
   /**
@@ -8335,10 +8410,19 @@ class Renderer {
 
   /**
    * Draw an uploaded mesh.
-   * @param {object} opts { model, normalMatrix, tint, alpha, emissive }
+   *
+   * `gloss` is per-DRAW rather than per-frame, which is what makes it a
+   * material and not a lighting setting. A painted hull and the asteroid it is
+   * flying past are lit by the same sun and are not the same substance; a
+   * single frame-wide sheen either puts a highlight on the rock or takes it off
+   * the ship. Everything else in a frame keeps whatever the last `setLighting`
+   * asked for, so a draw that says nothing about gloss is unchanged.
+   *
+   * @param {object} opts { model, normalMatrix, tint, alpha, emissive, gloss }
    */
   draw(key, mesh, {
     model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0,
+    gloss = null, shine = null, rim = null,
     // Default is the engagement volume, which is what almost every draw is.
     fogFar = 9000,
   }) {
@@ -8368,6 +8452,9 @@ class Renderer {
     gl.uniform1f(this.uniform.alpha, alpha);
     gl.uniform1f(this.uniform.emissive, emissive);
     gl.uniform1f(this.uniform.fogFar, fogFar);
+    gl.uniform1f(this.uniform.gloss, gloss ?? this._gloss);
+    gl.uniform1f(this.uniform.shine, shine ?? this._shine);
+    gl.uniform1f(this.uniform.rim, rim ?? this._rim);
 
     gl.drawArrays(gl.TRIANGLES, 0, entry.vertexCount);
     this.drawCalls++;
@@ -10238,6 +10325,72 @@ const PALETTE = {
 const paletteFor = (faction) => PALETTE[faction] ?? PALETTE.independent;
 
 /**
+ * How much a hull shines.
+ *
+ * The renderer has had a Blinn-Phong term since the interior was written, and
+ * its own note in `gl.js` argues the case: "a flat-shaded bulkhead with no
+ * highlight is a coloured polygon, and the same bulkhead with a soft sheen
+ * sliding across it as you turn your head is a wall." Rooms asked for it at
+ * 0.22. No hull in the game ever did — the tactical plot never called
+ * `setLighting` at all, and the two viewscreen passes named `gloss: 0`
+ * explicitly, under a comment about one hard sun and deep shadow. That is an
+ * argument about where the light comes FROM. A painted hull under a single hard
+ * sun is exactly when a highlight is sharpest.
+ *
+ * Faces that carry their own light — windows, bussards, the deflector — are
+ * untouched for free: the shader mixes the glow channel in AFTER the specular,
+ * so a fully-lit face replaces it. Measured on the built fleet rather than
+ * assumed: every painted surface carries glow 0, every self-lit one glow above
+ * 0.45.
+ *
+ * The value is not a taste call, it is the clipping ceiling. A Starfleet hull
+ * is the brightest paint in the game at 0.82, and its diffuse peak is already
+ * 0.82 × (0.22 ambient + 0.85 key) = 0.877. With the shader's luminance weight
+ * this lands the specular peak at exactly 1.000 — the brightest highlight that
+ * is still a highlight rather than a blown white patch. 0.3 would put it at
+ * 1.14 and flatten the one material it is most visible on. Klingon hulls, being
+ * darker paint, sit well under the ceiling and get proportionally less sheen,
+ * which is correct.
+ *
+ * It lives here, beside the palettes, because it is a property of the hull
+ * rather than of the scene, and in ONE place because the two draw sites that
+ * need it are in different files and a number written twice is a number that
+ * drifts.
+ */
+const HULL_GLOSS = 0.14;
+
+/**
+ * And how tight that highlight is.
+ *
+ * The exponent was 24 for everything, which is right for the surface it was
+ * written against — a bulkhead two metres from the camera, filling the frame.
+ * Across a face that large the view vector changes a lot from one fragment to
+ * the next, so the half-vector sweeps the whole specular lobe and the highlight
+ * slides across the wall, which is exactly what the shader's note describes.
+ *
+ * A hull seventeen hundred units away is the opposite case. The whole ship
+ * subtends a few dozen pixels, so the view vector is very nearly constant over
+ * all of it and the half-vector is effectively ONE direction. A flat-shaded hull
+ * then samples the lobe at its facet normals and nowhere else — and with an
+ * exponent of 24 the lobe is narrower than the gap between facets, so it is
+ * almost always missed entirely.
+ *
+ * Measured rather than argued: with the term wired and nothing else changed,
+ * the brightest pixel on the whole ship gained FOUR levels out of 255. The
+ * closest any facet came to the half-vector was a dot of 0.918, and 0.918^24 is
+ * 0.135 — the model and the pixels agree to the decimal. At 8 the same facet
+ * keeps half the highlight and its neighbours get a graded share, which is a
+ * sheen across a saucer rather than a glint that is never there.
+ *
+ * The ceiling is unchanged: the specular can never exceed `HULL_GLOSS`
+ * whatever the exponent, so broadening the lobe cannot make it clip.
+ */
+const HULL_SHINE = 8;
+
+/** How much light a hull picks up along its own outline. See the note in gl.js. */
+const HULL_RIM = 0.35;
+
+/**
  * Hull archetypes. `build` receives a MeshBuilder, the palette, and the
  * blueprint's own parameters.
  */
@@ -11126,6 +11279,9 @@ function hullScale(classId) {
 }
 
 __exports.paletteFor = paletteFor;
+__exports.HULL_GLOSS = HULL_GLOSS;
+__exports.HULL_SHINE = HULL_SHINE;
+__exports.HULL_RIM = HULL_RIM;
 __exports.DIMENSIONS = DIMENSIONS;
 __exports.BLUEPRINTS = BLUEPRINTS;
 __exports.proportionError = proportionError;
@@ -18437,7 +18593,7 @@ __define("src/ui/tactical3d.js", function (__exports, __require) {
 
 const { vec3, mat4, quat, identity, multiply, perspective, lookAt, compose, normalMatrix, quatFromEuler, quatAxisAngle, quatMultiply, project, sub, length: vlength, normalize, cross } = __require("src/gfx/math.js");
 const { Renderer } = __require("src/gfx/gl.js");
-const { hullMesh, hullScale, paletteFor } = __require("src/gfx/blueprint.js");
+const { hullMesh, hullScale, paletteFor, HULL_GLOSS, HULL_SHINE, HULL_RIM } = __require("src/gfx/blueprint.js");
 const { starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, arcMesh, VOLUME } = __require("src/gfx/scene.js");
 const { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } = __require("src/gfx/vista.js");
 const { inArc } = __require("src/sim/ship.js");
@@ -18943,19 +19099,35 @@ class TacticalView3D {
 
   /** Build the projection and view matrices for whichever camera is active. */
   setupCamera(aspect, dt) {
+    let eye;
     if (this.cameraMode === 'forward') {
       this.settleLook(dt);
       // Magnification is a narrower lens, not a nearer camera. Dividing the
       // field of view is what a real optical zoom does and it keeps the
       // parallax honest — a dolly would slide the ship through its own hull.
       perspective(fovFor(aspect) / this.magnification, aspect, 2, 40000, this._proj);
-      lookAt(this.forwardEye(this._eyeTmp), this.forwardTarget(this._look), vec3(0, 1, 0), this._view);
+      eye = this.forwardEye(this._eyeTmp);
+      lookAt(eye, this.forwardTarget(this._look), vec3(0, 1, 0), this._view);
     } else {
       perspective(52 * DEG, aspect, 5, 40000, this._proj);
-      lookAt(this.eye(), this.cam.focus, vec3(0, 1, 0), this._view);
+      eye = this.eye();
+      lookAt(eye, this.cam.focus, vec3(0, 1, 0), this._view);
     }
     multiply(this._proj, this._view, this._viewProj);
     this.renderer.setCamera(this._viewProj);
+    // Where the camera is, which this view had never told the renderer.
+    //
+    // `uEye` is set in exactly one place — `setLighting` — and this class did
+    // not call it at all, so the tactical plot ran on `beginFrame`'s defaults
+    // and the specular half-vector had no eye to work from. Nothing showed,
+    // because nothing here asked for a highlight either; enabling one without
+    // this line would have computed it against the origin and looked subtly
+    // wrong rather than failing loudly.
+    //
+    // Everything else is left at the frame default deliberately: `key` and
+    // `fill` are omitted so they keep `beginFrame`'s vacuum directions, and
+    // `gloss` stays 0 for the scene as a whole. A hull asks for its own.
+    this.renderer.setLighting({ eye });
   }
 
   /** Remember which system's scenery to draw. Cheap; safe to call per frame. */
@@ -19208,6 +19380,9 @@ class TacticalView3D {
       normalMatrix: normalMatrix(this._model, this._normal),
       tint,
       alpha: ship.cloaked ? 0.22 : 1,
+      gloss: HULL_GLOSS,
+      shine: HULL_SHINE,
+      rim: HULL_RIM,
     });
 
     // Drop line to the grid: this is what makes altitude legible.
@@ -20195,7 +20370,7 @@ const { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } = __re
 const { occupantsOf } = __require("src/sim/occupancy.js");
 const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME } = __require("src/gfx/scene.js");
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
-const { hullMesh, hullScale } = __require("src/gfx/blueprint.js");
+const { hullMesh, hullScale, HULL_GLOSS, HULL_SHINE, HULL_RIM } = __require("src/gfx/blueprint.js");
 const { vista, fovFor, noseOf, joltShake, joltTint } = __require("src/gfx/vista.js");
 const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
@@ -20582,12 +20757,10 @@ class FirstPersonView {
     // stars contains, on average, less than one of them.
     r.setViewport(screen.x, screen.y, screen.w, screen.h);
     const lens = screen.h > 0 ? screen.w / screen.h : aspect;
-    // Back to vacuum inside the screen: one hard sun, deep shadow, which is
-    // what a hull a thousand kilometres away actually looks like.
-    r.setLighting({
-      key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
-      ambient: 0.20, keyPower: 0.9, gloss: 0,
-    });
+    // The vacuum lighting used to be set here, before the camera for this pass
+    // had been worked out. It is set below instead, once `eye` exists: the
+    // specular half-vector needs to know where the viewer is, and this is the
+    // only call that can tell it. Nothing draws between here and there.
     // The whole depth range, so the exterior sorts against itself properly —
     // a planet behind a ship stays behind it. What keeps the ROOM in front of
     // all of it is the depth clear after this pass, not a reserved slice.
@@ -20654,6 +20827,18 @@ class FirstPersonView {
     lookAt(eye, at, this._up, this._view);
     multiply(this._proj, this._view, this._screenVP);
     r.setCamera(this._screenVP);
+
+    // Back to vacuum inside the screen: one hard sun, deep shadow, which is
+    // what a hull a thousand kilometres away actually looks like.
+    //
+    // `gloss` stays 0 for the SCENE — a starfield and a planet do not shine —
+    // and the hulls below ask for their own. `eye` is the addition: it is the
+    // only thing the specular needs that the renderer cannot work out for
+    // itself, and it is why this call had to move below the camera.
+    r.setLighting({
+      key: [0.55, 0.72, 0.42], fill: [-0.6, -0.2, -0.5],
+      ambient: 0.20, keyPower: 0.9, gloss: 0, eye,
+    });
 
     // The key light is the system's own primary, not a studio lamp. Which is
     // the whole terminator: the line between day and night on the world below
@@ -20794,6 +20979,9 @@ class FirstPersonView {
           emissive: emisOf(0),
           alpha: s.cloaked ? 0.22 : 1,
           fogFar: VOLUME * 6,
+          gloss: HULL_GLOSS,
+          shine: HULL_SHINE,
+          rim: HULL_RIM,
         });
       }
 
