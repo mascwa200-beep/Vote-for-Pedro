@@ -47,6 +47,47 @@ function survey(rolls = 4000) {
   return { kinds, pairs, titles, texts, live };
 }
 
+describe('the list of kinds is the list of kinds', () => {
+  test('every kind the world actually rolls is a declared kind', () => {
+    // Derived from what `rollEncounter` PRODUCES, not from the declaration.
+    //
+    // The first version of this guard iterated ENCOUNTER_KINDS and asked
+    // whether each was covered — which means deleting an entry made it check
+    // less and pass, and it did: the control ran clean. A list cannot be the
+    // authority on its own completeness.
+    //
+    // `trapped` had been produced by `buildTrap` since traps were written and
+    // was absent from the array. Two guards enumerate ENCOUNTER_KINDS to decide
+    // their coverage, so it was covered by neither, and that is how a trap
+    // whose button printed the wrong power channel survived a test whose whole
+    // subject is buttons printing the wrong thing.
+    const rolled = new Set();
+    for (let seed = 0; seed < 4000; seed++) {
+      const sys = SYSTEMS[seed % SYSTEMS.length];
+      const e = rollEncounter(new RNG(hashSeed(`kinds${seed}`)), sys.id, {});
+      if (e?.kind) rolled.add(e.kind);
+    }
+    assert.ok(rolled.size >= 8, `only ${rolled.size} kinds rolled; the survey has gone blind`);
+    const undeclared = [...rolled].filter((k) => !ENCOUNTER_KINDS.includes(k)).sort();
+    assert.deepEqual(undeclared, [],
+      'kinds the game rolls that ENCOUNTER_KINDS does not name, so nothing that enumerates it covers them');
+  });
+
+  test('and every declared kind is one the world can actually roll', () => {
+    // The other direction, so the array cannot grow entries that describe
+    // nothing. `challenge` is deliberately not a kind — it is a patrol with a
+    // flag — and this is what would catch it being added as one.
+    const rolled = new Set();
+    for (let seed = 0; seed < 4000; seed++) {
+      const sys = SYSTEMS[seed % SYSTEMS.length];
+      const e = rollEncounter(new RNG(hashSeed(`kinds${seed}`)), sys.id, {});
+      if (e?.kind) rolled.add(e.kind);
+    }
+    const phantom = ENCOUNTER_KINDS.filter((k) => !rolled.has(k)).sort();
+    assert.deepEqual(phantom, [], 'declared kinds the world never produces');
+  });
+});
+
 describe('what a five-year mission is made of', () => {
   const s = survey();
 

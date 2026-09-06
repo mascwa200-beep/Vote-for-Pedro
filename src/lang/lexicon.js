@@ -1243,7 +1243,26 @@ export const INTENTS = [
       'take us in close', 'close on it', 'take us alongside',
       'provide escort', 'escort them', 'see them through',
       'make contact anyway', 'make contact',
-      'use the device', 'everything to auxiliary', 'ride it out', 'sit it out',
+      // Both channels a trap can ask for. The button prints the one this trap
+      // actually uses, and until it did, a gravimetric eddy showed "Everything
+      // to engines" over the words "everything to auxiliary" — and saying what
+      // the button said parsed as nothing at all, with a suggestion to target
+      // somebody's engines. `build` below already routes any "everything to"
+      // to trap_power; it was only ever the recognition list that was short.
+      'use the device', 'everything to auxiliary', 'everything to engines',
+      'ride it out', 'sit it out',
+      // Answering a signal. Every SIGNALS entry prints its own phrase on its
+      // own button — "realign it", "grant it", "put the doctor on" — and not
+      // one of the eight was a phrase this parser had ever heard of. The
+      // button's whole job is to teach the language; for every signal in the
+      // game it taught a word the game did not know.
+      //
+      // `tests/lang.test.js` derives the list from SIGNALS and fails if a new
+      // signal arrives with a phrase that is not here, so these cannot drift
+      // apart again.
+      'answer it', 'take the packet aboard', 'exchange reports', 'realign it',
+      'run the sweep', 'pipe it through the ship', 'update it',
+      'put the doctor on', 'grant it',
       'observe them', 'watch them', 'watch what they are doing', 'keep an eye on them',
       // Springing an ambush the sensors caught. Without these, "take them
       // first" parsed as `mission_choice` and the phrase printed on the button
@@ -1273,6 +1292,9 @@ export const INTENTS = [
         [/\buse the device\b/, 'trap_device'],
         [/\beverything to\b/, 'trap_power'],
         [/\bride it out|sit it out\b/, 'trap_wait'],
+        // A signal answered. After the trap arms above, because "everything to
+        // auxiliary" is a trap and not a reply.
+        [/\banswer it|take the packet|exchange reports|realign it|run the sweep|pipe it through|update it|put the doctor on|grant it\b/, 'answer'],
         // Before `fire first` can be read as anything else. An ambush the
         // sensors caught is the only place this choice exists, and
         // `executeOrder` refuses it anywhere else.

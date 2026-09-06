@@ -55,6 +55,13 @@ export const SECTOR_PRESENCE = {
 export const ENCOUNTER_KINDS = [
   'patrol', 'distress', 'derelict', 'anomaly', 'ambush', 'convoy', 'first_contact',
   'signal', 'quiet',
+  // `buildTrap` has produced this since traps were written and the list did not
+  // have it. Two guards enumerate this array to decide what they cover —
+  // "every encounter kind the game can roll has a policy", and the phrase check
+  // in tests/lang.test.js — so a kind missing from here is a kind those guards
+  // silently do not cover. That is how eight signal buttons and a trap that
+  // named the wrong power channel got past both of them.
+  'trapped',
 ];
 
 /**

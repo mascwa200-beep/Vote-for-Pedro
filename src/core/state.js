@@ -2494,8 +2494,15 @@ export class Game {
           held > 0 ? 'The clean way out — if you thought of it in advance.'
             : 'You would need to have built one already.',
           held > 0 ? 'green' : 'ghost');
-        add('trap_power', `Everything to ${trap.powerChannel ?? 'auxiliary'}`,
-          'everything to auxiliary', 'Costs antimatter and unbalances the grid.', 'amber');
+        // The label already named the channel this trap actually wants, and
+        // the phrase underneath it said "auxiliary" whatever the label said.
+        // For a gravimetric eddy the button therefore read "Everything to
+        // engines" over the words "everything to auxiliary" — and a captain who
+        // said the words on the button got `unknown`, with a suggestion to
+        // target somebody's engines. One channel now, in both places.
+        const channel = trap.powerChannel ?? 'auxiliary';
+        add('trap_power', `Everything to ${channel}`,
+          `everything to ${channel}`, 'Costs antimatter and unbalances the grid.', 'amber');
         add('trap_wait', 'Ride it out', 'ride it out',
           `${trap.waitHours ?? 0} hours${trap.damage ? ', and it will hurt' : ''}.`, 'ice');
         break;
