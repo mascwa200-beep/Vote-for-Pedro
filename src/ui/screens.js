@@ -372,8 +372,13 @@ export function chairConsole(app) {
     app.showMessage('Sensor Sweep', enc);
   }, 'scan'), { say: 'scan the system', color: 'ice' }));
 
-  if (g.ship.hullPct < 1 && !g.canDock()) {
-    actions.push(button('Effect repairs', tap(() => {
+  // Offered against the ceiling the order actually has rather than against a
+  // sound hull, so the button stops being there once there is nothing left the
+  // crew can do — and is still there, greyed with the reason, during a fight.
+  // Removed outright it would hide that the rule exists at all.
+  if (g.repairsWouldHelp() && !g.canDock()) {
+    const fighting = !!(g.engagement && !g.engagement.over);
+    actions.push(button('Effect repairs', fighting ? null : tap(() => {
       const r = g.effectRepairs();
       if (!r.ok) { app.showMessage('Repairs', [r.reason]); return; }
       app.showMessage('Repairs', [
@@ -384,10 +389,13 @@ export function chairConsole(app) {
       ]);
     }), {
       say: 'effect repairs',
-      color: 'peach',
-      sub: g.alert === 'blue'
-        ? 'Blue alert: maintenance stations manned, repairs go faster'
-        : 'Costs time. Cannot fully repair without a starbase.',
+      color: fighting ? 'ghost' : 'peach',
+      disabled: fighting,
+      sub: fighting
+        ? 'Not while we are under fire — damage control is holding what is left'
+        : g.alert === 'blue'
+          ? 'Blue alert: maintenance stations manned, repairs go faster'
+          : 'Costs time. Cannot repair past 85% without a starbase.',
     }));
   }
   root.append(panel('Bridge', actions));
@@ -2549,7 +2557,11 @@ export function machineShopPanel(app) {
         : `${status.hoursRemaining.toFixed(1)} h`));
     body.push(button('Put the hours in', tap(() => {
       const r = g.workTheShop(Math.min(status.hoursRemaining, 8));
-      if (r.done) app.showMessage(r.done.recipe.name, [r.done.text]);
+      // A refusal used to land here and go nowhere: this read only `r.done`,
+      // so pressing it during a fight produced no message, no log and no deny
+      // cue. The button did nothing and said nothing.
+      if (!r.ok) app.showMessage('Engineering', [r.reason]);
+      else if (r.done) app.showMessage(r.done.recipe.name, [r.done.text]);
       app.render();
     }), { color: 'amber', sub: 'Spends up to eight hours of the commission' }));
   } else {

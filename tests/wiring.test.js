@@ -31,6 +31,7 @@ import { OUTCOMES } from '../src/sim/combat.js';
 import { SHIP_CLASSES } from '../src/world/ships.data.js';
 import {
   RECIPES, MATERIAL_LIST, beginFabrication, advanceFabrication, salvageWreck,
+  availableRecipes,
 } from '../src/sim/fabrication.js';
 import { TRAPS } from '../src/world/encounters.js';
 import { EPISODES } from '../src/missions/episodes/index.js';
@@ -496,6 +497,148 @@ test('blue alert makes repairs go further, and is refused under fire', () => {
 test('repairs refuse to run on an undamaged hull', () => {
   const g = gameWith();
   assert.equal(g.effectRepairs().ok, false);
+});
+
+// The test above has been titled "and is refused under fire" since it was
+// written, and what it asserts is that BLUE ALERT is refused mid-engagement.
+// That is a different sentence about a different thing, and for a long time it
+// was the only thing standing where this belongs.
+//
+// `effectRepairs`' own doc comment ended "and is refused in a fight for the
+// obvious reason", with no such guard in the body. Combat does not take the
+// screen, so the button was on the bridge throughout: eight presses took a
+// wreck at 15% hull, every subsystem at 0.2 and all three mounts dead to a
+// hull at 100%, every subsystem at 1.0 and every mount back on line, without
+// the enemy getting a tick.
+const wreck = (g) => {
+  const s = g.ship;
+  s.hull = s.maxHull * 0.15;
+  for (const k of Object.keys(s.subsystems)) s.subsystems[k] = 0.2;
+  for (const w of s.weapons) { w.integrity = 0.1; w.enabled = false; }
+  return g;
+};
+
+test('a fight cannot be repaired out of', () => {
+  const g = wreck(gameWith());
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  assert.ok(g.engagement && !g.engagement.over, 'the fight never started');
+
+  const before = g.ship.hullPct;
+  for (let i = 0; i < 8; i++) {
+    const r = g.effectRepairs();
+    assert.equal(r.ok, false, `the shop repaired the ship mid-battle on press ${i + 1}`);
+    assert.match(r.reason, /under fire/i, r.reason);
+  }
+  assert.equal(g.ship.hullPct, before, 'the hull moved during the fight');
+});
+
+test('and nothing puts a ship right to the last percent without a berth', () => {
+  // The button has promised "Cannot fully repair without a starbase" since it
+  // was written, in three separate strings, and nothing enforced any of it.
+  const g = wreck(gameWith());
+  let stop = null;
+  for (let i = 0; i < 40; i++) {
+    const r = g.effectRepairs();
+    if (!r.ok) { stop = r.reason; break; }
+  }
+  assert.ok(stop, 'repairs never ran out, so there is no ceiling');
+  assert.match(stop, /starbase/i, stop);
+
+  const s = g.ship;
+  const over = [
+    ['hull', s.hullPct],
+    ...Object.entries(s.subsystems),
+    ...s.weapons.map((w, i) => [`mount ${i}`, w.integrity]),
+  ].filter(([, v]) => v > 0.85 + 1e-9);
+  assert.deepEqual(over, [], `these went past the ceiling: ${JSON.stringify(over)}`);
+
+  // And it is a ceiling, not a target: the crew still got her most of the way.
+  assert.ok(s.hullPct > 0.8, `the ceiling swallowed the repair: ${s.hullPct}`);
+});
+
+test('the ceiling holds a figure down, and never pulls one down to itself', () => {
+  // A hull a starbase or an episode already put above the cap is not undone by
+  // ordering repairs for something else that is genuinely broken. Written
+  // because the obvious `Math.min(x, CAP)` would quietly cost a captain ten
+  // points of hull for asking the crew to look at the sensors.
+  const g = gameWith();
+  const s = g.ship;
+  s.hull = s.maxHull * 0.95;
+  for (const k of Object.keys(s.subsystems)) s.subsystems[k] = 0.97;
+  s.subsystems.sensors = 0.4;
+
+  const r = g.effectRepairs();
+  assert.equal(r.ok, true, r.reason);
+  assert.ok(s.hullPct >= 0.95 - 1e-9, `repairing the sensors cost hull: ${s.hullPct}`);
+  assert.ok(s.subsystems.warpcore >= 0.97 - 1e-9,
+    `a sound warp core was pulled down to the ceiling: ${s.subsystems.warpcore}`);
+  assert.ok(s.subsystems.sensors > 0.4, 'the thing that was actually broken was not touched');
+});
+
+test('the ceiling is on the crew, not on the ship', () => {
+  // `Ship.repair` has six callers. A hull patch off the bench, a ship power, a
+  // starbase and an episode's repair are authored, finite events rather than
+  // the crew working between systems, and they still reach a whole ship.
+  // Capping inside `Ship.repair` would have silently capped every one of them.
+  const g = wreck(gameWith());
+  g.ship.repair(g.ship.maxHull);
+  assert.equal(g.ship.hullPct, 1, 'a direct repair no longer reaches a whole hull');
+  for (const [k, v] of Object.entries(g.ship.subsystems)) {
+    assert.equal(v, 1, `${k} was capped by a path that is not the crew's`);
+  }
+});
+
+test('and the hours the order spends cannot lift the ship over its own ceiling', () => {
+  // The trap this change fell into first. `effectRepairs` costs 19.2 hours,
+  // and `passTime` runs damage control across the hours that pass — so capping
+  // the order alone left the hours it spends carrying the ship over the top on
+  // the way out, and it reported 90.5% against a ceiling of 85%.
+  const g = wreck(gameWith());
+  for (let i = 0; i < 40 && g.effectRepairs().ok; i++) { /* to the ceiling */ }
+  const at = g.ship.hullPct;
+  g.spendHours(24 * 90);
+  assert.ok(g.ship.hullPct <= 0.85 + 1e-9,
+    `three months of damage control went past the ceiling: ${g.ship.hullPct}`);
+  assert.ok(g.ship.hullPct >= at - 1e-9, 'waiting made the ship worse');
+});
+
+test('every refusal a captain can walk into arrives as words', () => {
+  // `fabricate`'s combat branch returned `error` where every other refusal in
+  // the file returns `reason`, and both consumers read `reason` — so the modal
+  // said "Engineering / undefined" and the spoken order had the engineer say
+  // `undefined` out loud. `workTheShop`'s refusal was read by nobody at all.
+  const g = wreck(gameWith());
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+
+  const refusals = [
+    ['effectRepairs', g.effectRepairs()],
+    ['fabricate', g.fabricate(RECIPES[0].id)],
+    ['workTheShop', g.workTheShop(8)],
+  ];
+  for (const [what, r] of refusals) {
+    assert.equal(r.ok, false, `${what} was allowed mid-battle`);
+    assert.equal(typeof r.reason, 'string',
+      `${what} refused on a key the screens do not read: ${JSON.stringify(r)}`);
+    assert.ok(r.reason.length > 0, `${what} refused with an empty string`);
+  }
+});
+
+test('and the shop greys out rather than refusing after the tap', () => {
+  // A reason the panel can read, so the seven recipes a captain could afford
+  // mid-fight stop being drawn in the enabled colour. The guard in `fabricate`
+  // stays: a screen is not a rule.
+  const g = gameWith();
+  g.stores = Object.fromEntries(Object.keys(g.stores ?? {}).map((k) => [k, 99]));
+  const peace = availableRecipes(g).filter((r) => r.canMake).length;
+  assert.ok(peace > 0, 'nothing was makeable at rest, so this proves nothing');
+
+  g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: 'IKS Bortas' })]);
+  const inFight = availableRecipes(g);
+  assert.equal(inFight.filter((r) => r.canMake).length, 0,
+    'recipes are still offered in the enabled colour during a battle');
+  for (const r of inFight) {
+    assert.equal(typeof r.reason, 'string', 'a greyed recipe with no reason on it');
+  }
 });
 
 // ================================================================ the shop

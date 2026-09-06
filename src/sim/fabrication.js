@@ -211,8 +211,18 @@ export const RECIPES = [
 
 export const RECIPE_BY_ID = Object.fromEntries(RECIPES.map((r) => [r.id, r]));
 
-/** Everything the fabricator can make right now, and why it cannot. */
+/**
+ * Everything the fabricator can make right now, and why it cannot.
+ *
+ * "Right now" includes whether there is a fight on. This weighed only the
+ * material stores and `requires`, so during a battle seven of thirteen recipes
+ * were drawn in the enabled colour and every one of them was refused by
+ * `Game.fabricate` after the tap — the shop's own guard, arriving too late to
+ * be an answer. A reason the panel can read is the answer; the guard in
+ * `fabricate` stays, because a screen is not a rule.
+ */
 export function availableRecipes(game) {
+  const sealed = game?.engagement && !game.engagement.over;
   return RECIPES.map((r) => {
     const short = Object.entries(r.needs)
       .filter(([m, n]) => (game.stores?.[m] ?? 0) < n)
@@ -220,10 +230,11 @@ export function availableRecipes(game) {
     const wrongState = r.requires ? !r.requires(game) : false;
     return {
       recipe: r,
-      canMake: short.length === 0 && !wrongState,
+      canMake: !sealed && short.length === 0 && !wrongState,
       short,
-      reason: short.length ? `Not enough ${short.join(' or ')}.`
-        : wrongState ? 'Nothing aboard needs it.' : null,
+      reason: sealed ? 'The shop is sealed at red alert.'
+        : short.length ? `Not enough ${short.join(' or ')}.`
+          : wrongState ? 'Nothing aboard needs it.' : null,
     };
   });
 }
