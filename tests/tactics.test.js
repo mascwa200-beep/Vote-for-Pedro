@@ -14,8 +14,9 @@ import { Ship } from '../src/sim/ship.js';
 import { Character } from '../src/rules/character.js';
 import { ABILITIES } from '../src/sim/officers.js';
 import { FACTIONS } from '../src/world/factions.data.js';
-import { SHIP_CLASSES } from '../src/world/ships.data.js';
-import { DOCTRINE_TACTICS, chooseTactic, tickTactics } from '../src/sim/tactics.js';
+import { SHIP_CLASSES, SHIP_LIST } from '../src/world/ships.data.js';
+import { DOCTRINE_TACTICS, WHEN, chooseTactic, tickTactics } from '../src/sim/tactics.js';
+import { FACINGS } from '../src/sim/ship.js';
 
 function battle({ me = 'constitution', them = ['d7'], seed = 1, place = 'sol' } = {}) {
   const g = new Game({
@@ -250,5 +251,151 @@ describe('the orders the other captain gives', () => {
     assert.equal(chooseTactic(ally, eng.hostiles[0], eng, 'balanced'), 'emergency_power_shields');
     assert.ok(ally.hasBuff('emergency_power_shields'));
     void g;
+  });
+});
+
+// ======================================= an order nobody can ever give
+
+/**
+ * Two of these orders were dead for their whole life, and both read perfectly
+ * well in the source.
+ *
+ * `opportunist` listed `brace_for_impact`, which wants `hullPct < 0.45` — and
+ * an opportunist BREAKS OFF at 0.45 times her archetype's nerve, which is 0.72
+ * for the Orion raider and exactly 0.45 for the Ferengi marauder. Since
+ * `chooseTactic` returns null for a fleeing ship, the raider was always
+ * already leaving by the time the order became eligible and the marauder's two
+ * thresholds were the same number written in two different files.
+ *
+ * `assimilate` listed `polarize_hull`, which wanted `hullPct < 0.55` — and Borg
+ * hulls do not go there. Over six seeds apiece at Captain the worst a cube
+ * reached was 0.976 and a bioship 0.755.
+ *
+ * Neither is visible to a test that checks an order fires when you hand it a
+ * ship already in the state it wants. What makes them findable is asking
+ * whether a ship can BE in that state and still be taking orders.
+ */
+describe('every order a doctrine declares can actually be given', () => {
+  /** Which doctrine each faction with hulls in the game actually flies. */
+  const FLOWN = new Map();
+  for (const c of SHIP_LIST) {
+    const d = FACTIONS[c.faction]?.doctrine ?? 'balanced';
+    if (!FLOWN.has(d)) FLOWN.set(d, []);
+    FLOWN.get(d).push(c.id);
+  }
+
+  /** Fly one fight and record how far the hostiles' hull and shields fell. */
+  function envelope(classId, { me = 'sovereign', seed = 1, difficulty = 'captain' } = {}) {
+    const faction = SHIP_CLASSES[classId].faction;
+    const g = new Game({
+      seed: BigInt(seed), crewMode: 'original', shipClass: me, difficulty,
+      character: new Character({ speciesId: 'andorian', careerId: 'tactical' }),
+    });
+    g.startCombat([new Ship(classId, { faction, name: 'H1' })]);
+    let hull = 1;
+    let shield = 1;
+    let fledAt = null;
+    for (let i = 0; i < 40000 && g.engagement && !g.engagement.over; i++) {
+      if (i % 15 === 0) {
+        g.engagement.comeAboutTo(g.engagement.target);
+        g.ship.throttle = 0.6;
+        g.ship.power.applyPreset(g.ship.shieldPct < 0.35 ? 'defense' : 'attack');
+      }
+      g.update(1 / 30);
+      for (const h of g.engagement?.hostiles ?? []) {
+        if (h.destroyed) continue;
+        // Only states in which she is STILL TAKING ORDERS count. This is the
+        // whole point: a hull fraction a ship only reaches while running away
+        // is not a hull fraction any order can be given at.
+        if (h.fleeing) { fledAt ??= h.hullPct; continue; }
+        hull = Math.min(hull, h.hullPct);
+        for (const f of FACINGS) shield = Math.min(shield, h.shieldPctOf(f));
+      }
+    }
+    return { hull, shield, fledAt };
+  }
+
+  /**
+   * A stand-in ship carrying nothing but the two numbers WHEN reads. Built
+   * rather than mutated off a real Ship so the state under test is exactly the
+   * state named, with no other field able to decide the answer.
+   */
+  const at = (hullPct, shieldPct) => ({
+    hullPct,
+    shieldPctOf: () => shieldPct,
+  });
+
+  for (const [doctrine, list] of Object.entries(DOCTRINE_TACTICS)) {
+    const hulls = FLOWN.get(doctrine);
+    if (!hulls) continue;   // a doctrine no faction with a hull flies
+
+    test(`${doctrine}: every order is reachable in a state its ships reach`, () => {
+      // The envelope is the union over this doctrine's hulls of how far each
+      // is actually driven while still under orders. Two seeds and the player's
+      // heaviest ship, because the question is what is POSSIBLE, not typical.
+      let hull = 1;
+      let shield = 1;
+      for (const id of hulls) {
+        for (const seed of [1, 2]) {
+          const e = envelope(id, { seed });
+          hull = Math.min(hull, e.hull);
+          shield = Math.min(shield, e.shield);
+        }
+      }
+      // A foe hurt enough for the one order that reads the other ship.
+      const foe = at(0.2, 0.2);
+      for (const ability of list) {
+        const when = WHEN[ability];
+        assert.ok(when, `${doctrine} gives ${ability}, which has no trigger`);
+        let ok = false;
+        // Walk the reachable box. 40x40 is finer than any threshold in WHEN.
+        for (let i = 0; i <= 40 && !ok; i++) {
+          for (let j = 0; j <= 40 && !ok; j++) {
+            const h = hull + (1 - hull) * (i / 40);
+            const s = shield + (1 - shield) * (j / 40);
+            if (when(at(h, s), foe)) ok = true;
+          }
+        }
+        assert.ok(ok,
+          `${doctrine} declares ${ability}, but her ships never reach a state that `
+          + `triggers it while still taking orders: hull bottoms out at ${hull.toFixed(3)} `
+          + `and the weakest facing at ${shield.toFixed(3)}`);
+      }
+    });
+  }
+
+  test('no order is wholly swallowed by the one listed above it', () => {
+    // Priority here is first-match-wins, so an order whose trigger is a strict
+    // SUBSET of an earlier one's can only ever land in that order's cooldown
+    // shadow. That is what killed `brace_for_impact` on the opportunist:
+    // `evasive_maneuvers` fires at hullPct < 0.5 and the brace at < 0.45, so
+    // every state that wanted the brace had already asked for the evasion, and
+    // in 32 measured fights the shadow never opened while the hull was in
+    // range.
+    //
+    // Sampled at 1/200 rather than a coarser step on purpose. The first draft
+    // of this guard stepped by 1/20 and reported `emergency_power_shields`
+    // swallowed on the opportunist, which is FALSE: it is free between 0.28
+    // and 0.30 shields, a window 0.02 wide that a twentieth-step grid steps
+    // straight over. A guard too coarse to see the gap it is looking for
+    // reports the fix as the bug.
+    const N = 200;
+    const at = (hullPct, shieldPct) => ({ hullPct, shieldPctOf: () => shieldPct });
+    const foe = at(0.2, 0.2);
+    const states = [];
+    for (let i = 0; i <= N; i++) {
+      for (let j = 0; j <= N; j++) states.push(at(i / N, j / N));
+    }
+    for (const [doctrine, list] of Object.entries(DOCTRINE_TACTICS)) {
+      for (let n = 1; n < list.length; n++) {
+        const above = list.slice(0, n);
+        const free = states.filter((s) => WHEN[list[n]]?.(s, foe)
+          && !above.some((a) => WHEN[a]?.(s, foe)));
+        assert.ok(free.length > 0,
+          `${doctrine} lists ${list[n]} under ${above.join(' and ')}, and every state `
+          + 'that wants it has already asked for one of those — it can only ever fire '
+          + 'in their cooldown shadow');
+      }
+    }
   });
 });

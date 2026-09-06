@@ -6704,6 +6704,114 @@ Zero triangles of budget consequence: 24 a hull, against a frame cap of 8,000
 and a measured ~31 draw calls unchanged.
 
 
+## 80. Two orders no captain could ever give
+
+The doctrine table hands each enemy faction two orders. Fourteen of the sixteen
+(doctrine, order) pairs get given in real fights. Two never did, and both read
+perfectly well in the source.
+
+### The measurement, and two instruments that lied first
+
+The question was mechanical: **fly every hostile class against the player at
+four difficulties and count how often each declared order is actually given.**
+The tactical officer narrates each one, so the engagement log is the record.
+
+The first run reported **zero for all sixteen pairs**, which is the signature of
+a broken instrument rather than a broken game — and it was, twice over:
+
+- `game.lastCombat` has **no `log` field at all**. The log lives on the
+  engagement, and the engagement is cleared the instant the fight ends, so
+  reading it afterwards returns nothing for every fight.
+- The log is a **rolling five-entry window**. Even read live at the last tick it
+  holds the last five lines of a battle hundreds of lines long.
+
+Sampled every tick and accumulated by `(time, text)`, the same 256 fights gave a
+real signal:
+
+| doctrine | order | times given |
+| --- | --- | --- |
+| aggressive | emergency_power_shields | 77 |
+| aggressive | attack_pattern_alpha | 16 |
+| ambush | evasive_maneuvers | 43 |
+| ambush | attack_pattern_alpha | 3 |
+| ... | ... | ... |
+| **assimilate** | **polarize_hull** | **0** |
+| **opportunist** | **brace_for_impact** | **0** |
+
+### The Borg order the Borg could not give
+
+`polarize_hull` was the first order in the `assimilate` list and is the move
+that doctrine is named for. It wanted `hullPct < 0.55`, and **Borg hulls do not go
+there**: measured over six seeds apiece at Captain, the worst a cube ever
+reached was **0.995** against a Constitution and **0.976** against a Sovereign,
+and a bioship **0.755**.
+
+Their SHIELDS are another matter — stripped to **0.000** in three of those four
+matchups. Which is also the truer trigger: you polarise the plating when the
+shields have stopped holding, not when the hull is already open. Keyed on
+`weakestShield < 0.5` as well as the old hull clause, it fires 14 times in the
+same 32 fights — and a cube that a Constitution can barely scratch still never
+bothers, which is the right answer for that fight.
+
+### The order that was eaten by the one above it
+
+`opportunist` listed `brace_for_impact` second. **This one was NOT a
+reachability problem, and the first explanation written for it was wrong.**
+
+The first theory was the flee threshold: an opportunist breaks off at
+`0.45 * ARCHETYPE_NERVE`, and `chooseTactic` returns null for a fleeing ship, so
+the raider would always be leaving by the time the brace became eligible. It is
+a tidy argument and the measurement refuted it — **a marauder is driven to 0.197
+hull while still taking orders**, far below the 0.45 the brace wants.
+
+The real cause is the list itself. `evasive_maneuvers` fires at `hullPct < 0.5`,
+which **strictly contains** the brace's `hullPct < 0.45`, and the list is
+first-match-wins. Every state that wanted the brace had already asked for the
+evasion, so the brace could only ever land inside the evasion's cooldown shadow
+— and across 32 fights that shadow never opened while the hull was still in
+range.
+
+Replaced with `emergency_power_shields`, which **overlaps that region without
+being contained by it**: a ship at 0.29 shields and 0.9 hull wants the power and
+does not want to jink. Both orders now fire 27 times each.
+
+### The guard that was right, deleted, and restored
+
+Three guards came out of this, and the story of the second is the useful part.
+
+1. **Reachability.** Fly each doctrine's hulls, record how far hull and shields
+   are actually driven *while the ship is still taking orders*, and assert every
+   declared order has a trigger somewhere inside that measured envelope. Control:
+   put `polarize_hull` back on hull alone — fails.
+2. **No order wholly swallowed by the one above it.** Assert each order has at
+   least one state that wants it and wants none of the orders listed above it.
+   Control: put `brace_for_impact` back on the opportunist — fails.
+3. And the same guard catches the fix's own side effect: widening
+   `polarize_hull` to read shields made it strictly contain
+   `emergency_power_shields`, so on the old ordering the repair of one dead
+   order would have created another. Control: reverse the `assimilate` list —
+   fails.
+
+Guard 2 **was written, failed, and was deleted as unsound before being restored**
+— which is the lesson worth keeping. It reported `emergency_power_shields`
+swallowed on the opportunist, and the sweep said that order fires 27 times, so
+the guard looked plainly wrong. It was not. It sampled the state space at
+1/20, and the free window for that order is shields between 0.28 and 0.30 — a
+gap **0.02 wide that a twentieth-step grid steps straight over**. Sampled at
+1/200 it passes on the real code and still fails all three controls.
+
+**A guard too coarse to see the gap it is looking for reports the fix as the
+bug** — and the reflex of believing the measurement over the guard, which is
+right most of the time in this dossier, was wrong here. What settled it was not
+judgement but resolution: the disagreement between guard and sweep was itself
+the evidence that one of them was under-sampling.
+
+The first explanation of the opportunist bug is worth keeping on the record for
+the same reason. It was a clean causal story, consistent with the zero, written
+from reading two files — and simply not what was happening. Reading the source
+generates hypotheses; only the measurement closes them.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
