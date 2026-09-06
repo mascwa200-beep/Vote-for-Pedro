@@ -220,9 +220,19 @@ export const FRONTIER_EPISODES = [
         text: 'Inside, the ship’s chronometers disagree by eleven minutes and the structural integrity field is fighting something it was not designed for. There is a way to collapse it — an inverse tachyon pulse — and it will require the warp core running at a level the chief engineer describes as "a very bad idea, Captain."',
         speaker: 'Engineering',
         choices: [
-          { id: 'pulse', label: 'Do it', next: 'pulse',
+          // Running the core at a level the chief engineer calls a very bad
+          // idea, to collapse six hundred million kilometres of anomaly, and
+          // it worked every time it was pressed. The warp-theory gate decided
+          // whether the button was THERE; nothing decided whether the pulse
+          // took. `engineering`, because what is being asked is whether the
+          // core holds the level, and `dangerous` because the scene says so.
+          { id: 'pulse', label: 'Do it',
             requires: { skill: 'warp_theory', ranks: 2 },
-            effects: { xp: 800, damage: 0.2 } },
+            effects: {
+              check: { type: 'engineering', difficulty: 0.55, hazard: 'dangerous' },
+              xp: 400, damage: 0.2,
+            },
+            branch: { success: 'pulse', failure: 'pulse_failed' } },
           { id: 'retreat', label: 'Get us out', outcome: 'catalogued',
             effects: { xp: 500, damage: 0.1, record: { anomaly_catalogued: 2 } } },
           // A ship that took the probe's telemetry first knows where the
@@ -232,6 +242,26 @@ export const FRONTIER_EPISODES = [
           { id: 'blind', label: 'Run the pulse off the ship’s own readings', next: 'pulse',
             requires: { var: { entered: true } },
             effects: { xp: 1000, damage: 0.34, flag: 'devron_blind' } },
+        ],
+      },
+      pulse_failed: {
+        // The core will not hold the level, and the anomaly is unmoved. What
+        // the ship gets is the telemetry and a hull that paid for it — the
+        // `catalogued` ending the retreat also reaches, arrived at the hard
+        // way rather than chosen.
+        text: 'The core will not hold it. Intermix drops out of tolerance eleven seconds before the '
+          + 'pulse would have gone, the chief engineer takes it down himself without asking, and the '
+          + 'anomaly is exactly where it was. The chronometers still disagree. What we have is four '
+          + 'hours of the best telemetry anybody has ever taken of one of these, and a ship that '
+          + 'wants a yard.',
+        speaker: 'Engineering',
+        choices: [
+          { id: 'log', label: 'Log it and take us out', outcome: 'catalogued',
+            effects: {
+              xp: 900, damage: 0.1,
+              record: { anomaly_catalogued: 4 },
+              standing: { federation: 8 },
+            } },
         ],
       },
       pulse: {
@@ -580,8 +610,19 @@ export const FRONTIER_EPISODES = [
         text: 'It says it has been listening to Federation subspace traffic for two hundred and six years and has questions. The first is whether your species considers a thing that was built capable of consenting to anything.',
         speaker: 'Unknown vessel',
         choices: [
-          { id: 'engage', label: 'Answer honestly. Take the question seriously', next: 'dialogue',
-            effects: { xp: 800 } },
+          // The question is whether a thing that was built can consent, asked
+          // by a thing that was built, of a species it has been listening to
+          // for two hundred and six years. Answering it honestly went well
+          // every time. `diplomacy` — first contact is the first officer's and
+          // the comms officer's stations, which is what that type maps to — and
+          // `routine`, because nobody is off the ship and the risk here is not
+          // to a body.
+          { id: 'engage', label: 'Answer honestly. Take the question seriously',
+            effects: {
+              check: { type: 'diplomacy', difficulty: 0.55, hazard: 'routine' },
+              xp: 500,
+            },
+            branch: { success: 'dialogue', failure: 'misread' } },
           { id: 'deflect', label: 'Deflect. Establish protocol first', next: 'dialogue',
             effects: { xp: 400, setVar: { deflected: true } } },
           { id: 'terminate', label: 'End the contact', outcome: 'avoided',
@@ -592,6 +633,24 @@ export const FRONTIER_EPISODES = [
           { id: 'name_it', label: 'Tell it you know what it is, and answer anyway',
             next: 'dialogue', requires: { var: { scanned_first: true } },
             effects: { xp: 1100, flag: 'grid_candid' } },
+        ],
+      },
+      misread: {
+        // Not hostility. It simply stops finding the exchange useful, which
+        // from something that has waited two centuries is the more unsettling
+        // answer — and it is still there, so the Council can still be asked.
+        text: 'The answer is heard, considered, and found to be about something else. It says that '
+          + 'it has asked this question of four species and that three of them answered as we have, '
+          + 'and it does not say what happened to them. The exchange continues for another twenty '
+          + 'minutes and stops being a conversation somewhere in the middle of it. It is still on '
+          + 'station. It is simply no longer asking.',
+        speaker: 'Unknown vessel',
+        choices: [
+          { id: 'refer', label: 'Refer it to the Council and hold station', outcome: 'deferred',
+            effects: {
+              xp: 700, standing: { federation: 6 },
+              record: { anomaly_catalogued: 1 },
+            } },
         ],
       },
       dialogue: {

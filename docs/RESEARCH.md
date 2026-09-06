@@ -8272,6 +8272,146 @@ and breaks the corridors instead; the reticle reading `looking` again
 `looking`; and `nearestProp` returning nothing.
 
 
+## 91. Four episodes that faced an unknown, and a set that must stay unwired
+
+The recorded backlog, measured rather than believed. Both items in it changed
+shape under measurement, and one of them reversed completely.
+
+### `STOPWORDS` must never be wired
+
+`src/lang/normalize.js` exports a set of sixty function words — *"words that do
+not help identify an intent and only add noise to scoring"* — consumed by
+nothing. On that description it is an obvious wiring job, and it has sat on the
+backlog as one for as long as it has been noticed.
+
+Measured against the order corpus, using the suite's own acceptance rule:
+
+```
+parses correctly today               609 / 617   98.7%
+parses correctly with these stripped 535 / 617   86.7%
+
+broken by stripping: 74              fixed by stripping: 0
+```
+
+**Seventy-four orders broken and not one fixed.** The lexicon has been tuned
+WITH those words present, because this parser scores whole phrasings rather than
+a bag of words:
+
+```
+warp_factor   "punch it"             -> "punch"        undefined
+throttle      "cut the engines"      -> "cut engines"  undefined
+come_about    "point us at them"     -> "point them"   undefined
+warp_out      "get us out of here"   -> "get out here" undefined
+```
+
+And the set contains `not`, so stripping it **inverts an order**: this corpus's
+own `evasive | do not fly straight` becomes "fly straight" — the opposite
+instruction, given confidently.
+
+This was a change available on the strength of "the field is unused", and after
+five changes in a row where exactly that reasoning was correct — `headcountOf`,
+`cacheKey`, `check`-with-`branch`, `listSaves`, `prop.facing` — it would have
+been an easy sixth. It would have cost **twelve points of parser accuracy**.
+
+So the set stays, with the measurement written next to it, the way
+`OPEN_HAZARDS` keeps the hazards that deliberately do nothing. The next person
+to notice an unused export should find the experiment already run.
+
+**Seventh recorded lead this session to dissolve when measured.** The pattern is
+now the finding: an unwired thing is a *hypothesis*, not a defect.
+
+### "Fourteen episodes without a skill check" is about four
+
+#217 gave twelve episodes a decisive check with a real branch, leaving fourteen
+with none. Reading them, **ten are deliberately checkless**: `court_martial` is a
+board of inquiry, `homecoming` is a review of your command, and the rest are
+councils, treaties, testimony and consequence — `cardassian_treaty`,
+`qonos_council`, `romulus_debt`, `cardassia_debt`, `khitomer_accord`,
+`utopia_certification`, `vulcan_long_peace`, `vega_line`. Their drama is what the
+captain says and what they already did. A die roll in a court-martial would be
+wrong for the same reason a die roll at Marchetti's doorway was wrong in §88.
+
+Four were genuine, and each had the same shape §88 was about — a gated,
+dramatic, **unconditional** success:
+
+- **`devron_anomaly`** — an inverse tachyon pulse the chief engineer calls *"a
+  very bad idea, Captain"*, gated on warp theory, and it collapsed six hundred
+  million kilometres of anomaly every time it was pressed.
+- **`beta_reticuli`** — reading a Borg scout that is still awake and still
+  surveying, which gave up what it was doing whenever asked.
+- **`first_contact_grid`** — answering an intelligence that has been listening to
+  Federation traffic for two hundred and six years, which went well every time.
+- **`donatu_standoff`** — two fleets going to warp on a shared count, written as
+  a near-miss (*"It holds. Barely — one of his birds-of-prey lags eleven
+  seconds"*) and unable to miss.
+
+```
+                                      before      after
+checks,   of which branch              19 / 14    24 / 19
+branches, of which read the captain    14 / 14    19 / 19
+episodes with no check at all             14         10
+```
+
+The ten that remain are now a **named list in the guard**, so a later sweep
+looking for episodes "still missing" a check cannot quietly put dice in a board
+of inquiry.
+
+`donatu_standoff`'s failure is worth recording as a design rule. A check that
+failed straight into a shooting war would be a coin flip for a war; what it
+produces instead is the *moment* — one bird-of-prey that does not break with the
+count, nine seconds where the only two ships in the system are yours and hers,
+and a tactical officer with a firing solution waiting to be told. The captain
+still chooses. **A failed check should create the situation, not make the
+decision.**
+
+### The guard that caught me writing into the void
+
+`tests/echoes.test.js` refuses a flag that these episodes write and nothing
+reads, and it fired on `reticuli_sent` in the new failure stage.
+
+Checking the rest of the change: all five new flags were write-only. Checking
+§88's work: **six more from that change were too.** And then the measurement
+that mattered — across all twenty-six episodes, **49 of 75 flags are
+write-only**, going back to `asked_about_hurry` in the very first stage of the
+first episode.
+
+So the strict rule is deliberately **local** to the echo and consequence chains,
+where the flags are the mechanism, and write-only flags are the surrounding
+convention everywhere else. Extending the guard globally would fail on
+forty-nine flags that predate all of this.
+
+The proportionate answer was to drop all five new ones — the failure stages
+already carry their consequences in `record`, `standing`, `xp` and an outcome —
+and to record the forty-nine rather than widen this change into a content-wide
+cleanup. **Do not add to a pile you have decided not to clear.**
+
+### And a control that was not a control
+
+The first attempt at the `STOPWORDS` control renamed `normalize` and wrapped it,
+on the assumption that it returns a string. It returns an object — `text`,
+`tokens`, `station`, `urgent`, `negated` — so every test errored with
+`normalizeRaw(...).split is not a function` instead of failing on the parse
+rate. That is §89's own rule caught in the act: **a control that breaks the
+build is not a control.** Applied properly, inside the returned token list, it
+took the corpus from 98.7% to **88.0%** and failed thirty-three tests.
+
+It also exposed a flaw in the guard itself. With the filter wired inside
+`normalize`, the guard's simulated "today" baseline is *also* computed through
+the stripped parser, so both numbers collapse and it reports the wrong reason.
+The structural assertion — that nothing in the language layer applies the set —
+is the clean detector, so it now runs first and names the offending line
+verbatim.
+
+### Guards and controls
+
+Five guards, each confirmed failing against its own control: the pulse restored
+to unconditional (*"devron_anomaly has nothing in it the captain can fail"*); a
+die roll put into the board of inquiry; the set wired into `normalize` (corpus
+88.0%, thirty-three failures, and the structural guard naming the line); and the
+four played to **both** ends of their branches through the real location and room
+gates.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
