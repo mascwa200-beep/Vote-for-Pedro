@@ -3271,15 +3271,50 @@ function boxShell(solid, glow, room) {
 
       face(solid, p(u0, 0), p(u1, 0), p(u1, 0.9), p(u0, 0.9), PALETTE.wallLower, wall.flip);
       face(solid, p(u0, 0.9), p(u1, 0.9), p(u1, h), p(u0, h), PALETTE.wall, wall.flip);
+
+      // A structural rib on the join between panels.
+      //
+      // A corridor was a floor quad, a ceiling quad, two flat bands of wall and
+      // one light — fourteen metres of ship with nothing in it to walk PAST.
+      // Ribs are what a corridor is made of, and they are what tells you you
+      // are moving: at 3–4% of the room budget there was no reason not to have
+      // them. Proud of the wall by two centimetres, on the room side, so they
+      // catch the key light and the rim.
+      //
+      // It stops a hand's breadth clear of the deckhead, and that is a rule
+      // rather than a taste. A closed box reaching the ceiling puts a cap face
+      // ON the ceiling plane pointing straight up, which is indistinguishable
+      // from an inverted deckhead — so `tests/gfx.test.js` refuses any
+      // up-facing triangle within 0.06 of `h`, and it is right to. Clearing it
+      // by 0.10 also reads better: a rib that dies into a lighting cove is what
+      // the sets did, and a rib welded to the ceiling looks like a pillar.
+      const ribH = Math.max(0.1, h - 0.12);
+      const ribY = ribH / 2 + 0.02;
+      const rib = wall.axis === 'z'
+        ? { c: vec3(u1, ribY, wall.at + (wall.flip ? -0.02 : 0.02)), s: vec3(0.06, ribH, 0.05) }
+        : { c: vec3(wall.at + (wall.flip ? 0.02 : -0.02), ribY, u1), s: vec3(0.05, ribH, 0.06) };
+      if (i < panels - 1) box(solid, { center: rib.c, size: rib.s, color: PALETTE.wallLower });
     }
   }
 
-  // A lighting strip down the middle of the ceiling.
-  glow.quad(
-    vec3(-0.35, h - 0.03, -hd * 0.85), vec3(0.35, h - 0.03, -hd * 0.85),
-    vec3(0.35, h - 0.03, hd * 0.85), vec3(-0.35, h - 0.03, hd * 0.85),
-    PALETTE.strip,
-  );
+  // Ceiling lights, as a run of panels rather than one long strip.
+  //
+  // One strip down the middle is a stripe: it has no length you can read,
+  // because a continuous line looks the same however far along it you are. A
+  // run of separate panels is a rhythm, and a rhythm is the thing that
+  // actually reads as distance when you walk down a corridor — it is the whole
+  // reason the corridor sets on the show were lit that way.
+  const along = hd * 1.7;
+  const lamps = Math.max(2, Math.round(along / 1.6));
+  for (let i = 0; i < lamps; i++) {
+    const z0 = -hd * 0.85 + (along * (i + 0.18)) / lamps;
+    const z1 = -hd * 0.85 + (along * (i + 0.82)) / lamps;
+    glow.quad(
+      vec3(-0.35, h - 0.03, z0), vec3(0.35, h - 0.03, z0),
+      vec3(0.35, h - 0.03, z1), vec3(-0.35, h - 0.03, z1),
+      PALETTE.strip,
+    );
+  }
 }
 
 // ----------------------------------------------------------------- fittings
@@ -9780,6 +9815,31 @@ const HOSTILE_FORMS = {
       litEvery: 3,
     });
 
+    // Flank armour, and the head at the front of it.
+    //
+    // The carapace was one bare ellipsoid in one flat colour — a Jem'Hadar
+    // attack ship is a beetle, and a beetle that is a single smooth shell reads
+    // as a pebble. The plates run the length of the flank on both sides and
+    // break the silhouette where the light falls off; the blister forward is
+    // the crew's, and gives the eye somewhere to find the front of the ship.
+    mirrored(mb, (m) => {
+      greebles(m, {
+        from: vec3(-len * 0.28, -high * 0.06, wide * 0.62),
+        to: vec3(len * 0.26, -high * 0.02, wide * 0.5),
+        count: b.ridgeCount ?? 5,
+        size: vec3(len * 0.11, high * 0.26, wide * 0.18),
+        vary: 0.5,
+        color: p.trim,
+      });
+    });
+    box(mb, {
+      center: vec3(len * 0.3, high * 0.2, 0),
+      size: vec3(len * 0.2, high * 0.3, wide * 0.44),
+      sweep: 0.16,
+      rake: -0.1,
+      color: p.trim,
+    });
+
     mirrored(mb, (m) => {
       // The prongs, reaching forward of the body and angled inward, which is
       // what a Jem'Hadar ship is: a pair of jaws with an engine behind them.
@@ -10354,7 +10414,7 @@ __define("src/gfx/blueprint.js", function (__exports, __require) {
 // renderer normalises so the largest live hull frames sensibly.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowBelt, windowDeck, navLights } = __require("src/gfx/mesh.js");
+const { MeshBuilder, saucer, tube, box, prow, sphere, mirrored, seg, windowRing, windowBelt, windowDeck, navLights, greebles, portRow } = __require("src/gfx/mesh.js");
 const { FEDERATION_FORMS } = __require("src/gfx/forms.federation.js");
 const { KLINGON_FORMS } = __require("src/gfx/forms.klingon.js");
 const { HOSTILE_FORMS } = __require("src/gfx/forms.hostile.js");
@@ -11010,12 +11070,35 @@ const FORMS = {
   },
 
   /** A working hull: cylinder, bridge block, cargo spine. `length_` — see wedge. */
+  /**
+   * The two civilian hulls, and the fallback for anything unrecognised.
+   *
+   * `transport` and `freighter` used to be this form with three numbers
+   * changed — `length_`, `r0`, `r1` — and 285 triangles each, the crudest hulls
+   * in the game. They are also among the most-seen: `independent` appears in
+   * more sectors than any other faction, and one of these two is what turns up.
+   *
+   * Their own entries in `DIMENSIONS` had already told them apart and nothing
+   * had read it. A transport is 120 metres and carries **1,400** people; a
+   * freighter is 220 metres and carries **fourteen**. One is a liner and the
+   * other is fourteen people and a warehouse, and they were the same ship.
+   *
+   * So the shapes come from the numbers: `pods` slings cargo containers on a
+   * spine for the hauler that exists to carry them, and `habitat` puts a
+   * deckhouse and a second row of ports on the one that exists to carry people.
+   * Both default off, which keeps this safe as the fallback form for an unknown
+   * class (see the `BLUEPRINTS[classId] ?? BLUEPRINTS.transport` below).
+   */
   hauler(mb, p, b) {
+    const L = b.length_ ?? 1.0;
+    const hr0 = b.r0 ?? 0.16; const hr1 = b.r1 ?? 0.13;
+    const rAt = (u) => hr0 + (hr1 - hr0) * u;
+
     tube(mb, {
       origin: vec3(-0.5, 0, 0),
-      length: b.length_ ?? 1.0,
-      r0: b.r0 ?? 0.16,
-      r1: b.r1 ?? 0.13,
+      length: L,
+      r0: hr0,
+      r1: hr1,
       segments: seg(10),
       color: p.hull,
     });
@@ -11024,11 +11107,51 @@ const FORMS = {
       box(m, { center: vec3(-0.18, 0, 0.2), size: vec3(0.5, 0.12, 0.12), color: p.trim });
     });
 
+    // Cargo. Containers slung outboard on the spars, in a row, with the
+    // handling gear between them — which is what makes a freighter read as a
+    // freighter from any angle rather than as a tube with a box on it.
+    if (b.pods) {
+      mirrored(mb, (m) => {
+        for (let i = 0; i < b.pods; i++) {
+          const u = 0.16 + (i + 0.5) * (0.62 / b.pods);
+          box(m, {
+            center: vec3(-0.5 + L * u, -0.03, 0.235),
+            size: vec3(L * (0.5 / b.pods), 0.135, 0.115),
+            color: i % 2 ? p.trim : p.hull,
+          });
+        }
+        // The gear that holds them on.
+        greebles(m, {
+          from: vec3(-0.5 + L * 0.18, 0.05, 0.19),
+          to: vec3(-0.5 + L * 0.78, 0.05, 0.19),
+          count: 5, size: vec3(0.05, 0.035, 0.05), vary: 0.5, color: p.trim,
+        });
+      });
+    }
+
+    // Fourteen hundred people need somewhere to be. A deckhouse over the
+    // forward third, which is the only part of a transport that is not tankage.
+    if (b.habitat) {
+      box(mb, {
+        center: vec3(-0.5 + L * 0.62, hr0 * 0.72, 0),
+        size: vec3(L * 0.34, 0.1, 0.28),
+        rake: 0.06,
+        color: p.trim,
+      });
+      portRow(mb, {
+        from: vec3(-0.5 + L * 0.48, hr0 * 0.72, 0.14),
+        to: vec3(-0.5 + L * 0.76, hr0 * 0.72, 0.14),
+        count: seg(4), size: 0.019,
+      });
+      portRow(mb, {
+        from: vec3(-0.5 + L * 0.48, hr0 * 0.72, -0.14),
+        to: vec3(-0.5 + L * 0.76, hr0 * 0.72, -0.14),
+        count: seg(4), size: 0.019,
+      });
+    }
+
     // A freighter is a working ship with people living on it for months, so it
     // gets the most windows in the fleet and no weapons to glow instead.
-    const L = b.length_ ?? 1.0;
-    const hr0 = b.r0 ?? 0.16; const hr1 = b.r1 ?? 0.13;
-    const rAt = (u) => hr0 + (hr1 - hr0) * u;
     // Short ports at four stations. Thirteen windows spanning seventy degrees
     // of arc and half the hull's length was not a row of ports, it was a woven
     // mat — the same mistake the secondary hulls started with.
@@ -11190,8 +11313,10 @@ const BLUEPRINTS = {
   jem_hadar_battleship: { form: 'dominion', length: 800, heavy: true, length_: 1.1, prongSweep: 0.2, ridgeCount: 7, engines: 5 },
   borg_cube: { form: 'cube', length: 3040, size: 1.15 },
   bioship: { form: 'bioship', length: 600 },
-  transport: { form: 'hauler', length: 120, length_: 1.0, r0: 0.13, r1: 0.11 },
-  freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.155, r1: 0.13 },
+  // 1,400 aboard a 120-metre hull: a liner, so a deckhouse and rows of ports.
+  transport: { form: 'hauler', length: 120, length_: 1.0, r0: 0.13, r1: 0.11, habitat: true },
+  // Fourteen aboard 220 metres: the rest of her is cargo, so show the cargo.
+  freighter: { form: 'hauler', length: 220, length_: 1.2, r0: 0.155, r1: 0.13, pods: 4 },
 };
 
 /** Meshes are built once per class and reused by every ship of that class. */
@@ -20637,6 +20762,16 @@ const { fitCanvas } = __require("src/ui/touch.js");
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+/**
+ * Rim strength inside the ship, against `HULL_RIM`'s 0.35 outside her.
+ *
+ * A hull in space is rimmed against nothing and can take the full term. A
+ * bulkhead is rimmed against another bulkhead two metres behind it, in a room
+ * already lit at 0.62 ambient, so the same strength reads as fog on every
+ * surface rather than as an edge on the near one.
+ */
+const ROOM_RIM = 0.16;
+
 /** Eye height. A person standing, not a camera on a tripod. */
 const EYE_HEIGHT = 1.62;
 
@@ -20892,10 +21027,24 @@ class FirstPersonView {
     this.renderer.clearScissor();
     this.renderer.resetViewport();
     this.renderer.setDepthRange(0, 1);
+    // `rim` set for the whole interior pass, which is the room, the consoles,
+    // the props and the crew standing in it.
+    //
+    // The shader has had a rim term since it was written and `uRim` defaults to
+    // zero, so the exteriors carried it — `HULL_RIM` on every hull, in the
+    // viewer and on the tactical plot — and EVERY INTERIOR IN THE GAME was
+    // drawn flat. A room at ambient 0.62 with pale bouncing walls is exactly
+    // where a surface facing away from you has nothing else to separate it from
+    // the surface behind it.
+    //
+    // Gentler than the hulls' 0.35: a ship in space is rimmed against nothing,
+    // and a bulkhead is rimmed against another bulkhead two metres behind it.
+    // At hull strength the whole compartment glows at its own edges and reads
+    // as fog rather than as form. It costs no triangles and no draw calls.
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
       ambient: 0.62, keyPower: 0.44,
-      eye: this.eyeOf(walker), gloss: 0.22,
+      eye: this.eyeOf(walker), gloss: 0.22, rim: ROOM_RIM,
     });
     this.renderer.setCamera(this._viewProj);
     this.drawRoom(room);
@@ -21279,12 +21428,29 @@ class FirstPersonView {
     if (!m) return;
     compose(vec3(0, 0, 0), quat(), 1, this._model);
     const nm = normalMatrix(this._model, this._normal);
+
+    // `room.cacheKey`, not `room.id`, and the difference is a planet.
+    //
+    // `Renderer.upload` files a buffer under its key and, on a hit, hands that
+    // buffer back WITHOUT looking at the mesh it was passed. Every planet's
+    // room is `id: 'surface'` — one id for every world in the galaxy — so the
+    // key was `room:surface` on the first landing and `room:surface` on all of
+    // them. The desert you beamed down to at Sol was still the ground under
+    // your feet at Vulcan and at Andoria: different geometry built, different
+    // triangle counts, one buffer drawn.
+    //
+    // `makeSurface` saw this coming and set `cacheKey: \`surface:${body.id}\``
+    // with the comment "Distinct per world, so the mesh cache does not hand
+    // back the last planet" — and then nothing read it. Compartments aboard
+    // have no `cacheKey` and fall back to their id, which is unique and
+    // stable, so this changes nothing for them.
+    const key = room.cacheKey ?? room.id;
     // Rooms are 10 metres across, not 3,000 — the tactical falloff would fog a
     // bulkhead you are standing next to.
-    this.renderer.draw(`room:${room.id}`, m.solid, {
+    this.renderer.draw(`room:${key}`, m.solid, {
       model: this._model, normalMatrix: nm, fogFar: 1e6,
     });
-    this.renderer.draw(`room:${room.id}:glow`, m.glow, {
+    this.renderer.draw(`room:${key}:glow`, m.glow, {
       model: this._model, normalMatrix: nm, emissive: 1, fogFar: 1e6,
     });
 
@@ -21440,6 +21606,7 @@ class FirstPersonView {
   }
 }
 
+__exports.ROOM_RIM = ROOM_RIM;
 __exports.EYE_HEIGHT = EYE_HEIGHT;
 __exports.SEATED_HEIGHT = SEATED_HEIGHT;
 __exports.JOLT_SECONDS = JOLT_SECONDS;

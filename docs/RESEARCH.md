@@ -7679,6 +7679,176 @@ defects before a line was changed. Nothing had ever asserted that a ship could
 not be rebuilt in a battle, because nothing had ever asked.
 
 
+## 87. The planet you were not looking at, and the room with no edges
+
+The standing order puts the models first, so this is the models — and the first
+thing found in them was not a quality problem at all.
+
+### Every planet after the first was the wrong planet
+
+`makeSurface` gives every world's room `id: 'surface'` — one id for every planet
+in the galaxy — and, knowing exactly what that risks, also sets:
+
+```js
+// Distinct per world, so the mesh cache does not hand back the last planet.
+cacheKey: `surface:${body.id}`,
+```
+
+`FirstPerson.drawRoom` then drew with `` `room:${room.id}` `` and never read it.
+`Renderer.upload` files a buffer under its key and, on a hit, hands that buffer
+back **without looking at the mesh passed with it**. Measured, building three
+worlds in the order a commission would visit them:
+
+```
+desert  drawKey="room:surface"  cacheKey="surface:sol:body:0"     tris=1060  fp=46239.8
+ice     drawKey="room:surface"  cacheKey="surface:vulcan:body:1"  tris=1144  fp=57372.4
+jungle  drawKey="room:surface"  cacheKey="surface:andor:body:2"   tris=1180  fp=37974.6
+
+distinct cacheKeys : 3      distinct meshes : 3      distinct draw keys : 1
+```
+
+Three genuinely different worlds — different geometry, different triangle counts
+— filed under one key. **The second and every later landing drew the first
+planet's ground, ridge, sky and props.** The desert you beamed down to at Sol
+was still under your feet at Vulcan and at Andoria.
+
+`tests/gfx.test.js` has had a test called *"every world type builds, and no two
+look alike"* the whole time. It tests `roomMeshes`. The bug is in the draw key,
+so it passed throughout — **a guard aimed one layer above the defect.**
+
+This is the third time this dossier has recorded the same shape: a field created
+to prevent a named bug, documented with the reason it exists, and never wired —
+so the bug it names is live. `headcountOf` in §86 was the last one.
+
+### Every interior in the game was drawn flat
+
+The one shader has carried a rim term since it was written; `uRim` defaults to
+zero. The exteriors pass `HULL_RIM` — in the viewer and on the tactical plot —
+and **`src/ui/firstperson.js` never passed it at all.** So every hull in the
+game had a silhouette and every compartment aboard had none.
+
+A room is exactly where the term earns its keep. At 0.62 ambient with pale walls
+bouncing at each other there is almost no true shadow, which is what that
+ambient says — so a bulkhead facing away from you has nothing to separate it
+from the bulkhead two metres behind it. It is now set once for the whole
+interior pass, so it reaches the room, the consoles, the props and the crew.
+
+`ROOM_RIM` is 0.16 against the hulls' 0.35, and the difference is the point: a
+ship in space is rimmed against nothing and can take the full term; a bulkhead
+is rimmed against another bulkhead. At hull strength the compartment glows at
+every edge and reads as fog rather than as form. It costs no triangles and no
+draw calls.
+
+### What "better models" can mean here, measured first
+
+No asset files, ever, so this is procedural geometry and shading. The budgets,
+measured rather than assumed:
+
+| budget | before | after | cap |
+| --- | --- | --- | --- |
+| fleet total | 33,118 | **33,898** | 36,000 |
+| heaviest hull | 2,178 | 2,178 | 2,400 |
+| heaviest room | 1,094 (bridge) | **1,365** (hangar) | 4,000 |
+
+The binding resource is **draw calls, not triangles** — `mesh.js` says so
+outright, and §77 of this dossier already recorded the conclusion that *"a frame
+budget is not a quality budget… 'make the models better' correctly meant shading
+rather than polygons."* Two things followed from taking that seriously.
+
+**The hulls have almost no headroom and the rooms have most of theirs.** The
+Federation capitals sit against the per-hull ceiling; the corridors were using
+**3–4% of the room budget**. So the room work is where the geometry went, and
+the hull work went only to the hulls that had somewhere to go.
+
+**The crudest hulls were the most-seen ones.** `independent` reaches more sectors
+than any other faction, and what turns up is a `transport` or a `freighter` —
+285 triangles each, the two crudest hulls in the game, built by one form with
+three numbers changed between them: `length_`, `r0`, `r1`.
+
+Their own entries in `DIMENSIONS` had already told them apart, and nothing had
+read it. **A transport is 120 metres and carries 1,400 people. A freighter is
+220 metres and carries fourteen.** One is a liner and the other is fourteen
+people and a warehouse, and they were the same ship at two sizes. So the shapes
+now come from the numbers: containers slung on the spars with the handling gear
+between them for the hull that exists to carry cargo, a deckhouse and two rows
+of ports for the hull that exists to carry people.
+
+| hull | before | after |
+| --- | --- | --- |
+| `transport` | 285 | **537** |
+| `freighter` | 285 | **501** |
+| `jem_hadar_attack` | 406 | **538** |
+| `jem_hadar_battleship` | 478 | **658** |
+
+Measured on the twelve-slice silhouette fingerprint, `transport` and `freighter`
+are now **0.435** apart against a bar of 0.2. The Jem'Hadar carapace was one
+bare ellipsoid in one flat colour — a beetle drawn as a pebble — and now has
+flank armour down both sides and a head at the front of it.
+
+The `wedge` (Galor, Keldon) was left alone deliberately. It looks crude by
+triangle count and is not: read, it already carries a swept spine, a raked head,
+a set bow sensor, a deckhouse, machinery along it, dihedral ventral wings and
+lit seams. Cheap primitives, not a cheap ship.
+
+### A corridor with nothing to walk past
+
+`boxShell` gave every box compartment aboard a floor quad, a ceiling quad, wall
+panels in two flat bands, and **one** light strip down the middle. Fourteen
+metres of corridor with nothing in it that changes as you move through it.
+
+Two things fixed that, and both are about motion rather than detail:
+
+**Ribs on the panel joins.** A corridor is made of frames; frames are what you
+walk past. Proud of the wall by two centimetres on the room side, so they catch
+the key light and the new rim.
+
+**The ceiling light became a run of panels instead of one strip.** A continuous
+line looks identical however far along it you are, so it reads as a stripe and
+not as a length. A rhythm of separate panels is what actually reads as distance
+— it is why the corridor sets were lit that way.
+
+| room | before | after |
+| --- | --- | --- |
+| `corridor_a` | 172 | **532** |
+| `corridor_sec` | 156 | **480** |
+| `corridor_rec` | 148 | **446** |
+| `turbolift` | 112 | **198** |
+
+### The trap the ribs walked into, twice
+
+A rib is a closed box, and a closed box in a room has faces pointing every way
+including into the wall. Two guards caught it, and the second caught the fix to
+the first.
+
+The rib was full height, so its cap sat on the ceiling plane pointing straight
+up — a deckhead facing into the deck above, which is exactly what
+*"every bulkhead, deck and deckhead faces the room it encloses"* refuses. Pulled
+down by two centimetres, it still failed: *"no surface flush with the ceiling
+faces upward"* uses a tolerance of **0.06**, not an exact plane, because a
+normal that wrong is wrong slightly off the plane too. The ribs now stop a
+hand's breadth clear, which is also what the sets did — a rib dying into a
+lighting cove rather than welded to the ceiling.
+
+**A guard written against an exact plane and a guard written against a
+neighbourhood are different guards, and the loose one is the one that works.**
+
+### Guards and controls
+
+Nine guards, each confirmed failing against its own control: `drawRoom` keying
+on `room.id` again (1 fail, and the message names the collision); the interior
+rim switched off (1); the ceiling back to one strip with no ribs (1, and it
+reported `corridor_a is still 172 triangles`); the haulers back to three numbers
+apart (1, reporting `transport is back down to 285 triangles`).
+
+One control had to be run twice. The first attempt at the corridor control edited
+the file by slicing on string indices and produced a **syntax error**, so the
+suite reported one failure for the whole file and proved nothing about the
+guard. A control that breaks the build is not a control — it has to leave a
+program that runs and merely lacks the property. The second attempt asserted its
+own edits landed, checked the module still parsed, and only then read the
+verdict.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

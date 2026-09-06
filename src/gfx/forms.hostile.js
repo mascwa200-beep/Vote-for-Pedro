@@ -277,6 +277,31 @@ export const HOSTILE_FORMS = {
       litEvery: 3,
     });
 
+    // Flank armour, and the head at the front of it.
+    //
+    // The carapace was one bare ellipsoid in one flat colour — a Jem'Hadar
+    // attack ship is a beetle, and a beetle that is a single smooth shell reads
+    // as a pebble. The plates run the length of the flank on both sides and
+    // break the silhouette where the light falls off; the blister forward is
+    // the crew's, and gives the eye somewhere to find the front of the ship.
+    mirrored(mb, (m) => {
+      greebles(m, {
+        from: vec3(-len * 0.28, -high * 0.06, wide * 0.62),
+        to: vec3(len * 0.26, -high * 0.02, wide * 0.5),
+        count: b.ridgeCount ?? 5,
+        size: vec3(len * 0.11, high * 0.26, wide * 0.18),
+        vary: 0.5,
+        color: p.trim,
+      });
+    });
+    box(mb, {
+      center: vec3(len * 0.3, high * 0.2, 0),
+      size: vec3(len * 0.2, high * 0.3, wide * 0.44),
+      sweep: 0.16,
+      rake: -0.1,
+      color: p.trim,
+    });
+
     mirrored(mb, (m) => {
       // The prongs, reaching forward of the body and angled inward, which is
       // what a Jem'Hadar ship is: a pair of jaws with an engine behind them.

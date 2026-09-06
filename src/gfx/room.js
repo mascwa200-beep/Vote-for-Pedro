@@ -457,15 +457,50 @@ function boxShell(solid, glow, room) {
 
       face(solid, p(u0, 0), p(u1, 0), p(u1, 0.9), p(u0, 0.9), PALETTE.wallLower, wall.flip);
       face(solid, p(u0, 0.9), p(u1, 0.9), p(u1, h), p(u0, h), PALETTE.wall, wall.flip);
+
+      // A structural rib on the join between panels.
+      //
+      // A corridor was a floor quad, a ceiling quad, two flat bands of wall and
+      // one light — fourteen metres of ship with nothing in it to walk PAST.
+      // Ribs are what a corridor is made of, and they are what tells you you
+      // are moving: at 3–4% of the room budget there was no reason not to have
+      // them. Proud of the wall by two centimetres, on the room side, so they
+      // catch the key light and the rim.
+      //
+      // It stops a hand's breadth clear of the deckhead, and that is a rule
+      // rather than a taste. A closed box reaching the ceiling puts a cap face
+      // ON the ceiling plane pointing straight up, which is indistinguishable
+      // from an inverted deckhead — so `tests/gfx.test.js` refuses any
+      // up-facing triangle within 0.06 of `h`, and it is right to. Clearing it
+      // by 0.10 also reads better: a rib that dies into a lighting cove is what
+      // the sets did, and a rib welded to the ceiling looks like a pillar.
+      const ribH = Math.max(0.1, h - 0.12);
+      const ribY = ribH / 2 + 0.02;
+      const rib = wall.axis === 'z'
+        ? { c: vec3(u1, ribY, wall.at + (wall.flip ? -0.02 : 0.02)), s: vec3(0.06, ribH, 0.05) }
+        : { c: vec3(wall.at + (wall.flip ? 0.02 : -0.02), ribY, u1), s: vec3(0.05, ribH, 0.06) };
+      if (i < panels - 1) box(solid, { center: rib.c, size: rib.s, color: PALETTE.wallLower });
     }
   }
 
-  // A lighting strip down the middle of the ceiling.
-  glow.quad(
-    vec3(-0.35, h - 0.03, -hd * 0.85), vec3(0.35, h - 0.03, -hd * 0.85),
-    vec3(0.35, h - 0.03, hd * 0.85), vec3(-0.35, h - 0.03, hd * 0.85),
-    PALETTE.strip,
-  );
+  // Ceiling lights, as a run of panels rather than one long strip.
+  //
+  // One strip down the middle is a stripe: it has no length you can read,
+  // because a continuous line looks the same however far along it you are. A
+  // run of separate panels is a rhythm, and a rhythm is the thing that
+  // actually reads as distance when you walk down a corridor — it is the whole
+  // reason the corridor sets on the show were lit that way.
+  const along = hd * 1.7;
+  const lamps = Math.max(2, Math.round(along / 1.6));
+  for (let i = 0; i < lamps; i++) {
+    const z0 = -hd * 0.85 + (along * (i + 0.18)) / lamps;
+    const z1 = -hd * 0.85 + (along * (i + 0.82)) / lamps;
+    glow.quad(
+      vec3(-0.35, h - 0.03, z0), vec3(0.35, h - 0.03, z0),
+      vec3(0.35, h - 0.03, z1), vec3(-0.35, h - 0.03, z1),
+      PALETTE.strip,
+    );
+  }
 }
 
 // ----------------------------------------------------------------- fittings
