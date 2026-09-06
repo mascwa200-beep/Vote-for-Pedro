@@ -597,17 +597,33 @@ export const CORE_EPISODES = [
         choices: [
           { id: 'joint', label: 'Propose a joint patrol schedule', next: 'joint',
             requires: { skill: 'diplomacy', ranks: 3 }, effects: { xp: 600 } },
-          { id: 'coin', label: 'Propose both fleets withdraw simultaneously', next: 'simul',
-            effects: { xp: 400 } },
+          // Two fleets going to warp on a shared count, written as a near-miss
+          // -- "It holds. Barely -- one of his birds-of-prey lags eleven
+          // seconds" -- and it could not miss. `command`, because what is
+          // being asked is whether both sides hold a count nobody trusts, and
+          // `routine`, because the risk is to the peace and not to a body.
+          { id: 'coin', label: 'Propose both fleets withdraw simultaneously',
+            effects: {
+              check: { type: 'command', difficulty: 0.5, hazard: 'routine' },
+              xp: 400,
+            },
+            branch: { success: 'simul', failure: 'simul_ragged' } },
           { id: 'refuse', label: 'Tell him the Federation does not negotiate under guns', next: 'battle',
             effects: { standing: { klingon: -14 } } },
           // The other half of moving to a firing position before answering the
           // hail. He can see exactly where your ships are; an offer made from
           // there is a different offer, and both commands will read it that way.
           { id: 'from_strength', label: 'Offer the withdrawal from where you are standing',
-            next: 'simul', requires: { var: { aggressive_posture: true } },
-            effects: { xp: 500, standing: { klingon: -8, federation: 10 },
-              flag: 'donatu_pressed' } },
+            requires: { var: { aggressive_posture: true } },
+            effects: {
+              // Harder than the plain proposal, and the episode already says
+              // why: he can see where your ships are, and an offer made from
+              // there is a different offer that both commands will read as one.
+              check: { type: 'command', difficulty: 0.6, hazard: 'routine' },
+              xp: 500, standing: { klingon: -8, federation: 10 },
+              flag: 'donatu_pressed',
+            },
+            branch: { success: 'simul', failure: 'simul_ragged' } },
         ],
       },
       joint: {
@@ -625,6 +641,25 @@ export const CORE_EPISODES = [
         choices: [
           { id: 'done', label: 'Log it', outcome: 'defused',
             effects: { xp: 800, standing: { klingon: 12, federation: 10 } } },
+        ],
+      },
+      simul_ragged: {
+        // The count does not hold, and the episode does NOT decide what happens
+        // next. A check that failed straight into a war would be a coin flip
+        // for a shooting match; what it produces instead is the moment, and the
+        // captain still chooses. Both ways out are here.
+        text: 'The count runs and one of his birds-of-prey does not break with it. She sits where '
+          + 'she was with her disruptors hot and the rest of both fleets already at warp, and for '
+          + 'nine seconds the only two ships in the Donatu system are yours and hers. Your tactical '
+          + 'officer has a firing solution and is waiting to be told.',
+        speaker: 'Tactical',
+        choices: [
+          { id: 'hold', label: 'Hold. Nobody fires today', outcome: 'defused',
+            effects: {
+              xp: 900, standing: { klingon: 16, federation: 4 },
+            } },
+          { id: 'fire', label: 'She is the only one still here. Fire', next: 'battle',
+            effects: { standing: { klingon: -20 } } },
         ],
       },
       battle: {

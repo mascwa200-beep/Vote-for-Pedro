@@ -23055,17 +23055,33 @@ const CORE_EPISODES = [
         choices: [
           { id: 'joint', label: 'Propose a joint patrol schedule', next: 'joint',
             requires: { skill: 'diplomacy', ranks: 3 }, effects: { xp: 600 } },
-          { id: 'coin', label: 'Propose both fleets withdraw simultaneously', next: 'simul',
-            effects: { xp: 400 } },
+          // Two fleets going to warp on a shared count, written as a near-miss
+          // -- "It holds. Barely -- one of his birds-of-prey lags eleven
+          // seconds" -- and it could not miss. `command`, because what is
+          // being asked is whether both sides hold a count nobody trusts, and
+          // `routine`, because the risk is to the peace and not to a body.
+          { id: 'coin', label: 'Propose both fleets withdraw simultaneously',
+            effects: {
+              check: { type: 'command', difficulty: 0.5, hazard: 'routine' },
+              xp: 400,
+            },
+            branch: { success: 'simul', failure: 'simul_ragged' } },
           { id: 'refuse', label: 'Tell him the Federation does not negotiate under guns', next: 'battle',
             effects: { standing: { klingon: -14 } } },
           // The other half of moving to a firing position before answering the
           // hail. He can see exactly where your ships are; an offer made from
           // there is a different offer, and both commands will read it that way.
           { id: 'from_strength', label: 'Offer the withdrawal from where you are standing',
-            next: 'simul', requires: { var: { aggressive_posture: true } },
-            effects: { xp: 500, standing: { klingon: -8, federation: 10 },
-              flag: 'donatu_pressed' } },
+            requires: { var: { aggressive_posture: true } },
+            effects: {
+              // Harder than the plain proposal, and the episode already says
+              // why: he can see where your ships are, and an offer made from
+              // there is a different offer that both commands will read as one.
+              check: { type: 'command', difficulty: 0.6, hazard: 'routine' },
+              xp: 500, standing: { klingon: -8, federation: 10 },
+              flag: 'donatu_pressed',
+            },
+            branch: { success: 'simul', failure: 'simul_ragged' } },
         ],
       },
       joint: {
@@ -23083,6 +23099,25 @@ const CORE_EPISODES = [
         choices: [
           { id: 'done', label: 'Log it', outcome: 'defused',
             effects: { xp: 800, standing: { klingon: 12, federation: 10 } } },
+        ],
+      },
+      simul_ragged: {
+        // The count does not hold, and the episode does NOT decide what happens
+        // next. A check that failed straight into a war would be a coin flip
+        // for a shooting match; what it produces instead is the moment, and the
+        // captain still chooses. Both ways out are here.
+        text: 'The count runs and one of his birds-of-prey does not break with it. She sits where '
+          + 'she was with her disruptors hot and the rest of both fleets already at warp, and for '
+          + 'nine seconds the only two ships in the Donatu system are yours and hers. Your tactical '
+          + 'officer has a firing solution and is waiting to be told.',
+        speaker: 'Tactical',
+        choices: [
+          { id: 'hold', label: 'Hold. Nobody fires today', outcome: 'defused',
+            effects: {
+              xp: 900, standing: { klingon: 16, federation: 4 },
+            } },
+          { id: 'fire', label: 'She is the only one still here. Fire', next: 'battle',
+            effects: { standing: { klingon: -20 } } },
         ],
       },
       battle: {
@@ -23570,9 +23605,19 @@ const FRONTIER_EPISODES = [
         text: 'Inside, the ship’s chronometers disagree by eleven minutes and the structural integrity field is fighting something it was not designed for. There is a way to collapse it — an inverse tachyon pulse — and it will require the warp core running at a level the chief engineer describes as "a very bad idea, Captain."',
         speaker: 'Engineering',
         choices: [
-          { id: 'pulse', label: 'Do it', next: 'pulse',
+          // Running the core at a level the chief engineer calls a very bad
+          // idea, to collapse six hundred million kilometres of anomaly, and
+          // it worked every time it was pressed. The warp-theory gate decided
+          // whether the button was THERE; nothing decided whether the pulse
+          // took. `engineering`, because what is being asked is whether the
+          // core holds the level, and `dangerous` because the scene says so.
+          { id: 'pulse', label: 'Do it',
             requires: { skill: 'warp_theory', ranks: 2 },
-            effects: { xp: 800, damage: 0.2 } },
+            effects: {
+              check: { type: 'engineering', difficulty: 0.55, hazard: 'dangerous' },
+              xp: 400, damage: 0.2,
+            },
+            branch: { success: 'pulse', failure: 'pulse_failed' } },
           { id: 'retreat', label: 'Get us out', outcome: 'catalogued',
             effects: { xp: 500, damage: 0.1, record: { anomaly_catalogued: 2 } } },
           // A ship that took the probe's telemetry first knows where the
@@ -23582,6 +23627,26 @@ const FRONTIER_EPISODES = [
           { id: 'blind', label: 'Run the pulse off the ship’s own readings', next: 'pulse',
             requires: { var: { entered: true } },
             effects: { xp: 1000, damage: 0.34, flag: 'devron_blind' } },
+        ],
+      },
+      pulse_failed: {
+        // The core will not hold the level, and the anomaly is unmoved. What
+        // the ship gets is the telemetry and a hull that paid for it — the
+        // `catalogued` ending the retreat also reaches, arrived at the hard
+        // way rather than chosen.
+        text: 'The core will not hold it. Intermix drops out of tolerance eleven seconds before the '
+          + 'pulse would have gone, the chief engineer takes it down himself without asking, and the '
+          + 'anomaly is exactly where it was. The chronometers still disagree. What we have is four '
+          + 'hours of the best telemetry anybody has ever taken of one of these, and a ship that '
+          + 'wants a yard.',
+        speaker: 'Engineering',
+        choices: [
+          { id: 'log', label: 'Log it and take us out', outcome: 'catalogued',
+            effects: {
+              xp: 900, damage: 0.1,
+              record: { anomaly_catalogued: 4 },
+              standing: { federation: 8 },
+            } },
         ],
       },
       pulse: {
@@ -23930,8 +23995,19 @@ const FRONTIER_EPISODES = [
         text: 'It says it has been listening to Federation subspace traffic for two hundred and six years and has questions. The first is whether your species considers a thing that was built capable of consenting to anything.',
         speaker: 'Unknown vessel',
         choices: [
-          { id: 'engage', label: 'Answer honestly. Take the question seriously', next: 'dialogue',
-            effects: { xp: 800 } },
+          // The question is whether a thing that was built can consent, asked
+          // by a thing that was built, of a species it has been listening to
+          // for two hundred and six years. Answering it honestly went well
+          // every time. `diplomacy` — first contact is the first officer's and
+          // the comms officer's stations, which is what that type maps to — and
+          // `routine`, because nobody is off the ship and the risk here is not
+          // to a body.
+          { id: 'engage', label: 'Answer honestly. Take the question seriously',
+            effects: {
+              check: { type: 'diplomacy', difficulty: 0.55, hazard: 'routine' },
+              xp: 500,
+            },
+            branch: { success: 'dialogue', failure: 'misread' } },
           { id: 'deflect', label: 'Deflect. Establish protocol first', next: 'dialogue',
             effects: { xp: 400, setVar: { deflected: true } } },
           { id: 'terminate', label: 'End the contact', outcome: 'avoided',
@@ -23942,6 +24018,24 @@ const FRONTIER_EPISODES = [
           { id: 'name_it', label: 'Tell it you know what it is, and answer anyway',
             next: 'dialogue', requires: { var: { scanned_first: true } },
             effects: { xp: 1100, flag: 'grid_candid' } },
+        ],
+      },
+      misread: {
+        // Not hostility. It simply stops finding the exchange useful, which
+        // from something that has waited two centuries is the more unsettling
+        // answer — and it is still there, so the Council can still be asked.
+        text: 'The answer is heard, considered, and found to be about something else. It says that '
+          + 'it has asked this question of four species and that three of them answered as we have, '
+          + 'and it does not say what happened to them. The exchange continues for another twenty '
+          + 'minutes and stops being a conversation somewhere in the middle of it. It is still on '
+          + 'station. It is simply no longer asking.',
+        speaker: 'Unknown vessel',
+        choices: [
+          { id: 'refer', label: 'Refer it to the Council and hold station', outcome: 'deferred',
+            effects: {
+              xp: 700, standing: { federation: 6 },
+              record: { anomaly_catalogued: 1 },
+            } },
         ],
       },
       dialogue: {
@@ -25264,14 +25358,43 @@ const ECHO_EPISODES = [
         speaker: 'Science officer',
         where: 'anywhere',
         choices: [
-          { id: 'study', label: 'Study it where it lies', next: 'the_choice',
-            effects: { xp: 900 } },
+          // Reading a Borg scout that is still awake and still surveying. It
+          // gave up what it was doing every time it was asked. `science`, and
+          // `dangerous`: the thing has been transmitting on a schedule for
+          // decades and the away team is standing on it.
+          { id: 'study', label: 'Study it where it lies',
+            effects: {
+              check: { type: 'science', difficulty: 0.55, hazard: 'dangerous' },
+              xp: 500,
+            },
+            branch: { success: 'the_choice', failure: 'it_noticed' } },
           { id: 'destroy', label: 'Destroy it from orbit and log the position',
             outcome: 'buried', effects: { xp: 800, record: { first_contact: 1 } } },
           // Warning the colonies at Gamma Hydra is what makes this reflex.
           { id: 'colonies', label: 'Signal every colony in range before touching it',
             next: 'the_choice', requires: { flag: 'borg_warned' },
             effects: { xp: 1300, standing: { federation: 8 } } },
+        ],
+      },
+
+      it_noticed: {
+        // The failure is not that the team learns nothing. It is that the
+        // reading goes the other way: the scout logs the party, finishes its
+        // cycle early, and sends. What is lost is the CONTENT of the
+        // transmission -- the thing `the_choice` is a decision about -- so the
+        // captain is left with a position and a certainty and no text.
+        text: 'Whatever is left of it is awake enough to be interested. The survey cycle it has been '
+          + 'running on a schedule for decades completes eleven hours early, with our people on it, '
+          + 'and the transmission goes out before anybody has read a line of what it says. The team '
+          + 'comes up. The position is in the log, the system is in somebody else’s record, and we '
+          + 'do not know what was in the report.',
+        speaker: 'Science officer',
+        choices: [
+          { id: 'burn', label: 'Destroy it from orbit and log the position', outcome: 'buried',
+            effects: {
+              xp: 800, record: { first_contact: 1 },
+              standing: { federation: 6 },
+            } },
         ],
       },
 
@@ -26511,7 +26634,33 @@ const NUMBER_WORDS = {
   ninety: 90, hundred: 100,
 };
 
-/** Words that do not help identify an intent and only add noise to scoring. */
+/**
+ * Function words, kept here as a record of a change that must NOT be made.
+ *
+ * The comment on this set used to read "words that do not help identify an
+ * intent and only add noise to scoring", and on that description it looks like
+ * an obvious wiring job: an exported set, consumed by nothing, sitting beside a
+ * parser. It is the opposite. Measured against the order corpus, 617 lines:
+ *
+ *     parses correctly today               609 / 617   98.7%
+ *     parses correctly with these stripped 535 / 617   86.7%
+ *
+ *     broken by stripping: 74              fixed by stripping: 0
+ *
+ * The lexicon has been tuned WITH these words present and they carry the
+ * signal, because this parser scores whole phrasings rather than a bag of
+ * words. "punch it" becomes "punch". "cut the engines" becomes "cut engines".
+ * "get us out of here" becomes "get out here". None of them parse.
+ *
+ * And the set contains "not", so stripping it INVERTS an order: the corpus line
+ * `evasive | do not fly straight` becomes "fly straight", which is the opposite
+ * instruction given confidently.
+ *
+ * Kept rather than deleted, the way `OPEN_HAZARDS` in sim/arena.js keeps the
+ * hazards that deliberately do nothing: the next person to notice an unused
+ * export should find the measurement next to it, not repeat the experiment. If
+ * this is ever applied, `tests/lang.test.js` fails on the corpus floor.
+ */
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'to', 'of', 'and', 'or', 'is', 'are', 'be', 'we', 'us',
   'our', 'i', 'you', 'your', 'it', 'that', 'this', 'do', 'does', 'did', 'not',

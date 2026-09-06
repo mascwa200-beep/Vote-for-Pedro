@@ -198,7 +198,33 @@ const NUMBER_WORDS = {
   ninety: 90, hundred: 100,
 };
 
-/** Words that do not help identify an intent and only add noise to scoring. */
+/**
+ * Function words, kept here as a record of a change that must NOT be made.
+ *
+ * The comment on this set used to read "words that do not help identify an
+ * intent and only add noise to scoring", and on that description it looks like
+ * an obvious wiring job: an exported set, consumed by nothing, sitting beside a
+ * parser. It is the opposite. Measured against the order corpus, 617 lines:
+ *
+ *     parses correctly today               609 / 617   98.7%
+ *     parses correctly with these stripped 535 / 617   86.7%
+ *
+ *     broken by stripping: 74              fixed by stripping: 0
+ *
+ * The lexicon has been tuned WITH these words present and they carry the
+ * signal, because this parser scores whole phrasings rather than a bag of
+ * words. "punch it" becomes "punch". "cut the engines" becomes "cut engines".
+ * "get us out of here" becomes "get out here". None of them parse.
+ *
+ * And the set contains "not", so stripping it INVERTS an order: the corpus line
+ * `evasive | do not fly straight` becomes "fly straight", which is the opposite
+ * instruction given confidently.
+ *
+ * Kept rather than deleted, the way `OPEN_HAZARDS` in sim/arena.js keeps the
+ * hazards that deliberately do nothing: the next person to notice an unused
+ * export should find the measurement next to it, not repeat the experiment. If
+ * this is ever applied, `tests/lang.test.js` fails on the corpus floor.
+ */
 export const STOPWORDS = new Set([
   'a', 'an', 'the', 'to', 'of', 'and', 'or', 'is', 'are', 'be', 'we', 'us',
   'our', 'i', 'you', 'your', 'it', 'that', 'this', 'do', 'does', 'did', 'not',

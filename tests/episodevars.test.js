@@ -508,6 +508,52 @@ describe('an episode reads the captain, and failing it goes somewhere', () => {
     }
   });
 
+  test('the four that face an unknown roll for it', () => {
+    // #217 gave twelve episodes a decisive check. Fourteen still had none, and
+    // reading them, ten are deliberately checkless — see the guard below. These
+    // four are not: each had a gated, dramatic, UNCONDITIONAL success, which is
+    // the same shape #217 was about. The warp-theory gate decided whether the
+    // pulse button was there; nothing decided whether the core held it.
+    const FACING_AN_UNKNOWN = [
+      'devron_anomaly', 'first_contact_grid', 'beta_reticuli', 'donatu_standoff',
+    ];
+    for (const id of FACING_AN_UNKNOWN) {
+      const ep = EPISODES.find((e) => e.id === id);
+      assert.ok(ep, `${id} is gone`);
+      const gambles = Object.values(ep.stages).flatMap((st) =>
+        (st.choices ?? []).filter((c) => c.effects?.check && c.branch));
+      assert.ok(gambles.length > 0, `${id} has nothing in it the captain can fail`);
+    }
+  });
+
+  test('and the ones that are meant to be talked through stay that way', () => {
+    // Recorded rather than remembered. These ten are boards of inquiry,
+    // councils, treaties, testimony and consequence — their drama is what the
+    // captain SAYS and what they did earlier, and a die roll in a court-martial
+    // would be wrong for the same reason a die roll at Marchetti's doorway was
+    // wrong. A later sweep looking for episodes "still missing" a check would
+    // put dice in all ten; this is here so it cannot.
+    const TALKED_THROUGH = [
+      'court_martial', 'cardassian_treaty', 'homecoming', 'qonos_council',
+      'romulus_debt', 'cardassia_debt', 'khitomer_accord', 'utopia_certification',
+      'vulcan_long_peace', 'vega_line',
+    ];
+    for (const id of TALKED_THROUGH) {
+      const ep = EPISODES.find((e) => e.id === id);
+      assert.ok(ep, `${id} is gone`);
+      const rolls = Object.values(ep.stages).flatMap((st) =>
+        (st.choices ?? []).filter((c) => c.effects?.check));
+      assert.equal(rolls.length, 0,
+        `${id} is a scene about what is said, and something put a die roll in it`);
+    }
+    // And the two lists together are every episode without a check, so neither
+    // can drift out of date silently.
+    const checkless = EPISODES.filter((e) => !Object.values(e.stages ?? {}).some((st) =>
+      (st.choices ?? []).some((c) => c.effects?.check))).map((e) => e.id).sort();
+    assert.deepEqual(checkless, [...TALKED_THROUGH].sort(),
+      'the set of episodes with no skill check has changed');
+  });
+
   test('and the stakes are spread across the whole crew', () => {
     // Otherwise "the captain matters" means one officer matters. Seven check
     // types exist, each mapping to an ability, a set of stations and an officer

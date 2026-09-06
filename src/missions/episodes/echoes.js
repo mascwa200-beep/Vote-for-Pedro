@@ -182,14 +182,43 @@ export const ECHO_EPISODES = [
         speaker: 'Science officer',
         where: 'anywhere',
         choices: [
-          { id: 'study', label: 'Study it where it lies', next: 'the_choice',
-            effects: { xp: 900 } },
+          // Reading a Borg scout that is still awake and still surveying. It
+          // gave up what it was doing every time it was asked. `science`, and
+          // `dangerous`: the thing has been transmitting on a schedule for
+          // decades and the away team is standing on it.
+          { id: 'study', label: 'Study it where it lies',
+            effects: {
+              check: { type: 'science', difficulty: 0.55, hazard: 'dangerous' },
+              xp: 500,
+            },
+            branch: { success: 'the_choice', failure: 'it_noticed' } },
           { id: 'destroy', label: 'Destroy it from orbit and log the position',
             outcome: 'buried', effects: { xp: 800, record: { first_contact: 1 } } },
           // Warning the colonies at Gamma Hydra is what makes this reflex.
           { id: 'colonies', label: 'Signal every colony in range before touching it',
             next: 'the_choice', requires: { flag: 'borg_warned' },
             effects: { xp: 1300, standing: { federation: 8 } } },
+        ],
+      },
+
+      it_noticed: {
+        // The failure is not that the team learns nothing. It is that the
+        // reading goes the other way: the scout logs the party, finishes its
+        // cycle early, and sends. What is lost is the CONTENT of the
+        // transmission -- the thing `the_choice` is a decision about -- so the
+        // captain is left with a position and a certainty and no text.
+        text: 'Whatever is left of it is awake enough to be interested. The survey cycle it has been '
+          + 'running on a schedule for decades completes eleven hours early, with our people on it, '
+          + 'and the transmission goes out before anybody has read a line of what it says. The team '
+          + 'comes up. The position is in the log, the system is in somebody else’s record, and we '
+          + 'do not know what was in the report.',
+        speaker: 'Science officer',
+        choices: [
+          { id: 'burn', label: 'Destroy it from orbit and log the position', outcome: 'buried',
+            effects: {
+              xp: 800, record: { first_contact: 1 },
+              standing: { federation: 6 },
+            } },
         ],
       },
 

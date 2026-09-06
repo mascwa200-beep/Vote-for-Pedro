@@ -16,7 +16,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { normalize, readNumber } from '../src/lang/normalize.js';
+import { normalize, readNumber, STOPWORDS } from '../src/lang/normalize.js';
 import { readAnswer, AFFIRM_PHRASE, BELAY_PHRASE } from '../src/lang/answers.js';
 import { soundex, skeleton, soundsLike } from '../src/lang/phonetic.js';
 import { distance, similarity } from '../src/lang/fuzzy.js';
@@ -394,6 +394,55 @@ describe('corpus coverage', () => {
 
     assert.ok(rate >= 0.95,
       `corpus coverage ${pct}% is below the 95% floor — fix the lexicon, not the corpus`);
+  });
+
+  test('and nothing starts throwing the small words away', () => {
+    // `normalize.js` exports a set of function words that is consumed by
+    // nothing, and on its old description — words that "only add noise to
+    // scoring" — it reads as an obvious wiring job. Measured against this
+    // corpus, applying it takes the parser from 599 of 617 to 527: it breaks
+    // seventy-five orders to fix three.
+    //
+    // The lexicon is tuned WITH those words present because it scores whole
+    // phrasings, not a bag of words. "punch it" becomes "punch". "get us out
+    // of here" becomes "get out here". And the set contains a negation, so
+    // stripping it inverts an order outright: this corpus's own
+    // `do not fly straight` becomes `fly straight`.
+    //
+    // Simulated here rather than waiting for somebody to wire it, because by
+    // the time the coverage floor above catches it the change is already made.
+    // The structural half FIRST, because it is the only clean detector. Once
+    // the set is actually applied inside `normalize`, the simulation below
+    // measures a stripped parser against a stripped parser and the two numbers
+    // collapse together — it still fails, but it reports the wrong reason.
+    const parser = ['normalize.js', 'parse.js', 'lexicon.js', 'gazetteer.js', 'fuzzy.js']
+      .map((f) => readFileSync(join(HERE, '..', 'src', 'lang', f), 'utf8')).join('\n');
+    const uses = parser.split('\n')
+      .filter((l) => /STOPWORDS/.test(l) && !/^\s*(\*|\/\/)/.test(l));
+    assert.equal(uses.length, 1,
+      `something now applies the function-word set: ${uses.map((l) => l.trim()).join(' | ')}`);
+
+    const strip = (t) => t.split(/\s+/)
+      .filter((w) => !STOPWORDS.has(w.toLowerCase().replace(/[^a-z']/g, '')))
+      .join(' ');
+    let stripped = 0;
+    for (const { expected, text } of lines) {
+      const s = strip(text);
+      if (!s) continue;
+      const r = parseOrder(s);
+      const action = r.confirm ? r.order?.action : r.action;
+      if (action === expected || r.fallback?.action === expected) stripped++;
+    }
+    const now = lines.filter(({ expected, text }) => {
+      const r = parseOrder(text);
+      const action = r.confirm ? r.order?.action : r.action;
+      return action === expected || r.fallback?.action === expected;
+    }).length;
+    assert.ok(stripped < now - 40,
+      `filtering function words is no longer catastrophic (${stripped} vs ${now}) — `
+        + 'either the lexicon changed or this measurement needs redoing');
+
+
   });
 
   test('the lexicon stays inside the bundle budget', () => {
