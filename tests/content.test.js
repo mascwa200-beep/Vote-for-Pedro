@@ -635,13 +635,35 @@ describe('a distress call is about whoever is calling', () => {
         recorded: (g.ledger.entries?.length ?? 0) > marks,
       });
     }
-    assert.equal(exits.size, 2,
-      `only one kind of exit was exercised: ${[...exits.keys()].join(', ')}`);
-    const [a, b] = [...exits.values()];
-    assert.ok(a.recorded && b.recorded, 'an exit that leaves no mark on the record');
-    assert.ok(a.delta < 0 && b.delta < 0, 'an exit that costs nothing');
-    assert.equal(a.delta, b.delta,
-      `one way out costs ${a.delta} and the other ${b.delta}`);
+    // And the third door: laying in a course out of the system. `setCourse`
+    // says in its own comment that flying away is withdrawing, and it cost
+    // nothing by either shape of call — including the quiet one that has been
+    // charged through the button since long before any of this. A guard that
+    // compared only the two buttons would have called that agreement.
+    for (const e of ALL.slice(0, 12)) {
+      const g = new Game({
+        seed: 5n, crewMode: 'original', shipClass: 'constitution',
+        character: new Character({ speciesId: 'human', careerId: 'command' }),
+      });
+      g.encounter = e;
+      const before = g.ledger.standingOf('federation');
+      const marks = g.ledger.entries?.length ?? 0;
+      const elsewhere = g.galaxy.systems.find((sy) => sy.id !== g.locationId);
+      const r = g.setCourse(elsewhere.id, 6);
+      assert.ok(r?.ok, 'the helm refused the course, so this proves nothing');
+      exits.set('setCourse', {
+        delta: g.ledger.standingOf('federation') - before,
+        recorded: (g.ledger.entries?.length ?? 0) > marks,
+      });
+    }
+
+    assert.equal(exits.size, 3,
+      `only these exits were exercised: ${[...exits.keys()].join(', ')}`);
+    const seen = [...exits.values()];
+    assert.ok(seen.every((x) => x.recorded), 'an exit that leaves no mark on the record');
+    assert.ok(seen.every((x) => x.delta < 0), 'an exit that costs nothing');
+    assert.equal(new Set(seen.map((x) => x.delta)).size, 1,
+      `the ways out cost ${[...exits].map(([k, v]) => `${k} ${v.delta}`).join(', ')}`);
   });
 
   test('and nothing else is charged for walking away', () => {
