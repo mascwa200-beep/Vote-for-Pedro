@@ -24,7 +24,7 @@ import {
   project, sub, length as vlength, normalize, cross,
 } from '../gfx/math.js';
 import { Renderer } from '../gfx/gl.js';
-import { hullMesh, hullScale, paletteFor } from '../gfx/blueprint.js';
+import { hullMesh, hullScale, paletteFor, HULL_GLOSS, HULL_SHINE, HULL_RIM } from '../gfx/blueprint.js';
 import {
   starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, arcMesh, VOLUME,
 } from '../gfx/scene.js';
@@ -533,19 +533,35 @@ export class TacticalView3D {
 
   /** Build the projection and view matrices for whichever camera is active. */
   setupCamera(aspect, dt) {
+    let eye;
     if (this.cameraMode === 'forward') {
       this.settleLook(dt);
       // Magnification is a narrower lens, not a nearer camera. Dividing the
       // field of view is what a real optical zoom does and it keeps the
       // parallax honest — a dolly would slide the ship through its own hull.
       perspective(fovFor(aspect) / this.magnification, aspect, 2, 40000, this._proj);
-      lookAt(this.forwardEye(this._eyeTmp), this.forwardTarget(this._look), vec3(0, 1, 0), this._view);
+      eye = this.forwardEye(this._eyeTmp);
+      lookAt(eye, this.forwardTarget(this._look), vec3(0, 1, 0), this._view);
     } else {
       perspective(52 * DEG, aspect, 5, 40000, this._proj);
-      lookAt(this.eye(), this.cam.focus, vec3(0, 1, 0), this._view);
+      eye = this.eye();
+      lookAt(eye, this.cam.focus, vec3(0, 1, 0), this._view);
     }
     multiply(this._proj, this._view, this._viewProj);
     this.renderer.setCamera(this._viewProj);
+    // Where the camera is, which this view had never told the renderer.
+    //
+    // `uEye` is set in exactly one place — `setLighting` — and this class did
+    // not call it at all, so the tactical plot ran on `beginFrame`'s defaults
+    // and the specular half-vector had no eye to work from. Nothing showed,
+    // because nothing here asked for a highlight either; enabling one without
+    // this line would have computed it against the origin and looked subtly
+    // wrong rather than failing loudly.
+    //
+    // Everything else is left at the frame default deliberately: `key` and
+    // `fill` are omitted so they keep `beginFrame`'s vacuum directions, and
+    // `gloss` stays 0 for the scene as a whole. A hull asks for its own.
+    this.renderer.setLighting({ eye });
   }
 
   /** Remember which system's scenery to draw. Cheap; safe to call per frame. */
@@ -798,6 +814,9 @@ export class TacticalView3D {
       normalMatrix: normalMatrix(this._model, this._normal),
       tint,
       alpha: ship.cloaked ? 0.22 : 1,
+      gloss: HULL_GLOSS,
+      shine: HULL_SHINE,
+      rim: HULL_RIM,
     });
 
     // Drop line to the grid: this is what makes altitude legible.

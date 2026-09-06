@@ -5922,6 +5922,135 @@ a live additive ship mod read by the casualty model, and the objection system in
 somewhere real to land, and neither needs a new number invented for it.
 
 
+## 72. Two view-dependent terms, and the eye that neither of them had
+
+The sweep moved from the character sheet and the skill tree into the renderer,
+and found the same shape of defect there: **a channel fully built, argued for at
+length in its own comment, and connected to nothing.**
+
+`gl.js` has implemented a Blinn-Phong specular since the interior was written,
+and the comment above it makes the case:
+
+> a flat-shaded bulkhead with no highlight is a coloured polygon, and the same
+> bulkhead with a soft sheen sliding across it as you turn your head is a wall
+
+Rooms asked for it at 0.22. **No hull in the game ever did.** `beginFrame`
+defaults it to zero, the two viewscreen passes named `gloss: 0` explicitly, and
+the tactical plot — the main combat view — **never called `setLighting` at all.**
+
+That last one is worse than a matte hull, because `setLighting` is the only
+thing in the renderer that writes `uEye`. With no caller, the specular's
+half-vector had no viewer to point at. Unwiring it again as a control shows what
+was actually in the uniform: `[0, 1.18, -1.21]` — **the walker's eye position,
+in metres, inside a room**, left over from the first-person pass and still there
+while the plot drew hulls seventeen hundred units away.
+
+### Wiring it was not enough, and the measurement said so immediately
+
+With the term on and the eye correct, the brightest pixel on a hull gained
+**four levels out of 255.** Raising the strength to four times its clipping
+ceiling did not make it visible either. Two frames of the same fight, one matte
+and one glossy, were indistinguishable side by side.
+
+The reason is geometric and it is worth writing down, because it applies to
+every view-dependent effect this renderer will ever have:
+
+> A specular highlight needs the facet normal to line up with the **half-vector**.
+> Across a bulkhead two metres away and filling the frame, the view vector
+> changes a great deal from one fragment to the next, so the half-vector sweeps
+> the whole lobe and the highlight slides across the wall — exactly what the
+> comment describes, on the surface it was written for. A hull a hundred pixels
+> across is the opposite case: the view vector is very nearly constant over all
+> of it, the half-vector is effectively **one direction**, and a flat-shaded hull
+> samples the lobe at its facet normals and nowhere else. With an exponent of
+> 24 the lobe is narrower than the gap between facets, so it is simply missed.
+
+Measured against the model: the closest any facet came to the half-vector was a
+dot of **0.918**, and 0.918²⁴ = 0.135. Predicted gain 4.0 of 255; observed 4.0.
+The exponent became per-draw — 24 for a near bulkhead, 8 for a distant hull —
+and the same facet then keeps half its highlight instead of an eighth.
+
+### The rim term the header had been promising
+
+The file's own header said *"two lights and a rim term, all constant"*. There
+was no rim term. The sentence states the problem — *a hull lit from exactly one
+direction loses half its faces to solid black* — and then nothing solved it.
+
+A rim needs the normal to be **perpendicular to the view**, which every closed
+shape guarantees all the way round its own outline, on every frame, at every
+angle. Nothing is left to luck. That is why the header's complaint is answered
+by this and not by a highlight: it puts light exactly where there is none, along
+the edge that separates the ship from the starfield.
+
+| on the same frame, same camera, hulls only | mean | brightest pixel |
+| --- | --- | --- |
+| specular alone | +0.23 | +13.1 |
+| rim alone | +0.14 | **+30.1** |
+| both, as shipped | +0.38 | +30.1 |
+
+**The rim reaches more than twice as far for less average lift** — concentrated
+where it belongs instead of spread thin. That relation, not either number, is
+what the guard asserts, because the numbers are camera-dependent and the
+geometry is not.
+
+It is applied in the surface's **own colour**, not white: white hangs a halo
+round the hull and greys out the faction palette, whereas multiplying the albedo
+can only lift a surface toward more of what it already is, so a Klingon hull
+rims green and a Starfleet one rims white without either being told to. Cubed,
+so it stays on the facets that are genuinely edge-on.
+
+### What made all of this measurable
+
+Both terms are **per-draw**, not per-frame, which is what makes them materials
+rather than lighting. A painted hull and the asteroid it is flying past are lit
+by the same sun and are not the same substance; one frame-wide sheen either puts
+a highlight on the rock or takes it off the ship.
+
+And **nothing was needed to keep the highlight off a window.** The shader mixes
+the glow channel in *after* the specular, so an emissive face already replaces
+it — the term is multiplied by (1 − vGlow) for free. Checked on the built fleet
+rather than assumed: every painted surface carries glow 0 and every self-lit one
+carries glow above 0.45. The per-material problem was solved before it was asked.
+
+### The instrument, which was wrong first
+
+The first version of the comparison rendered the same fight twice and diffed it.
+Two matte frames differed by **205 levels** on their worst pixel — the camera
+eases toward the fleet on every render, the vista spins, and the look springs
+back to centre, so three renders in a row are three different pictures. The
+"highlight" it first reported was the scene moving.
+
+The fix is a third arm: **render the control twice and require the two to be
+bit-identical** before believing anything about the third. That check is now
+permanent, and it is the one that would catch this class of error again.
+
+Two other things this section paid for:
+
+- **A frame budget is not a quality budget.** The measurement recorded in
+  `mesh.js` — the renderer is draw-call and fill bound, not geometry bound —
+  is why every change here adds **zero triangles**, and why "make the models
+  better" correctly meant shading rather than polygons.
+- **A backtick in a GLSL comment ends the shader.** The source is a JS template
+  literal; a comment mentioning a variable in backticks terminated the string
+  and took the whole application down to a blank page. Prose about code, again.
+
+### Left alone deliberately
+
+Two leads were checked and killed before anything was built, which is the rule
+that has now paid for itself in three consecutive sections.
+
+**Smooth normals.** `mesh.js` argues flat shading in its own header — faceted
+hulls "read as solid geometry at phone size in a way smooth shading does not".
+Settled, and not reopened.
+
+**Ambient occlusion on hulls.** `bakeOcclusion` exists and is rooms-only, and
+its header says why: *"a hull in space has one hard light and a black
+background, so its shape reads from the shading alone."* Its distance field is
+keyed to a floor, walls and furniture circles — structurally a room's, and
+inapplicable to a convex exterior seen from outside. The codebase had already
+answered the question; the sweep only had to read the answer.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

@@ -67,6 +67,72 @@ const PALETTE = {
 export const paletteFor = (faction) => PALETTE[faction] ?? PALETTE.independent;
 
 /**
+ * How much a hull shines.
+ *
+ * The renderer has had a Blinn-Phong term since the interior was written, and
+ * its own note in `gl.js` argues the case: "a flat-shaded bulkhead with no
+ * highlight is a coloured polygon, and the same bulkhead with a soft sheen
+ * sliding across it as you turn your head is a wall." Rooms asked for it at
+ * 0.22. No hull in the game ever did — the tactical plot never called
+ * `setLighting` at all, and the two viewscreen passes named `gloss: 0`
+ * explicitly, under a comment about one hard sun and deep shadow. That is an
+ * argument about where the light comes FROM. A painted hull under a single hard
+ * sun is exactly when a highlight is sharpest.
+ *
+ * Faces that carry their own light — windows, bussards, the deflector — are
+ * untouched for free: the shader mixes the glow channel in AFTER the specular,
+ * so a fully-lit face replaces it. Measured on the built fleet rather than
+ * assumed: every painted surface carries glow 0, every self-lit one glow above
+ * 0.45.
+ *
+ * The value is not a taste call, it is the clipping ceiling. A Starfleet hull
+ * is the brightest paint in the game at 0.82, and its diffuse peak is already
+ * 0.82 × (0.22 ambient + 0.85 key) = 0.877. With the shader's luminance weight
+ * this lands the specular peak at exactly 1.000 — the brightest highlight that
+ * is still a highlight rather than a blown white patch. 0.3 would put it at
+ * 1.14 and flatten the one material it is most visible on. Klingon hulls, being
+ * darker paint, sit well under the ceiling and get proportionally less sheen,
+ * which is correct.
+ *
+ * It lives here, beside the palettes, because it is a property of the hull
+ * rather than of the scene, and in ONE place because the two draw sites that
+ * need it are in different files and a number written twice is a number that
+ * drifts.
+ */
+export const HULL_GLOSS = 0.14;
+
+/**
+ * And how tight that highlight is.
+ *
+ * The exponent was 24 for everything, which is right for the surface it was
+ * written against — a bulkhead two metres from the camera, filling the frame.
+ * Across a face that large the view vector changes a lot from one fragment to
+ * the next, so the half-vector sweeps the whole specular lobe and the highlight
+ * slides across the wall, which is exactly what the shader's note describes.
+ *
+ * A hull seventeen hundred units away is the opposite case. The whole ship
+ * subtends a few dozen pixels, so the view vector is very nearly constant over
+ * all of it and the half-vector is effectively ONE direction. A flat-shaded hull
+ * then samples the lobe at its facet normals and nowhere else — and with an
+ * exponent of 24 the lobe is narrower than the gap between facets, so it is
+ * almost always missed entirely.
+ *
+ * Measured rather than argued: with the term wired and nothing else changed,
+ * the brightest pixel on the whole ship gained FOUR levels out of 255. The
+ * closest any facet came to the half-vector was a dot of 0.918, and 0.918^24 is
+ * 0.135 — the model and the pixels agree to the decimal. At 8 the same facet
+ * keeps half the highlight and its neighbours get a graded share, which is a
+ * sheen across a saucer rather than a glint that is never there.
+ *
+ * The ceiling is unchanged: the specular can never exceed `HULL_GLOSS`
+ * whatever the exponent, so broadening the lobe cannot make it clip.
+ */
+export const HULL_SHINE = 8;
+
+/** How much light a hull picks up along its own outline. See the note in gl.js. */
+export const HULL_RIM = 0.35;
+
+/**
  * Hull archetypes. `build` receives a MeshBuilder, the palette, and the
  * blueprint's own parameters.
  */

@@ -2021,6 +2021,159 @@ try {
     check('the renderer stays inside the triangle budget', gl && gl.triangles <= 8000, String(gl?.triangles));
     check('the WebGL context is healthy', gl && gl.lost === false, String(gl?.lost));
 
+    // ---- The highlight the shader has always implemented and no hull got ----
+    //
+    // `gl.js` has had a Blinn-Phong term since the interior was written, and
+    // its own comment argues that a surface without one "is a coloured
+    // polygon". Rooms asked for it. No hull ever did: this view never called
+    // `setLighting` at all, so `uEye` was never set either and the half-vector
+    // had no viewer to point at.
+    //
+    // Measured on real pixels, because a test that a uniform is non-zero is not
+    // evidence that the picture changed. The same frame is drawn twice from an
+    // identical camera with only the gloss differing, and the two are compared
+    // per pixel — a paired measurement, so nothing drifts between the arms.
+    const shine = await page.evaluate(() => {
+      const v = globalThis.__app.tactical;
+      const eng = globalThis.__app.game?.engagement;
+      const r = v?.renderer;
+      const gl = r?.gl;
+      if (!v || !eng || !gl) return null;
+
+      // The view is not a still: the camera eases toward the fleet every call,
+      // the vista spins, and the look springs back to centre. Three renders in
+      // a row are therefore three different pictures, and the first draft of
+      // this check compared two of them and called the difference a highlight.
+      // Freeze everything that accumulates, and settle the easing first so the
+      // frozen value is the one the camera was heading for anyway.
+      for (let i = 0; i < 120; i++) v.render(eng, 0, 1 / 60);
+      const held = {
+        distance: v.cam.distance,
+        want: v.cam.wantDistance,
+        yaw: v.cam.yaw,
+        pitch: v.cam.pitch,
+        focus: Array.from(v.cam.focus),
+        look: { ...v.look },
+        spin: v.vistaSpin,
+      };
+      const rewind = () => {
+        v.cam.distance = held.distance;
+        v.cam.wantDistance = held.want;
+        v.cam.yaw = held.yaw;
+        v.cam.pitch = held.pitch;
+        for (let i = 0; i < 3; i++) v.cam.focus[i] = held.focus[i];
+        Object.assign(v.look, held.look);
+        v.vistaSpin = held.spin;
+      };
+
+      // One frame, read back before the compositor takes the buffer away.
+      const frame = () => {
+        rewind();
+        v.render(eng, 0, 0);
+        const w = gl.drawingBufferWidth;
+        const h = gl.drawingBufferHeight;
+        const px = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        const lum = new Float64Array(w * h);
+        for (let i = 0; i < w * h; i++) {
+          lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+        }
+        return lum;
+      };
+
+      // Each arm overrides only the draws that already ask for a material —
+      // the hulls. The starfield, the grid and the effects are untouched, so
+      // whatever moves between two arms moved on a ship.
+      const real = r.draw.bind(r);
+      const arm = (extra) => {
+        r.draw = (key, mesh, opts) => real(key, mesh,
+          (opts.gloss == null && opts.rim == null) ? opts : { ...opts, ...extra });
+        const lum = frame();
+        r.draw = real;
+        return lum;
+      };
+
+      const flat = arm({ gloss: 0, rim: 0 });
+      const specOnly = arm({ gloss: 0.14, shine: 8, rim: 0 });
+      const rimOnly = arm({ gloss: 0, rim: 0.35 });
+      const shipped = arm({});
+      // The rig itself: the same arm twice must be the same picture, or every
+      // comparison above is frame-to-frame drift wearing a label. The first
+      // draft of this check failed exactly here — the camera eases every render.
+      const flatAgain = arm({ gloss: 0, rim: 0 });
+
+      // Only pixels with something drawn on them. Empty sky gains nothing
+      // either way and would drown the signal in zeros.
+      const measure = (lit) => {
+        const gains = [];
+        for (let i = 0; i < flat.length; i++) {
+          if (flat[i] < 8) continue;
+          gains.push(lit[i] - flat[i]);
+        }
+        gains.sort((a, b) => a - b);
+        const at = (q) => gains[Math.min(gains.length - 1, Math.floor(gains.length * q))];
+        return {
+          lit: gains.length,
+          median: at(0.5),
+          p99: at(0.99),
+          max: gains[gains.length - 1],
+          brightened: gains.filter((g) => g > 1).length,
+          dimmed: gains.filter((g) => g < -1).length,
+        };
+      };
+      let selfNoise = 0;
+      for (let i = 0; i < flat.length; i++) {
+        selfNoise = Math.max(selfNoise, Math.abs(flatAgain[i] - flat[i]));
+      }
+      const eye = v.eye();
+      const uEye = gl.getUniform(r.program, r.uniform.eye);
+      return {
+        spec: measure(specOnly),
+        rim: measure(rimOnly),
+        both: measure(shipped),
+        selfNoise,
+        eyeSet: Array.from(uEye ?? []),
+        cameraEye: Array.from(eye),
+      };
+    });
+
+    check('the same frame drawn twice the same way is the same frame',
+      shine && shine.selfNoise === 0, `worst pixel differs by ${shine?.selfNoise}`);
+    // Without this the half-vector and the rim are both measured from the
+    // origin of the arena rather than from the camera, which looks subtly wrong
+    // instead of failing. It was measured from the origin: this view never
+    // called `setLighting`, which is the only thing that writes uEye.
+    check('the renderer knows where the camera is',
+      shine && shine.eyeSet.some((c) => c !== 0)
+        && shine.eyeSet.every((c, i) => Math.abs(c - shine.cameraEye[i]) < 1),
+      `uEye ${JSON.stringify(shine?.eyeSet)} against camera ${JSON.stringify(shine?.cameraEye)}`);
+    check('a hull is brighter lit than unlit, and nothing is darker',
+      shine && shine.both.brightened > 500 && shine.both.dimmed === 0,
+      `${shine?.both?.brightened} brighter, ${shine?.both?.dimmed} darker of ${shine?.both?.lit} lit`);
+    // Neither term may be a flat brightness lift. A lift raises the middle of
+    // the distribution as much as the top; both of these are concentrated —
+    // the specular where the half-vector meets a facet normal, the rim along
+    // the outline — so the top must move several times as far as the middle.
+    check('and both of them are local, not a brightness lift',
+      shine && shine.spec.p99 > Math.max(2, shine.spec.median * 4)
+        && shine.rim.p99 > Math.max(2, shine.rim.median * 4),
+      `spec median +${shine?.spec?.median?.toFixed(2)} p99 +${shine?.spec?.p99?.toFixed(2)}; `
+      + `rim median +${shine?.rim?.median?.toFixed(2)} p99 +${shine?.rim?.p99?.toFixed(2)}`);
+    // The geometric fact that decided this change, asserted as a relation
+    // rather than as either number on its own.
+    //
+    // A specular highlight needs the facet normal to line up with the
+    // half-vector, which on a flat-shaded hull a hundred pixels across is luck:
+    // the lobe is narrower than the gap between facets. A rim needs the normal
+    // to be perpendicular to the view, which every closed shape guarantees all
+    // the way round its own outline, on every frame, at every angle. So the rim
+    // must reach markedly further than the highlight — and when it stops doing
+    // so, something has flattened the silhouette.
+    check('and the rim reaches further than the highlight, because geometry',
+      shine && shine.rim.max > shine.spec.max * 1.8,
+      `rim peaks at +${shine?.rim?.max?.toFixed(1)} against the highlight's `
+      + `+${shine?.spec?.max?.toFixed(1)} of 255`);
+
     // A ship cloaking, on the display everyone actually uses.
     //
     // The simulation has pushed `cloak`/`decloak` since cloaking existed and
