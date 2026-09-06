@@ -22,6 +22,7 @@ import { EPISODES } from '../src/missions/episodes/index.js';
 import { parseOrder } from '../src/ui/orders.js';
 import { Game } from '../src/core/state.js';
 import { getShipClass, SHIP_LIST } from '../src/world/ships.data.js';
+import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { SYSTEMS, SYSTEM_BY_ID } from '../src/world/systems.data.js';
 import { buildRoster, STATIONS } from '../src/world/crews.data.js';
 import { resolveHail, HAIL_ENDING } from '../src/sim/diplomacy.js';
@@ -1135,15 +1136,16 @@ test('destroying every hostile is still a victory, not a rout', () => {
 // as a player would — an idle captain against an unarmed freighter is a
 // standoff by construction and proves nothing.
 test('every fight ends, and nothing leaves the arena', () => {
-  const HOSTILES = [
-    'bird_of_prey', 'd7', 'warbird', 'jem_hadar_attack', 'galor', 'marauder',
-    'tholian_web_spinner', 'orion_raider', 'vorcha', 'keldon', 'freighter',
-  ];
-  const DIFFS = ['story', 'cadet', 'commander', 'captain'];
+  // Derived, not remembered. This was eleven hostiles of eighteen and four
+  // difficulties of twelve, under a title that says "every fight" — so seven
+  // hulls and eight rungs of the ladder had never once been driven to an end
+  // condition by the test whose whole subject is that fights terminate.
+  const HOSTILES = SHIP_LIST.filter((c) => c.faction !== 'federation').map((c) => c.id);
+  const DIFFS = DIFFICULTIES.map((d) => d.id);
   let maxRadius = 0;
   const unresolved = [];
 
-  for (let i = 0; i < 112; i++) {
+  for (let i = 0; i < 216; i++) {
     const seed = BigInt(31000 + i);
     const id = HOSTILES[i % HOSTILES.length];
     const g = new Game({ seed, crewMode: 'original', difficulty: DIFFS[i % DIFFS.length] });
