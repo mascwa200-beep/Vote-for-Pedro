@@ -31,6 +31,7 @@ import { Game, MODES } from '../src/core/state.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { SHIP_LIST } from '../src/world/ships.data.js';
 import { Ship } from '../src/sim/ship.js';
+import { Character } from '../src/rules/character.js';
 import {
   ARENA_RADIUS, buildHostiles, hostileName, HOSTILE_NAMES, OUTCOMES,
   Engagement, MAX_WEAPON_RANGE,
@@ -4071,5 +4072,106 @@ describe('the mastery track follows the captain, not the hull', () => {
     takeCommandOf(g, 'constitution');
     assert.equal(g.mastery.classId, 'constitution');
     assert.equal(g.mastery.tier, earned, 'the work put into the old hull was thrown away');
+  });
+});
+
+// A landing party's casualties reach the ship it came back to.
+//
+// A party's casualties are of two kinds. Named officers are killed and injured
+// on their own objects, and the crew screen lists them by name. Anonymous
+// security crewmen are not officers, and the count that exists for exactly that
+// population is `ship.injured`, which the crew screen renders as "N in sickbay".
+//
+// The anonymous half reached nothing. Measured over 260 landings before the
+// fix: 25 reported a crewman hurt and the sickbay count moved on none of them,
+// and the two that reported one killed left the complement at 430. The report
+// handed to the captain said a man was hurt; he could walk to sickbay and find
+// it empty, and the log line — which reports the dead — did not mention him
+// either.
+describe('what a landing costs is counted on the ship that paid it', () => {
+  /** Land somewhere and hand back the report with the ship's before and after. */
+  const land = (seed) => {
+    const g = new Game({
+      seed: BigInt(seed), crewMode: 'canon', crew: 'tos', shipClass: 'constitution',
+      difficulty: 'captain', character: new Character({ speciesId: 'human', careerId: 'command' }),
+    });
+    try { g.enterOrbit(); } catch { return null; }
+    const offered = g.availableAwayMissions?.() ?? [];
+    if (!offered.length) return null;
+    const before = { injured: g.ship.injured, crew: g.ship.crew, log: g.log.length };
+    const report = g.awayMission(offered[0].id);
+    if (!report?.ok) return null;
+    const aboard = new Set(g.crew.officers.map((o) => o.name));
+    const anonymous = (report.casualties ?? []).filter((c) => !aboard.has(c.name));
+    return {
+      g,
+      before,
+      report,
+      hurt: anonymous.filter((c) => c.injured && !c.killed).length,
+      killed: anonymous.filter((c) => c.killed).length,
+      named: (report.casualties ?? []).filter((c) => aboard.has(c.name)).length,
+    };
+  };
+
+  test('a crewman hurt on the surface is a crewman in sickbay', () => {
+    // Every landing that reports one, not a sample: the whole point is that the
+    // two numbers agree every time rather than usually.
+    let reported = 0;
+    const wrong = [];
+    for (let s = 1; s <= 120; s++) {
+      const r = land(s * 13);
+      if (!r || !r.hurt) continue;
+      reported++;
+      if (r.g.ship.injured !== r.before.injured + r.hurt) {
+        wrong.push(`seed ${s * 13}: ${r.hurt} hurt, sickbay ${r.before.injured} -> ${r.g.ship.injured}`);
+      }
+    }
+    assert.ok(reported >= 5, `only ${reported} landings reported an injury — the fixture found nothing to check`);
+    assert.deepEqual(wrong, [], `${wrong.length} landing(s) reported an injury the ship never saw`);
+  });
+
+  test('and a crewman lost is a crewman off the complement', () => {
+    let reported = 0;
+    const wrong = [];
+    for (let s = 1; s <= 260; s++) {
+      const r = land(s * 13);
+      if (!r || !r.killed) continue;
+      reported++;
+      if (r.g.ship.crew !== r.before.crew - r.killed) {
+        wrong.push(`seed ${s * 13}: ${r.killed} lost, complement ${r.before.crew} -> ${r.g.ship.crew}`);
+      }
+    }
+    assert.ok(reported >= 1, 'no landing in 260 lost anybody, so this checked nothing');
+    assert.deepEqual(wrong, [], `${wrong.length} landing(s) lost somebody the ship still carries`);
+  });
+
+  test('and a named officer is not counted twice', () => {
+    // Officers are already accounted for as themselves — `injure` and `kill`
+    // run on the officer. Adding them to the anonymous count as well would put
+    // the exec in sickbay and a stranger in sickbay for the same wound.
+    for (let s = 1; s <= 120; s++) {
+      const r = land(s * 13);
+      if (!r || !r.named || r.hurt || r.killed) continue;
+      assert.equal(r.g.ship.injured, r.before.injured,
+        `seed ${s * 13}: a named officer was also counted among the anonymous crew`);
+      assert.equal(r.g.ship.crew, r.before.crew,
+        `seed ${s * 13}: a named officer was also taken off the complement`);
+    }
+  });
+
+  test('and the log says somebody went to sickbay', () => {
+    // It reported the dead and nothing else, so the fifth of landings that cost
+    // an injury read as landings that cost nothing.
+    for (let s = 1; s <= 120; s++) {
+      const r = land(s * 13);
+      if (!r || !r.hurt) continue;
+      const lines = r.g.log.slice(r.before.log).map((e) => e.text ?? '');
+      const landing = lines.find((t) => /Landing party is back aboard/.test(t));
+      assert.ok(landing, `seed ${s * 13}: no landing line in the log at all`);
+      assert.match(landing, /sickbay/i,
+        `seed ${s * 13}: "${landing}" — ${r.hurt} hurt and the log does not say so`);
+      return;
+    }
+    assert.fail('no landing in 120 reported an injury, so this checked nothing');
   });
 });
