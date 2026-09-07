@@ -294,6 +294,114 @@ describe('Survivor — once per commission, survive it at 1% hull', () => {
     const back = Ship.load(JSON.parse(JSON.stringify(g.ship.save())));
     assert.equal(back.deathSavesSpent, 1);
   });
+
+  test('and neither does losing the ship, which is the one that got through', () => {
+    // The two tests above guard a refit and a save file. Neither guards the
+    // one thing that actually replaces the object the counter lives on.
+    // `deathSavesSpent` is a field on the Ship — so `destroy` can write it
+    // without a back-reference to the campaign — and a replacement hull is a
+    // new Ship with the counter at zero. Measured before the fix: the feat
+    // fired TWICE in one commission, once aboard the Miranda and again aboard
+    // the Hood that replaced her.
+    const g = game(['survivor']);
+    sink(g);
+    assert.equal(g.ship.deathSavesSpent, 1, 'the fixture never spent the save');
+
+    const lost = g.ship;
+    g.loseTheShip();
+    assert.notEqual(g.ship, lost, 'the fixture never actually replaced the ship');
+    g.applyAllMods();
+    assert.equal(g.ship.deathSavesSpent, 1,
+      'a new hull came with the allowance reset');
+    assert.equal(g.ship.deathSaves, 0,
+      'losing the ship handed the once-per-commission save back');
+  });
+
+  test('and the captain is told when it happens', () => {
+    // The save is the most violent thing that can happen to a ship without
+    // ending the commission: the hull snaps to 1%, a running breach stops, any
+    // boarding party vanishes and every facing goes flat, in one tick. It
+    // emitted `ship:deathsave`, which had no listener anywhere, and said
+    // nothing on any other path — so it read as a display fault, and the
+    // allowance was spent with nothing to show it.
+    const g = game(['survivor']);
+    const before = g.log.length;
+    sink(g);
+    g.update(1 / 30);
+    const said = g.log.slice(before).filter((e) => /one percent of hull/.test(e.text ?? ''));
+    assert.equal(said.length, 1,
+      `the ship was saved and the campaign log said it ${said.length} times`);
+
+    // And exactly once, however long the commission runs afterwards.
+    for (let i = 0; i < 200; i++) g.update(1 / 30);
+    assert.equal(g.log.filter((e) => /one percent of hull/.test(e.text ?? '')).length, 1,
+      'the sweep runs every tick and said it again');
+  });
+
+  test('and the combat log says it too, while the fight is still going on', () => {
+    // Two surfaces on purpose, the same way losing the ship has two: the
+    // combat log is where the captain is looking at that second, and the
+    // campaign log is the record that outlives the sixty lines the combat log
+    // keeps. `Ship.destroy` returns before setting `destroyed`, so the sweep
+    // that reports kills walks straight past a save — it is the same silence
+    // `onDestroyed` was written to end, reached from the other side.
+    const g = game(['survivor']);
+    const eng = g.startCombat([new Ship('neghvar', { faction: 'klingon', name: 'N1' })],
+      { relentless: true });
+    assert.equal(eng.log.filter((e) => /should have been lost/.test(e.text)).length, 0,
+      'the engagement announced a save before anything happened');
+
+    sink(g);
+    eng.update(1 / 30);
+    const said = eng.log.filter((e) => /should have been lost/.test(e.text));
+    assert.equal(said.length, 1, `the combat log said it ${said.length} times`);
+
+    for (let i = 0; i < 120; i++) eng.update(1 / 30);
+    assert.equal(eng.log.filter((e) => /should have been lost/.test(e.text)).length, 1,
+      'the sweep runs every tick and said it again');
+
+    // And the NEXT fight does not re-announce it. The counter survives the
+    // battle it was spent in, so a sweep that started from an empty map would
+    // open every subsequent engagement by reporting a rescue that happened in
+    // a previous one. Written because the control for it — seeding the map
+    // empty — passed everything above: the case only exists once a ship walks
+    // into a fight with the save already gone.
+    //
+    // The first draft of this called `startCombat` again without ending the
+    // fight, which returns the SAME engagement, so it re-read the line the
+    // first fight had already written and failed for a reason that had nothing
+    // to do with the seeding.
+    assert.equal(g.ship.deathSavesSpent, 1, 'the fixture never spent the save');
+    eng.end('victory');
+    g.resolveCombat?.();
+    g.engagement = null;
+    g.ship.restore();
+    assert.equal(g.ship.deathSavesSpent, 1, 'restoring the ship handed the save back');
+
+    const next = g.startCombat([new Ship('neghvar', { faction: 'klingon', name: 'N2' })],
+      { relentless: true });
+    assert.notEqual(next, eng, 'the fixture never actually started a second fight');
+    next.update(1 / 30);
+    assert.equal(next.log.filter((e) => /should have been lost/.test(e.text)).length, 0,
+      'the next engagement opened by announcing the previous one\'s rescue');
+  });
+
+  test('and a campaign loaded afterwards does not announce it a second time', () => {
+    // `deathSavesSpent` is saved with the ship. A counter that started at zero
+    // on load would find it already spent and report a rescue that happened
+    // before the save file was written.
+    const g = game(['survivor']);
+    sink(g);
+    g.update(1 / 30);
+    assert.equal(g.ship.deathSavesSpent, 1, 'the fixture never spent the save');
+
+    const reloaded = Game.load(JSON.parse(JSON.stringify(g.save())));
+    assert.equal(reloaded.ship.deathSavesSpent, 1, 'the save file lost the spent counter');
+    const before = reloaded.log.length;
+    for (let i = 0; i < 60; i++) reloaded.update(1 / 30);
+    assert.equal(reloaded.log.slice(before).filter((e) => /one percent of hull/.test(e.text ?? '')).length, 0,
+      'loading a campaign re-announced a save spent before the file was written');
+  });
 });
 
 describe('Inspiring Presence — cooldowns recover faster, officers never object', () => {

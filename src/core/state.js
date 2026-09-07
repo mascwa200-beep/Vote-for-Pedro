@@ -288,6 +288,12 @@ export class Game {
       faction: 'federation',
       isPlayer: true,
     });
+    // What the campaign log has already said about a death save. Seeded from
+    // the ship rather than left to the first tick: a save spent before `update`
+    // ever ran — a hazard on arrival, a fixture that sinks the ship outright —
+    // would otherwise be swallowed by its own seeding. `Game.load` re-seeds it
+    // from the loaded hull for the same reason, in the other direction.
+    this.saidDeathSaves = this.ship.deathSavesSpent ?? 0;
     this.applyAllMods();
 
     // ---- world ----
@@ -4959,6 +4965,21 @@ export class Game {
     // back with "I had the con for the last hour. Nothing to report."
     if (this.conStation) this.conHours += dt / 3600;
 
+    // The ship was destroyed and something caught her. The engagement says so
+    // in the combat log while it is happening; this is the campaign's record,
+    // because what the save costs is permanent and the combat log is sixty
+    // lines and thrown away. Swept here rather than inside the COMBAT case
+    // because `Ship.destroy` is also reached by hazards and collisions.
+    const saveSpent = this.ship.deathSavesSpent ?? 0;
+    if (saveSpent > (this.saidDeathSaves ?? 0)) {
+      this.saidDeathSaves = saveSpent;
+      this.pushLog(
+        `${this.ship.name} was lost and is not. Damage control has her at one percent of hull `
+        + 'and the breach is out. There is no second time.',
+        'engineering',
+      );
+    }
+
     switch (this.mode) {
       case MODES.TRANSIT: {
         if (!this.transit) { this.mode = MODES.BRIDGE; break; }
@@ -5112,8 +5133,20 @@ export class Game {
         + 'put in, and it is already on your record.',
         'comms',
       );
+      const spentSaves = this.ship.deathSavesSpent ?? 0;
       const took = takeCommandOf(this, board.id);
       if (!took.ok) return this.gameOver('ship lost and no hull available');
+      // "Once per commission", and a commission outlasts a hull.
+      //
+      // `deathSavesSpent` lives on the ship so that `destroy` can write it
+      // without a back-reference to the campaign, and `applyAllMods` subtracts
+      // it — which the comment there says makes the save once per commission
+      // rather than once per refit. It does, for a refit. It does not for the
+      // one thing that actually replaces the object: losing the ship. A
+      // brand-new hull carries the counter at zero, so the allowance came back
+      // with every replacement. Measured: the feat fired TWICE in one
+      // commission, once before the Miranda was lost and once aboard the Hood.
+      this.ship.deathSavesSpent = spentSaves;
       this.pushLog(
         `Starfleet assigns you ${this.ship.name}. She is not ${lost}, and nobody `
         + 'aboard has worked her up.',
@@ -5939,6 +5972,10 @@ export class Game {
     g.captain = { ...g.captain, ...data.captain };
     g.crew = Crew.load(data.crew);
     g.ship = Ship.load(data.ship);
+    // Whatever this hull has already spent has already been reported, in the
+    // session that spent it. Without this a loaded campaign announces a rescue
+    // that happened before the save file was written.
+    g.saidDeathSaves = g.ship.deathSavesSpent ?? 0;
     g.progress = CaptainProgress.load(data.progress);
     g.loadout = Loadout.load(data.loadout, g.ship.cls.slots);
     g.ledger = Ledger.load(data.ledger);

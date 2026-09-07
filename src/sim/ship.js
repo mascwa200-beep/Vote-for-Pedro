@@ -116,7 +116,7 @@ export const TARGETABLE_SUBSYSTEMS = ['weapons', 'shields', 'engines', 'warpcore
  * Measured across a hundred and twenty fights against five factions, with the
  * simple pilot the balance suite flies, once every enemy captain could call one:
  *
- *     share of hull damage kept    player destroyed    median battle
+ *     share of the SHOT kept       player destroyed    median battle
  *     1.00  (free, as it was)         53 / 120             40 s
  *     0.85                            48                   45 s
  *     0.70                            48                   50 s
@@ -132,6 +132,29 @@ export const TARGETABLE_SUBSYSTEMS = ['weapons', 'shields', 'engines', 'warpcore
  * the log, with a whole repair and power system to answer it.
  */
 export const CALLED_SHOT_HULL = 0.7;
+
+/*
+ * A correction to the name and to what §95 said about it.
+ *
+ * Both constants are applied to `incoming` at the top of `takeDamage`, BEFORE
+ * the shield/hull split and before the crew roll. So the price is not a share
+ * of hull damage, as the name and §95 both say — it is a share of the whole
+ * shot, and it is taken out of shield-stripping just as hard. Measured, one
+ * 100-point hit on a B'rel at the player's 0.85:
+ *
+ *     shields up     shield 92.00 -> 78.20    hull 8.00 -> 6.80
+ *     shields down   shield  0.00 ->  0.00    hull 100.00 -> 85.00
+ *
+ * Which matters, because what the shot BUYS is `(hullDamage / maxHull) * 3.2`
+ * — scaled by the part that reached the hull. Through an intact facing that is
+ * the 8% bleed, so the captain pays the full price on the 92 points doing the
+ * real work and buys against the 8. Same price, about twelve times less bought.
+ *
+ * That is the whole of the AI's rule at `ai.js`: it drops its called shot while
+ * the facing it is shooting at still has shields, and the player has no
+ * equivalent. Not a balance change here — the targeting hint now says it, which
+ * is what the player was missing.
+ */
 
 /**
  * The same share, for a shot the CAPTAIN called.

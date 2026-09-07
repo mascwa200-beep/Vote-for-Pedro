@@ -9340,6 +9340,163 @@ error in three sections, and §96's rule is now doing real work: it was caught
 because I was about to act on it.
 
 
+## 98. The miracle nobody mentioned, and a once-per-commission save that came back with every hull
+
+§97 counted 56 events emitted in `src/` with no listener and refused to call
+them 56 defects, on §91's rule: an unwired thing is a hypothesis. This is that
+register worked. All 56 were traced to what the player actually experiences —
+where the emit sits, what the enclosing function already says, and which screen
+renders the state it changes. **One** survived.
+
+| verdict | count | what it means |
+| --- | ---: | --- |
+| covered | 52 | a `pushLog` at the emit site, a returned message, or a screen that renders the result |
+| internal | 2 | no player-facing meaning at all: `ledger:flag` and `gambit:channel-closed`, both bookkeeping inside an outcome that is reported as a whole |
+| claimed silent, refuted | 1 | `officer:level` — no *notification*, but `expertise` is drawn in three places a player reaches, including a cooldown they watch mid-fight |
+| **silent** | **1** | `ship:deathsave` |
+
+`combat:hit` is the clearest of the 52: it fires on every hit including the
+player's own, which would be a log line thirty times a second — and the
+narrowing that matters, `combat:player-hit`, *is* listened for, at
+`main.js`, for the impact haptic. The general hook being unheard is the design
+working, not a gap.
+
+Three I checked by hand rather than by delegation, and all three were the same
+shape: `walk`, `diagnostic` and `con` each push a log line on the line *before*
+the emit. The event is a hook beside prose that already exists — which is what
+most of the 56 turned out to be, and why the count was never a defect count.
+
+### The one that was real
+
+The Survivor feat lets a ship take the hit that would have destroyed her. When
+it fires, `Ship.destroy` spends the allowance, snaps the hull to 1% of maximum,
+stops a warp core breach that was already counting down, clears any boarding
+party, flattens every shield facing — and **returns before setting
+`destroyed`**. That early return is correct: the ship is alive. It also means
+the sweep that reports kills walks straight past it. Measured over a real fight:
+
+```
+ship:deathsave fired 1x       log lines mentioning it: 0
+```
+
+Which is the same silence `onDestroyed` was written to end, arrived at from the
+opposite direction. There, a kill was invisible because `destroyed` was set too
+*late*; here, a rescue is invisible because the function returns too *early*.
+
+To a captain it reads as a display fault: the hull jumps to 1%, the breach
+countdown vanishes, the boarders are gone, and nothing accounts for any of it.
+Worse, the once-per-commission allowance is now spent, and nothing says that
+either — so the next risk is taken on a safety net that is no longer there.
+
+It now says so twice, deliberately, the way losing the ship already does. The
+combat log gets the moment — *"…should have been lost. She is holding at one
+percent of hull, and that is the only time she will."* — and the campaign log
+gets the record, because the combat log holds sixty lines and is thrown away
+while what the save cost is permanent.
+
+### And the thing the sweep did not find
+
+Verifying the first finding turned up a second that no amount of reading would
+have produced, because it only appears when you run a commission long enough to
+lose a ship.
+
+`deathSavesSpent` lives on the **Ship** — it has to, so `destroy` can write it
+without a back-reference to the campaign — and `applyAllMods` computes the
+allowance as `mechanic('deathSave') - ship.deathSavesSpent`. The comment there
+says, correctly, that this is what makes the save once per commission rather
+than once per refit. Two tests guard exactly that: one for a refit, one for a
+save file.
+
+Neither guards the one thing that replaces the object the counter lives on.
+Lose the ship and Starfleet assigns a new hull — a new `Ship`, with the counter
+at zero. Measured across four fights in one commission:
+
+```
+                       deathSaves  spent   feat had fired
+start                       1        0            0
+after fight 1 (ship lost)   1        0            1     <- handed back
+after fight 2               0        1            2     <- twice, in one commission
+```
+
+The feat's own text reads *"Once per commission, survive what would destroy the
+ship at 1% hull."* It was once per hull, and the captains who got two were the
+ones who had already lost a ship. The replacement now carries the counter.
+
+### A correction to §95, which is merged
+
+While confirming a separate diagnosis I measured what the called-shot price
+actually multiplies, and §95 has it wrong. It says `CALLED_SHOT_HULL` is *"the
+share of hull damage a called shot keeps."* Both constants are applied to
+`incoming` at the top of `takeDamage`, **before** the shield/hull split and
+before the crew roll. One 100-point hit on a B'rel at the player's 0.85:
+
+```
+                shield damage      hull damage
+shields up      92.00 -> 78.20     8.00 -> 6.80
+shields down     0.00 ->  0.00   100.00 -> 85.00
+```
+
+It is a share of the whole shot, taken out of shield-stripping exactly as hard.
+That matters because what the shot *buys* is `(hullDamage / maxHull) * 3.2` —
+scaled by the part that reached the hull. Through an intact facing that is the
+8% bleed, so the captain pays full price on the 92 points doing the real work
+and buys against the 8.
+
+Which is the entire content of the rule the AI has been following since §31:
+drop the called shot while the facing you are shooting at still has shields.
+The player has no such gate and was never told the arithmetic behind it. The
+panel said *"It costs you hull damage you would otherwise be doing"*, which
+priced the shot as free while shields were up — the opposite of true. It now
+names both halves and says when to pay: *"…fifteen percent of the whole shot,
+shields as much as hull — and it only cripples in proportion to what reaches
+the hull. Call it once their shields are down, which is what they do to you."*
+
+No balance change. The numbers §95 measured were survival outcomes and they
+stand; it was the explanation that was wrong, and a wrong explanation on a
+lever is how a player learns the wrong lesson from a real result.
+
+### Guards and controls
+
+Eight, each with the control that must break it, every control run:
+
+| guard | control | fired |
+| --- | --- | --- |
+| losing the ship does not refund the save | drop the carry-over | ✓ |
+| the campaign log says it happened | remove the notice | ✓ |
+| …once, not every tick | announce whenever spent > 0 | ✓ |
+| a loaded campaign does not re-announce it | drop the load reseed | ✓ |
+| the combat log says it during the fight | remove the sweep | ✓ |
+| …and the next fight does not repeat it | seed the map empty | ✓ |
+| the price is charged to shields as hard as hull | move it after the split | ✓ |
+| the panel says so, and says when to call it | revert the hint | ✓ |
+
+Two of these exist only because a control failed to fire first.
+
+The seeding guard passed with the map seeded empty, because every ship in the
+fixture started with nothing spent — an empty map and a correct one are
+identical until a ship walks into a fight with the save already gone. Adding
+that case is what made the control bite.
+
+And the first draft of that same test called `startCombat` again without ending
+the fight. `startCombat` returns the **same** engagement when one is already
+running, so the test re-read the line the first fight had written and failed for
+a reason that had nothing to do with what it was guarding. A red test is not
+self-justifying: it was measuring the wrong object, and the fix was in the test.
+
+### The rule from §97, immediately earning its keep
+
+The verdict table above first read 41 covered and 14 internal. I did not count
+those — I wrote down a plausible-looking split and moved on, which is precisely
+what §97 had just finished amending the rule against. Counted: **52 covered, 2
+internal, 1 refuted, 1 silent.** The shape of the answer was right and every
+number in it was wrong, and the internal bucket was off by a factor of seven.
+
+That is the third time in two sections that a figure headed for prose was wrong
+until it was measured, and the second where nothing at all depended on it. A
+claim nothing branches on is still a claim; it is just one whose error survives
+longer, because no test will ever fail because of it.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
