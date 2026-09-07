@@ -11648,12 +11648,40 @@ than its class that did not say so; this one says so.
 
 ### Verification
 
-- `node --test tests/*.test.js` — **2,092 passing**, 0 failing
+- `node --test tests/*.test.js` — **2,093 passing**, 0 failing
 - `tools/verify-app.mjs` — 410/410
 - `dist/` and the APK rebuilt; manifest carries `VIBRATE` only, no `INTERNET`
 
-Eleven flags to go, three of them act-5 blocked — one fewer than arithmetic would
-give, because `archanis_ratified` left the list without being wired.
+### One more inherited claim, checked on the way out
+
+Every section since §112 has ended with *"N flags to go, three of them act-5
+blocked"*. §116 caught the N being wrong and put a guard on it. Nobody had ever
+checked the clause after the comma, and it is false: **no flag on the list is
+written in act 5.** The three that were have long since gone, and the qualifier
+rode along behind a number that was being measured, which is the safest possible
+place for a wrong claim to hide.
+
+What the list actually looks like, by the act that writes each flag:
+
+| act | flags | deepest reach available |
+| --- | --- | --- |
+| 1 | `centauri_reported` | 4 acts |
+| 2 | `organia_rebuffed` | 3 acts |
+| 3 | `badlands_run` `devron_blind` `devron_data` `dmz_favourable` `donatu_battle` | 2 acts |
+| 4 | `borrowed_blade` `grid_9902_contact` `grid_answered_late` `romulus_witness` | 1 act |
+
+Which says plainly where the bar drops, and says it structurally rather than by
+taste. Four of the eleven are act-4 deeds that can only ever be answered in the
+final act, and there are exactly five episodes there. That is the tail I said in
+§118 I would rather leave unwired than dress up, and it is four flags rather than
+the vaguer "some" — while the two at the top have twenty-three and eighteen
+possible hosts between them.
+
+The qualifier is now scraped and checked like the count.
+
+Eleven flags to go. None is written in act 5; four are act-4 deeds that can reach
+only the final act. One fewer than arithmetic would give, because
+`archanis_ratified` left the list without being wired.
 
 ## Attribution
 
