@@ -44802,6 +44802,30 @@ class Game {
       : won === 0 ? 'failure' : 'partial';
     const lost = team.casualties.filter((c) => c.killed).length;
 
+    // The people who did not walk back onto the transporter pad.
+    //
+    // A landing party's casualties are named officers, who are killed and
+    // injured on their own objects, and anonymous security crewmen, who are
+    // not. The anonymous half reached NOTHING: measured over 260 landings, 12
+    // of 60 reported a crewman hurt and `ship.injured` moved on none of them,
+    // and the two that reported one killed left the complement at 430.
+    //
+    // `ship.injured` is what the crew screen renders as "N in sickbay", and it
+    // is the count for exactly this population — officers are listed separately
+    // by name. So a party came back, the report said a man was hurt, and the
+    // captain could walk to sickbay and find it empty.
+    //
+    // Counted here rather than in `away.js` because that module resolves the
+    // landing and does not hold the ship. Named officers are excluded: they are
+    // already accounted for as themselves, and adding them here would count
+    // each one twice.
+    const aboard = new Set(this.crew.officers.map((o) => o.name));
+    const anonymous = team.casualties.filter((c) => !aboard.has(c.name));
+    const anonKilled = anonymous.filter((c) => c.killed).length;
+    const anonHurt = anonymous.filter((c) => c.injured && !c.killed).length;
+    if (anonKilled) this.ship.crew = Math.max(0, this.ship.crew - anonKilled);
+    if (anonHurt) this.ship.injured += anonHurt;
+
     this.applyAwayOutcome(template, outcome, won, total);
 
     // What going down there did for the people who went.
@@ -44854,9 +44878,14 @@ class Game {
         + (captainWounded ? ', broken off with the captain wounded' : ''),
       system: this.locationId,
     });
+    // And say who is in sickbay, which this never did. It reported the dead
+    // and nothing else, so the twenty percent of landings that cost somebody an
+    // injury read in the log as landings that cost nothing at all.
+    const hurtAboard = team.casualties.filter((c) => c.injured && !c.killed).length;
     this.pushLog(
       `Landing party is back aboard. ${won} of ${total} objectives.`
-      + (lost ? ` We lost ${lost}.` : ''),
+      + (lost ? ` We lost ${lost}.` : '')
+      + (hurtAboard ? ` ${hurtAboard} for sickbay.` : ''),
       'transporter',
     );
     emit('away:mission', report);

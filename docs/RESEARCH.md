@@ -10122,6 +10122,91 @@ Controls, all fired: a load that drops the ship's log, one that forgets the
 hours an officer stood the con, and one that forgets where the captain was.
 
 
+## 104. The man in sickbay who was not in sickbay
+
+§102 and §103 filed ten dissolved leads between them and one real defect. The
+eleventh lead was the away-mission loop, which nothing in this register had ever
+measured, and it is the one that held.
+
+The instrument was the same one that found §98 and §101: **take what the game
+tells the captain and check it against what the game did.**
+
+### The finding
+
+A landing party's casualties come in two kinds. Named officers are killed and
+injured on their own objects — `injure` and `kill` run on the officer, and the
+crew screen lists them by name. Anonymous security crewmen are not officers, and
+the count that exists for exactly that population is `ship.injured`, which the
+crew screen renders as **"N in sickbay"**.
+
+The anonymous half reached nothing at all. Measured over 260 landings:
+
+```
+                                    reported   the ship noticed
+a crewman hurt on the surface          25            0
+a crewman lost on the surface           2            0
+```
+
+So the report handed to the captain said *"Security crewman — injured"*, the
+sickbay count stayed at zero, the complement stayed at 430, and the log line
+said only `Landing party is back aboard. 0 of 2 objectives.` — because that line
+reported the dead and had never mentioned the hurt. A fifth of all landings cost
+somebody an injury and read, everywhere a player could look, as landings that
+cost nothing.
+
+A captain could be told a man was hurt and walk to sickbay to find it empty.
+
+### Why it was invisible
+
+`ship.injured` is a **display counter** — written in four places and read by
+nothing mechanical — so nothing downstream misbehaved, no invariant fired, and
+no balance shifted. It is exactly the class of defect that only an assertion
+about what the player is *told* can catch, which is why ten sweeps of wiring and
+outcomes went past it.
+
+The fix counts the anonymous casualties on the ship they came back to, excluding
+named officers, who are already accounted for as themselves — adding them here
+would put the exec in sickbay and a stranger in sickbay for the same wound. And
+the log line now says how many went below.
+
+```
+                                    reported   the ship notices
+a crewman hurt on the surface          25           25
+a crewman lost on the surface           2            2
+named officers double-counted           —            0
+```
+
+### Guards and controls
+
+Four, each with the control that must break it: an injury reaches sickbay
+(*control:* stop applying it — the shipped defect); a loss comes off the
+complement (*control:* stop applying it); a named officer is not counted twice
+(*control:* drop the filter that excludes them, which puts one man in two
+places); and the log says somebody went to sickbay (*control:* remove the
+clause). All four fire.
+
+The first two assert on **every** landing that reports a casualty across 120 and
+260 seeds rather than on a sample, because the point is that the two numbers
+agree every time rather than usually — and both refuse to pass if the fixture
+finds nothing to check, which is the failure mode a test like this actually has.
+
+### And a twelfth instrument error
+
+While confirming that combat *does* cost the complement, a battle came back
+reading **crew 430 → 535**. A hundred and five people had not joined the ship:
+she was lost and `g.ship` is the replacement hull, which carries a larger crew.
+
+That is the same trap §100 recorded — `g.ship` is not a stable reference across
+a lost fight — caught for the second time by the same tell as always, an answer
+that is not merely wrong but impossible. Holding the reference gives 430 → 424
+with nine in sickbay, which is what a battle costs.
+
+Counting it, **nine of the last thirteen things that looked wrong were the
+instrument.** The hit rate for a lead surviving first contact with a correct
+measurement is now about one in six, and the leads that do survive have all had
+the same shape: something the game says, checked against something the game does.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
