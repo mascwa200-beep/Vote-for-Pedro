@@ -1842,7 +1842,7 @@ describe('every episode graph is sound', () => {
       came_clean: 'candidate',
       centauri_reported: 'candidate', devron_blind: 'candidate',
       devron_collapsed: 'candidate', devron_data: 'candidate',
-      dmz_clause_recovered: 'candidate', dmz_favourable: 'candidate',
+      dmz_favourable: 'candidate',
       donatu_battle: 'candidate',
       donatu_pressed: 'candidate', grid_9902_contact: 'candidate',
       grid_answered_late: 'candidate',
@@ -1851,6 +1851,12 @@ describe('every episode graph is sound', () => {
       organia_revealed: 'candidate',
       rescued_vell: 'candidate',
       romulus_witness: 'candidate',
+      // `tholian_protocol` and `dmz_clause_recovered` left in §113: the captain
+      // who wrote the Tholian procedure — the one named after his own ship —
+      // can open a first contact with it, and the one who took a conceded point
+      // back before signing can reopen Khitomer's ninth page without spending
+      // the man who gave him the name.
+      //
       // `ordered_the_deck`, `grid_candid` and `telek_acquitted` left in §112, to
       // the review board: the captain who made it an order on the rec deck can
       // put that in front of them himself, the one who answered 9902 candidly

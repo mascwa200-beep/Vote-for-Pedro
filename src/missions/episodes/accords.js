@@ -249,6 +249,24 @@ export const ACCORD_EPISODES = [
             next: 'ninth', effects: { xp: 1000, flag: 'read_the_ninth' } },
           { id: 'quiet', label: 'Keep the name and fix the ninth page quietly',
             next: 'ninth', effects: { xp: 900, flag: 'read_the_ninth' } },
+          // Terok Nor, in act 3: "Take the conceded point back before you sign."
+          // A captain who has once reopened a concession at the table, with the
+          // pen already in his hand, knows the ninth page does not need a name
+          // attached to it to be fought over.
+          //
+          // Both roads above spend the prisoner — one at the table, one quietly
+          // — and he has just asked, in the first frightened thing he has said,
+          // that nobody be told he gave it. This is the road that does not spend
+          // him: the concession is reopened on its own merits, which is a harder
+          // argument and the one that leaves a nineteen-year-old out of it.
+          //
+          // `read_the_ninth` as well, like both of its siblings: the stage it
+          // leads to gates on having actually read the page, and arriving there
+          // without it would strand the captain among locked choices.
+          { id: 'reopen', label: 'Reopen the concession itself, and leave him out of it',
+            next: 'ninth', requires: { flag: 'dmz_clause_recovered' },
+            effects: { xp: 1200, standing: { cardassian: 6, federation: 8 },
+              flag: 'read_the_ninth' } },
         ],
       },
 

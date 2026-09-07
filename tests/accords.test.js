@@ -304,3 +304,63 @@ describe('the captain who defused Donatu can defuse this', () => {
       `both are written inside ${[...donatu].join(',')}, so a captain may have to choose`);
   });
 });
+
+// §113. Terok Nor, read at Khitomer.
+//
+// The prisoner has just given up the paymaster and asked, in the first
+// frightened thing he has said, that nobody be told he gave it. Both roads out
+// of `bargained` spend him anyway — one at the table, one quietly.
+//
+// A captain who took a conceded point back before signing at Terok Nor in act 3
+// has a third: reopen the concession on its own merits. A harder argument, and
+// the one that leaves a nineteen-year-old out of it.
+describe('the captain who reopened a concession once can do it again', () => {
+  const ep = EPISODES.find((e) => e.id === 'khitomer_accord');
+  const stage = ep.stages.bargained;
+
+  const open = (flags) => {
+    const g = captain({ flags });
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('reopening the page is only for the captain who has done it before', () => {
+    const gated = stage.choices.find((c) => c.id === 'reopen');
+    assert.ok(gated, 'the third road out of the cell is gone');
+    assert.deepEqual(gated.requires, { flag: 'dmz_clause_recovered' });
+
+    const without = open([]);
+    assert.equal(without.includes('reopen'), false,
+      'offered to a captain who never reopened anything at Terok Nor');
+    assert.equal(without.length, 2, 'the two original roads are no longer both there');
+    assert.ok(open(['dmz_clause_recovered']).includes('reopen'), 'Terok Nor bought nothing');
+  });
+
+  test('and it is the road that does not spend the man who gave him the name', () => {
+    // The distinction the scene is built on. Both original roads carry the name
+    // to the table or use it quietly; this one carries neither.
+    const reopen = stage.choices.find((c) => c.id === 'reopen');
+    const sourced = stage.choices.filter((c) => c.id !== 'reopen');
+    for (const c of sourced) {
+      assert.ok([].concat(c.effects?.flag ?? []).includes('read_the_ninth'),
+        `${c.id} no longer reads the page, so the comparison below is wrong`);
+    }
+    assert.ok([].concat(reopen.effects.flag).includes('read_the_ninth'),
+      'reopening the page arrives at the ninth stage without having read it');
+    assert.equal([].concat(reopen.effects.flag).includes('khitomer_source'), false,
+      'the road that leaves him out of it still names the paymaster');
+  });
+
+  test('and it does not strand the captain among locked choices at the ninth page', () => {
+    // `ninth` gates three of its four choices. A road into it that failed to set
+    // `read_the_ninth` would put a captain in a room where almost everything is
+    // greyed out — which is why both siblings set it and why this one must.
+    const g = captain({ flags: ['dmz_clause_recovered', 'read_the_ninth'] });
+    const m = g.missions.start('khitomer_accord', g);
+    g.locationId = ep.system;
+    m.stageId = 'ninth';
+    const open2 = m.choices().filter((c) => !c.locked).map((c) => c.id);
+    assert.ok(open2.length >= 2, `only ${open2.length} choices open at the ninth page`);
+  });
+});

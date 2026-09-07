@@ -625,6 +625,30 @@ export const FRONTIER_EPISODES = [
             branch: { success: 'dialogue', failure: 'misread' } },
           { id: 'deflect', label: 'Deflect. Establish protocol first', next: 'dialogue',
             effects: { xp: 400, setVar: { deflected: true } } },
+          // The Tholian border, in act 3. The Assembly stated a timetable, the
+          // Merrimack was released, and the ending of that episode reads: "A
+          // formal acknowledgement of error is now the standing Starfleet
+          // procedure for the Tholian border. It is named after this ship."
+          //
+          // The choice above improvises a protocol to buy time, which is what a
+          // captain does when he has none. This one has one, and it is his: a
+          // worked procedure for talking to a power whose reasoning nobody
+          // shares, written after eighty-two people came home. Opening with a
+          // formal acknowledgement of error, to a thing that has been listening
+          // for two hundred and six years and has just asked whether something
+          // built can consent, is a better answer than deflection and a more
+          // careful one than candour.
+          //
+          // It rolls the same check as answering honestly, at 0.4 rather than
+          // 0.55, because the difference between them is that this captain has
+          // done it before and written it down.
+          { id: 'protocol', label: 'Open with the acknowledgement of error, as the procedure says',
+            requires: { flag: 'tholian_protocol' },
+            effects: {
+              check: { type: 'diplomacy', difficulty: 0.4, hazard: 'routine' },
+              xp: 800, standing: { federation: 8 },
+            },
+            branch: { success: 'dialogue', failure: 'misread' } },
           { id: 'terminate', label: 'End the contact', outcome: 'avoided',
             effects: { xp: 200 } },
           // Only a ship that scanned it first knows there is nobody aboard —
