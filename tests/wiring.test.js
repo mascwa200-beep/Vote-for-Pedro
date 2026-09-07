@@ -1851,6 +1851,11 @@ describe('every episode graph is sound', () => {
       organia_revealed: 'candidate',
       rescued_vell: 'candidate',
       romulus_witness: 'candidate',
+      // `paid_orions` left in §115: the captain who bought off the Orions at Vega,
+      // and watched them leave with four hundred colonists aboard as cargo, can
+      // buy a Federation citizen back from a Rigel broker. It is the only road in
+      // that episode that cannot fail, and that is the cost of it.
+      //
       // `centauri_aid` left in §114, and it is the longest reach in the book:
       // act 1, the second episode a captain ever flies, answered in the Klingon
       // Great Hall in act 4. He pulled a Klingon crew off a failing reactor
