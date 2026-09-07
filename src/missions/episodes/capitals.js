@@ -134,6 +134,24 @@ export const CAPITAL_EPISODES = [
             effects: { xp: 500, standing: { klingon: -12, federation: 8 } } },
           { id: 'kang', label: 'Ask that Kang answer it, as is his right', next: 'kang_fights',
             effects: { xp: 600, standing: { klingon: 4 } } },
+          // Donatu V, in act 3: "Offer the withdrawal from where you are
+          // standing." Two fleets a minute from firing, and he put the terms on
+          // the table without first backing off to somewhere safe to say them
+          // from.
+          //
+          // Duras has invoked the rite of challenge and named a champion who is
+          // not Kang, which is a way of making the argument about bodies rather
+          // than about the accusation. A captain who has offered terms while in
+          // range can say the one thing the hall will hear about that: he did
+          // not withdraw to make the offer at Donatu and he does not intend to
+          // be moved off the point here either.
+          //
+          // It reaches the duel like accepting outright, because the Council is
+          // not going to be talked out of a rite. What it changes is who is
+          // understood to have chosen it.
+          { id: 'from_here', label: '"I made the offer at Donatu without stepping back. I will not step back now"',
+            next: 'blade', requires: { flag: 'donatu_pressed' },
+            effects: { xp: 1000, standing: { klingon: 12 } } },
           // Written one stage earlier, at `charge/own_it`. `charge` is the only
           // way into this stage, so the write is always upstream of the read —
           // an episode remembering something the captain did inside it, which

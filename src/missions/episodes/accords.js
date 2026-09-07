@@ -170,6 +170,25 @@ export const ACCORD_EPISODES = [
             effects: { xp: 600 } },
           { id: 'work', label: 'Say nothing and go and read the draft', next: 'table',
             effects: { xp: 500, standing: { federation: 4 } } },
+          // Organia, in act 2, and the longest thing anybody at this table
+          // knows. He went down, pressed the council, found out what they
+          // actually are, and reported it to Starfleet.
+          //
+          // Kang has just said that two of the four days are for the funeral of
+          // whoever tries to stop the accord. Every other captain hears a
+          // threat. This one has filed a report on the last power that stopped
+          // a Federation-Klingon war, which did it without asking either empire
+          // and without anybody's funeral, and the useful part is not the
+          // warning — it is that he can tell Kang, who has aged, that the two of
+          // them have been overruled before and neither of them enjoyed it.
+          //
+          // `federation` rather than `klingon`: this is a captain volunteering
+          // a piece of classified assessment to a Klingon in orbit over a
+          // treaty, and Starfleet's view of that depends entirely on the accord
+          // being signed four days later.
+          { id: 'organia', label: 'Tell him what you filed about Organia, and who stopped it last time',
+            next: 'table', requires: { flag: 'organia_revealed' },
+            effects: { xp: 900, standing: { klingon: 10, federation: 6 } } },
         ],
       },
 

@@ -25376,6 +25376,24 @@ const CAPITAL_EPISODES = [
             effects: { xp: 500, standing: { klingon: -12, federation: 8 } } },
           { id: 'kang', label: 'Ask that Kang answer it, as is his right', next: 'kang_fights',
             effects: { xp: 600, standing: { klingon: 4 } } },
+          // Donatu V, in act 3: "Offer the withdrawal from where you are
+          // standing." Two fleets a minute from firing, and he put the terms on
+          // the table without first backing off to somewhere safe to say them
+          // from.
+          //
+          // Duras has invoked the rite of challenge and named a champion who is
+          // not Kang, which is a way of making the argument about bodies rather
+          // than about the accusation. A captain who has offered terms while in
+          // range can say the one thing the hall will hear about that: he did
+          // not withdraw to make the offer at Donatu and he does not intend to
+          // be moved off the point here either.
+          //
+          // It reaches the duel like accepting outright, because the Council is
+          // not going to be talked out of a rite. What it changes is who is
+          // understood to have chosen it.
+          { id: 'from_here', label: '"I made the offer at Donatu without stepping back. I will not step back now"',
+            next: 'blade', requires: { flag: 'donatu_pressed' },
+            effects: { xp: 1000, standing: { klingon: 12 } } },
           // Written one stage earlier, at `charge/own_it`. `charge` is the only
           // way into this stage, so the write is always upstream of the read —
           // an episode remembering something the captain did inside it, which
@@ -25777,6 +25795,25 @@ const ACCORD_EPISODES = [
             effects: { xp: 600 } },
           { id: 'work', label: 'Say nothing and go and read the draft', next: 'table',
             effects: { xp: 500, standing: { federation: 4 } } },
+          // Organia, in act 2, and the longest thing anybody at this table
+          // knows. He went down, pressed the council, found out what they
+          // actually are, and reported it to Starfleet.
+          //
+          // Kang has just said that two of the four days are for the funeral of
+          // whoever tries to stop the accord. Every other captain hears a
+          // threat. This one has filed a report on the last power that stopped
+          // a Federation-Klingon war, which did it without asking either empire
+          // and without anybody's funeral, and the useful part is not the
+          // warning — it is that he can tell Kang, who has aged, that the two of
+          // them have been overruled before and neither of them enjoyed it.
+          //
+          // `federation` rather than `klingon`: this is a captain volunteering
+          // a piece of classified assessment to a Klingon in orbit over a
+          // treaty, and Starfleet's view of that depends entirely on the accord
+          // being signed four days later.
+          { id: 'organia', label: 'Tell him what you filed about Organia, and who stopped it last time',
+            next: 'table', requires: { flag: 'organia_revealed' },
+            effects: { xp: 900, standing: { klingon: 10, federation: 6 } } },
         ],
       },
 
@@ -26447,6 +26484,29 @@ const ECHO_EPISODES = [
           { id: 'colonies', label: 'Signal every colony in range before touching it',
             next: 'the_choice', requires: { flag: 'borg_warned' },
             effects: { xp: 1300, standing: { federation: 8 } } },
+          // Devron, in act 3. He fired a resonance pulse into a spatial anomaly
+          // and it "does not collapse so much as stop having been there", and
+          // nobody on the bridge was entirely certain afterwards what they had
+          // been doing eleven minutes earlier.
+          //
+          // A thing that has been running one survey cycle on a schedule for
+          // longer than the Federation has had a starbase in this quadrant, and
+          // transmitting the results to nobody, is a loop. This is the only
+          // captain in the fleet who has stood inside one and then ended it, and
+          // the useful part of that is not courage — it is that he knows to read
+          // the SCHEDULE before touching the hull, because the cycle is the only
+          // thing here that can be predicted.
+          //
+          // Same check as studying it where it lies, two steps easier, and the
+          // same two destinations. Knowing what kind of thing you are looking at
+          // is worth a roll, not an exemption from one.
+          { id: 'cycle', label: 'Read the cycle first. You have seen a loop end before',
+            requires: { flag: 'devron_collapsed' },
+            effects: {
+              check: { type: 'science', difficulty: 0.45, hazard: 'dangerous' },
+              xp: 900,
+            },
+            branch: { success: 'the_choice', failure: 'it_noticed' } },
         ],
       },
 
