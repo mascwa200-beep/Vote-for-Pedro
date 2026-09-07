@@ -714,7 +714,7 @@ export class Engagement {
     const az = (attacker.z ?? 0) - (target.z ?? 0);
     const ad = Math.hypot(ax, ay, az) || 1;
     this.effects.push({
-      kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4,
+      kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4, span: 0.4,
       facing: result.facing, penetrated: result.penetrated, crit,
       from: { x: ax / ad, y: ay / ad, z: az / ad },
       classId: target.classId,

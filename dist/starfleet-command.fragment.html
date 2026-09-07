@@ -17273,7 +17273,7 @@ function chooseAction(ship, engagement, dt, opts = {}) {
         // at a stock size while the ship it was veiling was somewhere else.
         engagement.effects.push({
           kind: 'decloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
-          classId: ship.classId, life: 1.0,
+          classId: ship.classId, life: 1.0, span: 1.0,
         });
       }
       return;
@@ -17283,7 +17283,7 @@ function chooseAction(ship, engagement, dt, opts = {}) {
       ship.cloak();
       engagement.effects.push({
         kind: 'cloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
-        classId: ship.classId, life: 1.0,
+        classId: ship.classId, life: 1.0, span: 1.0,
       });
       return;
     }
@@ -18341,7 +18341,7 @@ class Engagement {
     const az = (attacker.z ?? 0) - (target.z ?? 0);
     const ad = Math.hypot(ax, ay, az) || 1;
     this.effects.push({
-      kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4,
+      kind: 'impact', x: target.x, y: target.y, z: target.z ?? 0, life: 0.4, span: 0.4,
       facing: result.facing, penetrated: result.penetrated, crit,
       from: { x: ax / ad, y: ay / ad, z: az / ad },
       classId: target.classId,
@@ -19344,7 +19344,11 @@ function drawCombatEffects(renderer, engagement, opts = {}) {
   // through burns white on the plating itself.
   for (const e of engagement.effects ?? []) {
     if (e.kind !== 'impact') continue;
-    const age = clamp(1 - e.life / 0.4, 0, 1);
+    // Against the flare's own span, for the reason the explosion pass records
+    // below: the renderer holding a second copy of a number the simulation owns
+    // is a convention, and the explosion is proof the convention does not hold.
+    // One caller today at 0.4, agreeing by luck rather than by construction.
+    const age = clamp(1 - e.life / (e.span || 0.4), 0, 1);
     const r = hullScale(e.classId) * 0.5;
     const at = toRender(e, _pos);
     // `from` is the unit vector toward whoever fired, recorded at the moment
@@ -19395,7 +19399,10 @@ function drawCombatEffects(renderer, engagement, opts = {}) {
   // for the impact flare, so this costs a draw call and no new geometry.
   for (const e of engagement.effects ?? []) {
     if (e.kind !== 'cloak' && e.kind !== 'decloak') continue;
-    const age = clamp(1 - e.life, 0, 1);
+    // Same again. `1 - e.life` is `1 - e.life / 1.0` with the divisor written
+    // as an assumption instead of as a value, which is the form the explosion
+    // was in when three of its four callers disagreed with it.
+    const age = clamp(1 - e.life / (e.span || 1), 0, 1);
     // Sized to the hull, not to a stock radius.
     //
     // The flat plot's law is `30 + t * 60` units, which is right for a plan

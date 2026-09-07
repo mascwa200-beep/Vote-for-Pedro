@@ -3741,6 +3741,96 @@ describe('a shot looks like something, not like a flat cutout', () => {
       `a held shield renders ${held.map((v) => v.toFixed(2)).join(', ')} — it should stay the shield's colour`);
   });
 
+  test('and so does every other effect that animates against its own clock', () => {
+    // The class, not the instance.
+    //
+    // Three effects age against a lifetime, and in each the renderer held a
+    // PRIVATE COPY of a number the simulation owns: the explosion divided by a
+    // hardcoded 1.6, the impact by 0.4, the cloak by an implicit 1.0 written as
+    // `1 - e.life`. The explosion is proof the arrangement does not hold —
+    // three of its four callers disagreed with it and every one was born
+    // part-way through its own animation, unnoticed, because nothing asserted
+    // the agreement.
+    //
+    // The property asserted is SPAN-INDEPENDENCE: an effect's opening frame
+    // must not depend on how long it lives. A renderer reading the span gives
+    // the same opening at any span; one dividing by a constant gives a
+    // different opening the moment the span is not that constant. Comparing
+    // two spans rather than testing an absolute threshold also avoids baking in
+    // each effect's own peak alpha — an unpenetrated impact opens at 0.6 by
+    // design, which is what the first draft of this test got wrong.
+    //
+    // A source check that the divisor mentions `e.span` would pass on a
+    // renderer reading the wrong field. This does not.
+    const opening = (kind, span, extra) => {
+      const r = recorder();
+      drawCombatEffects(r, {
+        effects: [{ kind, x: 0, y: 0, z: 0, life: span, span, ...extra }],
+        projectiles: [],
+      });
+      const key = kind === 'decloak' ? 'cloak' : kind;
+      const call = r.calls.find((c) => c.key === key);
+      assert.ok(call, `${kind} was not drawn at all`);
+      return { alpha: call.opts.alpha ?? 1, scale: call.opts.model[0] };
+    };
+    for (const [kind, extra] of [
+      ['explosion', {}],
+      ['impact', { classId: 'constitution', facing: 'fore', penetrated: false, crit: false, from: { x: 1, y: 0, z: 0 } }],
+      ['cloak', { classId: 'constitution' }],
+    ]) {
+      // 0.13 and 2.7 straddle every divisor the renderer ever hardcoded (0.4,
+      // 1.0, 1.6). Both spans must sit on OPPOSITE sides of each, or the clamp
+      // rescues the bug: with a hardcoded 0.4, a life of 0.4 and a life of 2.7
+      // both clamp `age` to zero and the two openings match. That is exactly
+      // what the first draft chose, and its control passed.
+      const a = opening(kind, 0.13, extra);
+      const b = opening(kind, 2.7, extra);
+      assert.ok(Math.abs(a.alpha - b.alpha) < 1e-9,
+        `a ${kind} opens at alpha ${a.alpha.toFixed(3)} with a 0.13s life and ${b.alpha.toFixed(3)} `
+        + 'with a 2.7s one — the renderer is dividing by a lifetime of its own');
+      assert.ok(Math.abs(a.scale - b.scale) < 1e-6,
+        `a ${kind} opens at scale ${a.scale.toFixed(1)} with a 0.13s life and ${b.scale.toFixed(1)} with a 2.7s one`);
+      // And it must still go somewhere over that life, or "the opening never
+      // moves" would be satisfied by an effect that never animates at all.
+      const late = (() => {
+        const r = recorder();
+        drawCombatEffects(r, { effects: [{ kind, x: 0, y: 0, z: 0, life: 2.7 * 0.05, span: 2.7, ...extra }], projectiles: [] });
+        const call = r.calls.find((c) => c.key === (kind === 'decloak' ? 'cloak' : kind));
+        return { alpha: call.opts.alpha ?? 1, scale: call.opts.model[0] };
+      })();
+      assert.ok(late.alpha < b.alpha - 1e-6 || Math.abs(late.scale - b.scale) > 1e-6,
+        `a ${kind} looks identical at the start and end of its life`);
+    }
+  });
+
+  test('and every push site carries the span, because the fallback would hide it', () => {
+    // The renderer falls back to the old constant when an effect carries no
+    // span, which keeps a half-migrated tree working — and means a push site
+    // that forgets one is invisible to the behavioural guard above. Dropping
+    // `span` from the impact push does not change a single pixel today,
+    // because the fallback equals the value it forgot.
+    //
+    // So this asserts the data rather than the behaviour: every animated
+    // effect declares a span, and it agrees with the life beside it. Text can
+    // establish that, because deleting the field deletes the token — the same
+    // distinction §99 drew between checking wiring and checking logic.
+    const sim = ['combat.js', 'ai.js'].map((f) =>
+      readFileSync(new URL(`../src/sim/${f}`, import.meta.url), 'utf8')).join('\n');
+    const animated = ['explosion', 'impact', 'cloak', 'decloak'];
+    for (const kind of animated) {
+      const pushes = [...sim.matchAll(new RegExp(`kind: '${kind}'[^}]*`, 'g'))].map((m) => m[0]);
+      assert.ok(pushes.length > 0, `nothing pushes a ${kind} any more`);
+      for (const push of pushes) {
+        const life = /life: ([\d.]+)/.exec(push);
+        const span = /span: ([\d.]+)/.exec(push);
+        assert.ok(life, `a ${kind} is pushed with no life at all`);
+        assert.ok(span, `a ${kind} is pushed with life ${life[1]} and no span of its own`);
+        assert.equal(span[1], life[1],
+          `a ${kind} declares span ${span[1]} against life ${life[1]}`);
+      }
+    }
+  });
+
   test('and every explosion gets to play its own opening', () => {
     // The renderer aged an explosion against a hardcoded 1.6 — the lifetime a
     // destroyed ship is pushed with — while three of the four things that

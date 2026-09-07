@@ -9918,6 +9918,135 @@ above arriving from the other direction: a number that disagrees with the thing
 it measures is usually the number.
 
 
+## 102. Six leads that dissolved, and the class behind the one that did not
+
+The brief for this section was to keep hunting defects. The honest headline is
+that **the hunt found almost nothing**, and after fourteen sections of hunting
+that is the result worth writing down. Six plausible leads were chased and every
+one dissolved under measurement.
+
+Recording them is the whole point of a register. §91 established that an unwired
+thing is a hypothesis; §96 established that a lead which dissolves gets written
+up anyway. Otherwise the same six get hunted a third time.
+
+### The six
+
+1. **Eight mission-engine levers no episode uses** — `choice.hidden`,
+   `requires.standing`, `requires.notFlag`, `requires.torpedoes`, `effects.roll`,
+   `effects.repair`, `def.vars`, `where: 'surface'`. Exercised with synthetic
+   missions rather than read: **all eight behave correctly.** `effects.repair`
+   moves a hull from 924 to 2,079 of 4,620 on `repair: 0.25`; `effects.roll`
+   branches to `win` at 1 and `lose` at 0; `requires.notFlag` locks with *"No
+   longer possible"* only once the flag is set. Unused is not broken.
+
+2. **Seventy-seven of eighty-eight endings carry no effects.** Only one inert
+   ending's text promises a consequence — `vega_raid/saved`, *"Vega will
+   remember this. So will Starfleet."* — and the choice that reaches it pays 500
+   experience, three record entries, ten points of Federation standing and a
+   flag. Effects live on choices by design; an ending is the curtain, not the
+   payment.
+
+3. **Torpedoes never appeared in my census of what a fight draws.** They live on
+   `engagement.projectiles`, not `engagement.effects`, so the instrument could
+   not see them. Measured properly: four fired in a fight, six projectiles over
+   its length, peak three in flight.
+
+4. **Nine of twenty-six officer abilities declare no `mods` at all.** They
+   dispatch on a `special` field rather than on their id, which is why grepping
+   for the id found nothing. Every one of the twenty-six has either mods or a
+   handled `special`, and **every `special` declared is handled** — no dead
+   ability, no unreachable case.
+
+5. **Every ability displays an order line to the captain.** All twenty-six parse
+   back to their own ability through `parseOrder`.
+
+6. **Content reach.** Twenty-six episodes gated to twenty-five of forty-three
+   systems looked like writing a commission could never reach. The nearest
+   system is **3.3 days** at warp 8, the median hop 27 days, and **all
+   forty-two are reachable** inside an 1,826-day commission — about sixty-seven
+   median hops.
+
+### Two things this register had already written down, wrong
+
+**"The difficulty cliff is very sharp."** It is not. Measured across six
+difficulties by four enemy counts, survival degrades smoothly with a broad
+middle band:
+
+```
+                2 foes  3 foes  4 foes  5 foes
+ensign            100%    100%    100%    100%
+lieutenant        100%    100%    100%     79%
+commander         100%    100%     96%     46%
+captain           100%     92%     67%     50%
+commodore         100%     92%     75%     29%
+rear_admiral      100%     50%     21%     21%
+```
+
+The cliff was Galors specifically, sampled on an axis — whole ships — too coarse
+to show a gradient.
+
+**"The glow channel is binary, and has never been used."** It takes **six**
+distinct values across the fleet — 0, 0.45, 0.55, 0.7, 0.75 and 1 — with 8.3% of
+vertices at intermediate levels. What was actually measured is that no *triangle*
+varies glow across its three vertices. That is true, and "binary" is not what it
+means.
+
+### And a third instrument error, of a kind now familiar
+
+The content-reach measurement first said the nearest system was **1,666 days**
+away — nine tenths of an entire commission — and gave the identical figure at
+warp 2 and warp 9, which is what gave it away. `setCourse` takes the warp factor
+**positionally** and I passed `{ warp: 8 }`. An object where a number belongs:
+the same error as passing an invalid difficulty id in §95, with the same
+signature of plausible, constant output.
+
+### The one real finding: a convention where an invariant belongs
+
+Three effects animate against their own lifetime, and in each case the renderer
+held a **private copy of a number the simulation owns**:
+
+| effect | renderer assumed | push sites | state |
+| --- | --- | ---: | --- |
+| explosion | `1.6` | 4, at 0.4 / 0.5 / 0.8 / 1.6 | **broke** — §101 |
+| cloak / decloak | `1.0`, written as `1 - e.life` | 2, both 1.0 | agreed by luck |
+| impact | `0.4` | 1, is 0.4 | agreed by luck |
+
+§101 fixed the explosion because three of its four callers disagreed with the
+renderer and every one of them was born part-way through its own animation. The
+other two were one edit from the same silent failure and nothing in the suite
+would have noticed. All three now read `e.span`, and every push site carries one.
+
+### The guard, and the two ways it was wrong first
+
+The property is **span-independence**: an effect's opening frame must not depend
+on how long it lives. A renderer reading the span opens identically at any span;
+one dividing by a constant opens differently the moment the span is not that
+constant.
+
+It took three attempts.
+
+The first asserted an absolute threshold — *born at alpha above 0.9*. An
+unpenetrated impact opens at 0.6 by design, so the guard failed on correct code.
+Comparing two spans instead removes the need to know each effect's own peak.
+
+The second compared spans of **0.4 and 2.7**, and its control passed. With a
+hardcoded divisor of 0.4, a life of 0.4 gives age 0 and a life of 2.7 gives age
+−5.75, which `clamp` pulls back to 0 — both openings identical, bug intact. The
+two spans have to straddle every divisor the renderer ever held, so they are now
+**0.13 and 2.7**.
+
+That is twice in two sections that a control refused to fire and was right to.
+§101 recorded the first; the rule earns restating: **a control that will not
+fire is telling you something about the test, and the thing it says is not
+always the same.** In §101 it said the test was reading the wrong object, then
+that the claim was wrong. Here it said the fixture could not reach the bug.
+
+A second guard covers what the first cannot: the renderer falls back to the old
+constant when an effect carries no span, so a push site that forgets one changes
+nothing today. That one reads the source — legitimately, by §99's distinction,
+because deleting a field deletes the token.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
