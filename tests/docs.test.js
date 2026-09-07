@@ -202,6 +202,61 @@ describe('the register states figures it has actually measured', () => {
     assert.deepEqual(wrong, [], `${wrong.length} of §107's figures have drifted`);
   });
 
+  test('the running count of deeds still to wire is the count that is still to wire', () => {
+    // Eight consecutive sections end with "N flags to go", and until §116 not one
+    // of them had ever been checked. Three were wrong: §112 by two, §113 and
+    // §115 by one each, and §114 was right by accident.
+    //
+    // The cause is worth naming, because it is §107's disease in my own hands:
+    // a number the register repeats about itself reads like a restatement of
+    // something already verified rather than a new claim, so nobody measures it
+    // — and I was subtracting from the previous section's figure instead of
+    // counting the list. Three of the flags I subtracted were never on the list
+    // at all; the faction-memory table already read them.
+    //
+    // Only the LAST occurrence is checked. The earlier ones are a record of what
+    // was true when each section was written, and rewriting history to satisfy a
+    // test would be the opposite of the point.
+    const all = [...RESEARCH.matchAll(/\n([A-Z][a-z]+(?:-[a-z]+)?) flags to go/g)];
+    assert.ok(all.length >= 5,
+      `only ${all.length} "N flags to go" lines found, so this asserts nothing`);
+
+    const WORDS = {
+      zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+      eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+      fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+      nineteen: 19, twenty: 20, thirty: 30,
+    };
+    const toNumber = (word) => {
+      const [tens, units] = word.toLowerCase().split('-');
+      if (units === undefined) return WORDS[tens];
+      return WORDS[tens] === undefined || WORDS[units] === undefined
+        ? undefined : WORDS[tens] + WORDS[units];
+    };
+
+    const stated = toNumber(all[all.length - 1][1]);
+    assert.ok(stated !== undefined,
+      `the last count reads "${all[all.length - 1][1]}", which is not a number I can parse`);
+
+    // The registry in wiring.test.js is the authority — it is asserted against
+    // the book in both directions, so it cannot itself drift.
+    const wiring = readFileSync(join(HERE, 'wiring.test.js'), 'utf8');
+    const block = wiring.slice(
+      wiring.indexOf('const WRITTEN_AND_UNREAD = {'),
+      wiring.indexOf('};', wiring.indexOf('const WRITTEN_AND_UNREAD = {')));
+    // Not line-anchored: the registry packs several entries onto a line, and the
+    // first draft of this scrape counted 14 of 19 because of it. The guard caught
+    // that only because the expected value was stated rather than derived from
+    // the same broken read — which is the whole argument for writing the number
+    // down instead of computing both sides the same way.
+    const candidates = [...block.matchAll(/(\w+): 'candidate'/g)].length;
+    assert.ok(candidates >= 10,
+      `only ${candidates} candidates scraped from the registry, so this asserts little`);
+
+    assert.equal(stated, candidates,
+      `the register's last count says ${stated} deeds still to wire; the registry lists ${candidates}`);
+  });
+
   test('the episodes it names as gating nothing are the episodes that gate nothing', () => {
     // Scraped as a list, so an episode that gains its first gate has to leave
     // the document — and one that loses its last has to join it.

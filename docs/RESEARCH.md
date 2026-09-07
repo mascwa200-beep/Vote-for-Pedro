@@ -10990,7 +10990,7 @@ within about five minutes of opening. A check-in is worth arming for work that
 might stall; for work that lands before the timer is a tenth elapsed it is a
 machine for generating stale orders. Stopped.
 
-Twenty-two flags to go, three of which are act 5 and cannot move until the
+Twenty flags to go, three of which are act 5 and cannot move until the
 finale's place in the order is guaranteed.
 
 ## 113. Two act-3 deeds, and a lead that dissolved
@@ -11067,7 +11067,7 @@ is backwards. The three act-5 flags stay unread with a reason.
 | and it does not name the paymaster | add `khitomer_source` to it | ✓ |
 | and it does not strand him at the ninth page | drop `read_the_ninth` from it | ✓ |
 
-Twenty flags to go.
+Nineteen flags to go.
 
 ## 114. Twelve consequences paid into nothing
 
@@ -11239,7 +11239,99 @@ That last control is the §110 discipline working: the guard already existed,
 `wiring.test.js` checks both directions of the outcome/ending correspondence, and
 the job was to verify it fires rather than to write a second one.
 
-Eighteen flags to go, three of them act-5 blocked.
+Nineteen flags to go, three of them act-5 blocked.
+
+## 116. The number I put at the end of eight sections
+
+No content this time. §107 is the section about a figure repeated four times and
+measured none of them. This is the same thing, committed by the same author, in
+the eight sections that followed it.
+
+### The count
+
+Every section since §108 ends with *"N flags to go"*. Measured against the
+registry at each of those commits:
+
+```
+section   true   claimed
+  §108      28      28   ✓
+  §109      26      26   ✓
+  §110      25      25   ✓
+  §111      23      23   ✓
+  §112      20      22   ✗
+  §113      19      20   ✗
+  §114      19      19   ✓ — by accident
+  §115      19      18   ✗
+```
+
+Three wrong, and the fourth right for the wrong reason. **The count has been 19
+since §113** and three sections have reported it falling.
+
+The cause is exact and unflattering: I was subtracting from the previous
+section's figure instead of counting the list. §112 wired three flags and I
+subtracted one.
+
+### The worse half
+
+Three of the flags I wired were **never on the list**.
+
+`WRITTEN_AND_UNREAD` counts a flag as read if anything reads it, and that
+includes `Game.FACTION_MEMORY` — a table in `state.js` where eighteen flags
+already move a faction's opinion of the captain. `paid_orions`, `centauri_aid`
+and `tholian_protocol` are all in it.
+
+So §113, §114 and §115 each opened by calling their flag a deed the game wrote
+down and never read back, and for those three that was **false**. They were
+already consequential; they simply were not consequential anywhere a player
+would see it.
+
+What those sections actually did is still worth having, and is arguably the
+better thing: they turned a silent standing adjustment into a **visible** choice
+in a later episode — the Great Hall answer, the Tholian procedure, the road that
+cannot fail. That is a real improvement to a real game. It is not what I said it
+was, and the difference matters because "nothing reads this" was the argument I
+used to justify picking them.
+
+I picked them from my own earlier survey, whose `read` set omitted the
+faction-memory table, rather than from the registry that is asserted against the
+book in both directions. The authoritative list was one function call away in
+every one of those three sections.
+
+### The guard
+
+The last *"N flags to go"* in this document is now scraped and checked against
+the registry on every run. Earlier occurrences are left exactly as they were
+written — they are a record of what each section believed, and rewriting history
+to satisfy a test would be the opposite of the point. The three wrong ones are
+corrected in place because they are claims about the present, not about their own
+moment.
+
+Its own first draft scraped the registry with a line-anchored regex and counted
+**14 of 19**, because the registry packs several entries onto a line. That failed
+loudly rather than quietly for one reason: the expected value came from a
+different read than the actual. **A guard that computes both sides the same way
+proves only that it is consistent with itself**, which is the failure mode this
+whole file exists to catch, and it nearly shipped inside the fix for it.
+
+### Why this keeps happening here
+
+Three times now — §107, §111's ratchets, and this. The pattern is specific:
+**a number the register repeats about itself stops reading like a claim.** Each
+occurrence looks like a restatement of something already verified, so nobody
+verifies it, and the eighth restatement is as unexamined as the first.
+
+The defence is not diligence. It is that any number a document says about itself
+more than once should be scraped and checked, and that is now true of three of
+them here.
+
+| guard | control | fires |
+| --- | --- | --- |
+| the last count matches the registry | restore §115's "eighteen" | ✓ *says 18, registry lists 19* |
+| the claim is actually present to check | delete the line from the prose | ✓ *only 0 lines found* |
+| both sides are read independently | re-anchor the registry scrape | ✓ *says 19, registry lists 14* |
+
+Nineteen flags to go, three of them act-5 blocked — and that figure is now
+checked rather than asserted.
 
 ## Attribution
 
