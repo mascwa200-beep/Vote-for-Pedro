@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 357 choices, **71 of 357 choices carry a `requires`** —
+episodes, 154 stages and 360 choices, **74 of 360 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -11330,8 +11330,90 @@ them here.
 | the claim is actually present to check | delete the line from the prose | ✓ *only 0 lines found* |
 | both sides are read independently | re-anchor the registry scrape | ✓ *says 19, registry lists 14* |
 
-Nineteen flags to go, three of them act-5 blocked — and that figure is now
+Sixteen flags to go, three of them act-5 blocked — and that figure is now
 checked rather than asserted.
+
+## 117. Three at once, counted rather than subtracted
+
+The first batch since §116, and the first picked from the registry instead of
+from my own survey. Three deeds, three episodes, all verified on the list before
+being touched.
+
+### The account this episode was already about
+
+`utopia_certification` opens with a fleet yard that wants a captain to sign for a
+hull, and Vice Admiral Sostrova explaining why she asked this one:
+
+> She heard that a captain stood up at their own board of inquiry and gave an
+> account that cost them something.
+
+That is a description of `came_clean` — Starbase 11, act 3, *"Correct the
+shakedown report before they ask about it."* The episode was **built around the
+deed and never read it**. It already refuses the captain who went the other way:
+`blockedByFlag: deflected_blame`, the other outcome of the same court-martial.
+
+So the gate can never be dead, and that is structural rather than lucky. The two
+flags are alternatives at one stage of one board, so a captain holding
+`came_clean` cannot hold `deflected_blame` — and `deflected_blame` is the only
+thing that keeps anyone out of this episode. **Every captain who came clean is a
+captain this episode will admit.**
+
+What it opens is not the compliment. He can tell her which report it was: a
+trials report he signed as a lieutenant and then corrected himself, which is a
+smaller and worse thing than the story going round — and the reason he finds
+what the yard survey left out four days later.
+
+### The entry nobody came back to correct
+
+`beta_reticuli` opens on a system with one catalogue entry, four lines long,
+*"filed by a survey ship that charted the system briefly and did not come back to
+correct anything."*
+
+Every captain reads that as a curiosity. `merrimack_lost` — act 3, he
+acknowledged the Tholian timetable and held at it, and the Merrimack was still
+inside the web when it closed — is the captain who has written the entry nobody
+came back to correct. It takes him to the wreck rather than out of the episode:
+it is the reason he does not hold at the system edge.
+
+### The other half of the pod
+
+§108 gave the cube `wolf_scanned`, the captain who studied the wreckage at Wolf
+359 from range. This is the one who got somebody out of it: Lieutenant Commander
+Aris Vell, tactical officer, USS Kyushu, comes up through the last stage of a
+survival pod, wakes, and asks whether the fleet held — and nobody in the room
+wants to answer her.
+
+Four acts later the thing she was asking about is twenty-eight kilometres on a
+side and on a heading for Earth. He warns the route first, because he has heard
+what that question sounds like.
+
+It reaches the same stage as the plain evacuation and saves the same twelve
+thousand people, asserted so — the same decision reached for a reason nobody else
+has, not a quietly better outcome for knowing somebody's name.
+
+### The guard from §116 worked immediately
+
+§116 built a scrape that checks the register's running count against the
+registry. On this change it fired first time:
+
+```
+the register's last count says 19 deeds still to wire; the registry lists 16
+```
+
+Which is exactly the error §116 was written about, caught before it was published
+rather than eight sections later. The count here is **counted**, not subtracted.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| naming the report is locked without Starbase 11 | drop the `requires` | ✓ ×5 |
+| and the gate cannot be dead, the two flags being one board's alternatives | — | pinned |
+| the second-report road is locked without the Merrimack | drop the `requires` | ✓ ×5 |
+| and it enters the episode rather than leaving it | give it an `outcome` | ✓ |
+| Vell's road saves exactly what the plain one saves | raise it to 14,000 | ✓ |
+
+Sixteen flags to go, three of them act-5 blocked.
 
 ## Attribution
 

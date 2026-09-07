@@ -24896,6 +24896,27 @@ const FRONTIER_EPISODES = [
             branch: { success: 'study', failure: 'no_window' } },
           { id: 'evacuate', label: 'Break off. Warn every colony on its route', next: 'evacuate',
             effects: { xp: 700, record: { lives_saved: 12000 }, flag: 'borg_warned' } },
+          // Wolf 359, in act 2, and the other half of the pod.
+          //
+          // §108 gave this episode `wolf_scanned` — the captain who studied the
+          // wreckage from range. This is the one who got somebody out of it.
+          // Lieutenant Commander Aris Vell, tactical officer, USS Kyushu, comes
+          // up through the last stage of a survival pod, wakes, and asks whether
+          // the fleet held. Nobody in the room wants to answer her.
+          //
+          // Four acts later the thing she was asking about is twenty-eight
+          // kilometres on a side and on a heading for Earth, and this is the only
+          // captain in Starfleet who has heard that question asked by somebody
+          // who was there. Warning the route is what he does first, because he
+          // knows what the answer to her question sounds like when it is given
+          // eleven hours too late.
+          //
+          // The same road as `evacuate`, with the colonies warned either way —
+          // it is the same decision reached for a reason nobody else has.
+          { id: 'for_vell', label: 'Warn the route first. You have heard the question she asked',
+            next: 'evacuate', requires: { flag: 'rescued_vell' },
+            effects: { xp: 900, record: { lives_saved: 12000 }, standing: { federation: 8 },
+              flag: 'borg_warned' } },
         ],
       },
       no_window: {
@@ -26000,6 +26021,30 @@ const CONSEQUENCE_EPISODES = [
           { id: 'take', label: 'Take the trials', next: 'trials', effects: { xp: 700 } },
           { id: 'decline', label: 'Decline anyway', outcome: 'declined',
             effects: { xp: 400, standing: { federation: -4 } } },
+          // Starbase 11, in act 3, at his own court-martial: "Correct the
+          // shakedown report before they ask about it."
+          //
+          // This episode was built around that deed and never checked it.
+          // Sostrova's whole speech, one line above, is a description of it —
+          // "a captain stood up at their own board of inquiry and gave an
+          // account that cost them something" — and the episode is already
+          // `blockedByFlag: deflected_blame`, which is the OTHER outcome of the
+          // same court-martial. It refused the captain who shifted the blame and
+          // had nothing to say to the one who did not.
+          //
+          // The two flags are mutually exclusive, both being outcomes of one
+          // board, so this gate can never be dead: every captain who came clean
+          // is a captain the episode will admit.
+          //
+          // He does not have to accept the compliment as given. Naming the
+          // report tells her the account she heard about was a trials report he
+          // signed as a lieutenant and then corrected himself, which is a
+          // smaller and worse thing than the story going round, and is the
+          // reason he will find what the yard survey left out four days from
+          // now.
+          { id: 'name_it', label: 'Tell her which report it was, and what it actually said',
+            next: 'trials', requires: { flag: 'came_clean' },
+            effects: { xp: 1000, standing: { federation: 10 } } },
         ],
       },
 
@@ -26359,6 +26404,23 @@ const ECHO_EPISODES = [
           { id: 'compare', label: 'Compare it against the readings you took off the cube',
             next: 'the_wreck', requires: { flag: 'borg_data' },
             effects: { xp: 1100 } },
+          // The Tholian line, in act 3. He acknowledged the Assembly's timetable
+          // and held at it, and the Merrimack was still inside the web when it
+          // closed.
+          //
+          // The first sentence of this scene is about a survey ship that charted
+          // the system briefly "and did not come back to correct anything". Every
+          // captain reads that as a curiosity. One captain reads it as a ship
+          // that stopped filing, and he already knows what the four-line entry
+          // in the catalogue does not say, because he has written one.
+          //
+          // It goes to the wreck like the other two roads: this is not a way out
+          // of the episode, it is the reason he does not hold at the edge. The
+          // standing is Starfleet's, for a captain who files the second report
+          // somebody else did not live to file.
+          { id: 'second_report', label: 'Say what a four-line entry and no second report means',
+            next: 'the_wreck', requires: { flag: 'merrimack_lost' },
+            effects: { xp: 900, standing: { federation: 8 } } },
           { id: 'report', label: 'Report it and hold at the system edge',
             outcome: 'reported', effects: { xp: 500 } },
         ],

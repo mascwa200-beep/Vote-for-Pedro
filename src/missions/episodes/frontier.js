@@ -751,6 +751,27 @@ export const FRONTIER_EPISODES = [
             branch: { success: 'study', failure: 'no_window' } },
           { id: 'evacuate', label: 'Break off. Warn every colony on its route', next: 'evacuate',
             effects: { xp: 700, record: { lives_saved: 12000 }, flag: 'borg_warned' } },
+          // Wolf 359, in act 2, and the other half of the pod.
+          //
+          // §108 gave this episode `wolf_scanned` — the captain who studied the
+          // wreckage from range. This is the one who got somebody out of it.
+          // Lieutenant Commander Aris Vell, tactical officer, USS Kyushu, comes
+          // up through the last stage of a survival pod, wakes, and asks whether
+          // the fleet held. Nobody in the room wants to answer her.
+          //
+          // Four acts later the thing she was asking about is twenty-eight
+          // kilometres on a side and on a heading for Earth, and this is the only
+          // captain in Starfleet who has heard that question asked by somebody
+          // who was there. Warning the route is what he does first, because he
+          // knows what the answer to her question sounds like when it is given
+          // eleven hours too late.
+          //
+          // The same road as `evacuate`, with the colonies warned either way —
+          // it is the same decision reached for a reason nobody else has.
+          { id: 'for_vell', label: 'Warn the route first. You have heard the question she asked',
+            next: 'evacuate', requires: { flag: 'rescued_vell' },
+            effects: { xp: 900, record: { lives_saved: 12000 }, standing: { federation: 8 },
+              flag: 'borg_warned' } },
         ],
       },
       no_window: {

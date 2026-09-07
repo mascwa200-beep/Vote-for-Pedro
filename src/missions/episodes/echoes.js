@@ -172,6 +172,23 @@ export const ECHO_EPISODES = [
           { id: 'compare', label: 'Compare it against the readings you took off the cube',
             next: 'the_wreck', requires: { flag: 'borg_data' },
             effects: { xp: 1100 } },
+          // The Tholian line, in act 3. He acknowledged the Assembly's timetable
+          // and held at it, and the Merrimack was still inside the web when it
+          // closed.
+          //
+          // The first sentence of this scene is about a survey ship that charted
+          // the system briefly "and did not come back to correct anything". Every
+          // captain reads that as a curiosity. One captain reads it as a ship
+          // that stopped filing, and he already knows what the four-line entry
+          // in the catalogue does not say, because he has written one.
+          //
+          // It goes to the wreck like the other two roads: this is not a way out
+          // of the episode, it is the reason he does not hold at the edge. The
+          // standing is Starfleet's, for a captain who files the second report
+          // somebody else did not live to file.
+          { id: 'second_report', label: 'Say what a four-line entry and no second report means',
+            next: 'the_wreck', requires: { flag: 'merrimack_lost' },
+            effects: { xp: 900, standing: { federation: 8 } } },
           { id: 'report', label: 'Report it and hold at the system edge',
             outcome: 'reported', effects: { xp: 500 } },
         ],

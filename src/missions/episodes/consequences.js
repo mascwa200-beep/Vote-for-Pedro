@@ -98,6 +98,30 @@ export const CONSEQUENCE_EPISODES = [
           { id: 'take', label: 'Take the trials', next: 'trials', effects: { xp: 700 } },
           { id: 'decline', label: 'Decline anyway', outcome: 'declined',
             effects: { xp: 400, standing: { federation: -4 } } },
+          // Starbase 11, in act 3, at his own court-martial: "Correct the
+          // shakedown report before they ask about it."
+          //
+          // This episode was built around that deed and never checked it.
+          // Sostrova's whole speech, one line above, is a description of it —
+          // "a captain stood up at their own board of inquiry and gave an
+          // account that cost them something" — and the episode is already
+          // `blockedByFlag: deflected_blame`, which is the OTHER outcome of the
+          // same court-martial. It refused the captain who shifted the blame and
+          // had nothing to say to the one who did not.
+          //
+          // The two flags are mutually exclusive, both being outcomes of one
+          // board, so this gate can never be dead: every captain who came clean
+          // is a captain the episode will admit.
+          //
+          // He does not have to accept the compliment as given. Naming the
+          // report tells her the account she heard about was a trials report he
+          // signed as a lieutenant and then corrected himself, which is a
+          // smaller and worse thing than the story going round, and is the
+          // reason he will find what the yard survey left out four days from
+          // now.
+          { id: 'name_it', label: 'Tell her which report it was, and what it actually said',
+            next: 'trials', requires: { flag: 'came_clean' },
+            effects: { xp: 1000, standing: { federation: 10 } } },
         ],
       },
 
