@@ -10407,6 +10407,127 @@ next recipe reaching for a permanent effect the same way.
   that trap has caught me**, and the same tell each time: an answer that is not
   merely wrong but impossible.
 
+## 107. A claim repeated four times and measured none of them
+
+Every write-up from §103 to §106 ended with the same sentence:
+
+> Still open on the register: episode content is wide but shallow — 2.22 choices
+> per stage, 23% of stages offering exactly one, 40% of choices terminal, nine
+> episodes finishable in a single choice.
+
+It is not in this register. It never was. It lived in my working notes and in
+four consecutive pull request bodies, carried forward as an established fact
+that nothing had ever examined — which is the exact failure this document exists
+to prevent, committed in the document's own margins.
+
+It was also the largest recorded open item, and the next piece of content work
+would have been built on top of it.
+
+**The numbers are right. Every one of them. The reading is wrong**, three
+separate ways.
+
+### "Nine episodes can be finished in a single choice"
+
+True, and it means the opposite of what I wrote. 9 episodes offer an ending on
+their opening stage, and in every one of the nine that stage offers two or three
+choices of which exactly one ends it. It is a **decline**. Don't board the
+hulk, refuse the run, stay out of the anomaly.
+
+The nine include `long_watch`, which carries 31 choices across 11 stages and 773
+distinct paths — the deepest episode in the game. An episode you are permitted to
+walk away from is not a shallow episode. It is one with a door.
+
+The test that would have caught this writes itself once the reading is right:
+for each of the nine, the opening stage must *also* offer a choice that goes
+somewhere. That is what makes it a decline rather than a dead end, and it is now
+asserted.
+
+### "40% of choices terminal, 2.22 per stage"
+
+That measures a shape, not a depth. The worst-scoring episode in the game on it
+is `homecoming` — 4 stages, 15 choices, 14 of them terminal — and `homecoming`
+is the campaign's epilogue: a review board that branches on the ledger's own
+assessment of your command and then asks what you would like to say for
+yourself. 10 of `homecoming`'s 15 choices are gated on what you actually did,
+on officers and on flags. It is the most consequence-aware content in the game
+and it sits at the bottom of the table that called the content shallow.
+
+An epilogue has many endings because that is what an epilogue is.
+
+### "Mean 1.92 choices to reach an ending"
+
+That is the *shortest* path, and for nine episodes the shortest path is the
+decline. Measured over runs instead of over the cheapest exit, the mean run is
+3.2 stages and sees 59% of its episode's stages.
+
+I measured the cheapest way out of an episode and reported it as the episode.
+Same class as §102's two corrections — the difficulty cliff, measured on an axis
+too coarse to show a gradient, and the glow channel, where I measured triangles
+and reported vertices.
+
+### What does measure it
+
+Whether a choice depends on anything the captain has done. Across 26 authored
+episodes, 154 stages and 342 choices, **56 of 342 choices carry a `requires`** —
+16%, and unevenly:
+
+```
+homecoming            67%   officer, flag
+beta_reticuli         36%   flag
+khitomer_accord       27%   flag
+...
+outpost_silence        7%   skill, ranks
+centauri_drift         0%
+the_cube               0%
+vega_raid              0%
+wolf359_salvage        0%
+```
+
+Four episodes gate nothing whatsoever:
+
+- `centauri_drift`
+- `the_cube`
+- `vega_raid`
+- `wolf359_salvage`
+
+`vega_raid` and `centauri_drift` are act 1, where there is little history to read
+and the score is fair. `the_cube` is **act 4** with 15 choices: by then a captain
+has four acts behind them and the episode reads none of it.
+
+Against that sit the 30 flags marked `candidate` in `WRITTEN_AND_UNREAD`
+(`tests/wiring.test.js`) — `rescued_vell`, `ran_silent`, `came_clean`,
+`captured_cloak`, `merrimack_lost`, `organia_secret` and the rest. Deeds the game
+writes down and never once reads back.
+
+That is the real open item, and it is a better one than the claim it replaces:
+**the game remembers thirty things the captain did and lets none of them
+matter.**
+
+### The guard
+
+`tests/docs.test.js` has existed since #91 to stop exactly this, and its header
+states the method: *read the claim out of the document, compare it against the
+live data, and assert the scrape found something before believing what it says.*
+It applied that to `README.md` and `docs/MANUAL.md`.
+
+It had never checked a single number in this file — the longest document in the
+repository and the one that consists almost entirely of measurements. So the
+figures in this section are now scraped out of it and checked against
+`EPISODES`, including the "located N of N claims" assertion that makes a
+regex which stops matching a failure rather than a silent pass.
+
+That covers this section, not the register. Every other number in this document
+is still unguarded prose, and this is the second time in three sections that a
+thing I believed turned out to be untested rather than untrue.
+
+### And one inside the correction
+
+The first count of `long_watch`'s paths came out at 483. The walk followed only
+the first destination of each `branch`, so it undercounted by a third; counted
+properly it is 773. Fifteenth instrument error, and the correction of a
+correction — which is the right number to have found while writing a section
+about repeating figures nobody checked.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
