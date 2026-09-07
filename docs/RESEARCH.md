@@ -9207,6 +9207,139 @@ checked across six shifted blocks first, which is the discipline this section is
 about.
 
 
+## 97. The number the whole bridge turns on, that nobody could see or hear
+
+`Officer.relationship` decides how the crew take an order. `reactTo` computes
+`trust = relationship / 100 - friction * 2` and then shifts the two scores it
+weighs by up to twenty points each — `candor - trust * 20`,
+`discipline + trust * 20`. Swept across the full range, **71% of 484 order
+shapes flip** between regard −100 and +100: the same captain giving the same
+order to the same officer is complied with at one end and argued with at the
+other.
+
+Three things were true of that number at once:
+
+- The crew screen printed **Discipline and Candour** and not regard — the two
+  numbers it shifts were shown as though they were the operative ones.
+- `officer:regard` was emitted **with a reason on every change** since §44 wired
+  it — a watch stood, a fight won, the ship lost, a butcher's bill, an officer
+  hurt on the surface — and had **zero listeners anywhere in `src/`**.
+- It moves at a rate a captain would notice if anything told them:
+  **+2 per cleanly-fought fight, +52 over thirty**, and **−9 per fight** flown
+  badly.
+
+So the bridge's opinion of the captain was formed, stored, saved, loaded, and
+consulted on seven orders in ten — and never once shown or said.
+
+### What shipped
+
+Bands rather than a bare number, in the shape `STANDING_TIERS` already uses for
+the factions, because a crew's feeling about a captain is a thing you name and
+not a thing you count:
+
+| band | from | reads as |
+| --- | --- | --- |
+| `devoted` | +60 | Would follow you anywhere |
+| `warm` | +25 | Glad to serve under you |
+| `correct` | −10 | Correct and professional |
+| `strained` | −45 | Serving under protest |
+| `bitter` | −100 | Wants off this ship |
+
+The officer card gains a Regard readout beside the two scores it moves, and the
+log gains a line **when the band changes** — not when the number does. Regard
+moves a point or two on almost everything that happens; a line per change would
+be a log made of nothing else.
+
+### The rule went in the wrong file first, and that is the whole finding
+
+I first wrote the band-crossing rule as a listener in `src/main.js`, next to the
+`officer:killed` listener it resembles. Two defects followed from that, and only
+one of them was about the rule.
+
+**It suppressed the first crossing an officer ever made.** The listener latched
+the band it had last announced and skipped the case where nothing was latched
+yet, reasoning that announcing the state an officer was commissioned in is not
+news. But nothing emits at commissioning — the first event an officer produces
+is already a change. Traced over `+30, +5, −40` from a standing start:
+
+```
+  0 -> 30   correct -> warm       crossing, and SILENT   <- the one worth hearing
+ 30 -> 35   warm -> warm          no crossing, silent    correct
+ 35 -> -5   warm -> correct       crossing, announced    correct
+```
+
+The crew warming to the captain was the line that got eaten; the only line
+printed was the fall back to `correct`.
+
+**And no test could reach it.** `main.js` is DOM-bound and cannot be imported,
+so the guard I wrote for it read the file as text and asserted the handler
+*mentioned* the latch. A control that deleted the early return — making it
+announce every single point — **passed that guard**, because the latch was still
+written a line further down.
+
+That is the §51 defect, committed into a test whose subject is the §51 defect.
+It was caught by running the control, and by nothing else.
+
+The fix was not a better regex. `crossed` is a fact about the officer, not about
+the screen, so `Officer.regard` compares the band before against the band after
+and puts `crossed` on the event; `main.js` keeps one line, `if (!crossed)
+return;`. The rule is now measurable without a DOM, and the latch that could get
+the first crossing wrong does not exist — there is no state to get wrong.
+
+**The general lesson, which is narrower than "don't read source in tests":**
+text can establish that a subscription *exists*, because deleting the
+subscription deletes the token. It cannot establish that the logic inside is
+right, because a control that breaks the logic leaves every token standing.
+Reading source to check *wiring* is sound; reading source to check *behaviour*
+is the defect. Both appear in this section's guards, deliberately.
+
+### 56 of 82 events are emitted to nobody
+
+Sweeping `emit('…')` against `on('…')` across `src/`, with no wildcard listener
+anywhere:
+
+```
+82 events emitted     26 listened for     56 with no listener in src/
+```
+
+`officer:regard` was one of the 56, which is why it went years unheard, and
+nothing in the suite could have told me. A sample of the rest —
+`ledger:standing-tier`, `ship:deathsave`, `command:offered`,
+`inquiry:concluded`, `mastery:tier` — reads like a list of things a captain
+would want to be told about.
+
+They are **not** 56 defects. §91's rule applies: an unwired thing is a
+hypothesis, and each needs its own measurement before it earns a listener. What
+shipped is a guard that the count does not **grow** — a new emit with no reader
+should have to be a deliberate one — plus the one subscription this section
+actually justified.
+
+I got that count wrong twice before reporting it. The first pass said 55: my
+sweep script scored a **comment** in `state.js` quoting `on('combat:end')` as a
+listener. The second was the same shape — a hand-typed list of the thirteen
+emitting files, which stops counting the moment someone adds a fourteenth. The
+shipped guard walks `src/` off disk for both halves.
+
+### Guards and controls
+
+Five, each with the control that must break it, all four novel controls run:
+
+| # | guard | control | fired |
+| --- | --- | --- | --- |
+| 1 | a crew that has served no time is not yet warm | — | pre-existing |
+| 2 | the band actually moves over a commission | — | pre-existing |
+| 3 | the card shows Regard beside Discipline and Candour | remove the readout | ✓ |
+| 4 | a band change is announced, a point is not | announce every change | ✓ |
+| 4 | …including the first crossing an officer makes | latch instead of compare | ✓ |
+| 5 | something is actually subscribed to it | remove the listener | ✓ |
+
+Guard 2 is sixteen fights and not ten. Ten left the exec at 20 against a
+crossing at 25 and the test failed — which was the test being wrong about the
+rate, not the bands being wrong about the crew. That is the fourth small-sample
+error in three sections, and §96's rule is now doing real work: it was caught
+because I was about to act on it.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

@@ -26,13 +26,13 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 import { Game } from '../src/core/state.js';
 import { on } from '../src/core/events.js';
 import { Character } from '../src/rules/character.js';
 import { Ship } from '../src/sim/ship.js';
-import { Officer, ABILITIES } from '../src/sim/officers.js';
+import { Officer, ABILITIES, REGARD_BANDS } from '../src/sim/officers.js';
 import { applyAbility } from '../src/sim/powers.js';
 
 const game = ({ seed = 5n, shipClass = 'constitution', speciesId = 'human' } = {}) => new Game({
@@ -305,5 +305,179 @@ describe('read it or delete it', () => {
     const saved = g.crew.at('first_officer').save();
     assert.equal('canon' in saved, false);
     assert.doesNotMatch(readFileSync('src/world/crews.data.js', 'utf8'), /canon: true/);
+  });
+});
+
+// -------------------------------------------- and the captain can see any of it
+//
+// §44 gave `relationship` its meaning and measured what it buys — 79.2% of
+// ethically-weighted orders objected to at -80, 19.2% at +80. It never showed
+// the captain the number. The crew screen printed Expertise, Discipline, Daring
+// and Candour, which includes the two that regard moves, and not regard.
+//
+// Swept over the whole order space — risk and ethical weight each 0..1 in tenths
+// across four temperaments, 484 shapes — the difference between a crew that
+// despises you and one that would follow you anywhere changes the answer in
+// **71%** of them. That is not a stat worth hiding.
+
+describe('what the crew think of you is visible', () => {
+  test('regard bands cover the whole range and are ordered', () => {
+    assert.ok(REGARD_BANDS.length >= 4, `only ${REGARD_BANDS.length} bands`);
+    for (let i = 1; i < REGARD_BANDS.length; i++) {
+      assert.ok(REGARD_BANDS[i].min < REGARD_BANDS[i - 1].min,
+        `bands are not in descending order at ${REGARD_BANDS[i].id}`);
+    }
+    // Every reachable value lands in exactly one band, including the ends.
+    const o = Object.create(Officer.prototype);
+    for (let rel = -100; rel <= 100; rel += 1) {
+      o.relationship = rel;
+      const band = o.regardBand;
+      assert.ok(band && band.label, `regard ${rel} falls outside every band`);
+      assert.ok(rel >= band.min, `regard ${rel} matched ${band.id}, whose floor is ${band.min}`);
+    }
+    // A fresh officer reads as the middle of the road, not as a friend.
+    o.relationship = 0;
+    assert.equal(o.regardBand.id, 'correct',
+      'a crew that has served no time under you is not yet warm to you');
+  });
+
+  test('and the band actually moves over a commission', () => {
+    // A band nobody can reach is a label, not a reading. This is the same
+    // objection §44 raised against its own first draft: measure the thing
+    // moving, not the code that would move it.
+    const g = new Game({
+      seed: 21n, crewMode: 'original', difficulty: 'captain', shipClass: 'constitution',
+      character: new Character({ speciesId: 'human', careerId: 'command' }),
+    });
+    const bridge = g.crew.officers[0];
+    assert.equal(bridge.regardBand.id, 'correct');
+
+    // Sixteen, because the curve is measured and not guessed: a cleanly fought
+    // fight is worth about two points to the bridge, so the crossing from
+    // `correct` into `warm` at 25 lands around the thirteenth. Ten fights left
+    // it at 20 and this test failed — which was the test being wrong about the
+    // rate, not the bands being wrong about the crew. Thirty fights reach 52.
+    const seen = new Set([bridge.regardBand.id]);
+    for (let f = 0; f < 16 && !g.over; f++) {
+      g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: `K${f}` })]);
+      for (let i = 0; i < 40000 && g.engagement && !g.engagement.over; i++) {
+        if (i % 15 === 0 && g.engagement.target) {
+          g.engagement.comeAboutTo(g.engagement.target);
+          g.ship.throttle = 0.6;
+          g.ship.power.applyPreset(g.ship.shieldPct < 0.35 ? 'defense' : 'attack');
+        }
+        g.update(1 / 30);
+      }
+      seen.add(bridge.regardBand.id);
+      g.passTime?.(24 * 14);
+    }
+    assert.ok(seen.size > 1,
+      `ten fights fought well and the bridge never left "${bridge.regardBand.id}" — `
+      + `regard ended at ${bridge.relationship}`);
+  });
+
+  test('and the screen shows it beside the two scores it moves', () => {
+    // The specific defect: Discipline and Candour were printed as though they
+    // were the operative numbers, while `reactTo` weighed them shifted by up to
+    // twenty points in a direction the captain could not see.
+    const src = readFileSync(new URL('../src/ui/screens.js', import.meta.url), 'utf8');
+    const card = src.slice(src.indexOf('export function officerDetail'));
+    const body = card.slice(0, card.indexOf('\n}'));
+    assert.match(body, /readout\('Regard'/,
+      'the officer card no longer shows what that officer thinks of the captain');
+    for (const shown of ['Discipline', 'Candour']) {
+      assert.ok(body.includes(`readout('${shown}'`),
+        `${shown} is gone from the card, so regard has nothing to sit beside`);
+    }
+    assert.match(body, /regardBand/,
+      'regard is shown as a bare number rather than as what the officer would call it');
+  });
+
+  test('and a change of band reaches the log, but a change of a point does not', () => {
+    // `officer:regard` fires on almost everything that happens — a watch stood,
+    // a fight won, casualties, a landing. It had no listener at all. Wiring one
+    // per CHANGE would be a log made of nothing else, so this is the
+    // standing-tier rule: say it when it crosses a band.
+    //
+    // Measured on what the officer emits, not scraped from the source. The
+    // first version of this asserted that the handler MENTIONED the band latch,
+    // and a control that deleted the early return — making it log every single
+    // point — passed it anyway, because the latch was still written a line
+    // further down. A check satisfied by the shape of the source rather than by
+    // what it does is the defect this repo keeps rediscovering, and it had just
+    // been committed into a test about it.
+    //
+    // The rule lives on the officer for that reason. Written in `main.js` it
+    // sat behind a DOM-bound class no test can construct, and the only check
+    // available there was reading the file as text — which is how the first
+    // version came to be wrong.
+    const g = new Game({
+      seed: 4n, crewMode: 'original', shipClass: 'constitution',
+      character: new Character({ speciesId: 'human', careerId: 'command' }),
+    });
+    const o = g.crew.officers[0];
+    const announced = [];
+    const stop = on('officer:regard', (e) => { if (e.officer === o && e.crossed) announced.push(e.band.id); });
+    try {
+      // Twenty single points, all inside one band. Nothing to announce.
+      o.relationship = 0;
+      for (let i = 0; i < 20; i++) o.regard(1, 'a watch stood');
+      assert.equal(o.regardBand.id, 'correct', 'the fixture walked out of the band it meant to stay inside');
+      assert.deepEqual(announced, [],
+        `twenty points inside one band announced themselves ${announced.length} times`);
+
+      // And the point that crosses one is worth saying — including the first
+      // crossing an officer ever makes, which an earlier draft swallowed
+      // because it latched the band on the way past instead of comparing it.
+      o.relationship = 24;
+      o.regard(2, 'a fight won');
+      assert.equal(o.regardBand.id, 'warm', 'the fixture no longer crosses a band');
+      assert.deepEqual(announced, ['warm'],
+        'the bridge changed how it feels about you and nobody said so');
+    } finally { stop(); }
+  });
+
+  test('and something is actually listening for it', () => {
+    // The defect this whole block exists to fix was not a wrong rule — it was
+    // a right one nobody had subscribed to. `officer:regard` was emitted with a
+    // reason on every change since §44 and had zero listeners in `src/`, so the
+    // rule above could be perfect and still reach no one.
+    //
+    // Read as text, because `main.js` is DOM-bound and cannot be imported. That
+    // is sound HERE and was not sound for the rule above, and the difference is
+    // worth naming: text can establish that a subscription EXISTS, because
+    // deleting the subscription deletes the token. It cannot establish that the
+    // logic inside is right, because a control that breaks the logic leaves
+    // every token standing — which is exactly how the first draft of the test
+    // above passed a control that made it log every single point.
+    const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+    const at = main.indexOf("on('officer:regard'");
+    assert.ok(at > 0, 'officer:regard is emitted on every change and nothing subscribes to it again');
+    assert.ok(main.slice(at, at + 400).includes('pushLog'),
+      'the officer:regard listener no longer puts anything in front of the captain');
+
+    // And the sweep that would have caught it in the first place: 56 of the 82
+    // events emitted in `src/` have no listener there. Most are hooks rather
+    // than defects and each needs its own measurement (§91), so this asserts
+    // only that the count is not GROWING — a new emit with no reader is a new
+    // hypothesis, and it should have to be an explicit one.
+    //
+    // The file list is read off disk rather than typed here, because a
+    // hand-kept list of emitters silently stops counting the moment someone
+    // adds a fourteenth. Counting my own first pass with a typed list is how I
+    // got 55: it scored a COMMENT in `state.js` that quotes `on('combat:end')`
+    // as a listener, and the real figure was 56 all along.
+    const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+      d.isDirectory() ? walk(new URL(`${d.name}/`, dir)) : (d.name.endsWith('.js') ? [new URL(d.name, dir)] : []));
+    const emitted = new Set(), heard = new Set();
+    for (const url of walk(new URL('../src/', import.meta.url))) {
+      const src = readFileSync(url, 'utf8');
+      for (const m of src.matchAll(/\bemit\(\s*'([^']+)'/g)) emitted.add(m[1]);
+      for (const m of src.matchAll(/^[^/*\n]*\b(?:on|once)\(\s*'([^']+)'/gm)) heard.add(m[1]);
+    }
+    const unheard = [...emitted].filter((e) => !heard.has(e));
+    assert.ok(unheard.length <= 56,
+      `${unheard.length} emitted events have no listener, up from the 56 measured here: `
+      + `${unheard.slice(0, 8).join(', ')}`);
   });
 });

@@ -239,6 +239,33 @@ export function abilityPool(dept) {
   return ABILITY_LIST.filter((a) => a.dept === dept);
 }
 
+/**
+ * What an officer's regard for the captain reads as.
+ *
+ * §44 gave `relationship` its meaning — it shifts the candour and discipline
+ * that `reactTo` weighs, twenty points across the full range — and measured
+ * what that buys: 79.2% of ethically-weighted orders objected to at -80,
+ * 19.2% at +80. What it did not do was tell the captain any of it.
+ *
+ * Measured over the whole order space — risk and ethical weight each swept
+ * 0..1 across four officer temperaments, 484 shapes — the difference between a
+ * crew that despises you and one that would follow you anywhere changes the
+ * answer in **71% of them**: comply where they would have objected, object
+ * where they would have refused. And the crew screen showed candour and
+ * discipline, which are the two numbers regard moves, while showing nothing of
+ * the number that moves them.
+ *
+ * Bands rather than a raw score, in the shape `STANDING_TIERS` uses for the
+ * factions. A first officer does not think of you as -45.
+ */
+export const REGARD_BANDS = [
+  { min: 60, id: 'devoted', label: 'Would follow you anywhere' },
+  { min: 25, id: 'warm', label: 'Glad to serve under you' },
+  { min: -10, id: 'correct', label: 'Correct and professional' },
+  { min: -45, id: 'strained', label: 'Serving under protest' },
+  { min: -101, id: 'bitter', label: 'Wants off this ship' },
+];
+
 export class Officer {
   constructor(data) {
     Object.assign(this, {
@@ -395,6 +422,18 @@ export class Officer {
   }
 
   /**
+   * What the regard reads as. Bands rather than a bare number, in the shape
+   * `STANDING_TIERS` already uses for the factions, because a crew's feeling
+   * about a captain is a thing you name and not a thing you count.
+   *
+   * The thresholds are the ones §44 measured against, which reported 79.2% of
+   * orders objected to at -80 and 19.2% at +80.
+   */
+  get regardBand() {
+    return REGARD_BANDS.find((b) => this.relationship >= b.min) ?? REGARD_BANDS[REGARD_BANDS.length - 1];
+  }
+
+  /**
    * How this officer feels about serving under you, moved by something that
    * happened.
    *
@@ -404,9 +443,24 @@ export class Officer {
    */
   regard(delta, reason = '') {
     const before = this.relationship;
+    const bandBefore = this.regardBand;
     this.relationship = Math.max(-100, Math.min(100, before + delta));
     if (this.relationship !== before && reason) {
-      emit('officer:regard', { officer: this, delta: this.relationship - before, reason });
+      // `crossed` is decided here rather than by the listener because it is a
+      // fact about the officer, not about the screen: regard moves a point or
+      // two on almost everything that happens, and only a change of band is
+      // news. Deciding it in `main.js` put it somewhere no test can reach —
+      // that file is DOM-bound — and the version that lived there suppressed
+      // the FIRST crossing an officer ever made, which is the one worth
+      // hearing. Comparing the two bands has no such state to get wrong.
+      const band = this.regardBand;
+      emit('officer:regard', {
+        officer: this,
+        delta: this.relationship - before,
+        reason,
+        band,
+        crossed: band.id !== bandBefore.id,
+      });
     }
     return this.relationship;
   }
