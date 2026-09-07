@@ -654,7 +654,7 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
         // at a stock size while the ship it was veiling was somewhere else.
         engagement.effects.push({
           kind: 'decloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
-          classId: ship.classId, life: 1.0,
+          classId: ship.classId, life: 1.0, span: 1.0,
         });
       }
       return;
@@ -664,7 +664,7 @@ export function chooseAction(ship, engagement, dt, opts = {}) {
       ship.cloak();
       engagement.effects.push({
         kind: 'cloak', x: ship.x, y: ship.y, z: ship.z ?? 0,
-        classId: ship.classId, life: 1.0,
+        classId: ship.classId, life: 1.0, span: 1.0,
       });
       return;
     }
