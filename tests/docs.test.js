@@ -166,11 +166,14 @@ describe('the register states figures it has actually measured', () => {
     ['gated choices', /\*\*(\d+) of \d+ choices carry a `requires`\*\*/,
       () => everyChoice().filter((x) => x.c.requires).length],
     ['gated denominator', /\*\*\d+ of (\d+) choices carry a `requires`\*\*/, () => everyChoice().length],
-    ['long_watch choices', /carries (\d+) choices across \d+ stages and \d+\ndistinct paths/,
+    ['long_watch choices', /carries (\d+) choices across \d+ stages and [\d,]+\ndistinct paths/,
       () => choicesIn(byId('long_watch'))],
-    ['long_watch stages', /carries \d+ choices across (\d+) stages and \d+\ndistinct paths/,
+    ['long_watch stages', /carries \d+ choices across (\d+) stages and [\d,]+\ndistinct paths/,
       () => Object.keys(byId('long_watch').stages).length],
-    ['long_watch paths', /carries \d+ choices across \d+ stages and (\d+)\ndistinct paths/,
+    // Written with a thousands separator, because the prose says "1,349" and
+    // will keep crossing a thousand as episodes gain roads. `stated` below
+    // strips the commas rather than the document avoiding them.
+    ['long_watch paths', /carries \d+ choices across \d+ stages and ([\d,]+)\ndistinct paths/,
       () => pathsThrough(byId('long_watch'))],
     ['homecoming gated', /(\d+) of `homecoming`'s \d+ choices are gated/,
       () => gatedIn(byId('homecoming'))],
@@ -188,7 +191,7 @@ describe('the register states figures it has actually measured', () => {
       const m = RESEARCH.match(re);
       if (!m) { wrong.push(`${what}: §107 no longer states this at all`); continue; }
       found++;
-      const stated = Number(m[1]);
+      const stated = Number(String(m[1]).replace(/,/g, ''));
       const real = actual();
       if (stated !== real) wrong.push(`${what}: §107 says ${stated}, actual ${real}`);
     }

@@ -215,6 +215,16 @@ export const LONG_WATCH_EPISODES = [
           { id: 'sit', label: 'Sit down and ask her about her mother',
             next: 'the_write_up', requires: { var: { read_the_letter: true } },
             effects: { xp: 1600, flag: 'let_the_signal_go' } },
+          // Rigel, in act 2. You broke orbit on Marru and filed it — the ending
+          // is called `left_her` — and the filing was the whole of what she
+          // got. The one thing a person in this position is never offered is a
+          // say in what the record will call them, and a captain who has
+          // already turned somebody into paperwork once is the captain who
+          // thinks to offer it. She asks for it herself in the cells, one stage
+          // over, of a captain who did not.
+          { id: 'her_words', label: 'Ask her what she wants entered, and mean it',
+            next: 'the_write_up', requires: { flag: 'marru_left' },
+            effects: { xp: 1600, setVar: { she_was_asked: true } } },
         ],
       },
 
@@ -253,6 +263,26 @@ export const LONG_WATCH_EPISODES = [
           { id: 'both', label: 'Log the breach, and log what the crew did about it',
             outcome: 'on_the_record',
             effects: { xp: 1800, standing: { federation: 12 },
+              record: { commendation: 1 },
+              flag: ['logged_the_watch', 'the_watch_stood'] } },
+          // Wolf 359, in act 2. The pod came up through its stages and stopped
+          // at the last one, and Lieutenant Commander Aris Vell of the Kyushu
+          // never woke up, and you entered her name in the log yourself rather
+          // than let it be done for you. This is the same desk and the same
+          // hour. `truth` above logs the name; a captain who has written one
+          // before knows the name is not the part that matters, and puts down
+          // what she was reaching for six weeks behind us.
+          { id: 'like_vell', label: "Write her name the way you wrote Vell's",
+            outcome: 'on_the_record', requires: { flag: 'vell_lost' },
+            effects: { xp: 2100, standing: { federation: 10 },
+              record: { commendation: 1 },
+              flag: ['logged_the_watch', 'the_watch_stood'] } },
+          // And the version she asked for, available only to a captain who
+          // asked her. Not a softer entry — her account of it, which is the
+          // thing the cells scene says nobody ever gets.
+          { id: 'her_account', label: 'Log it in her words, and sign it under them',
+            outcome: 'on_the_record', requires: { var: { she_was_asked: true } },
+            effects: { xp: 2000, standing: { federation: 6 },
               record: { commendation: 1 },
               flag: ['logged_the_watch', 'the_watch_stood'] } },
         ],

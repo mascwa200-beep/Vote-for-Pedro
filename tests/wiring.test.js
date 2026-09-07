@@ -1851,12 +1851,16 @@ describe('every episode graph is sound', () => {
       donatu_accord: 'candidate', donatu_battle: 'candidate',
       donatu_pressed: 'candidate', grid_9902_contact: 'candidate',
       grid_answered_late: 'candidate', grid_candid: 'candidate',
-      marru_left: 'candidate', merrimack_lost: 'candidate',
+      merrimack_lost: 'candidate',
       ordered_the_deck: 'candidate', organia_rebuffed: 'candidate',
       organia_revealed: 'candidate', organia_secret: 'candidate',
       rescued_vell: 'candidate',
       romulus_witness: 'candidate', telek_acquitted: 'candidate',
-      vell_lost: 'candidate',
+      // `marru_left` and `vell_lost` left in §109, to `long_watch`: the captain
+      // who broke orbit on Marru and filed it is the one who thinks to ask
+      // Marchetti what she wants entered, and the captain who wrote Aris Vell's
+      // name into a log himself knows what a name in a log is worth.
+      //
       // `ran_silent` and `wolf_scanned` left this list in §108: the cube at
       // Gamma Hydra reads both of them now. They were the two act-2 deeds that
       // are unmistakably Borg — the excavated outpost you crept up on, and the

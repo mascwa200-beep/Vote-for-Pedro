@@ -10433,7 +10433,7 @@ their opening stage, and in every one of the nine that stage offers two or three
 choices of which exactly one ends it. It is a **decline**. Don't board the
 hulk, refuse the run, stay out of the anomaly.
 
-The nine include `long_watch`, which carries 31 choices across 11 stages and 773
+The nine include `long_watch`, which carries 34 choices across 11 stages and 1,349
 distinct paths — the deepest episode in the game. An episode you are permitted to
 walk away from is not a shallow episode. It is one with a door.
 
@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 344 choices, **58 of 344 choices carry a `requires`** —
+episodes, 154 stages and 347 choices, **61 of 347 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -10619,6 +10619,93 @@ has to agree with the list beneath it, so the number can fall as episodes learn
 to read the record without the guard going quiet.
 
 Twenty-eight flags to go.
+
+## 109. The long watch reads the four acts behind it
+
+§108 took the first two of the thirty. This is the next two, into `long_watch` —
+act 4, the deepest episode in the book, and until now the one that knew
+everything about its own night and nothing about the campaign that led to it.
+All three of its gates were on its own variables.
+
+### The episode, and why these two deeds
+
+An intermittent draw on auxiliary six weeks from the nearest relay. It is Petty
+Officer Ile Marchetti, signing out emitter couplings and eleven minutes of
+subspace carrier to reach her mother, and putting a fix on the ship's position
+across a great deal of empty space to do it. She knows. She has done it anyway.
+
+The whole episode is one question — the record, or the person — and it ends at a
+desk in the captain's own quarters at an hour when nothing is happening. Two of
+the twenty-eight remaining flags are about exactly that, and both are act 2:
+
+- **`marru_left`** — `rigel_syndicate`. *"Break orbit and file it."* The ending
+  is called `left_her`. You turned a person into paperwork, and the paperwork
+  was all she got.
+- **`vell_lost`** — `wolf359_salvage`. The pod comes up through its stages and
+  stops at the last one. Lieutenant Commander Aris Vell, tactical officer, USS
+  Kyushu. She does not wake, and you **enter her name in the log yourself**
+  rather than have it done for you.
+
+### What they open
+
+| deed | at the long watch |
+| --- | --- |
+| `marru_left` | at 0300, in the doorway: **ask her what she wants entered, and mean it** |
+| `vell_lost` | at the desk: **write her name the way you wrote Vell's** |
+
+The first is the one I would defend hardest. One stage over, in the cells, she
+asks the question herself — whether the ship will be told what she did, or
+whether it will be *"a rating removed from the watch bill with no reason given,
+because the second one will be worse for everybody still standing those
+watches."* She asks that of a captain who did not think to ask her. A captain
+who has already turned somebody into a filing is the one who thinks to.
+
+And it is read at the desk rather than left as a gesture: taking it sets
+`she_was_asked`, which opens a fourth entry — *log it in her words, and sign it
+under them*. Not a softer entry. Her account, which is the thing the cells scene
+says nobody in her position is ever offered.
+
+`vell_lost` opens the entry beside `truth`, which logs the name flat. A captain
+who has written one of those before knows the name is not the part that
+matters, and puts down what she was reaching for six weeks behind us.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| asking her is locked without Rigel, open with it | drop the `requires` | ✓ ×4 |
+| the Vell entry is locked without Wolf 359 | drop the `requires` | ✓ ×3 |
+| asking her is READ at the desk | have it set nothing | ✓ |
+| her account is offered only to a captain who asked | drop that gate | ✓ ×2 |
+
+The third guard exists because this file's own header records walking into that
+defect while writing this episode: `sat_in_the_dark` was written by three routes
+and read by none — a variable recorded and never consulted, in the episode about
+not overlooking things. A new `setVar` that nothing gates on would be the same
+mistake in the same file.
+
+### The instrument caught the instrument, twice
+
+Both were mine and both were the same shape as errors already recorded here.
+
+`long_watch`'s path count is stated in §107 and the guard reported
+`773, actual 1349` — three choices nearly doubled the routes through the
+episode, which is a fair measure of what was added. Written into the prose as
+**1,349**, the thousands separator then broke the scrape: `\d+` matched `1` and
+stopped. Fixed by parsing `[\d,]+` and stripping the commas, because register
+figures will keep crossing a thousand and the document should not have to write
+around its own test. The first pass fixed only the paths regex and left the two
+that read *past* that number in the same sentence — and the located-N-of-N
+assertion caught that too, `9 of 11`.
+
+Then the lock-reason test read `"They are waiting for you in Auxiliary
+Control."` The choices were read from the corridor, where the room gate locks
+every one of them and supplies the reason. **That is the exact mistake this
+file's header records**, committed again by the test asserting on lock reasons,
+eight lines below the comment describing it. Sixteenth and seventeenth
+instrument errors.
+
+Twenty-six flags to go.
 
 ## Attribution
 
