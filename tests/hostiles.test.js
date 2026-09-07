@@ -43,6 +43,34 @@ const classesOf = (faction) => SHIP_LIST
 const WINDOW = PORT_LIGHT;
 const near = (a, b, eps = 2e-3) => a.every((v, i) => Math.abs(v - b[i]) < eps);
 
+/**
+ * The same colour, whatever brightness it is drawn at.
+ *
+ * `near` compares absolute values, which is right for asking "is this the trim
+ * colour" and wrong for asking "is this a port". A port is now SHADED — the
+ * belts carry a vertical ramp so a row of them reads as windows rather than as
+ * a painted stripe — and every one of its vertices is a different multiple of
+ * `PORT_LIGHT`. Measured, an absolute matcher at 0.002 found zero ports on ten
+ * of the fourteen hulls and six on the rest, on hulls that visibly have them.
+ *
+ * `gfx.test.js` hit exactly this when the Federation bussard domes were shaded
+ * and moved to a chromaticity matcher for it; this file never got that
+ * migration and inherited the trap. Comparing chromaticity — the colour divided
+ * by its own brightest channel — asks the question that was always meant, and a
+ * scalar ramp preserves it exactly.
+ */
+const sameHue = (c, target, eps = 0.02) => {
+  const cm = Math.max(c[0], c[1], c[2]);
+  const tm = Math.max(target[0], target[1], target[2]);
+  if (cm < 1e-6 || tm < 1e-6) return cm < 1e-6 && tm < 1e-6;
+  return Math.abs(c[0] / cm - target[0] / tm) < eps
+    && Math.abs(c[1] / cm - target[1] / tm) < eps
+    && Math.abs(c[2] / cm - target[2] / tm) < eps;
+};
+
+/** How bright a vertex is drawn relative to the palette colour it is drawn in. */
+const scaleOf = (c, target) => Math.max(c[0], c[1], c[2]) / Math.max(...target);
+
 const vertex = (m, i) => {
   const f = m.stride / 4;
   return {
@@ -52,7 +80,7 @@ const vertex = (m, i) => {
   };
 };
 
-const isPort = (v) => near(v.color, WINDOW) && v.glow > 0.5;
+const isPort = (v) => sameHue(v.color, WINDOW) && v.glow > 0.5;
 
 /** The forms that build a hull somebody shoots at, and the classes on them. */
 const HOSTILE_FORMS = [
@@ -170,6 +198,34 @@ describe('a ship with a crew has lights on', () => {
     }
     assert.ok(HOSTILE.length >= 14,
       `only ${HOSTILE.length} classes were checked`);
+  });
+
+  test('and each of those ports is a lit aperture rather than a flat chip', () => {
+    // The other half of moving `isPort` to chromaticity.
+    //
+    // A hue matcher accepts any brightness, so on its own it would go on
+    // passing if the ramp that made these ports worth having were deleted
+    // tomorrow — it would simply see flat ports again and call them ports. That
+    // is the trade every loosened matcher makes, and it is only safe if
+    // something else then asserts the thing the matcher stopped noticing.
+    //
+    // So: across a hull's ports the brightness must actually SPAN, and no port
+    // may be baked to nothing or blown past the palette. Control for the span:
+    // return `windowBelt` to a flat colour and it collapses to 0.
+    for (const id of HOSTILE) {
+      const m = mesh(id);
+      const scales = [];
+      for (let i = 0; i < m.vertexCount; i++) {
+        const v = vertex(m, i);
+        if (isPort(v)) scales.push(scaleOf(v.color, WINDOW));
+      }
+      assert.ok(scales.length >= 12, `${id} has ${scales.length} port vertices`);
+      const lo = Math.min(...scales); const hi = Math.max(...scales);
+      assert.ok(hi - lo > 0.2,
+        `${id}: its ports span ${(hi - lo).toFixed(3)} of brightness — the belt is flat again`);
+      assert.ok(lo > 0.5, `${id} has a port baked down to ${lo.toFixed(3)}`);
+      assert.ok(hi < 1.3, `${id} has a port blown out to ${hi.toFixed(3)}`);
+    }
   });
 
   test('and the hulls that still have none are named, not forgotten', () => {

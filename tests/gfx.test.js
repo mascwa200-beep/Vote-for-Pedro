@@ -3396,3 +3396,197 @@ describe('the ships and rooms a player actually looks at', () => {
     }
   });
 });
+
+// Eighteen hulls that were one flat colour.
+//
+// The shader ends `mix(lit, vColor * uTint, max(uEmissive, vGlow))`, so an
+// emissive face has its entire lighting result discarded and the albedo is the
+// only channel left that can carry shape. `mesh.js` recorded being bitten by
+// exactly that on the Federation bussard domes and fixed it there. Measured
+// across the built fleet afterwards, 18 of 31 classes still had NO per-vertex
+// colour variation anywhere on them — every Klingon, Romulan, Cardassian,
+// Ferengi, Orion, Tholian, Dominion, Borg and civilian hull — and between them
+// 4,526 emissive triangles, 13.4% of the whole fleet, rendered as flat
+// silhouettes of a single colour.
+describe('every hull in the fleet carries a gradient, not just the Federation ones', () => {
+  /** Walk a built hull and report what varies across it. */
+  const survey = (id, faction) => {
+    const m = hullMesh(id, faction);
+    const f = m.stride / 4;
+    const col = (i) => [m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]];
+    let grad = 0; let emissive = 0; let emissiveGrad = 0; let darkest = Infinity;
+    for (let t = 0; t < m.triangles; t++) {
+      const b = t * 3;
+      const c0 = col(b);
+      const varies = [1, 2].some((k) => col(b + k).some((v, j) => Math.abs(v - c0[j]) > 1e-6));
+      const lit = [0, 1, 2].every((k) => m.data[(b + k) * f + 9] >= 0.4);
+      if (varies) grad++;
+      if (lit) { emissive++; if (varies) emissiveGrad++; }
+      for (const k of [0, 1, 2]) darkest = Math.min(darkest, Math.max(...col(b + k)));
+    }
+    return { m, grad, emissive, emissiveGrad, darkest };
+  };
+
+  test('not one class is flat', () => {
+    // The headline. Eighteen were, and the fix is in three shared helpers
+    // rather than in eighteen forms, so this is the assertion that says the
+    // helpers actually reach everybody.
+    const flat = [];
+    for (const cls of SHIP_LIST) {
+      if (survey(cls.id, cls.faction).grad === 0) flat.push(cls.id);
+    }
+    assert.deepEqual(flat, [], `${flat.length} classes render as flat colour: ${flat.join(', ')}`);
+  });
+
+  test('and the fleet as a whole is meaningfully shaded, not just technically', () => {
+    // A floor rather than a pinned figure: one gradient triangle per class
+    // would satisfy the test above and change nothing a player sees. 9.1%
+    // before, 19.0% after.
+    let tris = 0; let grad = 0;
+    for (const cls of SHIP_LIST) {
+      const s = survey(cls.id, cls.faction);
+      tris += s.m.triangles; grad += s.grad;
+    }
+    const pct = (100 * grad) / tris;
+    assert.ok(pct > 15, `only ${pct.toFixed(1)}% of the fleet varies colour — it was 9.1% before`);
+  });
+
+  test('and it lands where the shader throws the lighting away', () => {
+    // The one that matters. A gradient on a lit surface is a nicety; on an
+    // emissive one it is the only shape there is. These four were the worst
+    // affected by share of hull — transport 72% emissive, galor 66%, warbird
+    // 63%, keldon 48% — and every one of those emissive triangles was flat.
+    for (const [id, faction] of [['warbird', 'romulan'], ['galor', 'cardassian'],
+      ['transport', 'independent'], ['keldon', 'cardassian']]) {
+      const s = survey(id, faction);
+      assert.ok(s.emissive > 50, `${id} has only ${s.emissive} emissive triangles to shade`);
+      const pct = (100 * s.emissiveGrad) / s.emissive;
+      assert.ok(pct > 12,
+        `${id}: ${pct.toFixed(0)}% of its self-lit triangles carry shape, and they carry none of it from the light`);
+    }
+  });
+
+  test('and nothing was baked to black', () => {
+    // Same reasoning as `bakeOcclusion`'s 0.42 clamp and `hotCore`'s rim: a
+    // ramp that reaches zero is a hole in the hull, not shading.
+    for (const cls of SHIP_LIST) {
+      const s = survey(cls.id, cls.faction);
+      assert.ok(s.darkest > 0.04, `${cls.id} has a vertex at ${s.darkest.toFixed(3)}`);
+    }
+  });
+
+  test('and it cost not one triangle, across all thirty-one classes', () => {
+    // The reason a gradient is the only move available: the fleet is at 33,898
+    // of a 36,000 ceiling, about 68 triangles per class, and the heaviest hull
+    // is 222 under a 2,400 wall. Flat shading means vertexCount is exactly
+    // three per triangle, so this also catches a helper that split a face to
+    // get its gradient.
+    let total = 0;
+    for (const cls of SHIP_LIST) {
+      const m = hullMesh(cls.id, cls.faction);
+      assert.equal(m.vertexCount, m.triangles * 3, `${cls.id} stopped being flat-shaded`);
+      total += m.triangles;
+    }
+    assert.equal(total, 33898, `the fleet is ${total} triangles — the shading went into geometry`);
+  });
+
+  test('and port and starboard are still shaded the same', () => {
+    // `shaded` must be called INSIDE a `mirrored` callback: mirroring copies
+    // colours that are already written, so shading from outside applies one
+    // side's field to both. The belts and port rows are called from inside
+    // `mirrored` by the forms, so the helpers doing their own shading keeps
+    // that ordering — this is the assertion that says so.
+    // Paired by POSITION, not by sorting both sides and comparing the lists.
+    // The first draft sorted, and it failed on a Bird-of-Prey by 3.8e-3 while
+    // every single starboard vertex demonstrably had a port twin at the same
+    // colour — a sorted multiset can differ on multiplicity alone, so it was
+    // reporting a shading fault that did not exist. Asking the question
+    // directly ("does the vertex mirrored from this one carry the same
+    // colour?") is both stricter and the thing actually meant.
+    const key = (x, y, z) => `${x.toFixed(6)}|${y.toFixed(6)}|${Math.abs(z).toFixed(6)}`;
+    // Not the Borg cube: it is not built by `mirrored`, its six faces are laid
+    // out independently, and its conduit ramp runs along each face's own axis
+    // on purpose. Asking a cube to be a mirror image of itself is asking the
+    // wrong question — the test below is the one that covers it.
+    for (const [id, faction] of [['warbird', 'romulan'], ['bird_of_prey', 'klingon'],
+      ['galor', 'cardassian'], ['vorcha', 'klingon'], ['neghvar', 'klingon'],
+      ['transport', 'independent'], ['keldon', 'cardassian']]) {
+      const m = hullMesh(id, faction);
+      const f = m.stride / 4;
+      const scale = (i) => Math.max(m.data[i * f + 6], m.data[i * f + 7], m.data[i * f + 8]);
+      const port = new Map();
+      let starboard = 0;
+      for (let i = 0; i < m.vertexCount; i++) {
+        const z = m.data[i * f + 2];
+        if (z >= -1e-9) continue;
+        const k = key(m.data[i * f], m.data[i * f + 1], z);
+        port.set(k, (port.get(k) ?? []).concat(scale(i)));
+      }
+      let mismatched = 0;
+      let orphan = 0;
+      for (let i = 0; i < m.vertexCount; i++) {
+        const z = m.data[i * f + 2];
+        if (z <= 1e-9) continue;
+        starboard++;
+        const twins = port.get(key(m.data[i * f], m.data[i * f + 1], z)) ?? [];
+        // A vertex with NO mirrored counterpart is a geometry question, not a
+        // shading one — see the separate test below. Only vertices that have a
+        // twin can be shaded unlike it.
+        if (!twins.length) { orphan++; continue; }
+        if (!twins.some((v) => Math.abs(v - scale(i)) < 1e-9)) mismatched++;
+      }
+      assert.ok(port.size > 0 && starboard > 0, `${id} has geometry on one side only`);
+      assert.equal(mismatched, 0,
+        `${id}: ${mismatched} starboard vertices are shaded unlike their port twin`);
+      assert.ok(orphan < starboard * 0.5,
+        `${id}: ${orphan} of ${starboard} starboard vertices have no port twin at all`);
+    }
+  });
+
+  test('and the hulls that are not mirror images of themselves are named', () => {
+    // Found by the guard above, not looked for.
+    //
+    // Asking "is this vertex shaded like its mirror twin?" needs a mirror twin,
+    // and on four classes some vertices have none — geometry that exists on the
+    // starboard side of the ship and not the port side. It is pre-existing and
+    // this change does not touch geometry, but nothing in the suite had ever
+    // asked, so it goes on the record rather than into a silent `continue`.
+    //
+    // A Borg cube is the honest case: it is not built by `mirrored` at all, its
+    // six faces are laid out independently, and asymmetry is the point. The
+    // other three are 18 vertices each — six triangles — and all three are hulls
+    // whose command head is a `box` carrying a `sweep`. This file's own header
+    // records what that means: "A swept centreline box is a parallelogram seen
+    // from above ... a Galor measured sixteen percent lopsided", which is why
+    // `prow` exists and mirrors a half-box instead. Those three forms still use
+    // the swept `box` directly.
+    //
+    // Not fixed here. Swapping in `prow` changes triangle counts, and the whole
+    // licence for this change is that it spends none — the fleet is pinned at
+    // 33,898 two tests above. Recorded, bounded, and left for a change that can
+    // afford geometry.
+    const key = (x, y, z) => `${x.toFixed(6)}|${y.toFixed(6)}|${Math.abs(z).toFixed(6)}`;
+    const lopsided = {};
+    for (const cls of SHIP_LIST) {
+      const m = hullMesh(cls.id, cls.faction);
+      const f = m.stride / 4;
+      const port = new Set();
+      for (let i = 0; i < m.vertexCount; i++) {
+        const z = m.data[i * f + 2];
+        if (z < -1e-9) port.add(key(m.data[i * f], m.data[i * f + 1], z));
+      }
+      let orphan = 0;
+      for (let i = 0; i < m.vertexCount; i++) {
+        const z = m.data[i * f + 2];
+        if (z > 1e-9 && !port.has(key(m.data[i * f], m.data[i * f + 1], z))) orphan++;
+      }
+      if (orphan) lopsided[cls.id] = orphan;
+    }
+    assert.deepEqual(lopsided, {
+      warbird: 18,
+      jem_hadar_attack: 18,
+      jem_hadar_battleship: 18,
+      borg_cube: 576,
+    }, 'a hull gained or lost unmirrored geometry');
+  });
+});

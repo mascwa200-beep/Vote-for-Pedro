@@ -9548,6 +9548,140 @@ branch that holds the fix and a `main` that does not look identical from the
 branch.
 
 
+## 99. Eighteen hulls that were one flat colour, and the span I guessed instead of measuring
+
+Hulls are out of triangles: 33,898 of a 36,000 fleet ceiling, about 68 spare a
+class, and the heaviest hull 222 under a wall a test enforces. So "make the
+ships look better" cannot mean geometry. It has to ride vertices already paid
+for.
+
+The shader ends `lit = mix(lit, vColor * uTint, max(uEmissive, vGlow))`, so an
+emissive face discards its entire lighting result and per-vertex colour is the
+only channel left that can carry shape. §94 recorded being bitten by exactly
+that on the Federation bussard domes — *"a 250-triangle sphere at `glow: 1` was
+drawn as one flat circle of colour"* — and fixed it there. Measured across the
+built fleet afterwards:
+
+```
+classes with ZERO colour gradient        18 of 31
+emissive triangles on those 18        4,526  = 13.4% of the whole fleet
+distinct colours on 16 of the 18           4, for an entire ship
+```
+
+Every Klingon, Romulan, Cardassian, Ferengi, Orion, Tholian, Dominion, Borg and
+civilian hull. On a Warbird 63% of what a player sees was one unshaded colour;
+on a transport 72%.
+
+### The fix is in three shared helpers, not in eighteen forms
+
+The dome fix wrapped one emitter at one call site. That does not generalise:
+measured, the emissive geometry on these hulls is scattered the length of the
+ship — a Warbird's 556 emissive triangles fall into **37 clusters**, the largest
+only 115.
+
+But almost all of it comes from three helpers that default to emissive —
+`windowBelt` (`glow = 1`), `portRow` (`glow = 1`) and `greebles` (`litEvery`).
+Shading inside those reaches **27 call sites and every class in the game** for
+three edits, instead of thirty-seven per hull. The Borg cube was the one class
+left over, because it draws its own boxes; its six faces ramp along their
+conduits instead, which is the right idiom for a shape with no up.
+
+```
+                       before    after
+fleet gradient coverage   9.1%    19.0%
+classes with none           18        0
+fleet triangles         33,898   33,898
+constitution             2,178    2,178
+```
+
+Not one triangle, on any of the thirty-one classes.
+
+### The span I guessed, and what measuring it instead fixed
+
+The first field took the extent to normalise over as a parameter — the belt's
+radius. It looked right and was wrong for the hulls it was written for. Most
+hostile classes put their ports in a **narrow arc on the flank**, where every
+port sits at nearly the same height, so a ramp normalised over the radius varied
+by **0.088 across a Galor's entire belt**: flat chips again, in a change whose
+whole purpose was to stop them being flat chips.
+
+`shadedAlong` measures the extent of what was actually built and normalises over
+that. A belt gets a full ramp whether it wraps the hull or occupies twenty
+degrees of it, and no call site has to know which. The guessed parameter is
+gone rather than tuned, which is the difference between a fix and a coat of
+paint.
+
+### The test I broke, in the way this repo has already written down
+
+Running only `tests/gfx.test.js` after the change, I saw 171 passing and moved
+on. `tests/hostiles.test.js` was red: three failures, and port counts that went
+from ≥96 to **0** on ten of fourteen hulls.
+
+The cause is a matcher, not a hull. `isPort` was `near(colour, PORT_LIGHT, 2e-3)`
+— an absolute comparison — and shading multiplies the colour, so a scaled port
+stops being recognised as one. §94 hit precisely this when the domes were shaded
+and migrated to a chromaticity matcher for it. `hostiles.test.js` never got that
+migration and inherited the trap, sitting there until something shaded a port.
+
+Migrating it to `sameHue` fixes it, and **loosens it**: a hue matcher accepts any
+brightness, so on its own it would go on passing if the ramp were deleted
+tomorrow — it would see flat ports and call them ports. A loosened matcher is
+only safe if something then asserts the thing it stopped noticing, so the same
+test now also requires that a hull's ports **span** more than 0.2 in brightness
+and that none is baked below 0.5 or blown past 1.3. Control: return `windowBelt`
+to a flat colour and the span collapses to 0.
+
+The process error is mine and worth naming: after changing a **shared** helper,
+running one test file is not a check. The blast radius of an edit to `mesh.js`
+is every hull in the game and every suite that looks at one.
+
+### Three hulls are lopsided, found by a guard rather than looked for
+
+Asking "is this vertex shaded like its mirror twin?" needs a mirror twin, and on
+four classes some vertices have none:
+
+```
+warbird                18 starboard vertices with no port twin
+jem_hadar_attack       18
+jem_hadar_battleship   18
+borg_cube             576   (not built by `mirrored` at all — asymmetry is the point)
+```
+
+Eighteen vertices is six triangles, and all three of those hulls draw their
+command head as a `box` carrying a `sweep`. `forms.hostile.js` opens by
+recording what that means: *"A swept centreline box is a parallelogram seen from
+above ... a Galor measured sixteen percent lopsided"* — which is why `prow`
+exists and mirrors a half-box instead. Those three forms never made the switch.
+
+**Not fixed here.** `prow` changes triangle counts, and the entire licence for
+this change is that it spends none. Recorded, pinned to its exact figures so it
+cannot grow quietly, and left for a change that can afford geometry.
+
+### Guards and controls
+
+Five controls, every one run, each breaking exactly what it should:
+
+| guard | control | fired |
+| --- | --- | --- |
+| not one class is flat | return `windowBelt` to a flat colour | ✓ |
+| the fleet is meaningfully shaded, not technically | " | ✓ |
+| it lands where the shader throws lighting away | shade only the non-emissive geometry | ✓ |
+| nothing baked to black | set the ramp floor to 0 | ✓ |
+| port and starboard shaded alike | give the field a z term | ✓ |
+| it cost not one triangle | raise `DETAIL` | ✓ |
+| a port is a lit aperture, not a flat chip | flatten the belt | ✓ |
+
+Two of the guards exist only because writing them went wrong first. The
+symmetry check began by sorting each side's colour scales and comparing the
+lists, and failed on a Bird-of-Prey by 3.8e-3 while every starboard vertex
+demonstrably had a port twin at the same colour — a sorted multiset can differ
+on multiplicity alone, so it was reporting a fault that did not exist. Pairing
+by position asks the question that was meant, is strictly stronger, and is what
+turned up the lopsided hulls above. And the Borg cube had to come out of that
+test: a cube is not a mirror image of itself, and asserting it should be was
+asking the wrong question of the right code.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
