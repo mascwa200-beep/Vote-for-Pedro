@@ -490,7 +490,7 @@ export const FRONTIER_EPISODES = [
         speaker: 'Science',
         choices: [
           { id: 'enter', label: 'Cross the line and pull her out', next: 'inside',
-            effects: { xp: 300, standing: { tholian: -12 }, record: { violated_border: 1 } } },
+            effects: { xp: 300, standing: { independent: -12 }, record: { violated_border: 1 } } },
           { id: 'negotiate', label: 'Hail the Assembly', next: 'hail',
             effects: { xp: 250 } },
           { id: 'wait', label: 'Hold at the line and prepare a fast transporter lock', next: 'lock',
@@ -514,7 +514,7 @@ export const FRONTIER_EPISODES = [
             effects: { check: { type: 'diplomacy', difficulty: 0.6, hazard: 'routine' }, xp: 400 },
             branch: { success: 'released', failure: 'timetable' } },
           { id: 'enter', label: 'Cross anyway', next: 'inside',
-            effects: { standing: { tholian: -20 }, record: { violated_border: 1 } } },
+            effects: { standing: { independent: -20 }, record: { violated_border: 1 } } },
         ],
       },
       timetable: {
@@ -528,12 +528,12 @@ export const FRONTIER_EPISODES = [
         speaker: 'Tholian Assembly',
         choices: [
           { id: 'cross', label: 'Then we cross the line', next: 'inside',
-            effects: { xp: 300, standing: { tholian: -20 }, record: { violated_border: 1 } } },
+            effects: { xp: 300, standing: { independent: -20 }, record: { violated_border: 1 } } },
           { id: 'hold', label: 'Hold at the line', outcome: 'web_closed',
             effects: {
               xp: 400,
               record: { lives_lost: 82 },
-              standing: { tholian: 6, federation: -16 },
+              standing: { independent: 6, federation: -16 },
               flag: 'merrimack_lost',
             } },
         ],
@@ -544,7 +544,7 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'done', label: 'Escort her home', outcome: 'released',
             effects: { xp: 1400, record: { lives_saved: 82, distress_answered: 1 },
-              standing: { tholian: 12, federation: 14 }, flag: 'tholian_protocol' } },
+              standing: { independent: 12, federation: 14 }, flag: 'tholian_protocol' } },
         ],
       },
       lock: {
@@ -565,7 +565,7 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'fight', label: 'Break the lattice', outcome: 'fought_out',
             effects: { combat: { faction: 'tholian', ships: ['tholian_web_spinner', 'tholian_web_spinner'], canWarpOut: false },
-              xp: 1000, damage: 0.15, record: { lives_saved: 82 }, standing: { tholian: -18 } } },
+              xp: 1000, damage: 0.15, record: { lives_saved: 82 }, standing: { independent: -18 } } },
         ],
       },
     },

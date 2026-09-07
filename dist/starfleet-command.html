@@ -23247,8 +23247,25 @@ const CORE_EPISODES = [
         text: 'The Orion captain is amused. He offers to leave for a price, and to keep whatever his people already have aboard.',
         speaker: 'Orion captain',
         choices: [
+          // `independent`, not `orion`.
+          //
+          // This paid `orion: 8` and eleven other choices across three episodes
+          // paid `orion` or `tholian` too. Both are factions in
+          // `world/factions.data.js` — the world has ten — and neither is one of
+          // the six REPUTATION TRACKS, so every one of those lines was written
+          // into nothing. Six of the twelve had no other standing line at all,
+          // which meant crossing a Tholian border, going loud on Rigel, and
+          // pursuing the raiders who took four hundred colonists as cargo each
+          // cost the captain nothing anywhere in the game. RESEARCH §114.
+          //
+          // `independent` is "Unaligned Worlds", earned by answering distress
+          // calls nobody was required to answer, and it is the track that
+          // already exists for powers outside the majors — this file was
+          // pairing `orion` with it at two sites, which is the author's own
+          // reading. Where that pairing existed the dead key is simply dropped;
+          // everywhere else it becomes `independent` at the same magnitude.
           { id: 'pay', label: 'Pay him', next: 'paid',
-            effects: { standing: { orion: 8, federation: -6 }, xp: 120, flag: 'paid_orions' } },
+            effects: { standing: { independent: 8, federation: -6 }, xp: 120, flag: 'paid_orions' } },
           { id: 'refuse', label: 'Refuse and open fire', next: 'after_combat',
             effects: { combat: { faction: 'orion', ships: ['orion_raider', 'orion_raider'] } } },
         ],
@@ -23268,7 +23285,7 @@ const CORE_EPISODES = [
         choices: [
           { id: 'pursue', label: 'Pursue them anyway', next: 'after_combat',
             effects: { combat: { faction: 'orion', ships: ['orion_raider', 'orion_raider'] },
-              standing: { orion: -14 } } },
+              standing: { independent: -14 } } },
           { id: 'let_go', label: 'Let them go', outcome: 'bought_off',
             effects: { record: { lives_lost: 400 }, standing: { federation: -12 } } },
         ],
@@ -23599,7 +23616,7 @@ const CORE_EPISODES = [
             effects: { check: { type: 'stealth', difficulty: 0.55, hazard: 'dangerous' } } },
           { id: 'force', label: 'Beam down armed and take her back', next: 'force',
             effects: { check: { type: 'combat', difficulty: 0.5, hazard: 'extreme' },
-              standing: { orion: -18, independent: -10 } } },
+              standing: { independent: -10 } } },
         ],
       },
       legal: {
@@ -23608,7 +23625,7 @@ const CORE_EPISODES = [
         choices: [
           { id: 'leverage', label: 'Use it as leverage', outcome: 'negotiated',
             requires: { skill: 'diplomacy', ranks: 2 },
-            effects: { xp: 800, record: { lives_saved: 1 }, standing: { orion: -4, federation: 10 } } },
+            effects: { xp: 800, record: { lives_saved: 1 }, standing: { independent: -4, federation: 10 } } },
           { id: 'covert2', label: 'Send a team instead', next: 'covert',
             effects: { check: { type: 'stealth', difficulty: 0.45, hazard: 'dangerous' } } },
         ],
@@ -23627,7 +23644,7 @@ const CORE_EPISODES = [
             branch: { success: 'got_her', failure: 'blown' } },
           { id: 'loud', label: 'Go loud',
             effects: { check: { type: 'combat', difficulty: 0.45, hazard: 'extreme' },
-              xp: 350, standing: { orion: -14 } },
+              xp: 350, standing: { independent: -14 } },
             branch: { success: 'got_her', failure: 'blown' } },
         ],
       },
@@ -23650,7 +23667,7 @@ const CORE_EPISODES = [
         speaker: 'Away Team',
         choices: [
           { id: 'again', label: 'Go back in, and not quietly this time', next: 'force',
-            effects: { xp: 300, standing: { orion: -18, independent: -10 } } },
+            effects: { xp: 300, standing: { independent: -10 } } },
           { id: 'withdraw', label: 'Break orbit and file it', outcome: 'left_her',
             effects: {
               xp: 250, standing: { federation: -8 },
@@ -24606,7 +24623,7 @@ const FRONTIER_EPISODES = [
         speaker: 'Science',
         choices: [
           { id: 'enter', label: 'Cross the line and pull her out', next: 'inside',
-            effects: { xp: 300, standing: { tholian: -12 }, record: { violated_border: 1 } } },
+            effects: { xp: 300, standing: { independent: -12 }, record: { violated_border: 1 } } },
           { id: 'negotiate', label: 'Hail the Assembly', next: 'hail',
             effects: { xp: 250 } },
           { id: 'wait', label: 'Hold at the line and prepare a fast transporter lock', next: 'lock',
@@ -24630,7 +24647,7 @@ const FRONTIER_EPISODES = [
             effects: { check: { type: 'diplomacy', difficulty: 0.6, hazard: 'routine' }, xp: 400 },
             branch: { success: 'released', failure: 'timetable' } },
           { id: 'enter', label: 'Cross anyway', next: 'inside',
-            effects: { standing: { tholian: -20 }, record: { violated_border: 1 } } },
+            effects: { standing: { independent: -20 }, record: { violated_border: 1 } } },
         ],
       },
       timetable: {
@@ -24644,12 +24661,12 @@ const FRONTIER_EPISODES = [
         speaker: 'Tholian Assembly',
         choices: [
           { id: 'cross', label: 'Then we cross the line', next: 'inside',
-            effects: { xp: 300, standing: { tholian: -20 }, record: { violated_border: 1 } } },
+            effects: { xp: 300, standing: { independent: -20 }, record: { violated_border: 1 } } },
           { id: 'hold', label: 'Hold at the line', outcome: 'web_closed',
             effects: {
               xp: 400,
               record: { lives_lost: 82 },
-              standing: { tholian: 6, federation: -16 },
+              standing: { independent: 6, federation: -16 },
               flag: 'merrimack_lost',
             } },
         ],
@@ -24660,7 +24677,7 @@ const FRONTIER_EPISODES = [
         choices: [
           { id: 'done', label: 'Escort her home', outcome: 'released',
             effects: { xp: 1400, record: { lives_saved: 82, distress_answered: 1 },
-              standing: { tholian: 12, federation: 14 }, flag: 'tholian_protocol' } },
+              standing: { independent: 12, federation: 14 }, flag: 'tholian_protocol' } },
         ],
       },
       lock: {
@@ -24681,7 +24698,7 @@ const FRONTIER_EPISODES = [
         choices: [
           { id: 'fight', label: 'Break the lattice', outcome: 'fought_out',
             effects: { combat: { faction: 'tholian', ships: ['tholian_web_spinner', 'tholian_web_spinner'], canWarpOut: false },
-              xp: 1000, damage: 0.15, record: { lives_saved: 82 }, standing: { tholian: -18 } } },
+              xp: 1000, damage: 0.15, record: { lives_saved: 82 }, standing: { independent: -18 } } },
         ],
       },
     },
@@ -25289,6 +25306,29 @@ const CAPITAL_EPISODES = [
           { id: 'sent_away', label: '"He told me himself. A Klingon sent away has not withdrawn"',
             next: 'seconded', requires: { flag: 'kang_left_room' },
             effects: { xp: 800, standing: { klingon: 10, federation: -4 } } },
+          // Alpha Centauri, in ACT ONE — the longest reach in the book, and the
+          // second episode a captain ever flies.
+          //
+          // A Klingon scout adrift eleven million kilometres inside Federation
+          // space with a reactor that is "not failed, failing, which is a
+          // slower and worse thing", and the lieutenant who answers the hail
+          // says they require nothing. `centauri_aid` is every road where he
+          // takes them off regardless — aboard, by bypass, under tow, or after
+          // they have formally refused in writing.
+          //
+          // Duras's charge is that Kang vouched for an outsider. The other two
+          // answers here are about Archanis: what this captain did to Klingons,
+          // and what Kang said to him. This one is the plainest thing in the
+          // room and nobody has said it — five years before any of this, he
+          // pulled a Klingon crew off a dying ship that was too proud to ask,
+          // and never mentioned it to anybody.
+          //
+          // It costs nothing with Starfleet and it is not meant to: a hall that
+          // respects a man for what he took off an enemy (§110) respects him
+          // rather more for what he did when there was nothing in it.
+          { id: 'centauri', label: '"Ask the Centauri scout\'s crew whether I am an outsider"',
+            next: 'seconded', requires: { flag: 'centauri_aid' },
+            effects: { xp: 1000, standing: { klingon: 16 } } },
         ],
       },
 

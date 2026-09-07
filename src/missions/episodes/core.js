@@ -161,8 +161,25 @@ export const CORE_EPISODES = [
         text: 'The Orion captain is amused. He offers to leave for a price, and to keep whatever his people already have aboard.',
         speaker: 'Orion captain',
         choices: [
+          // `independent`, not `orion`.
+          //
+          // This paid `orion: 8` and eleven other choices across three episodes
+          // paid `orion` or `tholian` too. Both are factions in
+          // `world/factions.data.js` — the world has ten — and neither is one of
+          // the six REPUTATION TRACKS, so every one of those lines was written
+          // into nothing. Six of the twelve had no other standing line at all,
+          // which meant crossing a Tholian border, going loud on Rigel, and
+          // pursuing the raiders who took four hundred colonists as cargo each
+          // cost the captain nothing anywhere in the game. RESEARCH §114.
+          //
+          // `independent` is "Unaligned Worlds", earned by answering distress
+          // calls nobody was required to answer, and it is the track that
+          // already exists for powers outside the majors — this file was
+          // pairing `orion` with it at two sites, which is the author's own
+          // reading. Where that pairing existed the dead key is simply dropped;
+          // everywhere else it becomes `independent` at the same magnitude.
           { id: 'pay', label: 'Pay him', next: 'paid',
-            effects: { standing: { orion: 8, federation: -6 }, xp: 120, flag: 'paid_orions' } },
+            effects: { standing: { independent: 8, federation: -6 }, xp: 120, flag: 'paid_orions' } },
           { id: 'refuse', label: 'Refuse and open fire', next: 'after_combat',
             effects: { combat: { faction: 'orion', ships: ['orion_raider', 'orion_raider'] } } },
         ],
@@ -182,7 +199,7 @@ export const CORE_EPISODES = [
         choices: [
           { id: 'pursue', label: 'Pursue them anyway', next: 'after_combat',
             effects: { combat: { faction: 'orion', ships: ['orion_raider', 'orion_raider'] },
-              standing: { orion: -14 } } },
+              standing: { independent: -14 } } },
           { id: 'let_go', label: 'Let them go', outcome: 'bought_off',
             effects: { record: { lives_lost: 400 }, standing: { federation: -12 } } },
         ],
@@ -513,7 +530,7 @@ export const CORE_EPISODES = [
             effects: { check: { type: 'stealth', difficulty: 0.55, hazard: 'dangerous' } } },
           { id: 'force', label: 'Beam down armed and take her back', next: 'force',
             effects: { check: { type: 'combat', difficulty: 0.5, hazard: 'extreme' },
-              standing: { orion: -18, independent: -10 } } },
+              standing: { independent: -10 } } },
         ],
       },
       legal: {
@@ -522,7 +539,7 @@ export const CORE_EPISODES = [
         choices: [
           { id: 'leverage', label: 'Use it as leverage', outcome: 'negotiated',
             requires: { skill: 'diplomacy', ranks: 2 },
-            effects: { xp: 800, record: { lives_saved: 1 }, standing: { orion: -4, federation: 10 } } },
+            effects: { xp: 800, record: { lives_saved: 1 }, standing: { independent: -4, federation: 10 } } },
           { id: 'covert2', label: 'Send a team instead', next: 'covert',
             effects: { check: { type: 'stealth', difficulty: 0.45, hazard: 'dangerous' } } },
         ],
@@ -541,7 +558,7 @@ export const CORE_EPISODES = [
             branch: { success: 'got_her', failure: 'blown' } },
           { id: 'loud', label: 'Go loud',
             effects: { check: { type: 'combat', difficulty: 0.45, hazard: 'extreme' },
-              xp: 350, standing: { orion: -14 } },
+              xp: 350, standing: { independent: -14 } },
             branch: { success: 'got_her', failure: 'blown' } },
         ],
       },
@@ -564,7 +581,7 @@ export const CORE_EPISODES = [
         speaker: 'Away Team',
         choices: [
           { id: 'again', label: 'Go back in, and not quietly this time', next: 'force',
-            effects: { xp: 300, standing: { orion: -18, independent: -10 } } },
+            effects: { xp: 300, standing: { independent: -10 } } },
           { id: 'withdraw', label: 'Break orbit and file it', outcome: 'left_her',
             effects: {
               xp: 250, standing: { federation: -8 },
