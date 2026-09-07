@@ -1343,7 +1343,11 @@ export function dutyPanel(app) {
       const job = out.get(person.id);
       const doing = job
         ? `${ASSIGNMENTS[job.assignmentId]?.name ?? 'a detail'} — ${Math.max(0, Math.round(job.hoursRemaining))}h`
-        : person.state === 'recovering' ? 'in sickbay'
+        : person.state === 'recovering'
+          // With the day they are due back, now that there is one. This read
+          // "in sickbay" against a state nothing but a sickbay rotation could
+          // ever clear, so it was a promise the game had no way of keeping.
+          ? `in sickbay — ${person.daysToRecover}d`
           : person.state === 'lost' ? 'lost' : 'aboard';
       // One line each, the way In Memoriam does it. `.row` is styled only
       // inside the tactical overlay, so using it here put the name and the

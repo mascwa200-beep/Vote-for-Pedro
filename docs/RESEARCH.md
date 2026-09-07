@@ -10207,6 +10207,103 @@ measurement is now about one in six, and the leads that do survive have all had
 the same shape: something the game says, checked against something the game does.
 
 
+## 105. Twelve people who were never coming out of sickbay
+
+The eleventh lead held (§104) and this is the twelfth, found by pointing the same
+instrument at the first system on the unprobed list: **what the game tells the
+captain, checked against what the game does.**
+
+The roster panel prints a line per specialist, and for somebody hurt on a detail
+it printed **`in sickbay`**. Two words that mean a thing will end.
+
+It did not end. There was no clock.
+
+### The measurement
+
+A bridge officer given a full-severity injury and a specialist just hurt on a
+detail, both left alone for the same stretch of campaign time:
+
+```
+hours    bridge officer    specialist
+    24   in sickbay        in sickbay
+   120   back on duty      in sickbay
+   240   back on duty      in sickbay
+   720   back on duty      in sickbay
+ 2,400   back on duty      in sickbay
+ 8,760   back on duty      in sickbay
+```
+
+Not slower. **Never.** `passTime` healed the ten people with names on the bridge
+and skipped the twelve with names on the roster — twelve lines above the call
+that resolves the details which hurt them. `state = 'recovering'` had exactly one
+exit in the whole game: the sickbay rotation's `grant: {heal: true}`, one detail
+out of ten, which itself needs two healthy people to run.
+
+### What it cost beyond the reading
+
+`replaceLosses` — written in §-past precisely to stop this roster grinding itself
+away — counts everybody whose state is not `lost` as **present**. So a man who
+would never work again held his billet forever, the ship read as fully manned,
+and Starfleet posted nobody into the gap. The one mechanism built to see this
+drain could not see the people it was draining.
+
+Playing details at random, sickbay rotation included and freely chosen, the ship
+ran out of anybody fit to send on **eight seeds out of eight**, at a median of
+day 326 of a 1,826-day commission. Filtering that one detail out — which a
+player has no way of knowing is load-bearing — `healed` was **0** on every seed,
+and the roster ended with 8 to 11 of its 12 permanently in sickbay and **nobody
+aboard**.
+
+### The fix
+
+A specialist keeps `recoveryHours`, set to 120 when a detail hurts them, and
+`passTime` sheds it on the same clock and the same captain's `recoveryRate` that
+discharges a bridge officer — because it is the same sickbay. 120 is not a new
+number: `Officer.recover` sheds severity at `hours * rate / 120`, so a full
+wound has always been five days, and a specialist's convalescence is written to
+be that rather than a second invented figure. The sickbay rotation keeps its
+point, as a shortcut: it returns them *today* instead of at the end of the five
+days.
+
+The panel now says `in sickbay — 4d`. The promise has a date on it.
+
+A save written before the clock existed has people in `recovering` with no hours
+against them, and `?? 0` would have discharged all of them the instant the game
+next ticked. That is a decision, so it is made on purpose in the constructor:
+they serve the same five days anybody hurt today serves. It also makes
+*recovering implies hours left* true of every `DutyOfficer` ever built, which is
+a property a test can hold.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| officer and specialist leave sickbay together, at 24h and at 120h and out to a year | stop healing specialists (the shipped defect) | ✓ ×2 |
+| `recovering` always has hours left, and nothing else ever does | hurt somebody and give them no hours | ✓ |
+| across five 700-day commissions, everyone who went into sickbay came out | (same as the first) | ✓ |
+| the sickbay rotation still discharges immediately | stop it clearing the counter | ✓ |
+| a legacy patient serves five days, not zero | restore the `?? 0` default | ✓ |
+
+The second and third refuse to pass if the fixture never hurts anybody — the
+failure mode a test like this actually has.
+
+### A fourteenth instrument error
+
+The first run of the control read `aboard` at 24 hours: the specialist out of
+sickbay *before* the officer. The harness had set `state = 'recovering'` without
+`recoveryHours`, so the new code discharged them on the first tick. Caught by the
+usual tell — not merely wrong but impossible, since the two are meant to share
+one clock — and it turned out to be worth making: it is what surfaced the legacy
+save question above, which the `?? 0` would otherwise have answered silently.
+
+**Ten of the last fifteen things that looked wrong were the instrument.** Both
+survivors since — §104 and this — had the identical shape, and it is now the only
+shape that has produced anything: take a sentence the game shows a captain, and
+check it against what the game actually did.
+
+Still unprobed with it: fabrication, diplomacy and hailing, the encounter
+resolution loop, shore leave.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

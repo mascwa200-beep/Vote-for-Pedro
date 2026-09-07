@@ -85,6 +85,18 @@ export function rosterSizeFor(maxCrew) {
  * Sharing the name, species and two of the four scores is enough, and it means
  * the name tables in `crews.data.js` are the only name tables in the game.
  */
+/**
+ * How long a specialist hurt on a detail spends in sickbay.
+ *
+ * The same clock a bridge officer keeps. `Officer.recover` sheds injury
+ * severity at `hours * rate / 120`, so a full-severity wound is a hundred and
+ * twenty hours — five days — and a specialist's convalescence is written to be
+ * the same length rather than a second, invented number. A specialist has no
+ * severity of their own: a detail either hurts somebody or it does not, and one
+ * scalar per person is enough for a roster of twelve.
+ */
+export const CONVALESCENCE_HOURS = 120;
+
 export class DutyOfficer {
   constructor(data) {
     Object.assign(this, {
@@ -92,7 +104,20 @@ export class DutyOfficer {
       speciality: 'engineer', expertise: 80, discipline: 78,
       // aboard | assigned | recovering | lost
       state: 'aboard',
+      // Hours left in sickbay. Zero for everybody who is not in it.
+      recoveryHours: 0,
     }, data);
+
+    // A save written before there was a clock has people in `recovering` and no
+    // hours against them, and `?? 0` would have discharged every one of them the
+    // instant the game next ticked. That is a decision, not a default, so it is
+    // made here: they were stuck indefinitely, and they get the five days
+    // anybody hurt today gets rather than a walk straight out of sickbay. It
+    // also makes "recovering implies hours left" true of every one of these
+    // ever built, which is a thing a test can hold on to.
+    if (this.state === 'recovering' && !(this.recoveryHours > 0)) {
+      this.recoveryHours = CONVALESCENCE_HOURS;
+    }
   }
 
   get spec() { return SPECIALITIES[this.speciality] ?? SPECIALITIES.engineer; }
@@ -106,11 +131,46 @@ export class DutyOfficer {
   /** Aboard in any sense — counts toward what the ship can do, unlike the dead. */
   get alive() { return this.state !== 'lost'; }
 
+  /** Days left in sickbay, for a panel that has to say something to a captain. */
+  get daysToRecover() { return Math.max(0, Math.ceil(this.recoveryHours / 24)); }
+
+  /**
+   * Time in sickbay, on the same clock and the same captain's `recoveryRate`
+   * as a bridge officer's.
+   *
+   * This did not exist, and neither did anything else that brought a specialist
+   * back. `state` went to `recovering` when a detail hurt somebody and there was
+   * exactly one way out of it in the whole game — the sickbay rotation's
+   * `grant: {heal: true}`, one detail of the ten. Campaign time did nothing:
+   * measured against a bridge officer given a full-severity injury and left
+   * alone, the officer was back on duty inside 120 hours and the specialist was
+   * still in sickbay after 8,760 — a year — and after any number you care to
+   * name. The roster panel said "in sickbay", which is a promise of coming out.
+   *
+   * It cost more than the reading. `replaceLosses` counts everybody whose state
+   * is not `lost` as present, so a man who would never work again held his
+   * billet forever and Starfleet posted nobody into it — the one mechanism
+   * written to stop this roster grinding itself away could not see the people it
+   * was grinding away. Playing details at random, the ship ran out of anybody
+   * fit to send on all eight seeds tried, at a median of day 326 of a
+   * 1,826-day commission.
+   */
+  recover(hours, rate = 1) {
+    if (this.state !== 'recovering') return;
+    const scale = Number.isFinite(rate) && rate > 0 ? rate : 1;
+    this.recoveryHours = Math.max(0, this.recoveryHours - hours * scale);
+    if (this.recoveryHours <= 0) {
+      this.recoveryHours = 0;
+      this.state = 'aboard';
+    }
+  }
+
   save() {
     return {
       id: this.id, name: this.name, species: this.species, speciesId: this.speciesId,
       speciality: this.speciality, expertise: this.expertise,
       discipline: this.discipline, state: this.state,
+      recoveryHours: this.recoveryHours,
     };
   }
 }
@@ -501,12 +561,15 @@ export function resolveAssignment(game, job, rng = game?.rng) {
   for (const person of team) {
     if (rng?.chance?.(hazard.death * shield)) {
       person.state = 'lost';
+      person.recoveryHours = 0;
       lost.push(person);
     } else if (rng?.chance?.(hazard.injury * shield)) {
       person.state = 'recovering';
+      person.recoveryHours = CONVALESCENCE_HOURS;
       hurt.push(person);
     } else {
       person.state = 'aboard';
+      person.recoveryHours = 0;
     }
   }
 
@@ -581,8 +644,14 @@ function payAssignment(game, assignment, share, job = null) {
     for (const officer of game.crew?.officers ?? []) {
       if (officer.injured) officer.heal?.(0.5);
     }
+    // Still the shortcut it always was, and now it is one: the rotation returns
+    // them today instead of at the end of their five days, rather than being
+    // the only road back from a state that was otherwise permanent.
     for (const person of game.dutyRoster ?? []) {
-      if (person.state === 'recovering') person.state = 'aboard';
+      if (person.state === 'recovering') {
+        person.state = 'aboard';
+        person.recoveryHours = 0;
+      }
     }
     parts.push('the injured are back on their feet');
   }
