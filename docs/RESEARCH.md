@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 360 choices, **74 of 360 choices carry a `requires`** —
+episodes, 154 stages and 363 choices, **77 of 363 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -11413,7 +11413,93 @@ rather than eight sections later. The count here is **counted**, not subtracted.
 | and it enters the episode rather than leaving it | give it an `outcome` | ✓ |
 | Vell's road saves exactly what the plain one saves | raise it to 14,000 | ✓ |
 
-Sixteen flags to go, three of them act-5 blocked.
+Thirteen flags to go, three of them act-5 blocked.
+
+## 118. Three more, and where the bar starts to drop
+
+### A loop, read by the captain who ended one
+
+At Devron he fires a resonance pulse into a spatial anomaly and it *"does not
+collapse so much as stop having been there"*, and nobody on the bridge is
+entirely certain afterwards what they were doing eleven minutes earlier.
+
+`beta_reticuli` is a Borg scout half buried on the fourth planet, still awake,
+*"still surveying, patiently, on a schedule, and transmitting the results to
+nobody for longer than the Federation has had a starbase in this quadrant."*
+That is a loop, and this is the only captain in the fleet who has stood inside
+one and then ended it.
+
+What that buys is not courage. It is knowing to read the **schedule** before
+touching the hull, because the cycle is the only thing in the system that can be
+predicted. The same `science` check as studying it where it lies, two steps
+easier, the same two destinations — recognising the shape of a thing is worth a
+roll, not an exemption from one, with an away team standing on something that has
+been transmitting for decades.
+
+### The last power that stopped this war
+
+Kang, at Khitomer, has aged, and says the accord will be signed in four days and
+that two of the four are for the funeral of whoever tries to stop it.
+
+Every captain hears a threat. One of them went down to Organia in act 2, pressed
+the council, found out what they actually are, and filed a report on it — the
+last power to stop a Federation-Klingon war, which did it without asking either
+empire and without anybody's funeral. He can tell Kang that the two of them have
+been overruled before and neither enjoyed it.
+
+Both tracks move rather than the Klingon one alone: he is volunteering classified
+assessment to a Klingon in orbit over a treaty, and Starfleet's view of that
+depends entirely on the accord being signed four days later.
+
+### Terms offered from where you were standing
+
+Donatu V, act 3: *"Offer the withdrawal from where you are standing."* Two fleets
+a minute from firing and he put the terms on the table without first backing off
+somewhere safe to say them from.
+
+Duras has invoked the rite of challenge and named a champion who is not Kang,
+which is a way of making the argument about bodies rather than about the
+accusation. It reaches the duel exactly as accepting outright does — the Council
+is not going to be talked out of a rite — and what it changes is who is
+understood to have chosen it.
+
+### Where the bar starts to drop
+
+Thirteen remain and the honest position is that they are not equally good.
+
+Six or so still have homes I would defend without effort. `devron_data` and
+`devron_blind` are thinner — placements exist, but "plausible" is the word that
+comes just before "forced". `romulus_witness` is close to a duplicate of the
+`telek_acquitted` gate §112 already placed, since the same two choices set both
+flags, and wiring it would be padding a count rather than answering a deed.
+
+Two more batches of this quality, on my estimate, and then a tail I would rather
+leave unwired than dress up. Recording that here so the estimate is on the record
+before the temptation arrives, rather than after.
+
+### An instrument error, in the test rather than the game
+
+The first draft of one assertion read:
+
+```js
+assert.ok(gated.effects.standing.klingon > accept.effects.standing?.klingon ?? 0, …)
+```
+
+which parses as `(a > b) ?? 0` — the comparison's own result, never the fallback.
+It compared against `undefined`, produced `false`, and failed. Parenthesised, it
+passes and means what it says. Precedence, not physics, and caught only because
+the assertion had a side that was actually supposed to be true.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| reading the cycle is locked without Devron | drop the `requires` | ✓ ×5 |
+| and it eases the roll rather than removing it | replace the check with a `next` | ✓ |
+| the Donatu answer reaches the duel | give it an `outcome` | ✓ |
+| the Organia answer pays Starfleet too | pay only the Klingons | ✓ |
+
+Thirteen flags to go, three of them act-5 blocked.
 
 ## Attribution
 

@@ -405,3 +405,38 @@ describe('a Klingon crew he pulled off a dying ship in act one', () => {
       'the hall thinks less of a rescue than of a quotation');
   });
 });
+
+// §118. Donatu V, answered in the Great Hall.
+describe('the captain who offered terms without stepping back', () => {
+  const stage = EPISODE_BY_ID.qonos_council.stages.seconded;
+
+  const open = (flags) => {
+    const g = captain({ flags: ['kang_respects_you', ...flags] });
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('can say so when Duras names a champion', () => {
+    const gated = stage.choices.find((c) => c.id === 'from_here');
+    assert.ok(gated, 'the Donatu answer is gone');
+    assert.deepEqual(gated.requires, { flag: 'donatu_pressed' });
+    assert.equal(open([]).includes('from_here'), false,
+      'offered to a captain who never made that offer');
+    assert.ok(open(['donatu_pressed']).includes('from_here'), 'Donatu bought nothing');
+  });
+
+  test('and it reaches the duel, because the Council will not be talked out of a rite', () => {
+    // It changes who is understood to have chosen the challenge, not whether
+    // there is one. A road that dodged the duel would be a different episode.
+    const gated = stage.choices.find((c) => c.id === 'from_here');
+    const accept = stage.choices.find((c) => c.id === 'accept');
+    assert.equal(gated.next, accept.next);
+    assert.equal(gated.outcome, undefined, 'it ends the episode instead of answering the challenge');
+    // Parenthesised: `a > b ?? 0` parses as `(a > b) ?? 0`, which is the
+    // comparison's own result and never the fallback — so the first draft of
+    // this line compared against `undefined` and asserted `false`.
+    assert.ok(gated.effects.standing.klingon > (accept.effects.standing?.klingon ?? 0),
+      'the hall thinks no more of it than of simply accepting');
+  });
+});

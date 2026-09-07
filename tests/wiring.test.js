@@ -1840,14 +1840,15 @@ describe('every episode graph is sound', () => {
       archanis_ratified: 'candidate', asked_about_hurry: 'candidate',
       badlands_run: 'candidate', borrowed_blade: 'candidate',
       centauri_reported: 'candidate', devron_blind: 'candidate',
-      devron_collapsed: 'candidate', devron_data: 'candidate',
+      devron_data: 'candidate',
       dmz_favourable: 'candidate',
       donatu_battle: 'candidate',
-      donatu_pressed: 'candidate', grid_9902_contact: 'candidate',
+      grid_9902_contact: 'candidate',
       grid_answered_late: 'candidate',
       organia_rebuffed: 'candidate',
-      organia_revealed: 'candidate',
       romulus_witness: 'candidate',
+      // `devron_collapsed`, `organia_revealed` and `donatu_pressed` left in §118.
+      //
       // `rescued_vell`, `came_clean` and `merrimack_lost` left in §117, and all
       // three were genuinely on this list — checked against the registry rather
       // than subtracted from the last section's figure, which is what §116 was

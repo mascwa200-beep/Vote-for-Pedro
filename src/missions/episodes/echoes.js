@@ -215,6 +215,29 @@ export const ECHO_EPISODES = [
           { id: 'colonies', label: 'Signal every colony in range before touching it',
             next: 'the_choice', requires: { flag: 'borg_warned' },
             effects: { xp: 1300, standing: { federation: 8 } } },
+          // Devron, in act 3. He fired a resonance pulse into a spatial anomaly
+          // and it "does not collapse so much as stop having been there", and
+          // nobody on the bridge was entirely certain afterwards what they had
+          // been doing eleven minutes earlier.
+          //
+          // A thing that has been running one survey cycle on a schedule for
+          // longer than the Federation has had a starbase in this quadrant, and
+          // transmitting the results to nobody, is a loop. This is the only
+          // captain in the fleet who has stood inside one and then ended it, and
+          // the useful part of that is not courage — it is that he knows to read
+          // the SCHEDULE before touching the hull, because the cycle is the only
+          // thing here that can be predicted.
+          //
+          // Same check as studying it where it lies, two steps easier, and the
+          // same two destinations. Knowing what kind of thing you are looking at
+          // is worth a roll, not an exemption from one.
+          { id: 'cycle', label: 'Read the cycle first. You have seen a loop end before',
+            requires: { flag: 'devron_collapsed' },
+            effects: {
+              check: { type: 'science', difficulty: 0.45, hazard: 'dangerous' },
+              xp: 900,
+            },
+            branch: { success: 'the_choice', failure: 'it_noticed' } },
         ],
       },
 

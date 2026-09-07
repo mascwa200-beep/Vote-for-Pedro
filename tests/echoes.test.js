@@ -236,8 +236,8 @@ describe('and neither writes anything down that nobody reads', () => {
     const written = flagsWritten(EPISODES);
     const read = gateReads(EPISODES);
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.equal(gated, 49,
-      `${gated} of ${written.size} recorded decisions gate something; the register says 49. `
+    assert.equal(gated, 52,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 52. `
       + 'If the book grew, raise this number and say so in RESEARCH.md. '
       + 'If it shrank, a captain stopped being remembered for something.');
   });
@@ -303,5 +303,52 @@ describe('the reach into the last two episodes', () => {
       assert.ok(Math.min(...acts) < ep.act,
         `${ep.id} is act ${ep.act} and reads ${flag}, first set in act ${Math.min(...acts)}`);
     }
+  });
+});
+
+// §118. What a captain who has ended a loop knows to look at.
+describe('the wreck that has been running one cycle for decades', () => {
+  const beta = EPISODES.find((e) => e.id === 'beta_reticuli');
+  const stage = beta.stages.the_wreck;
+
+  const open = (flags) => {
+    const g = captain({ flags });
+    return (stage.choices ?? [])
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('is read differently by the captain who watched one stop', () => {
+    // Devron: he fired a pulse and the anomaly "does not collapse so much as
+    // stop having been there".
+    const gated = stage.choices.find((c) => c.id === 'cycle');
+    assert.ok(gated, 'the road that reads the cycle is gone');
+    assert.deepEqual(gated.requires, { flag: 'devron_collapsed' });
+    assert.equal(open([]).includes('cycle'), false,
+      'offered to a captain who never collapsed anything');
+    assert.ok(open(['devron_collapsed']).includes('cycle'), 'Devron bought nothing');
+  });
+
+  test('and knowing what it is buys a better roll, not an exemption from one', () => {
+    // The scene is a science check on a thing that has been transmitting on a
+    // schedule for decades with an away team standing on it. Recognising the
+    // shape of it should not remove the risk.
+    const cycle = stage.choices.find((c) => c.id === 'cycle');
+    const study = stage.choices.find((c) => c.id === 'study');
+    assert.ok(cycle.effects.check, 'reading the cycle rolls for nothing');
+    assert.equal(cycle.effects.check.type, study.effects.check.type);
+    assert.equal(cycle.effects.check.hazard, study.effects.check.hazard,
+      'standing on it got safer for knowing what it is');
+    assert.ok(cycle.effects.check.difficulty < study.effects.check.difficulty,
+      `the earned road is ${cycle.effects.check.difficulty} against ${study.effects.check.difficulty}`);
+    assert.deepEqual(cycle.branch, study.branch,
+      'the earned road cannot reach the failure the plain one can');
+  });
+
+  test('and it reaches back to an earlier act', () => {
+    const acts = actsThatSet('devron_collapsed');
+    assert.ok(acts.length, 'nothing sets devron_collapsed');
+    assert.ok(Math.min(...acts) < beta.act,
+      `${beta.id} is act ${beta.act} and reads a flag first set in act ${Math.min(...acts)}`);
   });
 });

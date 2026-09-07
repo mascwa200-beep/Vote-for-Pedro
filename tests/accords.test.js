@@ -364,3 +364,47 @@ describe('the captain who reopened a concession once can do it again', () => {
     assert.ok(open2.length >= 2, `only ${open2.length} choices open at the ninth page`);
   });
 });
+
+// §118. Organia, at a Federation-Klingon table.
+describe('the last power that stopped this war', () => {
+  const ep = EPISODES.find((e) => e.id === 'khitomer_accord');
+  const stage = ep.stages.start;
+
+  const open = (flags) => {
+    const g = captain({ flags });
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('is something one captain at the table has filed a report on', () => {
+    // Kang has just said two of the four days are for the funeral of whoever
+    // tries to stop the accord. Every other captain hears a threat.
+    const gated = stage.choices.find((c) => c.id === 'organia');
+    assert.ok(gated, 'the Organia answer is gone');
+    assert.deepEqual(gated.requires, { flag: 'organia_revealed' });
+    assert.equal(open([]).includes('organia'), false,
+      'offered to a captain who never found out what they were');
+    assert.equal(open([]).length, 2, 'the two original openings are no longer both there');
+    assert.ok(open(['organia_revealed']).includes('organia'), 'Organia bought nothing');
+  });
+
+  test('and it is act 2 read in act 5, which is the reach worth having', () => {
+    const acts = EPISODES
+      .filter((e) => Object.values(e.stages ?? {}).some((s) => (s.choices ?? [])
+        .some((c) => [].concat(c.effects?.flag ?? []).includes('organia_revealed'))))
+      .map((e) => e.act);
+    assert.ok(acts.length, 'nothing sets organia_revealed');
+    assert.equal(Math.min(...acts), 2);
+    assert.equal(ep.act, 5);
+  });
+
+  test('and Starfleet is paid too, because he is telling a Klingon what he filed', () => {
+    // A captain volunteering a piece of classified assessment to a Klingon in
+    // orbit over a treaty. Starfleet's view of that depends on the accord being
+    // signed, so both tracks move rather than the Klingon one alone.
+    const gated = stage.choices.find((c) => c.id === 'organia');
+    assert.ok(gated.effects.standing.klingon > 0);
+    assert.ok(gated.effects.standing.federation > 0);
+  });
+});
