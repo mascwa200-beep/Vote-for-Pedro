@@ -491,7 +491,7 @@ export class Engagement {
    */
   deployDecoy(seconds) {
     this.decoyTimer = Math.max(this.decoyTimer, clamp(seconds, 0, 600));
-    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, z: this.player.z ?? 0, life: 0.8 });
+    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, z: this.player.z ?? 0, life: 0.8, span: 0.8 });
     this.pushLog('Decoy away — their targeting solutions just got harder.', 'tactical');
   }
 
@@ -756,7 +756,7 @@ export class Engagement {
   onDestroyed(ship, killer = null) {
     if (!ship || this.mourned.has(ship)) return;
     this.mourned.add(ship);
-    this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, z: ship.z ?? 0, life: 1.6 });
+    this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, z: ship.z ?? 0, life: 1.6, span: 1.6 });
     emit('combat:destroyed', { ship, killer, byPlayer: killer === this.player });
     const cause = ship.destroyCause && ship.destroyCause !== 'destroyed'
       ? ` — ${ship.destroyCause}` : '';
@@ -1079,7 +1079,7 @@ export class Engagement {
     const skill = this.player.subsystems.weapons * this.player.mod('accuracy');
     if (!this.rng.chance(POINT_DEFENCE_PER_SECOND * skill * dt)) return false;
 
-    this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.4 });
+    this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.4, span: 0.4 });
     // Once per fight. The captain needs to learn the order does this; he does
     // not need a line every time a torpedo comes in.
     if (!this.saidPointDefence) {
@@ -1119,7 +1119,7 @@ export class Engagement {
         };
         const struck = insideSolid(this.arena, p) ?? blockedBy(this.arena, p, ahead);
         if (struck) {
-          this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.5 });
+          this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.5, span: 0.5 });
           p.dead = true;
           continue;
         }

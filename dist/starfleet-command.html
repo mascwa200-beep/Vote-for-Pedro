@@ -11755,7 +11755,7 @@ __define("src/gfx/scene.js", function (__exports, __require) {
 // decorative.
 
 const { vec3 } = __require("src/gfx/math.js");
-const { MeshBuilder, sphere, box, tube } = __require("src/gfx/mesh.js");
+const { MeshBuilder, sphere, box, tube, seg, shadedAlong } = __require("src/gfx/mesh.js");
 
 /** The tactical volume is a cube this many units on a side. */
 const VOLUME = 3000;
@@ -12325,16 +12325,34 @@ function gridMesh(divisions = 12) {
 function beamMesh() {
   return memo('beam', () => {
     const mb = new MeshBuilder();
-    tube(mb, {
-      origin: vec3(0, 0, 0),
-      length: 1,
-      r0: 0.5,
-      r1: 0.5,
-      segments: 5,
-      color: [1, 1, 1],
-      capFore: false,
-      capAft: false,
-    });
+    // A unit +x tube with its origin at the aft end, because `orientAlong`
+    // builds the shot's length into column 0 of the model matrix and the tests
+    // read the length back out of it. Anything pre-scaled here would be scaled
+    // twice; anything not starting at the origin would start off the muzzle.
+    //
+    // Three things it did not have. It was FIVE segments, which is a pentagon
+    // at any range where a beam is worth looking at. It was untapered, so it
+    // read as a rod rather than as something leaving a gun. And it was one flat
+    // colour over its whole length — drawn emissive, which discards the
+    // lighting entirely, so there was no shading of any kind on 40% of what a
+    // player looks at during a fight.
+    //
+    // The ramp runs along the shot, hot at the muzzle and cooling toward the
+    // target. It cannot be a core inside a sheath: blending is a single global
+    // alpha mode with depth writes on, so an inner shell is occluded by the
+    // outer one's front faces in the same draw. One surface, shaded across it.
+    shadedAlong(mb, (m) => {
+      tube(m, {
+        origin: vec3(0, 0, 0),
+        length: 1,
+        r0: 0.55,
+        r1: 0.34,
+        segments: seg(7),
+        color: [1, 1, 1],
+        capFore: false,
+        capAft: false,
+      });
+    }, [-1, 0, 0], { peak: 1.25, floor: 0.5 });
     return mb;
   });
 }
@@ -12361,6 +12379,55 @@ function shieldMesh() {
   });
 }
 
+/**
+ * The flash where a shot lands: a burst of facets filling a ball, hottest at
+ * the middle.
+ *
+ * It used to borrow `shieldMesh` — a hollow sphere in the shield's own blue —
+ * and separate a hull penetration from a held shield by tint alone. That does
+ * not work, because `uTint` MULTIPLIES the vertex colour rather than replacing
+ * it (`gl.js`: `mix(lit, vColor * uTint, ...)`). Measured on the shipped
+ * values, the penetration the comment called "white-hot" rendered at
+ * [0.50, 0.72, 0.70] against the held shield's [0.28, 0.62, 1.00] — a dull
+ * grey-teal, DARKER than the case it was supposed to outshine.
+ *
+ * Two things follow. The base colour is white, so a tint is now the colour it
+ * says it is. And the geometry is filled rather than hollow: every vertex of a
+ * hollow sphere is the same distance from the middle, so it cannot carry a
+ * core-to-edge falloff at all — and a falloff is the only shape available,
+ * since these are drawn emissive and the shader throws the lighting away.
+ *
+ * Hashed off the index like `explosionMesh`, never off `Math.random` and never
+ * off the simulation's stream: a flash is decoration and must not move the
+ * seed.
+ */
+function impactMesh() {
+  return memo('impact', () => {
+    const mb = new MeshBuilder();
+    let h = 0x9e3779b9;
+    const rnd = () => {
+      h ^= h << 13; h ^= h >>> 17; h ^= h << 5; h |= 0;
+      return (h >>> 0) / 4294967296;
+    };
+    for (let i = 0; i < 22; i++) {
+      const u = rnd() * 2 - 1;
+      const a = rnd() * Math.PI * 2;
+      const ring = Math.sqrt(1 - u * u);
+      // Cube-rooted so the facets fill the ball evenly instead of crowding its
+      // surface, which is what makes the middle read as a core.
+      const d = Math.cbrt(rnd());
+      const heat = 1 - d;
+      const s = 0.13 + heat * 0.16;
+      box(mb, {
+        center: vec3(Math.cos(a) * ring * d, u * d, Math.sin(a) * ring * d),
+        size: vec3(s, s, s),
+        color: [0.55 + heat * 0.45, 0.55 + heat * 0.45, 0.55 + heat * 0.45],
+      });
+    }
+    return mb;
+  });
+}
+
 /** An expanding debris burst. */
 function explosionMesh() {
   return memo('explosion', () => {
@@ -12370,15 +12437,27 @@ function explosionMesh() {
       h ^= h << 13; h ^= h >>> 17; h ^= h << 5; h |= 0;
       return (h >>> 0) / 4294967296;
     };
+    // Eighteen identical cubes in two alternating colours was a cloud of
+    // confetti at the same brightness throughout, drawn at up to a hundred and
+    // sixty units — twice a Constitution's length. Debris near the middle of a
+    // detonation is hotter and smaller than debris thrown clear of it, and both
+    // of those are free: the size comes off the hash already being drawn, and
+    // the colour ramp rides the per-vertex channel the mesh already carries.
     for (let i = 0; i < 18; i++) {
       const u = rnd() * 2 - 1;
       const a = rnd() * Math.PI * 2;
       const r = Math.sqrt(1 - u * u);
       const d = 0.4 + rnd() * 0.6;
+      // Nearer the core: smaller and hotter. `d` is already this fragment's
+      // distance from the centre, so nothing new has to be invented or seeded.
+      const heat = 1 - (d - 0.4) / 0.6;
+      const scale = 0.09 + (1 - heat) * 0.13;
+      const hot = [1, 0.95, 0.78];
+      const cool = [1, 0.42, 0.12];
       box(mb, {
         center: vec3(Math.cos(a) * r * d, u * d, Math.sin(a) * r * d),
-        size: vec3(0.16, 0.16, 0.16),
-        color: i % 3 === 0 ? [1, 0.9, 0.6] : [1, 0.55, 0.2],
+        size: vec3(scale, scale, scale),
+        color: [0, 1, 2].map((k) => cool[k] + (hot[k] - cool[k]) * heat),
       });
     }
     return mb;
@@ -12475,6 +12554,7 @@ function sceneMeshes() {
     beam: beamMesh(),
     torpedo: torpedoMesh(),
     shield: shieldMesh(),
+    impact: impactMesh(),
     explosion: explosionMesh(),
     dropLine: dropLineMesh(),
     planet: bodyMesh('planet'),
@@ -12495,6 +12575,7 @@ __exports.gridMesh = gridMesh;
 __exports.beamMesh = beamMesh;
 __exports.torpedoMesh = torpedoMesh;
 __exports.shieldMesh = shieldMesh;
+__exports.impactMesh = impactMesh;
 __exports.explosionMesh = explosionMesh;
 __exports.dropLineMesh = dropLineMesh;
 __exports.arcMesh = arcMesh;
@@ -18058,7 +18139,7 @@ class Engagement {
    */
   deployDecoy(seconds) {
     this.decoyTimer = Math.max(this.decoyTimer, clamp(seconds, 0, 600));
-    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, z: this.player.z ?? 0, life: 0.8 });
+    this.effects.push({ kind: 'explosion', x: this.player.x, y: this.player.y, z: this.player.z ?? 0, life: 0.8, span: 0.8 });
     this.pushLog('Decoy away — their targeting solutions just got harder.', 'tactical');
   }
 
@@ -18323,7 +18404,7 @@ class Engagement {
   onDestroyed(ship, killer = null) {
     if (!ship || this.mourned.has(ship)) return;
     this.mourned.add(ship);
-    this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, z: ship.z ?? 0, life: 1.6 });
+    this.effects.push({ kind: 'explosion', x: ship.x, y: ship.y, z: ship.z ?? 0, life: 1.6, span: 1.6 });
     emit('combat:destroyed', { ship, killer, byPlayer: killer === this.player });
     const cause = ship.destroyCause && ship.destroyCause !== 'destroyed'
       ? ` — ${ship.destroyCause}` : '';
@@ -18646,7 +18727,7 @@ class Engagement {
     const skill = this.player.subsystems.weapons * this.player.mod('accuracy');
     if (!this.rng.chance(POINT_DEFENCE_PER_SECOND * skill * dt)) return false;
 
-    this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.4 });
+    this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.4, span: 0.4 });
     // Once per fight. The captain needs to learn the order does this; he does
     // not need a line every time a torpedo comes in.
     if (!this.saidPointDefence) {
@@ -18686,7 +18767,7 @@ class Engagement {
         };
         const struck = insideSolid(this.arena, p) ?? blockedBy(this.arena, p, ahead);
         if (struck) {
-          this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.5 });
+          this.effects.push({ kind: 'explosion', x: p.x, y: p.y, z: p.z ?? 0, life: 0.5, span: 0.5 });
           p.dead = true;
           continue;
         }
@@ -19176,7 +19257,7 @@ __define("src/gfx/effects.js", function (__exports, __require) {
 // and drawn by nothing.
 
 const { vec3, quat, compose, normalize, cross, sub, length: vlength, normalMatrix } = __require("src/gfx/math.js");
-const { beamMesh, torpedoMesh, explosionMesh, shieldMesh } = __require("src/gfx/scene.js");
+const { beamMesh, torpedoMesh, explosionMesh, shieldMesh, impactMesh } = __require("src/gfx/scene.js");
 const { paletteFor, hullScale } = __require("src/gfx/blueprint.js");
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -19298,12 +19379,26 @@ function drawCombatEffects(renderer, engagement, opts = {}) {
 
     const size = r * (e.penetrated ? 0.45 : 0.7) * (e.crit ? 1.5 : 1) * (1 - age * 0.4);
     compose(_pos, quat(), Math.max(1, size), _model);
-    draw('impact', shieldMesh(), {
+    draw('impact', impactMesh(), {
       model: _model,
       normalMatrix: normalMatrix(_model, _normal),
       emissive: 1,
       alpha: (1 - age) * (e.penetrated ? 0.95 : 0.6),
       // White-hot through the hull; the shield's own colour when it holds.
+      //
+      // True now, and it was not before. This drew `shieldMesh`, whose vertices
+      // are the shield's blue [0.5, 0.78, 1], and `uTint` MULTIPLIES that
+      // colour rather than replacing it. So the "white-hot" penetration
+      // rendered [0.50, 0.72, 0.70] — a desaturated teal, GREEN-dominant, the
+      // same character as the shield reading it is meant to contrast with.
+      //
+      // Both were cool, and the only thing separating them was alpha. Not
+      // brightness: counting alpha the breach was the brighter of the two
+      // (0.62 against 0.34), so it was never the dim one. It simply was not the
+      // colour the line above claims, and "did that get through?" was carried
+      // by opacity alone. `impactMesh` is near-white, so a tint is now the
+      // colour it says it is: [0.90, 0.83, 0.63] through the hull against
+      // [0.50, 0.72, 0.90] off the shield.
       tint: e.penetrated ? [1, 0.92, 0.7] : [0.55, 0.8, 1],
     });
   }
@@ -19353,7 +19448,24 @@ function drawCombatEffects(renderer, engagement, opts = {}) {
 
   for (const e of engagement.effects ?? []) {
     if (e.kind !== 'explosion') continue;
-    const age = clamp(1 - e.life / 1.6, 0, 1);
+    // Aged against the explosion's OWN span, not against the longest one.
+    //
+    // This divided by a hardcoded 1.6, which is the lifetime a destroyed ship
+    // is pushed with — and three of the four things that explode are pushed
+    // with less. An explosion whose whole life is shorter than the divisor is
+    // born part-way through its own animation and never plays the opening:
+    //
+    //     source                 life   born at   scale   alpha
+    //     a ship destroyed        1.6      0.00      30    1.00
+    //     a decoy                 0.8      0.50      95    0.50
+    //     a torpedo on a rock     0.5      0.69     119    0.31
+    //     point defence           0.4      0.75     128    0.25
+    //
+    // A point-defence kill appeared at a hundred and twenty-eight units —
+    // larger than a Constitution, which is 82.65 — already three-quarters
+    // faded, and then shrank away. It never looked like a detonation because
+    // it never got to be one.
+    const age = clamp(1 - e.life / (e.span || 1.6), 0, 1);
     compose(toRender(e, _pos), quat(), 30 + age * 130, _model);
     draw('explosion', explosionMesh(), {
       model: _model,

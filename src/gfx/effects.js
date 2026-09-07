@@ -17,7 +17,9 @@
 // and drawn by nothing.
 
 import { vec3, quat, compose, normalize, cross, sub, length as vlength, normalMatrix } from './math.js';
-import { beamMesh, torpedoMesh, explosionMesh, shieldMesh } from './scene.js';
+import {
+  beamMesh, torpedoMesh, explosionMesh, shieldMesh, impactMesh,
+} from './scene.js';
 import { paletteFor, hullScale } from './blueprint.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -139,12 +141,26 @@ export function drawCombatEffects(renderer, engagement, opts = {}) {
 
     const size = r * (e.penetrated ? 0.45 : 0.7) * (e.crit ? 1.5 : 1) * (1 - age * 0.4);
     compose(_pos, quat(), Math.max(1, size), _model);
-    draw('impact', shieldMesh(), {
+    draw('impact', impactMesh(), {
       model: _model,
       normalMatrix: normalMatrix(_model, _normal),
       emissive: 1,
       alpha: (1 - age) * (e.penetrated ? 0.95 : 0.6),
       // White-hot through the hull; the shield's own colour when it holds.
+      //
+      // True now, and it was not before. This drew `shieldMesh`, whose vertices
+      // are the shield's blue [0.5, 0.78, 1], and `uTint` MULTIPLIES that
+      // colour rather than replacing it. So the "white-hot" penetration
+      // rendered [0.50, 0.72, 0.70] — a desaturated teal, GREEN-dominant, the
+      // same character as the shield reading it is meant to contrast with.
+      //
+      // Both were cool, and the only thing separating them was alpha. Not
+      // brightness: counting alpha the breach was the brighter of the two
+      // (0.62 against 0.34), so it was never the dim one. It simply was not the
+      // colour the line above claims, and "did that get through?" was carried
+      // by opacity alone. `impactMesh` is near-white, so a tint is now the
+      // colour it says it is: [0.90, 0.83, 0.63] through the hull against
+      // [0.50, 0.72, 0.90] off the shield.
       tint: e.penetrated ? [1, 0.92, 0.7] : [0.55, 0.8, 1],
     });
   }
@@ -194,7 +210,24 @@ export function drawCombatEffects(renderer, engagement, opts = {}) {
 
   for (const e of engagement.effects ?? []) {
     if (e.kind !== 'explosion') continue;
-    const age = clamp(1 - e.life / 1.6, 0, 1);
+    // Aged against the explosion's OWN span, not against the longest one.
+    //
+    // This divided by a hardcoded 1.6, which is the lifetime a destroyed ship
+    // is pushed with — and three of the four things that explode are pushed
+    // with less. An explosion whose whole life is shorter than the divisor is
+    // born part-way through its own animation and never plays the opening:
+    //
+    //     source                 life   born at   scale   alpha
+    //     a ship destroyed        1.6      0.00      30    1.00
+    //     a decoy                 0.8      0.50      95    0.50
+    //     a torpedo on a rock     0.5      0.69     119    0.31
+    //     point defence           0.4      0.75     128    0.25
+    //
+    // A point-defence kill appeared at a hundred and twenty-eight units —
+    // larger than a Constitution, which is 82.65 — already three-quarters
+    // faded, and then shrank away. It never looked like a detonation because
+    // it never got to be one.
+    const age = clamp(1 - e.life / (e.span || 1.6), 0, 1);
     compose(toRender(e, _pos), quat(), 30 + age * 130, _model);
     draw('explosion', explosionMesh(), {
       model: _model,

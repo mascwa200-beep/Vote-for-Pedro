@@ -13,7 +13,7 @@
 // decorative.
 
 import { vec3 } from './math.js';
-import { MeshBuilder, sphere, box, tube } from './mesh.js';
+import { MeshBuilder, sphere, box, tube, seg, shadedAlong } from './mesh.js';
 
 /** The tactical volume is a cube this many units on a side. */
 export const VOLUME = 3000;
@@ -584,16 +584,34 @@ export function gridMesh(divisions = 12) {
 export function beamMesh() {
   return memo('beam', () => {
     const mb = new MeshBuilder();
-    tube(mb, {
-      origin: vec3(0, 0, 0),
-      length: 1,
-      r0: 0.5,
-      r1: 0.5,
-      segments: 5,
-      color: [1, 1, 1],
-      capFore: false,
-      capAft: false,
-    });
+    // A unit +x tube with its origin at the aft end, because `orientAlong`
+    // builds the shot's length into column 0 of the model matrix and the tests
+    // read the length back out of it. Anything pre-scaled here would be scaled
+    // twice; anything not starting at the origin would start off the muzzle.
+    //
+    // Three things it did not have. It was FIVE segments, which is a pentagon
+    // at any range where a beam is worth looking at. It was untapered, so it
+    // read as a rod rather than as something leaving a gun. And it was one flat
+    // colour over its whole length — drawn emissive, which discards the
+    // lighting entirely, so there was no shading of any kind on 40% of what a
+    // player looks at during a fight.
+    //
+    // The ramp runs along the shot, hot at the muzzle and cooling toward the
+    // target. It cannot be a core inside a sheath: blending is a single global
+    // alpha mode with depth writes on, so an inner shell is occluded by the
+    // outer one's front faces in the same draw. One surface, shaded across it.
+    shadedAlong(mb, (m) => {
+      tube(m, {
+        origin: vec3(0, 0, 0),
+        length: 1,
+        r0: 0.55,
+        r1: 0.34,
+        segments: seg(7),
+        color: [1, 1, 1],
+        capFore: false,
+        capAft: false,
+      });
+    }, [-1, 0, 0], { peak: 1.25, floor: 0.5 });
     return mb;
   });
 }
@@ -620,6 +638,55 @@ export function shieldMesh() {
   });
 }
 
+/**
+ * The flash where a shot lands: a burst of facets filling a ball, hottest at
+ * the middle.
+ *
+ * It used to borrow `shieldMesh` — a hollow sphere in the shield's own blue —
+ * and separate a hull penetration from a held shield by tint alone. That does
+ * not work, because `uTint` MULTIPLIES the vertex colour rather than replacing
+ * it (`gl.js`: `mix(lit, vColor * uTint, ...)`). Measured on the shipped
+ * values, the penetration the comment called "white-hot" rendered at
+ * [0.50, 0.72, 0.70] against the held shield's [0.28, 0.62, 1.00] — a dull
+ * grey-teal, DARKER than the case it was supposed to outshine.
+ *
+ * Two things follow. The base colour is white, so a tint is now the colour it
+ * says it is. And the geometry is filled rather than hollow: every vertex of a
+ * hollow sphere is the same distance from the middle, so it cannot carry a
+ * core-to-edge falloff at all — and a falloff is the only shape available,
+ * since these are drawn emissive and the shader throws the lighting away.
+ *
+ * Hashed off the index like `explosionMesh`, never off `Math.random` and never
+ * off the simulation's stream: a flash is decoration and must not move the
+ * seed.
+ */
+export function impactMesh() {
+  return memo('impact', () => {
+    const mb = new MeshBuilder();
+    let h = 0x9e3779b9;
+    const rnd = () => {
+      h ^= h << 13; h ^= h >>> 17; h ^= h << 5; h |= 0;
+      return (h >>> 0) / 4294967296;
+    };
+    for (let i = 0; i < 22; i++) {
+      const u = rnd() * 2 - 1;
+      const a = rnd() * Math.PI * 2;
+      const ring = Math.sqrt(1 - u * u);
+      // Cube-rooted so the facets fill the ball evenly instead of crowding its
+      // surface, which is what makes the middle read as a core.
+      const d = Math.cbrt(rnd());
+      const heat = 1 - d;
+      const s = 0.13 + heat * 0.16;
+      box(mb, {
+        center: vec3(Math.cos(a) * ring * d, u * d, Math.sin(a) * ring * d),
+        size: vec3(s, s, s),
+        color: [0.55 + heat * 0.45, 0.55 + heat * 0.45, 0.55 + heat * 0.45],
+      });
+    }
+    return mb;
+  });
+}
+
 /** An expanding debris burst. */
 export function explosionMesh() {
   return memo('explosion', () => {
@@ -629,15 +696,27 @@ export function explosionMesh() {
       h ^= h << 13; h ^= h >>> 17; h ^= h << 5; h |= 0;
       return (h >>> 0) / 4294967296;
     };
+    // Eighteen identical cubes in two alternating colours was a cloud of
+    // confetti at the same brightness throughout, drawn at up to a hundred and
+    // sixty units — twice a Constitution's length. Debris near the middle of a
+    // detonation is hotter and smaller than debris thrown clear of it, and both
+    // of those are free: the size comes off the hash already being drawn, and
+    // the colour ramp rides the per-vertex channel the mesh already carries.
     for (let i = 0; i < 18; i++) {
       const u = rnd() * 2 - 1;
       const a = rnd() * Math.PI * 2;
       const r = Math.sqrt(1 - u * u);
       const d = 0.4 + rnd() * 0.6;
+      // Nearer the core: smaller and hotter. `d` is already this fragment's
+      // distance from the centre, so nothing new has to be invented or seeded.
+      const heat = 1 - (d - 0.4) / 0.6;
+      const scale = 0.09 + (1 - heat) * 0.13;
+      const hot = [1, 0.95, 0.78];
+      const cool = [1, 0.42, 0.12];
       box(mb, {
         center: vec3(Math.cos(a) * r * d, u * d, Math.sin(a) * r * d),
-        size: vec3(0.16, 0.16, 0.16),
-        color: i % 3 === 0 ? [1, 0.9, 0.6] : [1, 0.55, 0.2],
+        size: vec3(scale, scale, scale),
+        color: [0, 1, 2].map((k) => cool[k] + (hot[k] - cool[k]) * heat),
       });
     }
     return mb;
@@ -734,6 +813,7 @@ export function sceneMeshes() {
     beam: beamMesh(),
     torpedo: torpedoMesh(),
     shield: shieldMesh(),
+    impact: impactMesh(),
     explosion: explosionMesh(),
     dropLine: dropLineMesh(),
     planet: bodyMesh('planet'),
