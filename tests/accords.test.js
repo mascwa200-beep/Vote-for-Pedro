@@ -237,3 +237,70 @@ describe('and each has a scene in a compartment nothing had ever used', () => {
     }
   });
 });
+
+// §111. Donatu V, read at Khitomer.
+//
+// The prisoner scene is leverage: a Klingon technician with a Cardassian charge
+// is in YOUR brig on the second morning, and the two roads out of it are handing
+// him to the Klingons or going down to see him alone. Both make him somebody's
+// card.
+//
+// A captain who transmitted one text to two fleets at Donatu V — act 3, both
+// commands, neither learning it from the other — has done this before at a
+// larger scale and under worse odds. Told to both rooms in the same breath, the
+// technician stops being a card and goes back to being a nineteen-year-old with
+// a satchel.
+describe('the captain who defused Donatu can defuse this', () => {
+  const ep = EPISODES.find((e) => e.id === 'khitomer_accord');
+  const stage = ep.stages.table;
+
+  const open = (flags) => {
+    const g = captain({ flags });
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('telling both delegations at once is only for the captain who did it before', () => {
+    const gated = stage.choices.find((c) => c.id === 'both_rooms');
+    assert.ok(gated, 'the Donatu move is gone from the table');
+    assert.deepEqual(gated.requires, { flag: 'donatu_accord' });
+
+    const without = open([]);
+    assert.equal(without.includes('both_rooms'), false,
+      'offered to a captain who never brokered Donatu');
+    assert.equal(without.length, 2, 'the two original roads are no longer both there');
+
+    assert.ok(open(['donatu_accord']).includes('both_rooms'), 'Donatu bought nothing');
+  });
+
+  test('and it is a road, not a better version of an existing one', () => {
+    // It has to go somewhere and pay differently, or it is the same choice with
+    // a nicer label. It reaches the ninth page without spending the prisoner,
+    // which is what the week is actually about.
+    const gated = stage.choices.find((c) => c.id === 'both_rooms');
+    assert.equal(gated.next, 'ninth', 'the Donatu move does not reach the ninth page');
+    const hand = stage.choices.find((c) => c.id === 'hand');
+    assert.ok(gated.effects.standing.klingon > hand.effects.standing.klingon,
+      'handing him over is worth as much to the Klingons as not needing to');
+    assert.ok((gated.effects.standing.federation ?? 0) > 0,
+      'the Federation gets nothing for a captain who kept the table together');
+  });
+
+  test('and a captain can hold what it asks for alongside the episode gate', () => {
+    // The §110 trap: `captured_cloak` could never be read inside `romulus_debt`
+    // because it is the sibling of the flag that episode requires. The general
+    // guard lives in `wiring.test.js`; what is asserted here is the specific
+    // fact — `donatu_accord` and this episode's `qonos_upheld` are written by
+    // different episodes, so nothing makes a captain choose between them.
+    const writers = (flag) => new Set(EPISODES
+      .filter((e) => Object.values(e.stages ?? {}).some((s) => (s.choices ?? [])
+        .some((c) => [].concat(c.effects?.flag ?? []).includes(flag))))
+      .map((e) => e.id));
+    const donatu = writers('donatu_accord');
+    const upheld = writers(ep.requiresFlag);
+    assert.ok(donatu.size && upheld.size, 'one of the two flags is written by nothing');
+    assert.equal([...donatu].some((id) => upheld.has(id)), false,
+      `both are written inside ${[...donatu].join(',')}, so a captain may have to choose`);
+  });
+});

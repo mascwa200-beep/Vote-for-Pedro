@@ -182,6 +182,20 @@ export const ACCORD_EPISODES = [
             next: 'ninth', effects: { xp: 600, standing: { klingon: 8 } } },
           { id: 'see', label: 'Go down and see him yourself', next: 'brig',
             effects: { xp: 700 } },
+          // Donatu V, in act 3. Two fleets were a minute from firing and you
+          // transmitted one text to both commands at once, so that neither
+          // learned anything from the other and neither could claim it had.
+          //
+          // This is the same move on a smaller board. A prisoner is leverage
+          // only while one delegation knows about him and the other does not;
+          // told to both rooms in the same breath, on the second morning, he
+          // stops being a card either side can play and goes back to being a
+          // nineteen-year-old with a satchel. It costs the captain the private
+          // conversation in the brig — and the ninth page is still there in the
+          // afternoon, which is what the week was actually about.
+          { id: 'both_rooms', label: 'Tell both delegations at once, the way you told Donatu',
+            next: 'ninth', requires: { flag: 'donatu_accord' },
+            effects: { xp: 1000, standing: { klingon: 12, federation: 10 } } },
         ],
       },
 

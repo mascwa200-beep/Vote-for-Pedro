@@ -237,6 +237,31 @@ export const CONSEQUENCE_EPISODES = [
             outcome: 'long_peace', requires: { flag: 'observed_organia' },
             effects: { xp: 2100, standing: { klingon: 14, federation: 16 },
               record: { treaty_signed: 1 }, flag: 'long_peace_signed' } },
+          // And the captain who went down instead, and kept it out of the log.
+          //
+          // The counterpart to the choice above, which nobody had written. A
+          // captain who observed Organia from range can enter what he saw; one
+          // who beamed down, pressed the council, learned what they were, and
+          // then buried it has nothing to enter — he has something to admit.
+          // Two roads out of act 2 and one to a customer, since the two flags
+          // come from opposite opening choices at Organia.
+          //
+          // It costs, and the cost is the point. Starfleet does not thank a
+          // captain for disclosing that he sat on a first contact — `federation`
+          // goes DOWN, which is the only standing line in this stage that does.
+          // The Klingons in the hall respect it anyway, for the reason Klingons
+          // usually respect things. And T'Pral does not adjourn a proceeding
+          // that has become emotional, which from a Vulcan is applause.
+          //
+          // There is no `vulcan` reputation track — the six are federation,
+          // klingon, romulan, cardassian, ferengi and independent — so a line
+          // rewarding this in Vulcan standing would have been a silent no-op,
+          // which is the class of defect §104 and §105 were both about.
+          { id: 'organia_buried', label: 'Enter what you kept out of the log at Organia',
+            outcome: 'long_peace', requires: { flag: 'organia_secret' },
+            effects: { xp: 2300, standing: { klingon: 14, federation: -8 },
+              record: { treaty_signed: 1, commendation: 1 },
+              flag: 'long_peace_signed' } },
         ],
       },
     },

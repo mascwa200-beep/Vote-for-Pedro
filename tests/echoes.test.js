@@ -215,12 +215,30 @@ describe('and neither writes anything down that nobody reads', () => {
 
   test('and the book is less forgetful again', () => {
     // 13 before `consequences.js`, 18 after it, 24 after this file, 28 after
-    // `long_watch`. A ratchet: it only moves one way, and if a later change
-    // makes it worse this says so.
+    // `long_watch`, 37 after §108-§110 taught five more episodes to read the
+    // record.
+    //
+    // This was written as `>= 28` and called a ratchet — "it only moves one way,
+    // and if a later change makes it worse this says so". It stopped saying so.
+    // Content kept arriving, nobody tightened the floor, and by §111 the true
+    // figure was 37 against a floor of 28: eight gates could have been deleted
+    // and this would have passed green. Three of those nine were added by the
+    // author of this comment, who did not read the test he was moving the number
+    // for.
+    //
+    // A `>=` floor only INVITES tightening. The two guards in this repository
+    // that have actually held — `WRITTEN_AND_UNREAD` in `wiring.test.js` and
+    // §107's scraped figures in `docs.test.js` — are exact, so reality moving
+    // FORCES the number to move. An exact assertion on a growth count is
+    // normally a change-detector smell; it is right here for the same reason it
+    // is right there. The entire purpose is to make somebody notice when the
+    // book gets more or less forgetful, and a floor demonstrably cannot.
     const written = flagsWritten(EPISODES);
     const read = gateReads(EPISODES);
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.ok(gated >= 28,
-      `only ${gated} of ${written.size} recorded decisions gate anything; it was 24 before long_watch`);
+    assert.equal(gated, 39,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 39. `
+      + 'If the book grew, raise this number and say so in RESEARCH.md. '
+      + 'If it shrank, a captain stopped being remembered for something.');
   });
 });

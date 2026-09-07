@@ -203,11 +203,25 @@ describe('the scenes that ask you to get up', () => {
         if (w && w !== 'anywhere' && w !== 'surface') named.add(w);
       }
     }
-    // A ratchet, in the shape of the "less forgetful" one in echoes.test.js: it
-    // only moves one way. Two rooms of seventeen when this file was written,
-    // six now. The number that answers "how many rooms can you actually do
-    // something in" is this one, and it is the point of the exercise.
-    assert.ok(named.size >= 6, `only ${named.size} rooms are used by any episode`);
+    // Two rooms of seventeen when this file was written, six when the floor was
+    // set, eleven now. The number that answers "how many rooms can you actually
+    // do something in" is this one, and it is the point of the exercise.
+    //
+    // It said `>= 6`, in the shape of the "less forgetful" ratchet in
+    // echoes.test.js — and it inherited that ratchet's defect along with its
+    // shape. Five more rooms came into use and nobody raised the floor, so five
+    // could have fallen out of use again in silence. §111 measured three
+    // rotted this way; a floor is only a ratchet if somebody tightens it, and
+    // over four files and many months nobody did, including me three times.
+    //
+    // Exact, so the book growing FORCES this number rather than inviting it.
+    // Not every loose floor in the suite is wrong: one that proves a fixture
+    // found something at all ("the scrape matched >= 40 phrases") is doing a
+    // different job and is right to be slack. This one tracks a quality nobody
+    // otherwise watches, which is the kind that has to be exact.
+    assert.equal(named.size, 11,
+      `${named.size} rooms are used by an episode; the register says 11. `
+      + 'If a scene reached a new compartment, raise this and say so in RESEARCH.md.');
     for (const room of named) {
       const g = game();
       walkTo(g, room);

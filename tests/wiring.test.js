@@ -1843,14 +1843,19 @@ describe('every episode graph is sound', () => {
       centauri_reported: 'candidate', devron_blind: 'candidate',
       devron_collapsed: 'candidate', devron_data: 'candidate',
       dmz_clause_recovered: 'candidate', dmz_favourable: 'candidate',
-      donatu_accord: 'candidate', donatu_battle: 'candidate',
+      donatu_battle: 'candidate',
       donatu_pressed: 'candidate', grid_9902_contact: 'candidate',
       grid_answered_late: 'candidate', grid_candid: 'candidate',
       merrimack_lost: 'candidate',
       ordered_the_deck: 'candidate', organia_rebuffed: 'candidate',
-      organia_revealed: 'candidate', organia_secret: 'candidate',
+      organia_revealed: 'candidate',
       rescued_vell: 'candidate',
       romulus_witness: 'candidate', telek_acquitted: 'candidate',
+      // `organia_secret` and `donatu_accord` left in §111: the Vulcan hall now
+      // hears the captain who buried what he saw at Organia admit it, and the
+      // captain who made two fleets accept one text at Donatu can do it again
+      // at Khitomer with a prisoner nobody gets to use as a card.
+      //
       // `marru_left` and `vell_lost` left in §109, to `long_watch`: the captain
       // who broke orbit on Marru and filed it is the one who thinks to ask
       // Marchetti what she wants entered, and the captain who wrote Aris Vell's

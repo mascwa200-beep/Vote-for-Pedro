@@ -25627,6 +25627,20 @@ const ACCORD_EPISODES = [
             next: 'ninth', effects: { xp: 600, standing: { klingon: 8 } } },
           { id: 'see', label: 'Go down and see him yourself', next: 'brig',
             effects: { xp: 700 } },
+          // Donatu V, in act 3. Two fleets were a minute from firing and you
+          // transmitted one text to both commands at once, so that neither
+          // learned anything from the other and neither could claim it had.
+          //
+          // This is the same move on a smaller board. A prisoner is leverage
+          // only while one delegation knows about him and the other does not;
+          // told to both rooms in the same breath, on the second morning, he
+          // stops being a card either side can play and goes back to being a
+          // nineteen-year-old with a satchel. It costs the captain the private
+          // conversation in the brig — and the ninth page is still there in the
+          // afternoon, which is what the week was actually about.
+          { id: 'both_rooms', label: 'Tell both delegations at once, the way you told Donatu',
+            next: 'ninth', requires: { flag: 'donatu_accord' },
+            effects: { xp: 1000, standing: { klingon: 12, federation: 10 } } },
         ],
       },
 
@@ -25966,6 +25980,31 @@ const CONSEQUENCE_EPISODES = [
             outcome: 'long_peace', requires: { flag: 'observed_organia' },
             effects: { xp: 2100, standing: { klingon: 14, federation: 16 },
               record: { treaty_signed: 1 }, flag: 'long_peace_signed' } },
+          // And the captain who went down instead, and kept it out of the log.
+          //
+          // The counterpart to the choice above, which nobody had written. A
+          // captain who observed Organia from range can enter what he saw; one
+          // who beamed down, pressed the council, learned what they were, and
+          // then buried it has nothing to enter — he has something to admit.
+          // Two roads out of act 2 and one to a customer, since the two flags
+          // come from opposite opening choices at Organia.
+          //
+          // It costs, and the cost is the point. Starfleet does not thank a
+          // captain for disclosing that he sat on a first contact — `federation`
+          // goes DOWN, which is the only standing line in this stage that does.
+          // The Klingons in the hall respect it anyway, for the reason Klingons
+          // usually respect things. And T'Pral does not adjourn a proceeding
+          // that has become emotional, which from a Vulcan is applause.
+          //
+          // There is no `vulcan` reputation track — the six are federation,
+          // klingon, romulan, cardassian, ferengi and independent — so a line
+          // rewarding this in Vulcan standing would have been a silent no-op,
+          // which is the class of defect §104 and §105 were both about.
+          { id: 'organia_buried', label: 'Enter what you kept out of the log at Organia',
+            outcome: 'long_peace', requires: { flag: 'organia_secret' },
+            effects: { xp: 2300, standing: { klingon: 14, federation: -8 },
+              record: { treaty_signed: 1, commendation: 1 },
+              flag: 'long_peace_signed' } },
         ],
       },
     },
