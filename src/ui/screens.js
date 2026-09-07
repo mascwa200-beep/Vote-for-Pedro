@@ -1423,6 +1423,23 @@ export function officerDetail(app, officer) {
     readout('Discipline', officer.discipline / 100, `${officer.discipline}`),
     readout('Daring', officer.daring / 100, `${officer.daring}`),
     readout('Candour', officer.candor / 100, `${officer.candor}`),
+    // The number that moves two of the four above it.
+    //
+    // §44 gave `relationship` its meaning — it shifts candour and discipline by
+    // twenty points across its range, inside `reactTo` — and never showed it.
+    // So this screen printed Discipline 62 and Candour 72 while the values the
+    // ship actually weighed were 42/92 for a crew that despises you and 82/52
+    // for one that would follow you anywhere. Swept over the whole order space
+    // (risk and ethics 0..1, four temperaments, 484 shapes), regard changes the
+    // answer in 71% of them.
+    //
+    // Banded, not scored: a first officer does not think of you as -45.
+    readout('Regard', (officer.relationship + 100) / 200, officer.regardBand.label),
+    el('p', {
+      class: 'hint',
+      text: 'Regard moves the discipline and candour above it — up to twenty points '
+        + 'either way. It is what a watch stood, a fight won and a butcher\'s bill add up to.',
+    }),
     el('h3', { text: 'Abilities' }),
     ...officer.abilities.map((id) => {
       const a = ABILITIES[id];

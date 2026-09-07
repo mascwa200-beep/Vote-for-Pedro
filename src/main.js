@@ -385,6 +385,28 @@ class App {
       haptic('deny');
     });
 
+    // What the crew thinks of you, said when it changes rather than never.
+    //
+    // `officer:regard` has been emitted with a reason on every change since §44
+    // wired the relationship — a watch stood, a fight won, the ship lost, a
+    // butcher's bill, an officer hurt on the surface — and had NO listener
+    // anywhere. Measured over ten fights a well-fought commission moves the
+    // bridge twenty points and a badly-fought one forty-five, and 71% of order
+    // shapes turn on where that number sits, so a captain was being obeyed or
+    // argued with on a figure nothing ever mentioned.
+    //
+    // On the BAND, not on the change: regard moves a point or two on almost
+    // everything that happens, and a line every time would be a log made of
+    // nothing else. This is the standing-tier rule — say it when it crosses.
+    // `crossed` is the officer's own judgement; this listener only speaks it.
+    on('officer:regard', ({ officer, reason, band, crossed }) => {
+      if (!crossed) return;
+      this.game?.pushLog(
+        `${officer.rank} ${officer.name}: ${band.label.toLowerCase()}${reason ? ` — ${reason}` : ''}.`,
+        'captain',
+      );
+    });
+
     on('captain:promoted', (promo) => {
       // The level, the feat and the recomputed modifiers are `Game.awardXP`'s
       // job now. They used to be this listener's, which meant a promotion
