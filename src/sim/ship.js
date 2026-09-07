@@ -693,7 +693,7 @@ export class Ship {
     }
     if (this.destroyed) return;
 
-    this.power.update(dt);
+    this.power.update(dt, this.mod('powerTransfer'));
 
     // Buffs expire. A buff that raised a maximum has to give it back, so the
     // maxima are recomputed on the tick anything actually left.
@@ -1373,6 +1373,15 @@ export class Ship {
       hull: this.hull, shields: this.shields, shieldsUp: this.shieldsUp,
       crew: this.crew, injured: this.injured,
       subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
+      // Temporary effects, which did not survive a save — the third thing in
+      // this record with that history, after `evasive` and `desiredPitch`
+      // below. `until` counts DOWN and is only decremented by `update`, which
+      // runs during a fight, so out of combat a buff sits still: measured, the
+      // machine shop's rotating harmonics were still up after thirty days of
+      // campaign time and gone the instant the captain closed the app and came
+      // back. That is two answers to "how long does it hold?", and the shop
+      // charges three hours of the ship's one machine slot for it.
+      buffs: this.buffs.map((b) => ({ ...b, mods: { ...(b.mods ?? {}) } })),
       // Gun mounts, BY ID rather than by position. This is the second consumer
       // `weapon.id` has ever had — until now the only thing in the repo that
       // read it was one test — and it is what makes a save survive a refit: an
@@ -1432,6 +1441,16 @@ export class Ship {
         // edited save cannot hand back a mount that is wrecked and firing.
         w.enabled = w.integrity > MOUNT_DISABLED_AT;
       }
+    }
+
+    // Before the maxima are read below: a buff can raise `maxShield`, and the
+    // saved shield values were recorded in that raised space.
+    if (Array.isArray(data.buffs)) {
+      s.buffs = data.buffs
+        .filter((b) => b && typeof b.id === 'string'
+          && (b.until === undefined || Number.isFinite(b.until)))
+        .map((b) => ({ ...b, mods: { ...(b.mods ?? {}) } }));
+      s.recomputeDerived();
     }
 
     Object.assign(s, {

@@ -92,8 +92,29 @@ export const RECIPES = [
     needs: { isolinear: 6 },
     hours: 0.4,
     apply: (g) => {
-      g.ship.power.transferRate = Math.max(g.ship.power.transferRate, 160);
-      g.ship.addBuff({ id: 'eps_bypass', label: 'EPS bypass', until: 900, mods: { shieldRegen: 1.2 } });
+      // "While the bypass holds" — which it now does, and did not.
+      //
+      // This set `power.transferRate` to 160 outright, against a base of 55,
+      // and nothing ever put it back: the buff beside it expired on schedule
+      // and the tripled power routing did not. So the answer to how long the
+      // bypass held was four different things at once. It held forever, if the
+      // captain never did anything else; it was erased by a save and a load,
+      // because `PowerGrid.save` does not record `transferRate`; and it was
+      // overwritten DOWNWARD to 85 by fitting the EPS console — the part built
+      // for exactly this job, whose own description reads "power rebalances
+      // much faster" and which made the ship measurably slower than the
+      // jury-rig it replaced. Two owners for one field, and which won came down
+      // to what the captain happened to do next.
+      //
+      // Now it is a buff like every other temporary effect, on the buff clock
+      // the text has always implied, and it MULTIPLIES: the console and the
+      // bypass are both worth something, and having both is worth more than
+      // either. Three, so a stock grid runs at 165 against the 160 this wrote —
+      // the same jury-rig, for as long as it says.
+      g.ship.addBuff({
+        id: 'eps_bypass', label: 'EPS bypass', until: 900,
+        mods: { shieldRegen: 1.2, powerTransfer: 3 },
+      });
       return 'Power routing is quicker while the bypass holds.';
     },
   },

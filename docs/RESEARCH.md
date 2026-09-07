@@ -10304,6 +10304,109 @@ check it against what the game actually did.
 Still unprobed with it: fabrication, diplomacy and hailing, the encounter
 resolution loop, shore leave.
 
+## 106. Four answers to "while the bypass holds"
+
+Fabrication, the second system on the unprobed list, and the same instrument.
+The machine shop's jury-rigged EPS bypass reports:
+
+> Power routing is quicker **while the bypass holds.**
+
+The clause is the claim, so the question is how long it held. The game had four
+answers and none of them was that one.
+
+### What it actually did
+
+`apply` set `power.transferRate` to 160 outright — against a base of 55 — and
+added a buff carrying `shieldRegen: 1.2` with `until: 900`. The buff expired on
+schedule. The tripled power routing never did.
+
+`transferRate` governs how fast a captain's power reallocation takes effect,
+which is a number a player can watch. Measured as seconds for the grid to shift
+sixty units:
+
+```
+transferRate   55 (stock)   1.10s
+transferRate   85 (console) 0.73s
+transferRate  160 (bypass)  0.40s
+transferRate  400 (feat)    0.17s
+```
+
+So the bypass was a near-tripling of a real lever for 6 isolinear and
+twenty-four minutes. Its lifetime, depending entirely on what the captain did
+next:
+
+| what happens | how long the bypass held |
+| --- | --- |
+| nothing | **forever** — no expiry, no reversion |
+| the buff runs out | the routing stays at 160 anyway |
+| the captain saves and reloads | **gone** — `PowerGrid.save` never recorded `transferRate` |
+| the captain fits the EPS console | **overwritten down to 85**, slower than the jury-rig |
+
+That last row is the sharpest. `applyAllMods` assigns `55 + eps` from the
+loadout, so fitting the part built for exactly this job — description: *"power
+rebalances much faster"* — made a ship carrying the bypass measurably **slower**,
+0.40s to 0.73s. Two writers, one field, and the ship ran on whichever had
+happened most recently.
+
+### And the effect did not survive the save
+
+`until` is decremented only inside `Ship.update`, which runs during a fight. Out
+of combat a buff sits still: measured, the shop's rotating harmonics were still
+up after **thirty days** of campaign time. They were gone the instant the app
+closed and reopened, because `Ship.save` did not record `buffs` at all.
+
+This is the third time this record has had this exact hole. `evasive` and
+`desiredPitch` sit two lines below it with a comment saying so — *"Both were
+given by the captain and neither survived a save, so closing the app quietly
+levelled the ship off and stopped it evading."* Buffs are the same shape: a
+three-hour job on the ship's one machine slot, thrown away by a reload.
+
+### The fix
+
+`transferRate` gets one owner. `applyAllMods` assigns it unconditionally from
+the loadout and feats, and `PowerGrid.update` takes a multiplier the ship reads
+off its own buffs — so a temporary effect goes through the buff system like
+every other temporary effect. The bypass becomes `powerTransfer: 3` on the buff
+it already had, and buffs are saved and restored, screened on the way in.
+
+Every row now agrees with the sentence on screen:
+
+```
+                                     before        after
+stock grid                            1.10s        1.10s
+with the bypass                       0.40s        0.37s
+after a save and a load               1.10s        0.37s   (it holds)
+with the EPS console also fitted      0.73s        0.27s   (they add up)
+after the bypass expires              0.40s        1.10s   (it stops)
+```
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the bypass speeds the grid and then stops | write `transferRate` directly again | ✓ |
+| the bypass and the console add up | (same) | ✓ |
+| a part-spent effect survives a save with its clock and its mods | stop recording buffs | ✓ |
+| a malformed buff in a record is refused | stop screening the restore | ✓ |
+| the grid speed has one owner | make `applyAllMods` conditional again | ✓ |
+
+The last guard exists because the fourth control **did not fire without it**.
+With the bypass moved onto the buffs there was nothing left for `applyAllMods` to
+clobber, so making it unconditional was unobservable — a defensive change with no
+guard is a comment. It is asserted directly instead: a value written from outside
+the loadout does not survive the next `applyAllMods`, which is what stops the
+next recipe reaching for a permanent effect the same way.
+
+### The two leads that dissolved
+
+- **Shop buffs expire before the captain can use them.** `until: 900` looked
+  like 30 seconds. It is 900 *seconds* of combat, and a whole fight measured
+  136s — the harmonics came out of one with 464 left. Generous, not stingy.
+- **A buff does not survive a fight.** It read as gone afterwards because the
+  ship had been destroyed and `g.ship` is the replacement hull. **The third time
+  that trap has caught me**, and the same tell each time: an answer that is not
+  merely wrong but impossible.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

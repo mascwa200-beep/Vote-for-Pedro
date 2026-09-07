@@ -693,6 +693,152 @@ test('every recipe has an effect that can be observed', () => {
   assert.deepEqual(inert, [], `these recipes changed nothing: ${inert.join(', ')}`);
 });
 
+// ---- the EPS bypass, and what "while the bypass holds" turned out to mean ----
+//
+// Every guard below measures the thing a captain can actually watch: how long
+// the grid takes to move sixty units of power. Asserting `transferRate` would
+// pass on a ship whose buffs no longer reach the grid at all.
+
+/** Seconds for the power grid to shift 60 units. Stock is about 1.1. */
+const gridSeconds = (g) => {
+  const p = g.ship.power;
+  const keys = Object.keys(p.levels);
+  p.target = { ...p.levels };
+  p.target[keys[0]] = p.levels[keys[0]] + 60;
+  p.target[keys[1]] = Math.max(0, p.levels[keys[1]] - 60);
+  let t = 0;
+  while (t < 60) {
+    g.ship.update(1 / 30);
+    t += 1 / 30;
+    if (keys.every((k) => Math.abs(p.levels[k] - p.target[k]) < 0.5)) break;
+  }
+  return t;
+};
+
+const withBypass = (seed = 3n) => {
+  const g = gameWith({ seed });
+  g.stores = { duranium: 999, isolinear: 999, deuterium: 999, salvage: 999 };
+  assert.equal(g.fabricate('eps_bypass').ok, true);
+  assert.ok(advanceFabrication(g, 100), 'the bypass never finished');
+  return g;
+};
+
+test('the EPS bypass holds for as long as it says, and then stops', () => {
+  // It said "while the bypass holds" and set `power.transferRate` to 160
+  // outright — against a base of 55 — with nothing anywhere to put it back. The
+  // buff beside it expired on schedule; the tripled power routing did not.
+  const stock = gridSeconds(gameWith({ seed: 3n }));
+
+  const g = withBypass();
+  const held = gridSeconds(g);
+  assert.ok(held < stock * 0.6,
+    `the bypass moved the grid in ${held.toFixed(2)}s against a stock ${stock.toFixed(2)}s`);
+
+  // Run it past its own `until`, the way a long fight would.
+  for (let i = 0; i < 30 * 1000; i++) g.ship.update(1 / 30);
+  assert.equal(g.ship.hasBuff('eps_bypass'), false, 'the bypass never expired');
+
+  const after = gridSeconds(g);
+  assert.ok(Math.abs(after - stock) < 0.05,
+    `the bypass expired and the grid still runs at ${after.toFixed(2)}s against a stock ${stock.toFixed(2)}s`);
+});
+
+test('the bypass and the console for the same job add up', () => {
+  // Fitting the EPS console used to make a ship carrying the bypass SLOWER:
+  // `applyAllMods` assigned `55 + eps` over the bypass's 160, so the part whose
+  // description reads "power rebalances much faster" cost 75 units of routing
+  // speed. Two writers, one field, and whichever ran last won.
+  const g = withBypass();
+  const bypassOnly = gridSeconds(g);
+
+  const real = g.loadout.special.bind(g.loadout);
+  g.loadout.special = (k) => (k === 'powerTransfer' ? 30 : real(k));
+  g.applyAllMods();
+
+  const both = gridSeconds(g);
+  assert.ok(both < bypassOnly,
+    `bypass alone moved the grid in ${bypassOnly.toFixed(2)}s and the console made it ${both.toFixed(2)}s`);
+
+  // And the base underneath is the loadout's, unmodified by anything the shop
+  // built — one owner for the field.
+  assert.equal(g.ship.power.transferRate, 85,
+    'something other than the loadout is writing the grid speed');
+});
+
+test('the grid speed has one owner, so nothing can quietly become a second', () => {
+  // The property, rather than today's instance of it. `applyAllMods` used to
+  // assign the grid speed only when a console supplied one, which left the
+  // field open for anything else to write and keep — which is exactly what the
+  // EPS bypass did, and what the next recipe to reach for a permanent effect
+  // would do. Assigned unconditionally, whatever else wrote it is overwritten
+  // the next time the ship's modifiers are applied, and a temporary effect has
+  // to go through the buffs like every other temporary effect.
+  const g = gameWith({ seed: 3n });
+  assert.equal(g.ship.power.transferRate, 55);
+
+  g.ship.power.transferRate = 999;
+  g.applyAllMods();
+  assert.equal(g.ship.power.transferRate, 55,
+    'a value written from outside the loadout survived applyAllMods');
+
+  // The console still reaches it, and the feat still beats the console.
+  const real = g.loadout.special.bind(g.loadout);
+  g.loadout.special = (k) => (k === 'powerTransfer' ? 30 : real(k));
+  g.applyAllMods();
+  assert.equal(g.ship.power.transferRate, 85, 'the EPS console stopped being worth anything');
+});
+
+test('a temporary effect is still there when the captain comes back', () => {
+  // `until` counts down only inside `Ship.update`, which runs during a fight,
+  // so out of combat a buff sits still — measured, the rotating harmonics were
+  // up after thirty days of campaign time. They were gone the moment the app
+  // closed and reopened, because `Ship.save` did not record them. Two answers
+  // to how long a three-hour job holds for.
+  const g = gameWith({ seed: 3n });
+  g.stores = { duranium: 999, isolinear: 999, deuterium: 999, salvage: 999 };
+  assert.equal(g.fabricate('shield_harmonics').ok, true);
+  assert.ok(advanceFabrication(g, 100));
+  assert.equal(g.ship.hasBuff('shield_harmonics'), true);
+
+  // Spend some of it, so what comes back is a partly-used effect rather than a
+  // fresh one — a buff restored at full duration would be its own bug.
+  for (let i = 0; i < 30 * 120; i++) g.ship.update(1 / 30);
+  const left = g.ship.buffs.find((b) => b.id === 'shield_harmonics')?.until;
+  assert.ok(left > 0 && left < 900, `${left} left on a 900-second effect`);
+
+  const loaded = Game.load(JSON.parse(JSON.stringify(g.save())));
+  assert.equal(loaded.ship.hasBuff('shield_harmonics'), true,
+    'the shop worked three hours on something the save threw away');
+  const back = loaded.ship.buffs.find((b) => b.id === 'shield_harmonics');
+  assert.ok(Math.abs(back.until - left) < 1e-6, 'the effect came back with the wrong time on it');
+  assert.deepEqual(back.mods, { shieldMax: 1.2, shieldRegen: 1.35 },
+    'the effect came back without what it does');
+
+  // A buff that raises a maximum has to have raised it again by the time the
+  // saved shield values are read back, or the ship loads with shields over
+  // her own cap.
+  assert.ok(loaded.ship.maxShield >= g.ship.maxShield - 1e-6,
+    'the restored effect did not put the maximum back');
+});
+
+test('a save cannot smuggle in a buff that is not one', () => {
+  // Buffs are now read out of the record, so the record is checked. A junk
+  // entry with no id or a NaN clock would sit in the list forever, since the
+  // expiry filter only removes things whose `until` is a number at or below
+  // zero.
+  const g = gameWith({ seed: 3n });
+  const data = JSON.parse(JSON.stringify(g.save()));
+  data.ship.buffs = [
+    { id: 'real', label: 'Real', until: 60, mods: { shieldRegen: 1.1 } },
+    { label: 'no id', until: 60 },
+    { id: 'nan', until: Number.NaN },
+    null,
+  ];
+  const loaded = Game.load(data);
+  assert.deepEqual(loaded.ship.buffs.map((b) => b.id), ['real'],
+    'a malformed buff loaded straight through');
+});
+
 test('fabrication spends the materials and refuses without them', () => {
   const g = gameWith();
   g.ship.hull = g.ship.maxHull * 0.5;

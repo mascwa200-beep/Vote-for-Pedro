@@ -13133,12 +13133,22 @@ class PowerGrid {
     }
   }
 
-  /** Ease actual levels toward target. Called every sim step. */
-  update(dt) {
+  /**
+   * Ease actual levels toward target. Called every sim step.
+   *
+   * `rate` is a temporary multiplier from the ship's buffs — the jury-rigged
+   * EPS bypass, today. It is handed in rather than written into
+   * `transferRate`, because a grid does not know about buffs and because a
+   * field two things write is a field with no owner: the bypass used to set
+   * `transferRate` directly, and `applyAllMods` sets it from the loadout, so
+   * which value the ship actually ran on depended on which had happened last.
+   */
+  update(dt, rate = 1) {
+    const speed = this.transferRate * (Number.isFinite(rate) && rate > 0 ? rate : 1);
     for (const s of SUBSYSTEMS) {
       const diff = this.target[s] - this.levels[s];
       if (Math.abs(diff) < 0.01) { this.levels[s] = this.target[s]; continue; }
-      const step = Math.sign(diff) * Math.min(Math.abs(diff), this.transferRate * dt);
+      const step = Math.sign(diff) * Math.min(Math.abs(diff), speed * dt);
       this.levels[s] += step;
     }
   }
@@ -14441,7 +14451,7 @@ class Ship {
     }
     if (this.destroyed) return;
 
-    this.power.update(dt);
+    this.power.update(dt, this.mod('powerTransfer'));
 
     // Buffs expire. A buff that raised a maximum has to give it back, so the
     // maxima are recomputed on the tick anything actually left.
@@ -15121,6 +15131,15 @@ class Ship {
       hull: this.hull, shields: this.shields, shieldsUp: this.shieldsUp,
       crew: this.crew, injured: this.injured,
       subsystems: this.subsystems, torpedoes: this.torpedoes, antimatter: this.antimatter,
+      // Temporary effects, which did not survive a save — the third thing in
+      // this record with that history, after `evasive` and `desiredPitch`
+      // below. `until` counts DOWN and is only decremented by `update`, which
+      // runs during a fight, so out of combat a buff sits still: measured, the
+      // machine shop's rotating harmonics were still up after thirty days of
+      // campaign time and gone the instant the captain closed the app and came
+      // back. That is two answers to "how long does it hold?", and the shop
+      // charges three hours of the ship's one machine slot for it.
+      buffs: this.buffs.map((b) => ({ ...b, mods: { ...(b.mods ?? {}) } })),
       // Gun mounts, BY ID rather than by position. This is the second consumer
       // `weapon.id` has ever had — until now the only thing in the repo that
       // read it was one test — and it is what makes a save survive a refit: an
@@ -15180,6 +15199,16 @@ class Ship {
         // edited save cannot hand back a mount that is wrecked and firing.
         w.enabled = w.integrity > MOUNT_DISABLED_AT;
       }
+    }
+
+    // Before the maxima are read below: a buff can raise `maxShield`, and the
+    // saved shield values were recorded in that raised space.
+    if (Array.isArray(data.buffs)) {
+      s.buffs = data.buffs
+        .filter((b) => b && typeof b.id === 'string'
+          && (b.until === undefined || Number.isFinite(b.until)))
+        .map((b) => ({ ...b, mods: { ...(b.mods ?? {}) } }));
+      s.recomputeDerived();
     }
 
     Object.assign(s, {
@@ -27896,8 +27925,29 @@ const RECIPES = [
     needs: { isolinear: 6 },
     hours: 0.4,
     apply: (g) => {
-      g.ship.power.transferRate = Math.max(g.ship.power.transferRate, 160);
-      g.ship.addBuff({ id: 'eps_bypass', label: 'EPS bypass', until: 900, mods: { shieldRegen: 1.2 } });
+      // "While the bypass holds" — which it now does, and did not.
+      //
+      // This set `power.transferRate` to 160 outright, against a base of 55,
+      // and nothing ever put it back: the buff beside it expired on schedule
+      // and the tripled power routing did not. So the answer to how long the
+      // bypass held was four different things at once. It held forever, if the
+      // captain never did anything else; it was erased by a save and a load,
+      // because `PowerGrid.save` does not record `transferRate`; and it was
+      // overwritten DOWNWARD to 85 by fitting the EPS console — the part built
+      // for exactly this job, whose own description reads "power rebalances
+      // much faster" and which made the ship measurably slower than the
+      // jury-rig it replaced. Two owners for one field, and which won came down
+      // to what the captain happened to do next.
+      //
+      // Now it is a buff like every other temporary effect, on the buff clock
+      // the text has always implied, and it MULTIPLIES: the console and the
+      // bypass are both worth something, and having both is worth more than
+      // either. Three, so a stock grid runs at 165 against the 160 this wrote —
+      // the same jury-rig, for as long as it says.
+      g.ship.addBuff({
+        id: 'eps_bypass', label: 'EPS bypass', until: 900,
+        mods: { shieldRegen: 1.2, powerTransfer: 3 },
+      });
       return 'Power routing is quicker while the bypass holds.';
     },
   },
@@ -41508,9 +41558,17 @@ class Game {
     // captain's, so it is reapplied wherever he is standing.
     if (this.perk('cloak')) this.ship.cloakCapable = true;
 
+    // The grid's base speed, set here and nowhere else.
+    //
+    // This only assigned when `eps` was truthy, which made it a writer among
+    // writers rather than the owner: the machine shop's EPS bypass wrote the
+    // same field directly, so a ship's power routing was whichever of the two
+    // had happened most recently. Assigned unconditionally, this is the base
+    // and temporary effects multiply it — see `PowerGrid.update`.
     const eps = this.loadout.special('powerTransfer');
-    if (eps) this.ship.power.transferRate = 55 + eps;
-    if (this.character?.hasFeat('master_engineer')) this.ship.power.transferRate = 400;
+    this.ship.power.transferRate = this.character?.hasFeat('master_engineer')
+      ? 400
+      : 55 + (eps || 0);
 
     // The other half of Master Engineer, which said "the warp core can be
     // ejected and later recovered" and had never in its life recovered one.
