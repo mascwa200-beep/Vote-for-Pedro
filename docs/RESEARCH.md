@@ -8982,6 +8982,16 @@ Not a lever with a tradeoff — a button that was always a mistake, under a manu
 promising *"targeting a subsystem trades total damage for a specific outcome"*
 and a panel recommending targets by name.
 
+> **Too narrow, and corrected in §100.** The table above is right about what it
+> measured and wrong about what it concluded. Every cell is survival in a fight
+> to the death, which is a scenario where stopping the enemy leaving is worth
+> nothing by construction — so it cannot see three of the five targets at all.
+> Measured against enemies free to break off, aiming at the warp core turns
+> eighteen escapes in a hundred and eighty into none and seventy-two kills into
+> a hundred and twenty-eight; against a Galor, aiming at the weapons wins 98% of
+> fights to plain fire's 79%. The button was a genuine decision the whole time,
+> at this price and at the one §223 replaced it with.
+
 ### §31 measured the right number against a different question
 
 `CALLED_SHOT_HULL = 0.7` is the share of hull damage a called shot keeps, and
@@ -9680,6 +9690,111 @@ by position asks the question that was meant, is strictly stronger, and is what
 turned up the lopsided hulls above. And the Borg cube had to come out of that
 test: a cube is not a mirror image of itself, and asserting it should be was
 asking the wrong question of the right code.
+
+
+## 100. The button §95 called always a mistake, measured on what it is for
+
+§95 measured subsystem targeting one way — survival, over sixty seeded runs of a
+Miranda against three Birds-of-Prey in a fight to the death — and concluded it
+was *"not a lever with a tradeoff; it is a button that is always a mistake."*
+§223 acted on that and repriced it.
+
+The measurement was sound. The framing was too narrow, and this section is the
+correction, because a relentless brawl is a scenario in which **"stop them
+leaving" is worth exactly nothing by construction**. A metric taken from it
+cannot see the payoff of three of the five targets at all.
+
+### Measured on a fight the enemy can leave
+
+A Constitution against two Birds-of-Prey at `captain`, ninety seeds, nobody
+forced to stand — which is the ordinary case, not the special one:
+
+```
+aimed at          escaped   killed   of 180
+warpcore              0       128
+engines               0        90
+shields              12        78
+hull (default)       18        72
+sensors              21        69
+weapons              22        68
+```
+
+Aiming at the warp core turns eighteen escapes into none and **seventy-two kills
+into a hundred and twenty-eight**. That is not a marginal lever. It was invisible
+to §95's table because §95's enemies could not run.
+
+### And the sign flips with the opponent
+
+A Galaxy against two Galors, relentless, paired on the seed — paired because the
+fight starts identically either way, and an unpaired sixty-run cell cannot
+resolve an effect this size:
+
+```
+aimed at     survival   won only by it   lost only by it   net
+hull            79%          --                --           --
+weapons         98%          18                 1          +17
+warpcore        86%          15                 9           +6
+shields         77%          13                15           -2
+engines         48%           9                37          -28
+```
+
+**Engines is the best call in the game against something that wants to leave and
+the worst against something that wants to stand and fight.** Weapons is the
+reverse. A lever whose correct setting reverses with the enemy is the definition
+of a decision, and it is exactly what §95 concluded did not exist.
+
+### What that means for §223, fairly
+
+§223 is not overturned, but one of its claims is. Re-running both scenarios with
+the player's price put back to the 0.70 §95 measured:
+
+```
+                     runners (hull -> warpcore)      Galor, weapons paired
+price 0.85 (shipped)   4 escaped/36 killed -> 0/54          +8 / -1
+price 0.70 (old)       4 escaped/36 killed -> 1/57          +8 / -2
+```
+
+Identical within noise. **The repricing did not create the tactical value — it
+was always there.** What §223 fixed was real on the axis it measured: the
+survival penalty was genuine, and removing two targets that had zero mechanical
+readers and correcting a hint that priced the shot as free while shields were up
+stand entirely on their own. But "the dial had been set to the wrong end of its
+own range" overstates it. The dial was on the wrong end of *one* axis, and that
+axis was not where the button lived.
+
+### The general shape, which is the third time this register has hit it
+
+§91 said an unwired thing is a hypothesis. §98 added that a thing wired to
+nobody may still be doing its job through another path. This is the same family:
+**a lever measured on one axis will look broken whenever its payoff is on
+another.** The tell is available in advance and was available here — the panel's
+own hint named two uses, *"engines to stop a runner, weapons to survive a
+Galor"*, and neither of those sentences is about surviving a brawl. The content
+said what to measure and the measurement did not follow it.
+
+Both promises are now verified to the digit, and the panel says a third thing it
+had never said: that the warp core is the surest way to stop an escape, and that
+engines against a slugger is the wrong call and costs you the fight.
+
+### Guards and controls
+
+Three whole-battle guards, because the effect only exists in whole battles:
+engines beats hull fire at stopping runners and converts the escapes to kills;
+weapons wins Galor fights the hull shot loses, paired on the seed; and engines
+against those same Galors loses fights the hull shot wins — the flip, asserted
+directly, because two promises satisfied by one target would make the panel's
+naming a fiction.
+
+| control | fires |
+| --- | --- |
+| a called shot does no subsystem damage | ✓ — the payoff is the thing being measured |
+| the hint drops the warp core again | ✓ |
+| the player's price back to the enemy's 0.70 | **no** — and that is the finding above, not a gap in the guard |
+
+The third control is recorded as a *result*. A control that declines to fire is
+usually a bad test; this one is a measurement. It says the scenario payoffs do
+not depend on the price at all, which is what sent me back to check §223's claim
+rather than assume the guard was weak.
 
 
 ## Attribution

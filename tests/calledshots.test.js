@@ -358,6 +358,25 @@ describe('what the called shot actually costs, and whether the panel says so', (
       + `against ${down.hullDamage.toFixed(2)} with the facing down — the gap the hint is about`);
   });
 
+  test('and the panel names the targets the measurements actually support', () => {
+    // The panel recommends by name, so the names are a claim. Each one is
+    // measured in the block below: warp core and engines stop a runner (0 of
+    // 180 escaped against 18), weapons survives a slugger (+17 paired against
+    // Galors), and engines against that same slugger is -28, which is why the
+    // hint says so out loud rather than leaving a captain to find out.
+    const src = readFileSync(new URL('../src/ui/screens.js', import.meta.url), 'utf8');
+    const hint = /'(Targeting a subsystem[^']*)'/.exec(src);
+    assert.ok(hint, 'the targeting panel no longer explains the trade at all');
+    for (const [word, why] of [
+      ['warp core', 'the surest way to stop an escape, and the one the hint used to omit'],
+      ['runner', 'what engines and the warp core are for'],
+      ['weapons', 'what survives a slugger'],
+      ['wrong call', 'that the right target changes with the enemy'],
+    ]) {
+      assert.ok(new RegExp(word, 'i').test(hint[1]), `the hint no longer mentions ${word} — ${why}`);
+    }
+  });
+
   test('and the panel tells the captain both halves of that', () => {
     // The string IS the deliverable here, so reading it is the measurement and
     // not a substitute for one — unlike a test that reads source to check
@@ -371,5 +390,118 @@ describe('what the called shot actually costs, and whether the panel says so', (
       `the hint still prices the shot as hull-only: "${hint[1]}"`);
     assert.match(hint[1], /down/i,
       `the hint names the cost but not when to pay it: "${hint[1]}"`);
+  });
+});
+
+// What the button is FOR, measured on the thing it is for.
+//
+// §95 measured subsystem targeting one way — survival, in a fight to the death
+// against Birds-of-Prey — and concluded it was "a button that is always a
+// mistake". That measurement was sound and its framing was too narrow. A
+// relentless brawl is a scenario in which "stop them leaving" is worth exactly
+// nothing by construction, so a metric taken from it cannot see the payoff of
+// three of the five targets at all.
+//
+// Measured across scenarios instead, the trade is real and its sign FLIPS by
+// opponent, which is what a decision is:
+//
+//     target     vs runners (of 180)      vs a Galor (paired, n=90)
+//     warpcore    0 escaped, 128 killed     +6
+//     engines     0 escaped,  90 killed    -28
+//     weapons    22 escaped,  68 killed    +17
+//     hull       18 escaped,  72 killed     --
+//
+// These tests are slow because the effect only exists in whole battles. They
+// are the reason the panel is allowed to recommend targets by name.
+describe('a called shot is worth taking, and worth taking at the right target', () => {
+  /** Fly a whole engagement, aiming where told, and report what became of the enemy. */
+  const fight = ({ seed, me, them, faction, aim, relentless }) => {
+    const g = new Game({
+      seed: BigInt(seed), crewMode: 'original', shipClass: me, difficulty: 'captain',
+      character: new Character({ speciesId: 'human', careerId: 'tactical' }),
+    });
+    const eng = g.startCombat(them.map((c, i) => new Ship(c, { faction, name: `H${i}` })),
+      relentless ? { relentless: true } : {});
+    // Held, because `g.ship` is REPLACED when the player's hull is lost — read
+    // afterwards it is the ship Starfleet assigned next, which is never
+    // destroyed, and every cell reports 100% survival.
+    const mine = g.ship;
+    const foes = eng.hostiles.filter((h) => h !== mine);
+    for (let i = 0; i < 40000 && !eng.over; i++) {
+      if (i % 15 === 0 && eng.target) {
+        eng.comeAboutTo(eng.target);
+        g.ship.throttle = 0.6;
+        g.ship.power.applyPreset(g.ship.shieldPct < 0.35 ? 'defense' : 'attack');
+      }
+      if (aim && eng.targetedSubsystem !== aim) eng.targetSubsystem(aim);
+      g.update(1 / 30);
+    }
+    return {
+      survived: !mine.destroyed,
+      escaped: foes.filter((f) => f.withdrawn && !f.destroyed).length,
+      killed: foes.filter((f) => f.destroyed).length,
+    };
+  };
+
+  test('shooting out the engines stops a runner, which is what the panel promises', () => {
+    // The panel says "engines to stop a runner". Measured over 90 seeds against
+    // two Birds-of-Prey free to break off: aiming at the hull let 18 of 180 get
+    // away, aiming at engines let none, and turned those escapes into kills.
+    const N = 30;
+    const tally = (aim) => {
+      let escaped = 0; let killed = 0;
+      for (let s = 1; s <= N; s++) {
+        const r = fight({
+          seed: s * 7, me: 'constitution', them: ['bird_of_prey', 'bird_of_prey'],
+          faction: 'klingon', aim, relentless: false,
+        });
+        escaped += r.escaped; killed += r.killed;
+      }
+      return { escaped, killed };
+    };
+    const plain = tally(null);
+    const aimed = tally('engines');
+    assert.ok(plain.escaped > 0,
+      'nobody ran from the default fight, so this measures nothing');
+    assert.ok(aimed.escaped < plain.escaped,
+      `${aimed.escaped} got away with their engines targeted against ${plain.escaped} without`);
+    assert.ok(aimed.killed > plain.killed,
+      `crippling their engines killed ${aimed.killed} against ${plain.killed} — the escapes did not become kills`);
+  });
+
+  test('and shooting out the guns is what survives a slugger, which is the other promise', () => {
+    // "weapons to survive a Galor." Paired on the seed, because the fight
+    // starts identically either way and an unpaired sample of sixty cannot
+    // resolve an effect this size. Measured at n=90: 98% against 79%, and 18
+    // seeds won only by aiming at the guns against 1 lost.
+    const N = 30;
+    let only = 0; let lost = 0;
+    for (let s = 1; s <= N; s++) {
+      const opts = { seed: s * 7, me: 'galaxy', them: ['galor', 'galor'], faction: 'cardassian', relentless: true };
+      const plain = fight({ ...opts, aim: null }).survived;
+      const aimed = fight({ ...opts, aim: 'weapons' }).survived;
+      if (aimed && !plain) only++;
+      if (plain && !aimed) lost++;
+    }
+    assert.ok(only > lost,
+      `aiming at their weapons won ${only} fights the hull shot lost and lost ${lost} it won`);
+  });
+
+  test('and the right target is not the same target, which is what makes it a decision', () => {
+    // The sign flips. Engines is the best call in the game against something
+    // that wants to leave and among the worst against something that wants to
+    // stand and fight — measured, -28 paired against Galors. If both promises
+    // were satisfied by one target the panel would not need to name two, and
+    // "trades raw damage for a specific outcome" would be a fiction.
+    const N = 24;
+    let enginesWorse = 0;
+    for (let s = 1; s <= N; s++) {
+      const opts = { seed: s * 7, me: 'galaxy', them: ['galor', 'galor'], faction: 'cardassian', relentless: true };
+      const plain = fight({ ...opts, aim: null }).survived;
+      const aimed = fight({ ...opts, aim: 'engines' }).survived;
+      if (plain && !aimed) enginesWorse++;
+    }
+    assert.ok(enginesWorse >= 3,
+      `aiming at a Galor's engines cost only ${enginesWorse} of ${N} fights — it is supposed to be the wrong call here`);
   });
 });
