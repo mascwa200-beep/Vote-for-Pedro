@@ -1839,18 +1839,20 @@ describe('every episode graph is sound', () => {
 
       archanis_ratified: 'candidate', asked_about_hurry: 'candidate',
       badlands_run: 'candidate', borrowed_blade: 'candidate',
-      came_clean: 'candidate',
       centauri_reported: 'candidate', devron_blind: 'candidate',
       devron_collapsed: 'candidate', devron_data: 'candidate',
       dmz_favourable: 'candidate',
       donatu_battle: 'candidate',
       donatu_pressed: 'candidate', grid_9902_contact: 'candidate',
       grid_answered_late: 'candidate',
-      merrimack_lost: 'candidate',
       organia_rebuffed: 'candidate',
       organia_revealed: 'candidate',
-      rescued_vell: 'candidate',
       romulus_witness: 'candidate',
+      // `rescued_vell`, `came_clean` and `merrimack_lost` left in §117, and all
+      // three were genuinely on this list — checked against the registry rather
+      // than subtracted from the last section's figure, which is what §116 was
+      // about.
+      //
       // NOT a correction of this list: `paid_orions`, `centauri_aid` and
       // `tholian_protocol` were never on it, because the faction-memory table in
       // `state.js` already read all three. §116 found that after three sections

@@ -314,8 +314,8 @@ describe('and neither writes anything down that nobody reads', () => {
     // this one is older and stays because it is what that file is about. They
     // measure the same quantity and must move together.
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.equal(gated, 46,
-      `${gated} of ${written.size} recorded decisions gate something; the register says 46. `
+    assert.equal(gated, 49,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 49. `
       + 'The same count is asserted in echoes.test.js and RESEARCH.md §111; move all three.');
   });
 });
@@ -409,5 +409,61 @@ describe('and the captain who buried Organia can say so', () => {
     }
     assert.ok(checked >= 60, `only ${checked} standing lines examined, so this asserts little`);
     assert.deepEqual(dead, [], `${dead.length} standing lines name no real track`);
+  });
+});
+
+// §117. The account Sostrova heard about.
+//
+// `utopia_certification` opens with a yard that wants a captain to sign for a
+// hull, and Vice Admiral Sostrova explaining why she asked this one: "She heard
+// that a captain stood up at their own board of inquiry and gave an account that
+// cost them something."
+//
+// That is a description of `came_clean` — Starbase 11, act 3, correcting the
+// shakedown report before the board asked about it — and the episode was built
+// around the deed without ever reading it. It already refuses the captain who
+// went the other way, `blockedByFlag: deflected_blame`.
+describe('the account this episode was written about', () => {
+  const ep = EPISODES.find((e) => e.id === 'utopia_certification');
+  const stage = ep.stages.starbase;
+
+  const open = (flags) => {
+    const g = captain({ flags, completed: ep.requiresCompleted ?? [] });
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('is one the captain who gave it can name', () => {
+    const gated = stage.choices.find((c) => c.id === 'name_it');
+    assert.ok(gated, 'the road that names the report is gone');
+    assert.deepEqual(gated.requires, { flag: 'came_clean' });
+    assert.equal(open([]).includes('name_it'), false,
+      'offered to a captain who never corrected anything');
+    assert.ok(open(['came_clean']).includes('name_it'), 'Starbase 11 bought nothing');
+  });
+
+  test('and the gate can never be dead, because the two outcomes are one board', () => {
+    // The reason this placement is safe rather than lucky. `came_clean` and
+    // `deflected_blame` are outcomes of the same court-martial, so a captain
+    // holding the first cannot hold the second — and the second is the only
+    // thing that keeps him out of this episode. Every captain who came clean is
+    // a captain this episode will admit.
+    assert.equal(ep.blockedByFlag, 'deflected_blame');
+    const sameStage = [];
+    for (const e of EPISODES) {
+      for (const s of Object.values(e.stages ?? {})) {
+        const flags = (s.choices ?? []).map((c) => [].concat(c.effects?.flag ?? []));
+        const has = (f) => flags.some((set) => set.includes(f));
+        if (has('came_clean') && has('deflected_blame')) sameStage.push(e.id);
+      }
+    }
+    assert.ok(sameStage.length,
+      'came_clean and deflected_blame are no longer alternatives at one stage, so this gate can go dead');
+
+    // And the positive half: a captain who came clean is offered the episode.
+    const g = captain({ flags: ['came_clean'], completed: ep.requiresCompleted ?? [] });
+    assert.equal(offered(g, ep.system, ep.id), true,
+      'a captain who came clean is not offered the episode that asked for him');
   });
 });

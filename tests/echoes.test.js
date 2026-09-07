@@ -236,9 +236,72 @@ describe('and neither writes anything down that nobody reads', () => {
     const written = flagsWritten(EPISODES);
     const read = gateReads(EPISODES);
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.equal(gated, 46,
-      `${gated} of ${written.size} recorded decisions gate something; the register says 46. `
+    assert.equal(gated, 49,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 49. `
       + 'If the book grew, raise this number and say so in RESEARCH.md. '
       + 'If it shrank, a captain stopped being remembered for something.');
+  });
+});
+
+// §117. Two more, at the far end of the book.
+describe('the reach into the last two episodes', () => {
+  const beta = EPISODES.find((e) => e.id === 'beta_reticuli');
+  const cube = EPISODES.find((e) => e.id === 'the_cube');
+
+  const openAt = (ep, stageId, flags) => {
+    const g = captain({ flags });
+    return (ep.stages[stageId].choices ?? [])
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('a captain who lost the Merrimack reads a four-line catalogue entry differently', () => {
+    // The first sentence of the scene is about a survey ship that charted the
+    // system "and did not come back to correct anything". Every captain reads
+    // that as a curiosity; one has written the entry nobody came back to
+    // correct.
+    const gated = beta.stages.start.choices.find((c) => c.id === 'second_report');
+    assert.ok(gated, 'the second-report road is gone');
+    assert.deepEqual(gated.requires, { flag: 'merrimack_lost' });
+    assert.equal(openAt(beta, 'start', []).includes('second_report'), false,
+      'offered to a captain who never lost a ship at a line');
+    assert.ok(openAt(beta, 'start', ['merrimack_lost']).includes('second_report'),
+      'the Tholian border bought nothing');
+
+    // It goes to the wreck, like the other two roads that go anywhere. It is the
+    // reason he does not hold at the edge, not a way out of the episode.
+    assert.equal(gated.next, 'the_wreck');
+    assert.equal(gated.outcome, undefined, 'it ends the episode instead of entering it');
+  });
+
+  test('and the captain who got somebody out of Wolf 359 warns the route first', () => {
+    // §108 gave the cube `wolf_scanned`, the captain who studied the wreckage
+    // from range. This is the one who pulled somebody out of it: Aris Vell wakes
+    // and asks whether the fleet held, and nobody in the room wants to answer.
+    const gated = cube.stages.start.choices.find((c) => c.id === 'for_vell');
+    assert.ok(gated, 'the road for Vell is gone');
+    assert.deepEqual(gated.requires, { flag: 'rescued_vell' });
+    assert.equal(openAt(cube, 'start', []).includes('for_vell'), false,
+      'offered to a captain who never opened the pod');
+    assert.ok(openAt(cube, 'start', ['rescued_vell']).includes('for_vell'),
+      'Wolf 359 bought nothing');
+
+    // Same destination and the same twelve thousand people as the plain
+    // evacuation — it is the same decision reached for a reason nobody else has,
+    // so it must not quietly be a better outcome.
+    const plain = cube.stages.start.choices.find((c) => c.id === 'evacuate');
+    assert.equal(gated.next, plain.next);
+    assert.equal(gated.effects.record.lives_saved, plain.effects.record.lives_saved);
+    assert.ok([].concat(gated.effects.flag).includes('borg_warned'),
+      'the route is warned on one road and not the other');
+  });
+
+  test('and both reach back to an act that really is earlier', () => {
+    for (const [flag, ep] of [['merrimack_lost', beta], ['rescued_vell', cube]]) {
+      const acts = actsThatSet(flag);
+      assert.ok(acts.length, `${flag} is read and nothing sets it`);
+      assert.ok(Math.min(...acts) < ep.act,
+        `${ep.id} is act ${ep.act} and reads ${flag}, first set in act ${Math.min(...acts)}`);
+    }
   });
 });
