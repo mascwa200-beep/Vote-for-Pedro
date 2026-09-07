@@ -37,6 +37,7 @@ import { INTENTS, phraseCount } from '../src/lang/lexicon.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const README = readFileSync(join(HERE, '..', 'README.md'), 'utf8');
 const MANUAL = readFileSync(join(HERE, '..', 'docs', 'MANUAL.md'), 'utf8');
+const RESEARCH = readFileSync(join(HERE, '..', 'docs', 'RESEARCH.md'), 'utf8');
 
 /** Non-blank, non-comment corpus lines — the same filter the corpus test uses. */
 function corpusOrders() {
@@ -98,6 +99,139 @@ describe('the README describes this game and not an earlier one', () => {
     const m = README.match(/npm test\s+# (\d+)\+ tests/);
     assert.ok(m, 'the README should state its test count as "N+ tests"');
     assert.ok(Number(m[1]) >= 1000, `the floor is ${m[1]}, which is below the suite's size`);
+  });
+});
+
+// ---------------------------------------------------------------- the register
+//
+// docs/RESEARCH.md is the longest document in the repository and consists almost
+// entirely of measurements, and until this block nothing had ever checked one of
+// them. §107 records what that cost: "episode content is wide but shallow" rode
+// four consecutive pull requests as an established fact, and when it was finally
+// measured the figures were all correct and the reading was wrong three separate
+// ways — the nine episodes "finishable in a single choice" are nine episodes you
+// are allowed to DECLINE, one of which is the deepest in the game.
+//
+// This covers §107 and not the register. Every other number in that document is
+// still unguarded prose.
+
+/** Every choice in the book, with the stage and episode it belongs to. */
+function everyChoice() {
+  const out = [];
+  for (const ep of EPISODES) {
+    for (const [stageId, stage] of Object.entries(ep.stages ?? {})) {
+      for (const c of stage.choices ?? []) out.push({ ep, stageId, stage, c });
+    }
+  }
+  return out;
+}
+
+const gatedIn = (ep) => Object.values(ep.stages ?? {})
+  .reduce((n, s) => n + (s.choices ?? []).filter((c) => c.requires).length, 0);
+const choicesIn = (ep) => Object.values(ep.stages ?? {})
+  .reduce((n, s) => n + (s.choices ?? []).length, 0);
+
+/** Distinct routes through an episode, following EVERY branch destination. */
+function pathsThrough(ep) {
+  const memo = new Map();
+  const walk = (id, depth) => {
+    if (depth > 25) return 1;
+    if (memo.has(id)) return memo.get(id);
+    const s = ep.stages?.[id];
+    if (!s) return 1;
+    memo.set(id, 1);            // a cycle contributes one route, not infinite
+    let n = 0;
+    for (const c of s.choices ?? []) {
+      const dests = c.next ? [c.next] : (c.branch ? Object.values(c.branch) : []);
+      if (!dests.length) { n += 1; continue; }
+      for (const d of dests) n += walk(d, depth + 1);
+    }
+    memo.set(id, n || 1);
+    return n || 1;
+  };
+  return walk(ep.start, 0);
+}
+
+describe('the register states figures it has actually measured', () => {
+  const byId = (id) => EPISODES.find((e) => e.id === id);
+
+  // Same shape as the README block above: the number is pulled OUT of the prose
+  // rather than restated here, so editing the sentence without editing the
+  // figure fails.
+  const CLAIMS = [
+    ['episodes', /(\d+) authored\nepisodes, \d+ stages and \d+ choices/, () => EPISODES.length],
+    ['stages', /\d+ authored\nepisodes, (\d+) stages and \d+ choices/,
+      () => EPISODES.reduce((n, e) => n + Object.keys(e.stages ?? {}).length, 0)],
+    ['choices', /\d+ authored\nepisodes, \d+ stages and (\d+) choices/, () => everyChoice().length],
+    ['gated choices', /\*\*(\d+) of \d+ choices carry a `requires`\*\*/,
+      () => everyChoice().filter((x) => x.c.requires).length],
+    ['gated denominator', /\*\*\d+ of (\d+) choices carry a `requires`\*\*/, () => everyChoice().length],
+    ['long_watch choices', /carries (\d+) choices across \d+ stages and \d+\ndistinct paths/,
+      () => choicesIn(byId('long_watch'))],
+    ['long_watch stages', /carries \d+ choices across (\d+) stages and \d+\ndistinct paths/,
+      () => Object.keys(byId('long_watch').stages).length],
+    ['long_watch paths', /carries \d+ choices across \d+ stages and (\d+)\ndistinct paths/,
+      () => pathsThrough(byId('long_watch'))],
+    ['homecoming gated', /(\d+) of `homecoming`'s \d+ choices are gated/,
+      () => gatedIn(byId('homecoming'))],
+    ['homecoming choices', /\d+ of `homecoming`'s (\d+) choices are gated/,
+      () => choicesIn(byId('homecoming'))],
+    ['episodes offering a decline', /(\d+) episodes offer an ending on\ntheir opening stage/,
+      () => EPISODES.filter((e) => (e.stages[e.start]?.choices ?? [])
+        .some((c) => c.outcome && !c.next && !c.branch)).length],
+  ];
+
+  test('every number §107 states is the number the episodes have', () => {
+    const wrong = [];
+    let found = 0;
+    for (const [what, re, actual] of CLAIMS) {
+      const m = RESEARCH.match(re);
+      if (!m) { wrong.push(`${what}: §107 no longer states this at all`); continue; }
+      found++;
+      const stated = Number(m[1]);
+      const real = actual();
+      if (stated !== real) wrong.push(`${what}: §107 says ${stated}, actual ${real}`);
+    }
+    // The assertion this whole section exists because of: a regex that stops
+    // matching must fail loudly, not pass by finding nothing to disagree with.
+    assert.equal(found, CLAIMS.length,
+      `only ${found} of ${CLAIMS.length} of §107's figures could be located in RESEARCH.md`);
+    assert.deepEqual(wrong, [], `${wrong.length} of §107's figures have drifted`);
+  });
+
+  test('the episodes it names as gating nothing are the episodes that gate nothing', () => {
+    // Scraped as a list, so an episode that gains its first gate has to leave
+    // the document — and one that loses its last has to join it.
+    const block = RESEARCH.match(/Four episodes gate nothing whatsoever:\n\n((?:- `[a-z0-9_]+`\n)+)/);
+    assert.ok(block, '§107 no longer names the episodes that gate nothing');
+    const named = [...block[1].matchAll(/`([a-z0-9_]+)`/g)].map((m) => m[1]).sort();
+    assert.ok(named.length >= 1, 'the list scraped empty, so this asserted nothing');
+
+    const actual = EPISODES.filter((e) => gatedIn(e) === 0).map((e) => e.id).sort();
+    assert.deepEqual(named, actual,
+      'the episodes §107 says read nothing the captain did are not those episodes');
+  });
+
+  test('an episode you can decline is not an episode with one choice', () => {
+    // The reading that was wrong for four pull requests, as an assertion. Nine
+    // episodes end on their opening stage; what makes each a DECLINE rather
+    // than a dead end is that the same stage also offers a way in.
+    const declines = EPISODES.filter((e) => (e.stages[e.start]?.choices ?? [])
+      .some((c) => c.outcome && !c.next && !c.branch));
+    assert.ok(declines.length >= 5, `only ${declines.length} episodes to check`);
+
+    const deadEnds = declines.filter((e) => !(e.stages[e.start].choices ?? [])
+      .some((c) => c.next || c.branch));
+    assert.deepEqual(deadEnds.map((e) => e.id), [],
+      'an episode ends on its opening stage with no other way to go');
+
+    // And the counterexample the correction rests on: the deepest episode in
+    // the book is one of the nine.
+    assert.ok(declines.some((e) => e.id === 'long_watch'),
+      '§107 rests on long_watch being declinable, and it is not');
+    const median = EPISODES.map(choicesIn).sort((a, b) => a - b)[Math.floor(EPISODES.length / 2)];
+    assert.ok(choicesIn(byId('long_watch')) > median,
+      'long_watch is no longer larger than the median episode, so §107 needs a new counterexample');
   });
 });
 
