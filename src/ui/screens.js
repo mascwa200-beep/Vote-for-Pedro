@@ -21,7 +21,7 @@ import { audio } from '../audio/engine.js';
 import { chairPanel } from './chair.js';
 import { commandReference } from './orders.js';
 import { namesFor } from '../sim/address.js';
-import { inArc, SUBSYSTEM_KEYS } from '../sim/ship.js';
+import { inArc, SUBSYSTEM_KEYS, TARGETABLE_SUBSYSTEMS } from '../sim/ship.js';
 import { OBJECTIVES } from '../sim/combat.js';
 import { weakestFacing } from '../sim/powers.js';
 
@@ -837,16 +837,20 @@ export function tacticalScreen(app) {
   }
 
   // --- Subsystem targeting ---
-  // All seven, from SUBSYSTEM_KEYS rather than a hand-written four.
+  // The five the simulation reads on a hostile, from TARGETABLE_SUBSYSTEMS.
   //
-  // The list had four of the seven the simulation models, so sensors, life
-  // support and auxiliary could be called by voice but not tapped, and
-  // `auxiliary` could not be reached at all by either — the one subsystem in
-  // the game with no route to it. Iterating the key list is what stops that
-  // happening again: a subsystem added to the simulation appears here, and a
-  // label missing from the table below is a visible gap rather than a silent
-  // omission.
-  const subs = SUBSYSTEM_KEYS.map((key) => [key, SUBSYSTEM_TARGET_LABEL[key] ?? key]);
+  // This iterated SUBSYSTEM_KEYS — all seven — to fix an older bug where the
+  // list was a hand-written four and `auxiliary` had no route to it at all.
+  // That made every subsystem reachable without asking whether every subsystem
+  // did anything, and two of them do not: nothing in the game reads
+  // `subsystems.auxiliary`, and `subsystems.lifesupport` is read once, in a
+  // sentence about our OWN casualties. Held at zero on every hostile from the
+  // first tick, both leave the fight at exactly the survival and length of
+  // crippling nothing.
+  //
+  // So the panel offers what can be shot out. The words still parse — the order
+  // is answered rather than silently charged — see `Engagement.targetSubsystem`.
+  const subs = TARGETABLE_SUBSYSTEMS.map((key) => [key, SUBSYSTEM_TARGET_LABEL[key] ?? key]);
   side.append(panel('Target Subsystem', [
     el('div', { class: 'grid-2' }, [
       ...subs.map(([key, label]) => button(label, tap(() => {
@@ -857,7 +861,7 @@ export function tacticalScreen(app) {
         say: `target their ${label.toLowerCase()}`,
       })),
     ]),
-    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor, auxiliary to keep a fire burning.' }),
+    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor. It costs you hull damage you would otherwise be doing, so it is worth it when the cripple is worth more than the kill.' }),
   ]));
 
   // --- Weapons ---

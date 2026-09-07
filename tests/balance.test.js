@@ -7,14 +7,26 @@
 // batteries that a ship facing its target can never fire together.
 //
 // The simulated pilot only steers, throttles, and swaps power presets. It does
-// not use bridge officer abilities, devices, or subsystem targeting, so a real
-// player has meaningful headroom above every number here.
+// not use bridge officer abilities, devices, or subsystem targeting.
+//
+// That used to end "so a real player has meaningful headroom above every number
+// here", which was an assumption stated as a fact and wrong about the one part
+// of it anything here could check. Measured, subsystem targeting was NEGATIVE
+// headroom at every one of its seven targets — see the tests at the foot of this
+// file. The abilities and devices remain unmeasured, and are therefore not
+// claimed either way.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
 import { Game } from '../src/core/state.js';
-import { Ship } from '../src/sim/ship.js';
+import {
+  Ship, SUBSYSTEM_KEYS, TARGETABLE_SUBSYSTEMS, CALLED_SHOT_HULL, CALLED_SHOT_PLAYER,
+} from '../src/sim/ship.js';
 import { Character } from '../src/rules/character.js';
 import { DIFFICULTIES } from '../src/rules/difficulty.js';
 import { SHIP_CLASSES, SHIP_LIST } from '../src/world/ships.data.js';
@@ -277,5 +289,124 @@ test('every ship has a coherent weapon fit', () => {
     }
     // Anything that is not a civilian hull must be able to shoot back.
     if (!cls.civilian) assert.ok((cls.weapons ?? []).length > 0, `${cls.id} is unarmed`);
+  }
+});
+
+// -------------------------------------------------- what a called shot is worth
+//
+// The comment at the top of this file says the simulated pilot "does not use
+// bridge officer abilities, devices, or subsystem targeting, so a real player
+// has meaningful headroom above every number here." That was a claim in prose
+// and it was false in the one part anything here could check.
+//
+// Measured over sixty seeded runs a cell, a Miranda against three Birds-of-Prey
+// at `captain`, varying only what the captain aimed at:
+//
+//     hull (default) 58%   engines 47%   warpcore 37%   weapons 28%
+//     shields 25%   sensors 22%   auxiliary 22%   lifesupport 22%
+//
+// Every one of the seven was worse than not using the feature. Not a lever with
+// a tradeoff — a button that was always a mistake, under a manual promising
+// that "targeting a subsystem trades total damage for a specific outcome".
+
+test('a called shot costs the captain less hull damage than it costs a hostile', () => {
+  // The mechanism, asserted without a simulation so it cannot be noise.
+  //
+  // One constant was doing two jobs. §31 set 0.70 by reading player deaths and
+  // battle length — the right numbers for the question it asked, which was how
+  // hard the enemy's new called shots should land. The captain's price is not
+  // that quantity: it is what an option costs the person choosing it, and at
+  // 0.70 no target was worth choosing.
+  assert.ok(CALLED_SHOT_PLAYER > CALLED_SHOT_HULL,
+    `the captain pays ${CALLED_SHOT_PLAYER} and a hostile ${CALLED_SHOT_HULL} — the split is backwards`);
+  // And not so far that it is free. 1.00 is the strictly-dominant configuration
+  // §31 removed: measured, weapons 78% and engines 83% against a 65% baseline.
+  assert.ok(CALLED_SHOT_PLAYER < 1,
+    'a called shot that costs the captain nothing is the free upgrade §31 removed');
+
+  const hit = (multiplier) => {
+    const s = new Ship('d7', { faction: 'klingon', name: 'Target' });
+    s.shieldsUp = false;
+    const before = s.hull;
+    s.takeDamage(500, { subsystem: 'weapons', calledShotHull: multiplier });
+    return before - s.hull;
+  };
+  const captain = hit(CALLED_SHOT_PLAYER);
+  const hostile = hit(CALLED_SHOT_HULL);
+  assert.ok(captain > hostile,
+    `the captain's called shot took ${captain.toFixed(1)} hull and a hostile's ${hostile.toFixed(1)}`);
+});
+
+test('and it is a choice: one target beats hull fire, others do not', () => {
+  // The outcome, which is what the mechanism is for. Fewer runs than the sixty
+  // above, so the margin asserted is the direction and not the figure.
+  const aimed = (sub, runs = 30) => {
+    let survived = 0;
+    for (let seed = 0; seed < runs; seed++) {
+      const g = new Game({
+        seed: BigInt(seed + 1), crewMode: 'original', difficulty: 'captain', shipClass: 'miranda',
+        character: new Character({ speciesId: 'andorian', careerId: 'tactical' }),
+      });
+      const hostiles = [];
+      for (let i = 0; i < 3; i++) hostiles.push(new Ship('bird_of_prey', { faction: 'klingon', name: `H${i}` }));
+      g.startCombat(hostiles);
+      for (let i = 0; i < 40000 && g.engagement && !g.engagement.over; i++) {
+        if (i % 15 === 0 && g.engagement.target) {
+          pilot(g);
+          if (sub && g.engagement.targetedSubsystem !== sub) g.engagement.targetSubsystem(sub);
+        }
+        g.update(1 / 30);
+      }
+      if ((g.lastCombat?.outcome ?? g.engagement?.outcome) !== 'destroyed') survived++;
+    }
+    return survived / runs;
+  };
+  const hull = aimed(null);
+  const engines = aimed('engines');
+  const sensors = aimed('sensors');
+
+  // Worth taking somewhere: stopping three raiders from manoeuvring is worth
+  // the hull damage it costs to do it.
+  assert.ok(engines >= hull,
+    `aiming at engines survives ${(engines * 100).toFixed(0)}% against ${(hull * 100).toFixed(0)}% for hull fire`);
+  // And not always right, which is the other half of being a choice. A lever
+  // that is correct every time is as shallow as one that is correct never.
+  assert.ok(sensors < hull,
+    `aiming at sensors survives ${(sensors * 100).toFixed(0)}%, which is not worse than hull fire's ${(hull * 100).toFixed(0)}%`);
+});
+
+test('nothing is offered as a target that cannot be shot out', () => {
+  // `auxiliary` is read by nothing in the game and `lifesupport` by one log
+  // line about our OWN casualties, so neither does anything to the ship being
+  // shot at. Held at zero on every hostile from the first tick, both leave the
+  // fight at exactly the survival and length of crippling nothing at all — and
+  // the targeting panel recommended one of them by name.
+  //
+  // Read from the source with comments stripped. A flag named in a sentence
+  // explaining why it is inert would otherwise count as a reader of itself,
+  // which is the defect `guards.test.js` exists to record.
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const root = join(HERE, '..', 'src');
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').map((l) => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory()
+    ? walk(join(d, e.name))
+    : (e.name.endsWith('.js') ? [join(d, e.name)] : [])));
+  const source = walk(root).map((f) => strip(readFileSync(f, 'utf8'))).join('\n');
+  const readsOf = (key) => (source.match(new RegExp(`subsystems\\.${key}\\b`, 'g')) ?? []).length;
+
+  for (const key of TARGETABLE_SUBSYSTEMS) {
+    assert.ok(SUBSYSTEM_KEYS.includes(key), `${key} is offered and is not a subsystem`);
+    // Two: the declaration in SUBSYSTEM_KEYS is not a read, and one lone
+    // mention is what `lifesupport` has.
+    assert.ok(readsOf(key) > 2,
+      `${key} is offered as a target and is read ${readsOf(key)} times`);
+  }
+  const excluded = SUBSYSTEM_KEYS.filter((k) => !TARGETABLE_SUBSYSTEMS.includes(k));
+  assert.deepEqual(excluded.sort(), ['auxiliary', 'lifesupport'],
+    'the set of subsystems not worth aiming at has changed — measure it before moving it');
+  for (const key of excluded) {
+    assert.ok(readsOf(key) <= 1,
+      `${key} is excluded from targeting but read ${readsOf(key)} times — it may do something now`);
   }
 });

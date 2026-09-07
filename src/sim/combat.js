@@ -12,6 +12,7 @@
 import { emit } from '../core/events.js';
 import {
   Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection, FACING_LABEL,
+  CALLED_SHOT_HULL, CALLED_SHOT_PLAYER, TARGETABLE_SUBSYSTEMS,
 } from './ship.js';
 import { chooseAction } from './ai.js';
 import { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } from './arena.js';
@@ -432,6 +433,22 @@ export class Engagement {
       this.pushLog(`We have no firing solution on their ${key}, Captain.`, 'tactical');
       return false;
     }
+    // A system they have, that shooting out would not change how they fight.
+    //
+    // The order is still understood — a captain may reasonably call for it, and
+    // refusing to parse the words would be its own kind of lie. What is refused
+    // is the shot: a called shot costs hull damage, and buying nothing with it
+    // is the trap this whole change is about. `auxiliary` is read by nothing in
+    // the game and `lifesupport` by one log line about our OWN casualties, so
+    // neither does anything to the ship being shot at.
+    if (key && !TARGETABLE_SUBSYSTEMS.includes(key)) {
+      this.pushLog(
+        `Their ${key} is not something we can shoot out from here, Captain — `
+        + 'we would be spending the shot for nothing.',
+        'tactical',
+      );
+      return false;
+    }
     this.targetedSubsystem = key ?? null;
     this.pushLog(key ? `Targeting ${key}.` : 'Targeting hull.', 'tactical');
     return true;
@@ -664,6 +681,13 @@ export class Engagement {
 
     const result = target.takeDamage(damage, {
       direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
+      // A called shot costs the captain less than it costs a hostile, because
+      // the two numbers were never measuring the same thing: the enemy's is a
+      // difficulty dial set by §31 against player deaths and battle length, and
+      // the captain's is the price of an option they choose. At one shared
+      // value the option was worth taking by nobody — every one of the seven
+      // targets came in below shooting at the hull.
+      calledShotHull: attacker === this.player ? CALLED_SHOT_PLAYER : CALLED_SHOT_HULL,
       // Who fired. The one place in the game where a ship is hurt BY somebody
       // rather than by a hazard, and the fact the AI's target selection has
       // always claimed to use.

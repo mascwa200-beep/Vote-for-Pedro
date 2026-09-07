@@ -78,6 +78,38 @@ export const ABLATIVE_RESIST = 0.12;
 export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /**
+ * The subsystems worth aiming at: the ones the simulation reads on a hostile.
+ *
+ * Every ship HAS all seven — random damage hits any of them, and the repair
+ * screen lists them all. But two of them do nothing when they fail on somebody
+ * else's ship, and the game was inviting the captain to shoot at those:
+ *
+ *     subsystems.weapons      8 reads in src/
+ *     subsystems.sensors      9
+ *     subsystems.warpcore     9
+ *     subsystems.shields      8
+ *     subsystems.engines      4
+ *     subsystems.auxiliary    0     <- read by nothing, anywhere
+ *     subsystems.lifesupport  1     <- one log line, about the PLAYER's casualties
+ *
+ * Measured, holding each at zero on every hostile from the first tick: crippled
+ * auxiliary and crippled life support both leave the fight at 58% survival over
+ * 152 seconds, identical to the digit to crippling nothing at all. The targeting
+ * panel's own hint recommended one of them by name — "auxiliary to keep a fire
+ * burning" — and the comment beside it recorded making all seven reachable,
+ * which wired them to the UI without asking whether they were wired to anything
+ * else.
+ *
+ * They are not removed from the vocabulary. A captain may still say "target
+ * their life support"; the answer is a straight one instead of a silent charge
+ * of the called-shot price for nothing.
+ *
+ * This is a registry, not a filter: a subsystem earns its place here by having a
+ * reader, and adding one is what should get it listed.
+ */
+export const TARGETABLE_SUBSYSTEMS = ['weapons', 'shields', 'engines', 'warpcore', 'sensors'];
+
+/**
  * What a called shot costs in hull damage, as a share of what it would have
  * done aimed at the ship generally. See `takeDamage`.
  *
@@ -100,6 +132,38 @@ export const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'wa
  * the log, with a whole repair and power system to answer it.
  */
 export const CALLED_SHOT_HULL = 0.7;
+
+/**
+ * The same share, for a shot the CAPTAIN called.
+ *
+ * One number was doing two unrelated jobs. §31 set 0.70 by reading player deaths
+ * and battle length — the right numbers for the question it was asking, which
+ * was how hard the enemy's new called shots should land. It never asked the
+ * other half: whether the option is worth taking by the captain paying for it.
+ *
+ * It was not. Measured over sixty seeded runs a side, a Miranda against three
+ * Birds-of-Prey, every one of the seven targets came in below simply shooting
+ * at the hull — engines 47%, weapons 28%, the floor group 22%, against 58% for
+ * naming nothing. A button that is always a mistake.
+ *
+ * Sweeping the price for the player's shots alone, with the enemy left at 0.70:
+ *
+ *     price   aim weapons   aim engines   aim shields     (hull baseline 65%)
+ *      0.70        35%           45%           23%
+ *      0.85        53%           70%           43%
+ *      1.00        78%           83%           38%
+ *
+ * 1.00 is the free upgrade §31 correctly removed — two targets strictly
+ * dominant. 0.70 is the far end, where none of them is worth taking. 0.85 is a
+ * decision: engines beats hull fire, weapons and shields do not.
+ *
+ * Split rather than moved, because moving it moves the enemy too — the same
+ * sweep applied to both sides costs six more player deaths in eighty fights and
+ * takes twenty seconds off the average battle, which is exactly the trade §31
+ * examined and declined. The captain's price is an option's cost; the enemy's
+ * is a difficulty dial. They were never the same quantity.
+ */
+export const CALLED_SHOT_PLAYER = 0.85;
 
 /**
  * When a single gun mount stops firing, and when it comes back.
@@ -811,6 +875,9 @@ export class Ship {
   takeDamage(amount, {
     bearing = 0, direction = null, type = 'energy',
     shieldPiercing = 0, rng = null, subsystem = null, from = null,
+    // What a called shot costs THIS shooter. Defaulted, so every other caller —
+    // hazards, collisions, boarding, the arena — keeps the behaviour it had.
+    calledShotHull = CALLED_SHOT_HULL,
   } = {}) {
     if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
 
@@ -848,10 +915,11 @@ export class Ship {
     // of 1.8 on a roll it usually lost. A choice with no cost is not a choice,
     // and it stayed one only because nothing but the player could make it.
     //
-    // Three tenths of the hull damage buys the precision, for both sides — see
-    // the measurements on CALLED_SHOT_HULL. A captain who calls a shot is
-    // trading the kill for the cripple, which is what calling a shot is.
-    if (subsystem) incoming *= CALLED_SHOT_HULL;
+    // The hull damage that buys the precision — see the measurements on
+    // CALLED_SHOT_HULL and CALLED_SHOT_PLAYER. A captain who calls a shot is
+    // trading the kill for the cripple, which is what calling a shot is; the
+    // question that constant pair answers is how much of the kill.
+    if (subsystem) incoming *= calledShotHull;
 
     let shieldDamage = 0;
     let hullDamage = 0;

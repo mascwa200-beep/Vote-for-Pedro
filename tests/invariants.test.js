@@ -47,7 +47,7 @@ import { parseOrder } from '../src/ui/orders.js';
 import { ABILITIES } from '../src/sim/officers.js';
 // The canonical lists the pools below are drawn from. Hand-written copies of
 // these are what let three of the fuzzer's calls do nothing at all.
-import { SUBSYSTEM_KEYS } from '../src/sim/ship.js';
+import { SUBSYSTEM_KEYS, TARGETABLE_SUBSYSTEMS } from '../src/sim/ship.js';
 import { PRESETS, SUBSYSTEMS } from '../src/sim/power.js';
 import { RECIPE_BY_ID } from '../src/sim/fabrication.js';
 import { AWAY_TEMPLATES } from '../src/sim/away.js';
@@ -2533,9 +2533,23 @@ describe('the fuzzer can actually reach what it fuzzes', () => {
     assert.deepEqual(took, Object.keys(PRESETS), 'a power preset the grid will not take');
 
     g.startCombat([new Ship('d7', { name: 'IKS Pool' })], { relentless: true });
+    // The pool is what the targeting computer takes, which is no longer every
+    // subsystem a ship HAS. Two of the seven do nothing when they fail on
+    // somebody else's ship — nothing in the game reads `subsystems.auxiliary`,
+    // and `lifesupport` is read once, about our own casualties — so the order
+    // is now answered rather than charging the called-shot price for nothing.
     const targetable = SUBSYSTEM_KEYS.filter((k) => g.engagement.targetSubsystem(k));
-    assert.deepEqual(targetable, [...SUBSYSTEM_KEYS],
+    assert.deepEqual(targetable, [...TARGETABLE_SUBSYSTEMS],
       'a subsystem key the targeting computer rejects');
+    // And the refusal is real, in both directions — otherwise this test would
+    // pass just as well if the computer accepted everything again.
+    const refused = SUBSYSTEM_KEYS.filter((k) => !TARGETABLE_SUBSYSTEMS.includes(k));
+    assert.ok(refused.length > 0, 'nothing is refused, so the pool proves nothing');
+    for (const k of refused) {
+      assert.equal(g.engagement.targetSubsystem(k), false, `${k} was accepted`);
+      assert.notEqual(g.engagement.targetedSubsystem, k,
+        `${k} was refused and set anyway — the captain pays the price and buys nothing`);
+    }
     g.engagement.end('routed');
 
     // Distinct reports, not merely seven calls that return: 'sickbay' returned
