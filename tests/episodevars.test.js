@@ -765,3 +765,82 @@ describe('the procedure named after this ship is one he can actually run', () =>
       `${src[0].id} is act ${src[0].act} and ${ep.id} is act ${ep.act}`);
   });
 });
+
+// §115. Vega, read on Rigel.
+//
+// At Vega the Orion captain "offers to leave for a price, and to keep whatever
+// his people already have aboard", and a captain can pay. They leave — "with
+// four hundred colonists aboard as cargo".
+//
+// Six weeks into Doctor Marru's detention on Rigel VII, a Syndicate broker is
+// running the same business, and this captain is on the list of people it works
+// on.
+describe('the captain who paid the Orions once is known to pay', () => {
+  const ep = EPISODES.find((e) => e.id === 'rigel_syndicate');
+  const stage = ep.stages.legal;
+
+  const open = (flags) => {
+    const g = captain();
+    for (const f of flags) g.ledger.setFlag(f);
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('buying her back is offered only to him', () => {
+    const gated = stage.choices.find((c) => c.id === 'buy');
+    assert.ok(gated, 'the bought road is gone');
+    assert.deepEqual(gated.requires, { flag: 'paid_orions' });
+    assert.equal(open([]).includes('buy'), false, 'offered to a captain who never paid anybody');
+    assert.ok(open(['paid_orions']).includes('buy'), 'Vega bought nothing');
+  });
+
+  test('and it is the one road in the episode that cannot fail', () => {
+    // That is the whole shape of it. Every other way to Doctor Marru is a roll
+    // or a firefight; this one is a price. The deed it reads was a captain
+    // buying his way out of a fight, and the consequence is that buying things
+    // works for him now.
+    const buy = stage.choices.find((c) => c.id === 'buy');
+    assert.ok(buy.outcome, 'the bought road no longer resolves the episode');
+    assert.equal(buy.effects.check, undefined, 'the bought road rolls for something');
+    assert.equal(buy.effects.combat, undefined, 'the bought road ends in a fight');
+
+    const rolls = [];
+    for (const [sid, s] of Object.entries(ep.stages)) {
+      for (const c of s.choices ?? []) {
+        if (c.effects?.check || c.effects?.combat) rolls.push(`${sid}/${c.id}`);
+      }
+    }
+    assert.ok(rolls.length >= 3, `only ${rolls.length} roads in this episode risk anything`);
+  });
+
+  test('and it costs him, in the place that would notice', () => {
+    // `independent` is "Unaligned Worlds" — the people who watch which Starfleet
+    // captains the Syndicate can do business with. It has to be the worst
+    // standing hit in the episode, or the road is simply the best one.
+    const buy = stage.choices.find((c) => c.id === 'buy');
+    assert.ok(buy.effects.standing.independent < 0);
+    assert.ok(buy.effects.standing.federation < 0, 'Starfleet does not mind at all');
+
+    const others = [];
+    for (const s of Object.values(ep.stages)) {
+      for (const c of s.choices ?? []) {
+        const v = c.effects?.standing?.independent;
+        if (typeof v === 'number' && c.id !== 'buy') others.push(v);
+      }
+    }
+    assert.ok(others.length, 'nothing else in the episode moves that track');
+    assert.ok(buy.effects.standing.independent < Math.min(...others),
+      `buying her back costs ${buy.effects.standing.independent} against a worst of ${Math.min(...others)}`);
+  });
+
+  test('and it has an ending of its own, not the clean one', () => {
+    // `negotiated` is leverage found in a public Ferengi filing and a consul who
+    // takes the credit. Dressing the bought road in that text would be the same
+    // four words for two different things.
+    const buy = stage.choices.find((c) => c.id === 'buy');
+    assert.notEqual(buy.outcome, 'negotiated');
+    assert.ok(ep.endings[buy.outcome], `no ending is written for "${buy.outcome}"`);
+    assert.notEqual(ep.endings[buy.outcome].text, ep.endings.negotiated.text);
+  });
+});

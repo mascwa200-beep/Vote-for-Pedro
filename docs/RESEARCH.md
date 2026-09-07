@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 356 choices, **70 of 356 choices carry a `requires`** —
+episodes, 154 stages and 357 choices, **71 of 357 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -11159,6 +11159,87 @@ tells the Council a Federation officer once offered Kang a way out.
 | and costs nothing with Starfleet, unlike its neighbour | — | pinned |
 
 Nineteen flags to go, three of them act-5 blocked.
+
+## 115. The road that cannot fail, and what it costs
+
+The tenth of the thirty, deferred out of §114 because it needed an ending of its
+own and I did not want to write one in the same change that was editing that
+episode's standing lines.
+
+### The deed
+
+At Vega, in act 1, the Orion captain *"offers to leave for a price, and to keep
+whatever his people already have aboard"*. A captain can pay. They leave — *"with
+four hundred colonists aboard as cargo."*
+
+`rigel_syndicate` is act 2: a Syndicate broker has held Doctor Elen Marru for six
+weeks and calls it a contract dispute. The consul is *"apologetic and useless"*.
+Every road to her from there is a stealth roll, a firefight on a neutral world,
+or a diplomacy check.
+
+`paid_orions` opens one more, and it is **the only road in the episode that
+cannot fail**. No roll, no guards, no Judge Advocate. She walks onto the pad
+because a price was met.
+
+That is the whole design of it. The deed it reads was a captain buying his way
+out of a fight while four hundred people paid for it, and the consequence is that
+buying things is now something he is known to do. It costs the worst `independent`
+hit in the episode — the unaligned worlds are precisely the people who notice
+which Starfleet captains the Syndicate can do business with — and a little
+Federation standing besides.
+
+Its ending is its own. `negotiated` is the clean road: leverage found in a public
+Ferengi filing, *"Nothing is on fire. The consul takes the credit."* Dressing the
+bought road in that text would be the same four words for two different things.
+`bought` ends with a ledger somewhere carrying his name and a number beside it,
+and the next Starfleet officer who comes to Rigel being quoted that number.
+
+### A guard caught the placement, not the content
+
+Written first onto the episode's opening stage, it moved a figure I did not
+expect: *"episodes offering a decline: §107 says 9, actual 10."*
+
+§107 defines those nine as episodes offering an **ending on their opening
+stage** — a decline, a walk-away. A terminal *purchase* on the first screen would
+have joined that count and made the prose false, while the guard beneath it
+(every such episode also offers a road in) went on passing.
+
+Moving it into `legal` — after the consulate has failed, which is where a captain
+would actually reach for his wallet — put the count back to nine and is the
+better scene anyway. **The guard did not object to the choice; it objected to
+where I put it**, and it was right on both counts.
+
+### And the bound on §114
+
+§114's defect was a declared key naming something that does not exist. The
+obvious question is whether the other effect keys have the same hole. The book
+uses eleven, and two had no test touching them at all:
+
+- **`record`, 93 uses** — the second-largest declared effect. All twelve kinds it
+  names are known to the ledger, which recognises 20 weighted and 13 weightless.
+  Clean.
+- **`item`, 3 uses** — `targeting_scanners`, `sensor_array`, `eps_conduits`, all
+  real console ids, and `effects.item` is read at `engine.js:417`. Clean.
+
+So the class was real and had exactly one instance. That is worth more than a
+second defect would have been: the twelve dead standing lines were an isolated
+lapse rather than the visible corner of a pattern, and now that is known rather
+than assumed either way.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the bought road is locked without Vega | drop the `requires` | ✓ ×4 |
+| it is the one road here that cannot fail | give it a check | ✓ |
+| and costs more than any other road on that track | soften it | ✓ |
+| and has an ending of its own | point it at `negotiated` | ✓ — and the pre-existing orphan guard reports `ending "bought" is unreachable` |
+
+That last control is the §110 discipline working: the guard already existed,
+`wiring.test.js` checks both directions of the outcome/ending correspondence, and
+the job was to verify it fires rather than to write a second one.
+
+Eighteen flags to go, three of them act-5 blocked.
 
 ## Attribution
 

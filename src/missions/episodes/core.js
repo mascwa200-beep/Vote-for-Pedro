@@ -540,6 +540,27 @@ export const CORE_EPISODES = [
           { id: 'leverage', label: 'Use it as leverage', outcome: 'negotiated',
             requires: { skill: 'diplomacy', ranks: 2 },
             effects: { xp: 800, record: { lives_saved: 1 }, standing: { independent: -4, federation: 10 } } },
+          // Vega, in act 1. He offered to leave for a price and to keep whatever
+          // his people already had aboard, and the captain paid: "They leave,
+          // with four hundred colonists aboard as cargo."
+          //
+          // A broker holding a Federation citizen for six weeks is running the
+          // same business, and this captain is on the list of people it works
+          // on. So there is a fourth road, and it is the only one here that
+          // cannot fail: no stealth roll, no firefight on a neutral world, no
+          // dead Syndicate guards. Doctor Marru walks onto the transporter pad
+          // because a price was met.
+          //
+          // It is meant to be the easy one. That is the point of it — the deed
+          // it reads was a captain buying his way out of a fight and four
+          // hundred people paying for it, and the consequence of that deed is
+          // that buying things is now something he is known to do. `independent`
+          // takes the worst of it: the unaligned worlds are the ones who notice
+          // which Starfleet captains the Syndicate can do business with.
+          { id: 'buy', label: 'Buy her back. They already know you pay',
+            outcome: 'bought', requires: { flag: 'paid_orions' },
+            effects: { xp: 600, record: { lives_saved: 1 },
+              standing: { independent: -16, federation: -6 } } },
           { id: 'covert2', label: 'Send a team instead', next: 'covert',
             effects: { check: { type: 'stealth', difficulty: 0.45, hazard: 'dangerous' } } },
         ],
@@ -603,6 +624,18 @@ export const CORE_EPISODES = [
     start: 'start',
     endings: {
       negotiated: { label: 'Negotiated release', text: 'She walks out. Nothing is on fire. The consul takes the credit.' },
+      // Its own ending, and not `negotiated`.
+      //
+      // `negotiated` is the clean road — leverage found in a public Ferengi
+      // filing, and a consul who takes the credit for it. Dressing the bought
+      // road in that text would be the quiet kind of dishonesty this register
+      // keeps catching: the same four words for two different things, one of
+      // which cost the captain nothing and one of which confirmed a market.
+      bought: { label: 'Bought back',
+        text: 'She walks out, six weeks late, and asks on the pad what it cost. The broker is '
+          + 'apologetic and businesslike and hopes you will think of him. Nothing is on fire '
+          + 'here either. Somewhere there is a ledger with your name in it and a number beside '
+          + 'it, and the next Starfleet officer who comes to Rigel will be quoted that number.' },
       extracted: { label: 'Extracted', text: 'Marru is aboard. Rigel will complain, and will be ignored.' },
       forced: { label: 'Taken by force',
         text: 'Starfleet Judge Advocate requests a written account within the week.' },
