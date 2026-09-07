@@ -1851,6 +1851,14 @@ describe('every episode graph is sound', () => {
       organia_revealed: 'candidate',
       rescued_vell: 'candidate',
       romulus_witness: 'candidate',
+      // NOT a correction of this list: `paid_orions`, `centauri_aid` and
+      // `tholian_protocol` were never on it, because the faction-memory table in
+      // `state.js` already read all three. §116 found that after three sections
+      // had described them as deeds nothing read. What §113-§115 actually gave
+      // them was a VISIBLE consequence — a choice in a later episode — which is a
+      // different and better thing than a standing adjustment nobody sees, and
+      // not the thing those sections claimed.
+      //
       // `paid_orions` left in §115: the captain who bought off the Orions at Vega,
       // and watched them leave with four hundred colonists aboard as cargo, can
       // buy a Federation citizen back from a Rigel broker. It is the only road in
