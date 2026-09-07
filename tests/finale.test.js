@@ -168,14 +168,14 @@ describe('the finale is still a finale', () => {
   test('every route through it ends the episode', () => {
     // Played, not read: each room, each choice that a maximal record opens.
     for (const [name, rec, flags] of [
-      ['commended', good, ['spared_warbird', 'the_watch_stood']],
+      ['commended', good, ['spared_warbird', 'the_watch_stood', 'grid_candid']],
       // `logged_the_watch` is `long_watch`'s: the night on deck eight, written
       // up honestly. Added here rather than to a new case because this list is
       // "every flag that opens a choice at this stage", and a flag missing from
       // it makes the loop below assert that a gated choice is unlocked for a
       // captain who never earned it.
       ['questioned', () => {}, ['falsified_report', 'borg_weakness', 'kang_respects_you', 'logged_the_watch', 'logged_a_fault']],
-      ['censured', bad, ['dmz_accord', 'inquiry_resolved']],
+      ['censured', bad, ['dmz_accord', 'inquiry_resolved', 'telek_acquitted']],
     ]) {
       const room = convene(captain({ record: rec, flags })).stageId;
       const stage = EPISODE_BY_ID.homecoming.stages[room];
@@ -214,6 +214,92 @@ describe('the finale is still a finale', () => {
     for (const [sid, stage] of Object.entries(EPISODE_BY_ID.homecoming.stages)) {
       const ungated = stage.choices.filter((c) => !c.requires);
       assert.ok(ungated.length, `homecoming/${sid}: every way out of the room is gated`);
+    }
+  });
+});
+
+// How far forward the board can see.
+//
+// §112. `finale.test.js` already asserted that specific old decisions are still
+// in the room — `spared_warbird` from act 2, `falsified_report` from act 1 — and
+// that every flag the board reads is one an episode can set. Nothing asserted
+// the SPAN, so nothing noticed that all nine of its gates reached back to act 4
+// or earlier and it read nothing at all from act 4's own harvest of unused
+// decisions.
+//
+// Reaching act 5 is not available and the reason is worth recording: `homecoming`
+// is act 5 itself, has `minRank: 8` and no `requiresCompleted`, so nothing makes
+// it the last episode played. `wiring.test.js` refuses a gate on a flag that is
+// not first written STRICTLY earlier — "flags read before anything could have
+// earned them" — and it is right to. A board that could only hear about Khitomer
+// if the captain happened to play Khitomer first is a promise the ordering does
+// not keep.
+describe('the reach forwards, as far as the ordering allows', () => {
+  const hc = EPISODE_BY_ID.homecoming;
+
+  /** The earliest act each flag can be earned in. */
+  const firstAct = (flag) => Math.min(...EPISODES
+    .filter((ep) => Object.values(ep.stages ?? {}).some((s) => (s.choices ?? [])
+      .some((c) => [].concat(c.effects?.flag ?? []).includes(flag)))
+      || Object.values(ep.endings ?? {}).some((e) => [].concat(e.effects?.flag ?? []).includes(flag)))
+    .map((ep) => ep.act));
+
+  const gatesOf = (ep) => Object.values(ep.stages ?? {})
+    .flatMap((s) => (s.choices ?? []).filter((c) => c.requires?.flag).map((c) => c.requires.flag));
+
+  test('the board hears about the last act it is allowed to hear about', () => {
+    const acts = gatesOf(hc).map(firstAct).filter(Number.isFinite);
+    assert.ok(acts.length >= 8, `the board gates on only ${acts.length} flags`);
+
+    // The assertion that would have found this: every act a captain could have
+    // acted in, up to the last one the ordering guarantees, is represented.
+    const reach = Math.max(...acts);
+    assert.equal(reach, hc.act - 1,
+      `the board reaches act ${reach}; the latest act it can legitimately read is ${hc.act - 1}`);
+    assert.equal(Math.min(...acts), 1, 'the board no longer reaches the shakedown');
+
+    // And not one act missing in between — a board that reads acts 1, 2 and 4
+    // but nothing from act 3 has a hole in the commission.
+    for (let act = 1; act < hc.act; act++) {
+      assert.ok(acts.includes(act), `nothing the board reads was first earned in act ${act}`);
+    }
+  });
+
+  test('and the opening is a decision now, for a captain with something to declare', () => {
+    // The stage had one choice, which is a screen that asks nothing. A captain
+    // who made it an order on the rec deck can put that in front of the board
+    // himself rather than wait for them to reach the page.
+    const start = hc.stages.start;
+    assert.equal(start.choices.length, 2);
+    const own = start.choices.find((c) => c.id === 'own_it');
+    assert.deepEqual(own.requires, { flag: 'ordered_the_deck' });
+
+    const g = captain({ record: bad, flags: ['ordered_the_deck'] });
+    const m = g.missions.start('homecoming', g);
+    g.locationId = 'sol';
+    const open = m.choices().filter((c) => !c.locked).map((c) => c.id);
+    assert.deepEqual(open.sort(), ['own_it', 'stand']);
+
+    // Locked with a reason for everybody else, which is the contract the panel
+    // renders — not absent.
+    const plain = captain({ record: bad });
+    const m2 = plain.missions.start('homecoming', plain);
+    plain.locationId = 'sol';
+    const shut = m2.choices().find((c) => c.id === 'own_it');
+    assert.ok(shut.locked && shut.lockReason, 'a locked choice with no reason on it');
+  });
+
+  test('and declaring it does not change what the record says he was', () => {
+    // Both openings run `byRecord`. A censured captain who gets ahead of the
+    // worst page in his file is still a censured captain — the choice changes
+    // what is on the table, not the finding.
+    for (const [rec, want] of [[good, 'commended'], [bad, 'censured']]) {
+      const g = captain({ record: rec, flags: ['ordered_the_deck'] });
+      const m = g.missions.start('homecoming', g);
+      g.locationId = 'sol';
+      g.chooseMission('own_it');
+      assert.equal(m.stageId, want,
+        `a captain with a ${want === 'good' ? 'good' : 'bad'} record was taken to ${m.stageId}`);
     }
   });
 });

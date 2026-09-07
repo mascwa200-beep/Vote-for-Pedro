@@ -1845,12 +1845,18 @@ describe('every episode graph is sound', () => {
       dmz_clause_recovered: 'candidate', dmz_favourable: 'candidate',
       donatu_battle: 'candidate',
       donatu_pressed: 'candidate', grid_9902_contact: 'candidate',
-      grid_answered_late: 'candidate', grid_candid: 'candidate',
+      grid_answered_late: 'candidate',
       merrimack_lost: 'candidate',
-      ordered_the_deck: 'candidate', organia_rebuffed: 'candidate',
+      organia_rebuffed: 'candidate',
       organia_revealed: 'candidate',
       rescued_vell: 'candidate',
-      romulus_witness: 'candidate', telek_acquitted: 'candidate',
+      romulus_witness: 'candidate',
+      // `ordered_the_deck`, `grid_candid` and `telek_acquitted` left in §112, to
+      // the review board: the captain who made it an order on the rec deck can
+      // put that in front of them himself, the one who answered 9902 candidly
+      // can have the exchange read rather than the summary, and the one a
+      // Romulan court acquitted a man on can say who last took his word.
+      //
       // `organia_secret` and `donatu_accord` left in §111: the Vulcan hall now
       // hears the captain who buried what he saw at Organia admit it, and the
       // captain who made two fleets accept one text at Donatu can do it again
