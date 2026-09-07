@@ -861,7 +861,15 @@ export function tacticalScreen(app) {
         say: `target their ${label.toLowerCase()}`,
       })),
     ]),
-    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor. It costs you hull damage you would otherwise be doing, so it is worth it when the cripple is worth more than the kill.' }),
+    // The hint used to say the price came out of "hull damage you would
+    // otherwise be doing". It does not: the multiplier is applied before the
+    // shield/hull split, so it is taken out of shield-stripping just as hard —
+    // while what the shot buys scales with the damage that reached the HULL.
+    // Through a full facing the captain pays on the whole shot and buys against
+    // the 8% bleed. Saying so is the difference between a lever with a cost and
+    // one with a cost the player cannot see. It is also the rule the enemy has
+    // been following all along.
+    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor. It costs fifteen percent of the whole shot, shields as much as hull — and it only cripples in proportion to what reaches the hull. Call it once their shields are down, which is what they do to you.' }),
   ]));
 
   // --- Weapons ---

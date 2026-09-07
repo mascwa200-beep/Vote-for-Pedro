@@ -22,7 +22,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Game } from '../src/core/state.js';
-import { Ship, SUBSYSTEM_KEYS, CALLED_SHOT_HULL, facingForDirection } from '../src/sim/ship.js';
+import { readFileSync } from 'node:fs';
+
+import { Ship, SUBSYSTEM_KEYS, CALLED_SHOT_HULL, CALLED_SHOT_PLAYER, facingForDirection } from '../src/sim/ship.js';
 import { Character } from '../src/rules/character.js';
 import { SHIP_CLASSES } from '../src/world/ships.data.js';
 import { FACTIONS } from '../src/world/factions.data.js';
@@ -308,5 +310,66 @@ describe('what it does to the player over a whole battle', () => {
     const median = runs[runs.length >> 1];
     assert.ok(median < 150, `the median battle now runs ${median.toFixed(0)} seconds`);
     assert.ok(runs[runs.length - 1] < 400, 'a battle ran to the time limit');
+  });
+});
+
+describe('what the called shot actually costs, and whether the panel says so', () => {
+  // A stub rng, so the shot is the only thing being measured. `range` is
+  // needed by the crew roll; leaving it off throws inside takeDamage.
+  const rng = {
+    chance: () => false, pick: (a) => a[0], next: () => 0.5,
+    float: () => 0.5, range: (a, b) => (a + b) / 2,
+  };
+  const shot = (subsystem, shieldsUp) => {
+    const s = new Ship('bird_of_prey', { faction: 'klingon', name: 'T' });
+    if (!shieldsUp) for (const k of Object.keys(s.shields)) s.shields[k] = 0;
+    return s.takeDamage(100, {
+      bearing: 0, type: 'energy', subsystem, rng, calledShotHull: CALLED_SHOT_PLAYER,
+    });
+  };
+
+  test('it comes out of shield damage exactly as hard as out of hull', () => {
+    // The constant is named CALLED_SHOT_HULL and §95 called it "the share of
+    // hull damage a called shot keeps". Both are wrong: it multiplies
+    // `incoming` at the top of takeDamage, BEFORE the shield/hull split, so it
+    // is taken out of shield-stripping too. That is not a detail — it is why
+    // calling a shot through a full facing is the worst thing a captain can
+    // do, and the panel used to tell them it only cost hull.
+    const plain = shot(null, true);
+    const called = shot('weapons', true);
+    assert.ok(plain.shieldDamage > 0 && plain.hullDamage > 0, 'the fixture landed nothing');
+    const onShields = called.shieldDamage / plain.shieldDamage;
+    const onHull = called.hullDamage / plain.hullDamage;
+    assert.ok(Math.abs(onShields - CALLED_SHOT_PLAYER) < 1e-9,
+      `a called shot kept ${onShields.toFixed(3)} of its shield damage, not ${CALLED_SHOT_PLAYER}`);
+    assert.ok(Math.abs(onHull - onShields) < 1e-9,
+      'the price is charged to hull and shields at different rates');
+  });
+
+  test('and it buys in proportion to what reached the hull, which is why it waits', () => {
+    // `damageSubsystem(subsystem, (hullDamage / maxHull) * 3.2)`. Through an
+    // intact facing hullDamage is only the bleed, so the same shot at the same
+    // price cripples far less. This is the AI's rule at ai.js, measured from
+    // the player's side: it is not a preference, it is arithmetic.
+    const up = shot('weapons', true);
+    const down = shot('weapons', false);
+    assert.ok(down.hullDamage > up.hullDamage * 5,
+      `a called shot through a full facing reached ${up.hullDamage.toFixed(2)} of hull `
+      + `against ${down.hullDamage.toFixed(2)} with the facing down — the gap the hint is about`);
+  });
+
+  test('and the panel tells the captain both halves of that', () => {
+    // The string IS the deliverable here, so reading it is the measurement and
+    // not a substitute for one — unlike a test that reads source to check
+    // logic. The two behavioural guards above are what keep it honest: if the
+    // hint says "shields as much as hull" and the code stops doing that, the
+    // first test fails rather than this one.
+    const src = readFileSync(new URL('../src/ui/screens.js', import.meta.url), 'utf8');
+    const hint = /'(Targeting a subsystem[^']*)'/.exec(src);
+    assert.ok(hint, 'the targeting panel no longer explains the trade at all');
+    assert.match(hint[1], /shield/i,
+      `the hint still prices the shot as hull-only: "${hint[1]}"`);
+    assert.match(hint[1], /down/i,
+      `the hint names the cost but not when to pay it: "${hint[1]}"`);
   });
 });

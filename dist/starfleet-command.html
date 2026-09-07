@@ -13590,7 +13590,7 @@ const TARGETABLE_SUBSYSTEMS = ['weapons', 'shields', 'engines', 'warpcore', 'sen
  * Measured across a hundred and twenty fights against five factions, with the
  * simple pilot the balance suite flies, once every enemy captain could call one:
  *
- *     share of hull damage kept    player destroyed    median battle
+ *     share of the SHOT kept       player destroyed    median battle
  *     1.00  (free, as it was)         53 / 120             40 s
  *     0.85                            48                   45 s
  *     0.70                            48                   50 s
@@ -13606,6 +13606,29 @@ const TARGETABLE_SUBSYSTEMS = ['weapons', 'shields', 'engines', 'warpcore', 'sen
  * the log, with a whole repair and power system to answer it.
  */
 const CALLED_SHOT_HULL = 0.7;
+
+/*
+ * A correction to the name and to what §95 said about it.
+ *
+ * Both constants are applied to `incoming` at the top of `takeDamage`, BEFORE
+ * the shield/hull split and before the crew roll. So the price is not a share
+ * of hull damage, as the name and §95 both say — it is a share of the whole
+ * shot, and it is taken out of shield-stripping just as hard. Measured, one
+ * 100-point hit on a B'rel at the player's 0.85:
+ *
+ *     shields up     shield 92.00 -> 78.20    hull 8.00 -> 6.80
+ *     shields down   shield  0.00 ->  0.00    hull 100.00 -> 85.00
+ *
+ * Which matters, because what the shot BUYS is `(hullDamage / maxHull) * 3.2`
+ * — scaled by the part that reached the hull. Through an intact facing that is
+ * the 8% bleed, so the captain pays the full price on the 92 points doing the
+ * real work and buys against the 8. Same price, about twelve times less bought.
+ *
+ * That is the whole of the AI's rule at `ai.js`: it drops its called shot while
+ * the facing it is shooting at still has shields, and the player has no
+ * equivalent. Not a balance change here — the targeting hint now says it, which
+ * is what the player was missing.
+ */
 
 /**
  * The same share, for a shot the CAPTAIN called.
@@ -17703,6 +17726,14 @@ class Engagement {
     // sits below the threshold for as long as it takes to repair, and the
     // sweep that notices runs every tick.
     this.saidMount = new Set();
+    // Death saves already announced, seeded with what each ship has ALREADY
+    // spent. `Ship.destroy` returns before setting `destroyed` when the
+    // Survivor feat catches a ship, so `reportDeaths` sweeps straight past it
+    // — the same silence `onDestroyed` was written to end, arrived at from the
+    // opposite direction. Seeded rather than started empty because the counter
+    // survives the fight it was spent in, and an unseeded map would announce
+    // an old save on the first tick of the next battle.
+    this.saidSaves = new Map(this.allShips.map((s) => [s, s.deathSavesSpent ?? 0]));
 
     this.placeCombatants();
     // Metreon gas will not let a warp field form. Read AFTER the arena is
@@ -18208,8 +18239,37 @@ class Engagement {
     }
   }
 
+  /**
+   * The one time a ship should have been lost and was not.
+   *
+   * `Ship.destroy` spends a death save and returns BEFORE setting `destroyed`,
+   * which is correct — the ship is alive — but it means the hull snaps to 1%,
+   * an in-progress warp core breach stops, any boarding party vanishes and
+   * every shield facing goes flat, all in one tick and with nothing said. The
+   * `ship:deathsave` event carried the news and had no listener anywhere, so
+   * the whole thing read as a display fault.
+   *
+   * Said here rather than from a screen listener, for the reason `state.js`
+   * gives about `combat:end`: a fight that finishes headless is still a fight
+   * that happened, and the log is the campaign's record of it.
+   */
+  reportSaves() {
+    for (const s of this.allShips) {
+      const spent = s.deathSavesSpent ?? 0;
+      if (spent <= (this.saidSaves.get(s) ?? 0)) continue;
+      this.saidSaves.set(s, spent);
+      const cause = s.destroyCause && s.destroyCause !== 'destroyed' ? ` — ${s.destroyCause}` : '';
+      this.pushLog(
+        `${s.name} should have been lost${cause}. She is holding at one percent of hull`
+        + `${s === this.player ? ', and that is the only time she will.' : '.'}`,
+        'engineering',
+      );
+    }
+  }
+
   reportDeaths() {
     this.reportMounts();
+    this.reportSaves();
     for (const s of this.allShips) {
       if (s.destroyed) this.onDestroyed(s, null);
     }
@@ -40526,6 +40586,12 @@ class Game {
       faction: 'federation',
       isPlayer: true,
     });
+    // What the campaign log has already said about a death save. Seeded from
+    // the ship rather than left to the first tick: a save spent before `update`
+    // ever ran — a hazard on arrival, a fixture that sinks the ship outright —
+    // would otherwise be swallowed by its own seeding. `Game.load` re-seeds it
+    // from the loaded hull for the same reason, in the other direction.
+    this.saidDeathSaves = this.ship.deathSavesSpent ?? 0;
     this.applyAllMods();
 
     // ---- world ----
@@ -45197,6 +45263,21 @@ class Game {
     // back with "I had the con for the last hour. Nothing to report."
     if (this.conStation) this.conHours += dt / 3600;
 
+    // The ship was destroyed and something caught her. The engagement says so
+    // in the combat log while it is happening; this is the campaign's record,
+    // because what the save costs is permanent and the combat log is sixty
+    // lines and thrown away. Swept here rather than inside the COMBAT case
+    // because `Ship.destroy` is also reached by hazards and collisions.
+    const saveSpent = this.ship.deathSavesSpent ?? 0;
+    if (saveSpent > (this.saidDeathSaves ?? 0)) {
+      this.saidDeathSaves = saveSpent;
+      this.pushLog(
+        `${this.ship.name} was lost and is not. Damage control has her at one percent of hull `
+        + 'and the breach is out. There is no second time.',
+        'engineering',
+      );
+    }
+
     switch (this.mode) {
       case MODES.TRANSIT: {
         if (!this.transit) { this.mode = MODES.BRIDGE; break; }
@@ -45350,8 +45431,20 @@ class Game {
         + 'put in, and it is already on your record.',
         'comms',
       );
+      const spentSaves = this.ship.deathSavesSpent ?? 0;
       const took = takeCommandOf(this, board.id);
       if (!took.ok) return this.gameOver('ship lost and no hull available');
+      // "Once per commission", and a commission outlasts a hull.
+      //
+      // `deathSavesSpent` lives on the ship so that `destroy` can write it
+      // without a back-reference to the campaign, and `applyAllMods` subtracts
+      // it — which the comment there says makes the save once per commission
+      // rather than once per refit. It does, for a refit. It does not for the
+      // one thing that actually replaces the object: losing the ship. A
+      // brand-new hull carries the counter at zero, so the allowance came back
+      // with every replacement. Measured: the feat fired TWICE in one
+      // commission, once before the Miranda was lost and once aboard the Hood.
+      this.ship.deathSavesSpent = spentSaves;
       this.pushLog(
         `Starfleet assigns you ${this.ship.name}. She is not ${lost}, and nobody `
         + 'aboard has worked her up.',
@@ -46177,6 +46270,10 @@ class Game {
     g.captain = { ...g.captain, ...data.captain };
     g.crew = Crew.load(data.crew);
     g.ship = Ship.load(data.ship);
+    // Whatever this hull has already spent has already been reported, in the
+    // session that spent it. Without this a loaded campaign announces a rescue
+    // that happened before the save file was written.
+    g.saidDeathSaves = g.ship.deathSavesSpent ?? 0;
     g.progress = CaptainProgress.load(data.progress);
     g.loadout = Loadout.load(data.loadout, g.ship.cls.slots);
     g.ledger = Ledger.load(data.ledger);
@@ -47244,7 +47341,15 @@ function tacticalScreen(app) {
         say: `target their ${label.toLowerCase()}`,
       })),
     ]),
-    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor. It costs you hull damage you would otherwise be doing, so it is worth it when the cripple is worth more than the kill.' }),
+    // The hint used to say the price came out of "hull damage you would
+    // otherwise be doing". It does not: the multiplier is applied before the
+    // shield/hull split, so it is taken out of shield-stripping just as hard —
+    // while what the shot buys scales with the damage that reached the HULL.
+    // Through a full facing the captain pays on the whole shot and buys against
+    // the 8% bleed. Saying so is the difference between a lever with a cost and
+    // one with a cost the player cannot see. It is also the rule the enemy has
+    // been following all along.
+    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor. It costs fifteen percent of the whole shot, shields as much as hull — and it only cripples in proportion to what reaches the hull. Call it once their shields are down, which is what they do to you.' }),
   ]));
 
   // --- Weapons ---
@@ -50228,10 +50333,10 @@ class App {
     // `officer:regard` has been emitted with a reason on every change since §44
     // wired the relationship — a watch stood, a fight won, the ship lost, a
     // butcher's bill, an officer hurt on the surface — and had NO listener
-    // anywhere. Measured over ten fights a well-fought commission moves the
-    // bridge twenty points and a badly-fought one forty-five, and 71% of order
-    // shapes turn on where that number sits, so a captain was being obeyed or
-    // argued with on a figure nothing ever mentioned.
+    // anywhere. Over ten fights a well-fought commission moves the bridge
+    // twenty points and a badly-fought one ninety — the mean of eight seeds —
+    // and 71% of order shapes turn on where that number sits, so a captain was
+    // being obeyed or argued with on a figure nothing ever mentioned.
     //
     // On the BAND, not on the change: regard moves a point or two on almost
     // everything that happens, and a line every time would be a log made of

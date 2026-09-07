@@ -284,6 +284,14 @@ export class Engagement {
     // sits below the threshold for as long as it takes to repair, and the
     // sweep that notices runs every tick.
     this.saidMount = new Set();
+    // Death saves already announced, seeded with what each ship has ALREADY
+    // spent. `Ship.destroy` returns before setting `destroyed` when the
+    // Survivor feat catches a ship, so `reportDeaths` sweeps straight past it
+    // — the same silence `onDestroyed` was written to end, arrived at from the
+    // opposite direction. Seeded rather than started empty because the counter
+    // survives the fight it was spent in, and an unseeded map would announce
+    // an old save on the first tick of the next battle.
+    this.saidSaves = new Map(this.allShips.map((s) => [s, s.deathSavesSpent ?? 0]));
 
     this.placeCombatants();
     // Metreon gas will not let a warp field form. Read AFTER the arena is
@@ -789,8 +797,37 @@ export class Engagement {
     }
   }
 
+  /**
+   * The one time a ship should have been lost and was not.
+   *
+   * `Ship.destroy` spends a death save and returns BEFORE setting `destroyed`,
+   * which is correct — the ship is alive — but it means the hull snaps to 1%,
+   * an in-progress warp core breach stops, any boarding party vanishes and
+   * every shield facing goes flat, all in one tick and with nothing said. The
+   * `ship:deathsave` event carried the news and had no listener anywhere, so
+   * the whole thing read as a display fault.
+   *
+   * Said here rather than from a screen listener, for the reason `state.js`
+   * gives about `combat:end`: a fight that finishes headless is still a fight
+   * that happened, and the log is the campaign's record of it.
+   */
+  reportSaves() {
+    for (const s of this.allShips) {
+      const spent = s.deathSavesSpent ?? 0;
+      if (spent <= (this.saidSaves.get(s) ?? 0)) continue;
+      this.saidSaves.set(s, spent);
+      const cause = s.destroyCause && s.destroyCause !== 'destroyed' ? ` — ${s.destroyCause}` : '';
+      this.pushLog(
+        `${s.name} should have been lost${cause}. She is holding at one percent of hull`
+        + `${s === this.player ? ', and that is the only time she will.' : '.'}`,
+        'engineering',
+      );
+    }
+  }
+
   reportDeaths() {
     this.reportMounts();
+    this.reportSaves();
     for (const s of this.allShips) {
       if (s.destroyed) this.onDestroyed(s, null);
     }
