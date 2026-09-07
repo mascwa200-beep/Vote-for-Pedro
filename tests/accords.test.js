@@ -408,3 +408,75 @@ describe('the last power that stopped this war', () => {
     assert.ok(gated.effects.standing.federation > 0);
   });
 });
+
+// ------------------------------------------------ a lock with a door behind it
+//
+// `cardassia_debt/start/clause` was gated on `dmz_accord` and carried the
+// comment "Only a captain who actually signed it. Two of the treaty's endings
+// set this and one does not." Both sentences are true about `cardassian_treaty`
+// and neither survives being read here.
+//
+// The episode requires `torvan_owes_you`, written at the treaty's `clause/quiet`
+// — and `quiet` goes to `talks`, where both remaining choices sign. The captain
+// who did not sign took `clause/press` instead and never earned the flag that
+// brings him to Cardassia. So the gate was shown as earned to a room in which
+// everybody had earned it: §111's dead lock with its sign reversed, and the
+// general guard for it now lives in `wiring.test.js`.
+describe('the clause quoted from memory', () => {
+  const ep = ACCORD_EPISODES.find((e) => e.id === 'cardassia_debt');
+  const clause = () => ep.stages.start.choices.find((c) => c.id === 'clause');
+
+  const diplomat = (ranks) => {
+    const g = captain({ flags: ['torvan_owes_you'] });
+    for (let i = 0; i < ranks; i++) {
+      assert.ok(g.progress.spend('diplomacy'), `could not buy diplomacy rank ${i + 1}`);
+    }
+    return g;
+  };
+
+  test('asks for the skill, because the deed cannot tell these captains apart', () => {
+    const c = clause();
+    assert.ok(c, 'the clause is gone');
+    assert.deepEqual(c.requires, { skill: 'diplomacy', ranks: 3 },
+      'the clause is gated on something other than the diplomacy that reads it');
+  });
+
+  test('and the deed it used to ask for is one every captain here already has', () => {
+    // Measured on the treaty's own graph rather than asserted: from the stage
+    // that writes `torvan_owes_you`, every road out signs the accord. This is
+    // the fact that made the old gate meaningless, and if the treaty ever grows
+    // a road that does not sign, the old gate becomes viable again and this
+    // test should be the thing that says so.
+    const treaty = EPISODES.find((e) => e.id === 'cardassian_treaty');
+    const writes = Object.entries(treaty.stages).flatMap(([sid, s]) =>
+      (s.choices ?? []).filter((c) =>
+        [].concat(c.effects?.flag ?? []).includes('torvan_owes_you'))
+        .map((c) => ({ sid, c })));
+    assert.equal(writes.length, 1, 'torvan_owes_you is written in more than one place now');
+
+    const after = treaty.stages[writes[0].c.next];
+    assert.ok(after, 'the stage that writes torvan_owes_you no longer leads anywhere');
+    assert.ok((after.choices ?? []).length >= 2, 'the road after it is no longer a choice');
+    for (const c of after.choices) {
+      assert.ok([].concat(c.effects?.flag ?? []).includes('dmz_accord'),
+        `${writes[0].c.next}/${c.id} does not sign, so dmz_accord would discriminate again`);
+    }
+  });
+
+  test('and the skill gate does discriminate, in both directions', () => {
+    const need = clause().requires.ranks;
+    const open = (g) => ep.stages.start.choices
+      .filter((c) => !c.requires?.skill || g.progress.ranksIn(c.requires.skill) >= c.requires.ranks)
+      .map((c) => c.id);
+
+    assert.equal(open(diplomat(need - 1)).includes('clause'), false,
+      `offered at diplomacy ${need - 1}`);
+    assert.ok(open(diplomat(need)).includes('clause'), `refused at diplomacy ${need}`);
+  });
+
+  test('and refusing it strands nobody, because two roads out of the stage are free', () => {
+    const free = ep.stages.start.choices.filter((c) => !c.requires);
+    assert.ok(free.length >= 2,
+      `only ${free.length} ungated roads out of the customs shed`);
+  });
+});

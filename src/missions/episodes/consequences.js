@@ -85,6 +85,24 @@ export const CONSEQUENCE_EPISODES = [
           { id: 'accept', label: 'Take the trials', next: 'trials', effects: { xp: 600 } },
           { id: 'why', label: 'Ask what she heard about Starbase 11', next: 'starbase',
             effects: { xp: 700 } },
+          // The second option on the first screen of the game. Nakamura's
+          // orders are on the screen, the ship is finished, and the captain's
+          // choice is to acknowledge them or to ask why the hurry — of this
+          // yard, at Utopia Planitia, before he has done anything at all.
+          //
+          // He is standing in the same yard now. There is a hull in frame two
+          // months from launch and a class being certified on a survey the yard
+          // wrote about itself, which is what a hurry looks like when it has
+          // had time to become a procedure. He is the one officer in the fleet
+          // who has asked this question in this building before and can say so.
+          //
+          // It goes straight to the trials because that is the honest answer to
+          // it: she is not going to tell him, and the schedule is not going to
+          // change, and the only thing asking buys him is knowing what to look
+          // for four days later. Which turns out to be enough.
+          { id: 'hurry', label: 'Ask why the hurry. You asked this yard that once before.',
+            next: 'trials', requires: { flag: 'asked_about_hurry' },
+            effects: { xp: 900, standing: { federation: 6 } } },
           { id: 'decline', label: 'Say the yard should certify its own work',
             outcome: 'declined', effects: { xp: 400, standing: { federation: -4 } } },
         ],

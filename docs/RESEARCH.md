@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 363 choices, **77 of 363 choices carry a `requires`** —
+episodes, 154 stages and 364 choices, **78 of 364 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -11500,6 +11500,188 @@ the assertion had a side that was actually supposed to be true.
 | the Organia answer pays Starfleet too | pay only the Klingons | ✓ |
 
 Thirteen flags to go, three of them act-5 blocked.
+
+## 119. The gate that was always open
+
+Two batches ago I said the remaining flags were not equally good and that I would
+say so when the placements started to feel forced. This section is what happened
+when I checked three of them properly instead of plausibly. Two were wrong, in
+opposite directions, and the check that had blessed all three was measuring the
+wrong thing.
+
+### What the old check did
+
+For six sections the safety test before placing a gate was: does the flag ever
+co-occur with the episode's own requirement? Never co-occurring means the gate is
+permanently shut — §111's defect, a lock with no key, and `wiring.test.js` has
+held a guard for it since.
+
+It has a mirror nobody had written. If the episode's own requirement *guarantees*
+the flag, the gate is permanently open: every captain who can walk into the room
+is already holding the key. The player is shown a choice dressed as earned, and
+nobody was ever kept out of it. A lock with no door.
+
+I nearly shipped one. `archanis_ratified` was headed for `khitomer_accord`, which
+requires `qonos_upheld` — and:
+
+```
+qonos_council: the `upheld` ending is reachable only from the two choices
+that write `qonos_upheld`, and both of them always reach it.
+```
+
+The two flags are one deed written down twice. A gate on either behaves exactly
+like a gate on the other, and `qonos_upheld` is already read in two places.
+
+### Measuring it properly
+
+The reason the old check could not see this is that it read the source. A flag is
+written on a choice, and whether one choice implies another is a fact about the
+*roads between them*, not about the lines they sit on. So: enumerate every
+complete route through every episode, following endings as part of the route, and
+ask about flags in terms of the routes that write them.
+
+```
+6,766 complete playthroughs across 26 episodes, 78 distinct flags
+```
+
+Two pairs are written by exactly the same playthroughs:
+
+| pair | episode | status |
+| --- | --- | --- |
+| `archanis_ratified` = `qonos_upheld` | `qonos_council` | one read, one on the unwired list |
+| `romulan_favour` = `telek_acquitted` | `romulus_debt` | both read, one as standing and one as a gate |
+
+The second is a redundancy and harmless. The first is a flag on the debt register
+that is not a deed at all, and it has been retired rather than wired — a third
+category in `WRITTEN_AND_UNREAD`, and one that has to prove itself: a flag excused
+as a synonym must actually have a twin that something reads, or the excuse fails.
+
+### One shipped, and it was the comment that gave it away
+
+Sweeping every gated choice against its own episode's requirement found one live:
+
+```
+cardassia_debt/start/clause: requires dmz_accord,
+  but the episode's own torvan_owes_you already guarantees it
+```
+
+Its comment read *"Only a captain who actually signed it. Two of the treaty's
+endings set this and one does not."* Both sentences are true about
+`cardassian_treaty`. Neither is true in the episode they are written in.
+`torvan_owes_you` is written at the treaty's `clause/quiet`, `quiet` goes to
+`talks`, and both of `talks`'s choices sign. The captain who did not sign went
+through `press` instead and never earned the flag that brings him to Cardassia.
+The distinction is real, and this episode had already filtered away everyone it
+applies to.
+
+Nothing in the treaty discriminates among the captains who arrive — after `quiet`
+the road is forced — so the credential could not be a deed, and pretending
+otherwise is what went wrong the first time. Quoting a treaty clause from memory,
+four hours into a customs interview two acts later, is a diplomat's trick and is
+gated as one, a rank above the check that let him read the room at Terok Nor.
+
+### The one placement that survived
+
+`asked_about_hurry` is the second option on the first screen of the game. Nakamura's
+orders are up, the ship is finished, and the captain may acknowledge them or ask
+why the hurry — of Utopia Planitia, before he has done anything at all.
+
+`utopia_certification` is act 5 and set in that same yard. There is a hull in
+frame two months from launch and a class being certified on a survey the yard
+wrote about itself, which is what a hurry looks like once it has had time to
+become a procedure. He is the one officer in the fleet who has asked this
+question in this building before, and can say so.
+
+It goes straight to the trials, because that is the honest answer: she is not
+going to tell him, the schedule is not going to change, and what asking buys him
+is knowing what to look for four days later.
+
+The third candidate, `dmz_favourable` into `cardassia_debt`, was wrong the other
+way — it never co-occurs with `torvan_owes_you` at all, so that gate would have
+been permanently shut. Three placements, one good.
+
+### And a claim the register had made twice, from memory
+
+Writing this up, I asserted the new gate was the longest reach in the book. The
+test disagreed. Then I read a truncated diff, corrected it to a two-way tie, and
+the test disagreed again. Computed properly:
+
+| gate | flag | reaches |
+| --- | --- | --- |
+| `homecoming/questioned/correct` | `falsified_report` | act 1 → 5 |
+| `utopia_certification/start/hurry` | `asked_about_hurry` | act 1 → 5 |
+| `utopia_certification/trials/tuned` | `core_tuned` | act 1 → 5 |
+| `utopia_certification/the_memo/trials` | `trials_by_the_book` | act 1 → 5 |
+
+Four gates at the maximum span, every one of them reaching into `shakedown` — the
+episode that exists to teach the controls — and three of the four already in
+`utopia_certification` before anything was added to it. §114 had called an
+act-1-to-act-4 gate "the longest reach in the book" when three four-act gates were
+already shipped.
+
+The new gate sets no record. It joins a pattern that was there, and the pattern is
+better than the record would have been: the captain comes back to the yard he
+launched from and is asked about the report he wrote, the tuning pass he ran, and
+the question he asked before he flew.
+
+Three wrong statements of one fact, all from the two or three episodes that
+happened to be open at the time. It is a test now.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| no gate is open to every captain who can reach it | restore the `dmz_accord` gate | ✓ names it |
+| a flag excused as a synonym has a twin something reads | excuse a real candidate | ✓ |
+| the clause asks for the skill that reads it | drop it to rank 2 | ✓ |
+| and every road out of the stage that writes `torvan_owes_you` signs | — | measured |
+| the first question is locked without having asked it | drop the `requires` | ✓ |
+| and it enters the trials rather than the account | send it to `starbase` | ✓ |
+| the deepest reaches are the four that reach the shakedown | gate on an act-3 flag | ✓ |
+
+The always-open guard is scoped, and says so: implication is measured over
+playthroughs of one episode, so it sees a requirement and a gate written in the
+same episode and is blind to the campaign-wide case, where holding a flag implies
+some earlier episode was completed which in turn always writes another. That needs
+the episode dependency graph and is not attempted here. §114 was a guard narrower
+than its class that did not say so; this one says so.
+
+### Verification
+
+- `node --test tests/*.test.js` — **2,093 passing**, 0 failing
+- `tools/verify-app.mjs` — 410/410
+- `dist/` and the APK rebuilt; manifest carries `VIBRATE` only, no `INTERNET`
+
+### One more inherited claim, checked on the way out
+
+Every section since §112 has ended with *"N flags to go, three of them act-5
+blocked"*. §116 caught the N being wrong and put a guard on it. Nobody had ever
+checked the clause after the comma, and it is false: **no flag on the list is
+written in act 5.** The three that were have long since gone, and the qualifier
+rode along behind a number that was being measured, which is the safest possible
+place for a wrong claim to hide.
+
+What the list actually looks like, by the act that writes each flag:
+
+| act | flags | deepest reach available |
+| --- | --- | --- |
+| 1 | `centauri_reported` | 4 acts |
+| 2 | `organia_rebuffed` | 3 acts |
+| 3 | `badlands_run` `devron_blind` `devron_data` `dmz_favourable` `donatu_battle` | 2 acts |
+| 4 | `borrowed_blade` `grid_9902_contact` `grid_answered_late` `romulus_witness` | 1 act |
+
+Which says plainly where the bar drops, and says it structurally rather than by
+taste. Four of the eleven are act-4 deeds that can only ever be answered in the
+final act, and there are exactly five episodes there. That is the tail I said in
+§118 I would rather leave unwired than dress up, and it is four flags rather than
+the vaguer "some" — while the two at the top have twenty-three and eighteen
+possible hosts between them.
+
+The qualifier is now scraped and checked like the count.
+
+Eleven flags to go. None is written in act 5; four are act-4 deeds that can reach
+only the final act. One fewer than arithmetic would give, because
+`archanis_ratified` left the list without being wired.
 
 ## Attribution
 

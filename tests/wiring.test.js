@@ -60,6 +60,69 @@ const gameWith = (opts = {}) => new Game({
   seed: 1n, crewMode: 'original', ...opts,
 });
 
+// ---------------------------------------------------- playthroughs, enumerated
+//
+// Every complete route through every episode, as the set of flags it leaves in
+// the ledger. Six-and-a-half thousand of them across the book, cheap enough to
+// build once at load and ask questions of.
+//
+// The questions worth asking are about IMPLICATION between flags — does holding
+// this one guarantee that one — which cannot be answered by reading the source,
+// because a flag written on a choice is only reachable through the choices
+// above it. `torvan_owes_you` and `dmz_accord` are written on different stages
+// by different choices and look independent in the file; the road between them
+// is forced, and only walking it says so.
+//
+// Endings count: a choice with an `outcome` finishes the episode, and the
+// ending's own effects are part of what that route wrote. That is the half that
+// makes `archanis_ratified` a synonym rather than a separate deed.
+const PLAYTHROUGHS = (() => {
+  const out = [];
+  const flagsOf = (fx) => (fx ? [].concat(fx.flag ?? []) : []);
+  for (const ep of EPISODES) {
+    const walk = (stageId, held, depth, seen) => {
+      const choices = ep.stages?.[stageId]?.choices ?? [];
+      // Depth and revisit caps, because the engine permits cycles and one
+      // episode uses them. A capped route still reports the flags it collected.
+      if (!choices.length || depth > 40) { out.push(new Set(held)); return; }
+      for (const c of choices) {
+        const now = [...held, ...flagsOf(c.effects)];
+        if (c.outcome) {
+          out.push(new Set([...now, ...flagsOf(ep.endings?.[c.outcome]?.effects)]));
+          continue;
+        }
+        const dests = typeof c.next === 'function' ? (c.next.targets ?? [])
+          : c.next ? [c.next]
+            : c.branch ? Object.values(c.branch) : [];
+        if (!dests.length) { out.push(new Set(now)); continue; }
+        for (const d of dests) {
+          if (seen.has(d)) { out.push(new Set(now)); continue; }
+          walk(d, now, depth + 1, new Set([...seen, d]));
+        }
+      }
+    };
+    walk(ep.start, [], 0, new Set([ep.start]));
+  }
+  return out;
+})();
+
+const RUNS_WRITING = new Map();
+PLAYTHROUGHS.forEach((flags, i) => {
+  for (const f of flags) {
+    if (!RUNS_WRITING.has(f)) RUNS_WRITING.set(f, new Set());
+    RUNS_WRITING.get(f).add(i);
+  }
+});
+
+/** The playthroughs that write `flag`, by index. */
+const writingRuns = (flag) => RUNS_WRITING.get(flag) ?? new Set();
+/** Every playthrough that writes `a` also writes `b` — so holding `a` implies `b`. */
+const isSubset = (a, b) => [...a].every((i) => b.has(i));
+const sameRuns = (a, b) => a.size === b.size && isSubset(a, b);
+
+/** Every flag any episode writes, on a choice or on an ending. */
+const FLAGS_WRITTEN = new Set(RUNS_WRITING.keys());
+
 /**
  * Compression at which one tick is one commission hour.
  *
@@ -1832,12 +1895,22 @@ describe('every episode graph is sound', () => {
     //               one of these hypotheses has already been measured and
     //               found catastrophic. Wiring one is a content pass with its
     //               own measurement, not a tidy-up.
+    //   synonym   — written by exactly the playthroughs that write a flag
+    //               something already reads, measured rather than eyeballed.
+    //               Not a deed waiting for a scene: any gate on it would
+    //               behave identically to a gate on its twin, so wiring it
+    //               would add a count and no content. §119.
     const WRITTEN_AND_UNREAD = {
       censured_command: 'terminal', command_reviewed: 'terminal',
       commended_command: 'terminal', credited_the_crew: 'terminal',
       romulan_testimony: 'terminal',
 
-      archanis_ratified: 'candidate', asked_about_hurry: 'candidate',
+      // Measured, not judged: `qonos_council`'s `upheld` ending is reachable
+      // only from the two choices that write `qonos_upheld`, and both of them
+      // always reach it. The two flags name one deed twice, and `qonos_upheld`
+      // is read by the faction-memory table and by `khitomer_accord`. §119.
+      archanis_ratified: 'synonym',
+
       badlands_run: 'candidate', borrowed_blade: 'candidate',
       centauri_reported: 'candidate', devron_blind: 'candidate',
       devron_data: 'candidate',
@@ -1847,6 +1920,18 @@ describe('every episode graph is sound', () => {
       grid_answered_late: 'candidate',
       organia_rebuffed: 'candidate',
       romulus_witness: 'candidate',
+      // `asked_about_hurry` left in §119: the second option on the first screen
+      // of the game — asking Utopia Planitia why the hurry, before the ship has
+      // left the yard — read in act 5 by an episode set in that same yard,
+      // about a class being certified on a survey the yard wrote about itself.
+      //
+      // It sets no record. Four gates in the book reach four acts back, all of
+      // them into `shakedown`, and three of those four were already in this one
+      // episode before this flag was wired — the trials report, the tuning
+      // pass, and now the question. `consequences.test.js` recomputes the whole
+      // set rather than describing it, because the register has now stated this
+      // particular fact from memory twice and been wrong twice.
+      //
       // `devron_collapsed`, `organia_revealed` and `donatu_pressed` left in §118.
       //
       // `rescued_vell`, `came_clean` and `merrimack_lost` left in §117, and all
@@ -1867,10 +1952,15 @@ describe('every episode graph is sound', () => {
       // buy a Federation citizen back from a Rigel broker. It is the only road in
       // that episode that cannot fail, and that is the cost of it.
       //
-      // `centauri_aid` left in §114, and it is the longest reach in the book:
-      // act 1, the second episode a captain ever flies, answered in the Klingon
-      // Great Hall in act 4. He pulled a Klingon crew off a failing reactor
-      // when they had said in writing that they required nothing.
+      // `centauri_aid` left in §114: act 1, the second episode a captain ever
+      // flies, answered in the Klingon Great Hall in act 4. He pulled a Klingon
+      // crew off a failing reactor when they had said in writing that they
+      // required nothing.
+      //
+      // §114 called this the longest reach in the book. It spans three acts,
+      // and three separate four-act gates were already shipped when the section
+      // said so. Corrected in §119, when the spans were computed rather than
+      // remembered.
       //
       // `tholian_protocol` and `dmz_clause_recovered` left in §113: the captain
       // who wrote the Tholian procedure — the one named after his own ship —
@@ -1930,10 +2020,72 @@ describe('every episode graph is sound', () => {
     assert.deepEqual(unread, Object.keys(WRITTEN_AND_UNREAD).sort(),
       'the list of flags nothing reads no longer matches the flags nothing reads');
 
-    // And the categories are the two that were reasoned about, not free text.
+    // And the categories are the three that were reasoned about, not free text.
     for (const [flag, why] of Object.entries(WRITTEN_AND_UNREAD)) {
-      assert.ok(why === 'terminal' || why === 'candidate', `${flag}: ${why}`);
+      assert.ok(['terminal', 'candidate', 'synonym'].includes(why), `${flag}: ${why}`);
     }
+
+    // `synonym` is the one category that makes a factual claim rather than a
+    // judgement, so it is checked rather than accepted. A flag excused as a
+    // synonym must actually have a twin — written by exactly the playthroughs
+    // that write it — and the twin must be read, or the excuse is that two
+    // things nobody reads agree with each other.
+    for (const [flag, why] of Object.entries(WRITTEN_AND_UNREAD)) {
+      if (why !== 'synonym') continue;
+      const mine = writingRuns(flag);
+      const twins = [...written].filter((f) => f !== flag && read.has(f)
+        && sameRuns(mine, writingRuns(f)));
+      assert.ok(twins.length, `${flag} is excused as a synonym of nothing: `
+        + 'no flag anything reads is written by exactly its playthroughs');
+    }
+  });
+
+  test('and no gate stands open for every captain who can reach it', () => {
+    // The mirror of the guard above at line 1703, and the half nobody had
+    // written. That one catches a gated choice whose flag is EXCLUSIVE with the
+    // episode's own requirement — a lock with no key. This catches the same
+    // mistake with its sign reversed: a gated choice whose flag is IMPLIED by
+    // the episode's own requirement, which is a lock with no door. The player
+    // is shown a choice presented as earned, and every captain in the building
+    // has already earned it.
+    //
+    // It found one, shipped: `cardassia_debt/start/clause` required
+    // `dmz_accord` while the episode required `torvan_owes_you`, and
+    // `torvan_owes_you` is written at a stage whose only continuation signs the
+    // accord. Its comment claimed a distinction the treaty really does make and
+    // this episode had already filtered away.
+    //
+    // SCOPE, stated because §114 was a guard narrower than its class that did
+    // not say so: implication is measured over playthroughs of ONE episode, so
+    // this sees a requirement and a gate written in the same episode and is
+    // blind to the campaign-wide case — where holding flag A means some earlier
+    // episode was completed, which in turn always writes B. That needs the
+    // episode dependency graph and is not attempted here. Within an episode the
+    // measurement is exact; across episodes this asserts nothing at all.
+    const offenders = [];
+    let checked = 0;
+    for (const ep of EPISODES) {
+      const need = ep.requiresFlag;
+      if (!need || !FLAGS_WRITTEN.has(need)) continue;
+      const needRuns = writingRuns(need);
+      for (const [stageId, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          const gate = c.requires?.flag;
+          if (!gate || !FLAGS_WRITTEN.has(gate)) continue;
+          checked++;
+          // Every playthrough that writes the episode's own requirement also
+          // writes the gate's flag, so nobody who gets in is kept out.
+          if (isSubset(needRuns, writingRuns(gate))) {
+            offenders.push(`${ep.id}/${stageId}/${c.id}: requires ${gate}, `
+              + `but the episode's own ${need} already guarantees it`);
+          }
+        }
+      }
+    }
+    assert.ok(checked >= 10,
+      `only ${checked} episode-requirement/gate pairs exist, so this asserts little`);
+    assert.deepEqual(offenders, [],
+      `${offenders.length} gated choices are open to every captain who can reach them`);
   });
 
 

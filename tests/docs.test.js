@@ -255,6 +255,52 @@ describe('the register states figures it has actually measured', () => {
 
     assert.equal(stated, candidates,
       `the register's last count says ${stated} deeds still to wire; the registry lists ${candidates}`);
+
+  });
+
+  test('and the clause after the comma is checked too', () => {
+    // Every section since §112 ended "N flags to go, three of them act-5
+    // blocked". §116 found the N wrong and guarded it. Nobody checked the rest
+    // of the sentence for seven sections, and it was false by then: no flag on
+    // the list is written in act 5 any more.
+    //
+    // The qualifier survived precisely BECAUSE the number beside it was
+    // measured. A sentence half of which is guarded reads as a guarded
+    // sentence. So the half that describes the shape of the debt is now
+    // measured as well.
+    const wiring = readFileSync(join(HERE, 'wiring.test.js'), 'utf8');
+    const block = wiring.slice(
+      wiring.indexOf('const WRITTEN_AND_UNREAD = {'),
+      wiring.indexOf('};', wiring.indexOf('const WRITTEN_AND_UNREAD = {')));
+    const candidates = [...block.matchAll(/(\w+): 'candidate'/g)].map((m) => m[1]);
+    assert.ok(candidates.length >= 10,
+      `only ${candidates.length} candidates scraped, so this asserts little`);
+
+    // The act that first writes each flag, from the episodes rather than names.
+    const firstAct = new Map();
+    for (const e of EPISODES) {
+      const note = (f) => firstAct.set(f, Math.min(firstAct.get(f) ?? Infinity, e.act));
+      for (const s of Object.values(e.stages ?? {})) {
+        for (const c of s.choices ?? []) for (const f of [].concat(c.effects?.flag ?? [])) note(f);
+      }
+      for (const en of Object.values(e.endings ?? {})) {
+        for (const f of [].concat(en.effects?.flag ?? [])) note(f);
+      }
+    }
+    const lastAct = Math.max(...EPISODES.map((e) => e.act));
+
+    const blocked = candidates.filter((f) => firstAct.get(f) === lastAct);
+    assert.match(RESEARCH, /None is written in act 5; (\w+) are act-4 deeds/,
+      'the register no longer states the shape of the debt in a form this can read');
+    assert.equal(blocked.length, 0,
+      `${blocked.length} candidates are written in the final act (${blocked.join(', ')}), `
+      + 'but the register says none is');
+
+    const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8 };
+    const stated = WORDS[RESEARCH.match(/None is written in act 5; (\w+) are act-4 deeds/)[1]];
+    const shallow = candidates.filter((f) => firstAct.get(f) === lastAct - 1);
+    assert.equal(stated, shallow.length,
+      `the register says ${stated} act-4 deeds; the registry has ${shallow.length}`);
   });
 
   test('the episodes it names as gating nothing are the episodes that gate nothing', () => {

@@ -25705,10 +25705,29 @@ const ACCORD_EPISODES = [
             effects: { xp: 400 } },
           { id: 'treaty', label: 'Cite the Terok Nor accord and ask to be berthed',
             next: 'order', effects: { xp: 500, standing: { cardassian: 4 } } },
-          // Only a captain who actually signed it. Two of the treaty's endings
-          // set this and one does not.
+          // This was gated on `dmz_accord` and read "Only a captain who
+          // actually signed it. Two of the treaty's endings set this and one
+          // does not." Both sentences are true about the treaty and neither is
+          // true here.
+          //
+          // The episode requires `torvan_owes_you`, which is written at
+          // `cardassian_treaty/clause/quiet` — and `quiet` goes to `talks`,
+          // where BOTH remaining choices sign. The captain who did not sign
+          // went through `clause/press` instead and never got the flag that
+          // brings him to Cardassia at all. So every captain who can reach this
+          // stage holds `dmz_accord`, and the gate stood open for all of them:
+          // a locked-looking choice nobody was ever locked out of, which is the
+          // §111 defect with its sign reversed.
+          //
+          // Nothing in the treaty discriminates among the captains who arrive
+          // here — after `quiet` the road is forced. So the credential cannot
+          // be a deed, and pretending otherwise is what went wrong the first
+          // time. Quoting a treaty clause from memory, four hours into a
+          // customs interview two acts later, is a diplomat's trick and is
+          // gated as one: a rank above the check that let him read the room at
+          // Terok Nor in the first place.
           { id: 'clause', label: 'Quote the clause about naval visits, from memory',
-            next: 'order', requires: { flag: 'dmz_accord' },
+            next: 'order', requires: { skill: 'diplomacy', ranks: 3 },
             effects: { xp: 700, standing: { cardassian: 8 } } },
         ],
       },
@@ -26066,6 +26085,24 @@ const CONSEQUENCE_EPISODES = [
           { id: 'accept', label: 'Take the trials', next: 'trials', effects: { xp: 600 } },
           { id: 'why', label: 'Ask what she heard about Starbase 11', next: 'starbase',
             effects: { xp: 700 } },
+          // The second option on the first screen of the game. Nakamura's
+          // orders are on the screen, the ship is finished, and the captain's
+          // choice is to acknowledge them or to ask why the hurry — of this
+          // yard, at Utopia Planitia, before he has done anything at all.
+          //
+          // He is standing in the same yard now. There is a hull in frame two
+          // months from launch and a class being certified on a survey the yard
+          // wrote about itself, which is what a hurry looks like when it has
+          // had time to become a procedure. He is the one officer in the fleet
+          // who has asked this question in this building before and can say so.
+          //
+          // It goes straight to the trials because that is the honest answer to
+          // it: she is not going to tell him, and the schedule is not going to
+          // change, and the only thing asking buys him is knowing what to look
+          // for four days later. Which turns out to be enough.
+          { id: 'hurry', label: 'Ask why the hurry. You asked this yard that once before.',
+            next: 'trials', requires: { flag: 'asked_about_hurry' },
+            effects: { xp: 900, standing: { federation: 6 } } },
           { id: 'decline', label: 'Say the yard should certify its own work',
             outcome: 'declined', effects: { xp: 400, standing: { federation: -4 } } },
         ],

@@ -59,10 +59,29 @@ export const ACCORD_EPISODES = [
             effects: { xp: 400 } },
           { id: 'treaty', label: 'Cite the Terok Nor accord and ask to be berthed',
             next: 'order', effects: { xp: 500, standing: { cardassian: 4 } } },
-          // Only a captain who actually signed it. Two of the treaty's endings
-          // set this and one does not.
+          // This was gated on `dmz_accord` and read "Only a captain who
+          // actually signed it. Two of the treaty's endings set this and one
+          // does not." Both sentences are true about the treaty and neither is
+          // true here.
+          //
+          // The episode requires `torvan_owes_you`, which is written at
+          // `cardassian_treaty/clause/quiet` — and `quiet` goes to `talks`,
+          // where BOTH remaining choices sign. The captain who did not sign
+          // went through `clause/press` instead and never got the flag that
+          // brings him to Cardassia at all. So every captain who can reach this
+          // stage holds `dmz_accord`, and the gate stood open for all of them:
+          // a locked-looking choice nobody was ever locked out of, which is the
+          // §111 defect with its sign reversed.
+          //
+          // Nothing in the treaty discriminates among the captains who arrive
+          // here — after `quiet` the road is forced. So the credential cannot
+          // be a deed, and pretending otherwise is what went wrong the first
+          // time. Quoting a treaty clause from memory, four hours into a
+          // customs interview two acts later, is a diplomat's trick and is
+          // gated as one: a rank above the check that let him read the room at
+          // Terok Nor in the first place.
           { id: 'clause', label: 'Quote the clause about naval visits, from memory',
-            next: 'order', requires: { flag: 'dmz_accord' },
+            next: 'order', requires: { skill: 'diplomacy', ranks: 3 },
             effects: { xp: 700, standing: { cardassian: 8 } } },
         ],
       },

@@ -314,8 +314,8 @@ describe('and neither writes anything down that nobody reads', () => {
     // this one is older and stays because it is what that file is about. They
     // measure the same quantity and must move together.
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.equal(gated, 52,
-      `${gated} of ${written.size} recorded decisions gate something; the register says 52. `
+    assert.equal(gated, 53,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 53. `
       + 'The same count is asserted in echoes.test.js and RESEARCH.md §111; move all three.');
   });
 });
@@ -465,5 +465,133 @@ describe('the account this episode was written about', () => {
     const g = captain({ flags: ['came_clean'], completed: ep.requiresCompleted ?? [] });
     assert.equal(offered(g, ep.system, ep.id), true,
       'a captain who came clean is not offered the episode that asked for him');
+  });
+});
+
+// ----------------------------------------------------------- the first question
+//
+// `shakedown`, act 1, the opening screen of the game. Nakamura's orders are up,
+// the ship is finished, and the captain may acknowledge them or ask why the
+// hurry. It is the second choice a player ever makes and until now nothing in
+// twenty-six episodes had noticed it.
+//
+// This episode is set in the yard he asked. There is a hull in frame two months
+// from launch, being certified on a survey the yard wrote about itself, which is
+// what a hurry looks like once it has had four years to become a procedure.
+describe('the question this captain asked before he had done anything', () => {
+  const ep = EPISODES.find((e) => e.id === 'utopia_certification');
+  const stage = ep.stages.start;
+
+  const open = (flags) => {
+    const g = captain({ flags, completed: ep.requiresCompleted ?? [] });
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('is one he can ask again, in the same building', () => {
+    const gated = stage.choices.find((c) => c.id === 'hurry');
+    assert.ok(gated, 'the road that asks the yard again is gone');
+    assert.deepEqual(gated.requires, { flag: 'asked_about_hurry' });
+    assert.equal(open([]).includes('hurry'), false,
+      'offered to a captain who acknowledged his orders and asked nothing');
+    assert.ok(open(['asked_about_hurry']).includes('hurry'),
+      'the first question in the game bought nothing');
+    // It goes to the trials rather than to Sostrova's account of Starbase 11:
+    // she is not going to answer, and what asking buys him is what he looks for
+    // four days later.
+    assert.equal(gated.next, 'trials');
+  });
+
+  test('and the deepest reach in the book is into the shakedown, four times over', () => {
+    // The span of a gated choice: the act it is read in, minus the earliest act
+    // that can write the flag it reads. Nothing had ever computed it, and the
+    // register asserted it twice in prose and was wrong both times — §114
+    // called an act-1-to-act-4 gate "the longest reach in the book" when §112
+    // had already beaten it by an act, and the first draft of this test claimed
+    // the record for the new gate and was wrong by three.
+    //
+    // What the measurement actually says is better than either claim. Every
+    // gate at the maximum span reads a flag written in `shakedown` — the first
+    // episode, the one that exists to teach the controls — and three of the
+    // four are in THIS episode, which was already the deepest-reaching in the
+    // book before anything was added to it. The captain returns to the yard he
+    // launched from and is asked about the trials report he wrote, the tuning
+    // pass he ran, and now the question he asked before he flew.
+    //
+    // Both wrong claims had the same cause, which is why this is a test and not
+    // a comment: a fact about the whole book, stated from the two or three
+    // episodes that happened to be open at the time.
+    const firstAct = new Map();
+    for (const e of EPISODES) {
+      for (const s of Object.values(e.stages ?? {})) {
+        for (const c of s.choices ?? []) {
+          for (const f of [].concat(c.effects?.flag ?? [])) {
+            firstAct.set(f, Math.min(firstAct.get(f) ?? Infinity, e.act));
+          }
+        }
+      }
+      for (const en of Object.values(e.endings ?? {})) {
+        for (const f of [].concat(en.effects?.flag ?? [])) {
+          firstAct.set(f, Math.min(firstAct.get(f) ?? Infinity, e.act));
+        }
+      }
+    }
+
+    const spans = [];
+    for (const e of EPISODES) {
+      for (const [sid, s] of Object.entries(e.stages ?? {})) {
+        for (const c of s.choices ?? []) {
+          const f = c.requires?.flag;
+          if (!f || !firstAct.has(f)) continue;
+          spans.push({ where: `${e.id}/${sid}/${c.id}`, flag: f, span: e.act - firstAct.get(f) });
+        }
+      }
+    }
+    assert.ok(spans.length >= 20, `only ${spans.length} gated choices span anything`);
+
+    const longest = Math.max(...spans.map((s) => s.span));
+    const deepest = spans.filter((s) => s.span === longest).sort((a, b) =>
+      a.where.localeCompare(b.where));
+    assert.equal(longest, 4, `the deepest reach is now ${longest} acts, not four`);
+    assert.deepEqual(deepest.map((s) => s.where), [
+      'homecoming/questioned/correct',
+      'utopia_certification/start/hurry',
+      'utopia_certification/the_memo/trials',
+      'utopia_certification/trials/tuned',
+    ], 'the set of deepest reaches has changed, and the register should say so');
+
+    // The part worth pinning is not the number but where they all reach TO.
+    // Every one of them lands on the opening episode, and the new gate did not
+    // set a record so much as join a pattern that was already there.
+    const wrote = (flag) => EPISODES.find((e) => Object.values(e.stages ?? {})
+      .some((s) => (s.choices ?? []).some((c) =>
+        [].concat(c.effects?.flag ?? []).includes(flag))));
+    for (const s of deepest) {
+      assert.equal(wrote(s.flag)?.id, 'shakedown',
+        `${s.where} reads ${s.flag}, which is no longer written in the shakedown`);
+    }
+    assert.equal(deepest.filter((s) => s.where.startsWith('utopia_certification/')).length, 3,
+      'this episode no longer holds three of the four deepest reaches in the book');
+  });
+
+  test('and nothing can keep the captain who asked it out of this yard', () => {
+    // The gate's own safety check, in the shape §111 established. The only
+    // thing that bars this episode is `deflected_blame`, written at the
+    // court-martial in act 3; `asked_about_hurry` is written in act 1 by an
+    // episode with no requirements of any kind. They cannot exclude each other
+    // because they are not alternatives at any stage — nothing has to be given
+    // up to hold both.
+    const shakedown = EPISODES.find((e) => (e.stages.start.choices ?? [])
+      .some((c) => [].concat(c.effects?.flag ?? []).includes('asked_about_hurry')));
+    assert.ok(shakedown, 'nothing writes asked_about_hurry on an opening stage any more');
+    assert.equal(shakedown.act, 1);
+    assert.equal(shakedown.requiresFlag, undefined,
+      'the first episode now demands something, so the first question is no longer free');
+    assert.equal(shakedown.requiresCompleted, undefined);
+
+    const g = captain({ flags: ['asked_about_hurry'], completed: ep.requiresCompleted ?? [] });
+    assert.equal(offered(g, ep.system, ep.id), true,
+      'the captain who asked the yard why the hurry is not offered the yard');
   });
 });
