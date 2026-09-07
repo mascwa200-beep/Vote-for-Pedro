@@ -41,7 +41,7 @@ import { Ledger } from '../src/core/ledger.js';
 import {
   SPECIALITIES, DIVISIONS, specialitiesIn, rosterSizeFor,
   beginAssignment, advanceAssignments, dutySlots, specialistBonusFor, replaceLosses,
-  ASSIGNMENTS, availableAssignments,
+  ASSIGNMENTS, availableAssignments, DutyOfficer, CONVALESCENCE_HOURS,
 } from '../src/sim/duty.js';
 import { TIERS, TRAIT_LIST, SHAKEDOWN, EARNINGS } from '../src/sim/mastery.js';
 import { offerCommand, takeCommandOf, COMMAND_LADDER } from '../src/sim/command.js';
@@ -2593,6 +2593,155 @@ describe('the duty roster', () => {
     // beyond the person.
     for (const p of g.dutyRoster.slice(0, Math.max(0, g.dutyRoster.length - 2))) p.state = 'lost';
     assert.ok(dutySlots(g) <= slots, 'losing the roster cost the ship nothing');
+  });
+
+  // ---------------------------------------------------------------- sickbay
+  //
+  // Everything below asserts the same thing from four directions: a specialist
+  // the roster panel says is in sickbay comes out of it. Before this, none of
+  // them did — campaign time healed the bridge and skipped the roster, and the
+  // only exit in the game was one detail out of ten.
+
+  test('sickbay runs on one clock, whether the name is on the bridge or the roster', () => {
+    // The measurement that found this, as an assertion. A bridge officer with a
+    // full-severity injury and a specialist just hurt on a detail, both left
+    // alone for the same stretch: they must come back together, because it is
+    // the same sickbay and the same doctor.
+    const at = (hours) => {
+      const g = gameWith({ seed: 7n });
+      const officer = g.crew.officers.find((o) => o.alive);
+      officer.injured = true;
+      officer.injurySeverity = 1;
+      const spec = g.dutyRoster[0];
+      spec.state = 'recovering';
+      spec.recoveryHours = CONVALESCENCE_HOURS;
+      g.passTime(hours);
+      return { officer: officer.injured, specialist: spec.state === 'recovering' };
+    };
+
+    const early = at(24);
+    assert.equal(early.officer, true, 'the officer was discharged in a day');
+    assert.equal(early.specialist, true,
+      'the specialist was discharged in a day while the officer was still in bed');
+
+    const later = at(CONVALESCENCE_HOURS);
+    assert.equal(later.officer, false, 'the officer never got better');
+    // The one that was false for the whole life of the roster, at every horizon
+    // out to a year and beyond.
+    assert.equal(later.specialist, false,
+      'the specialist is still in sickbay after the officer walked out of it');
+
+    for (const hours of [240, 720, 8760]) {
+      assert.equal(at(hours).specialist, false,
+        `a specialist was still in sickbay after ${hours} hours`);
+    }
+  });
+
+  test('a specialist in sickbay has a day they are due back', () => {
+    // The state and the counter can never disagree: `recovering` has to mean
+    // there are hours left to serve, or the panel is promising a discharge the
+    // game has no date for. Asserted on real casualties off real details rather
+    // than on a hand-set flag.
+    let hurt = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      const g = gameWith({ seed: BigInt(seed) });
+      for (let round = 0; round < 6; round++) {
+        const team = g.dutyRoster.filter((p) => p.available).slice(0, 3);
+        if (team.length < 3) break;
+        if (!beginAssignment(g, 'salvage_party', team.map((p) => p.id))?.ok) {
+          if (!beginAssignment(g, 'engine_overhaul', team.map((p) => p.id))?.ok) break;
+        }
+        advanceAssignments(g, 40, g.rng);
+      }
+      for (const p of g.dutyRoster) {
+        if (p.state !== 'recovering') continue;
+        hurt++;
+        assert.ok(p.recoveryHours > 0,
+          `${p.name} is in sickbay with no hours left to serve`);
+        assert.ok(p.daysToRecover >= 1, `${p.name} is due back in no days at all`);
+      }
+      for (const p of g.dutyRoster) {
+        if (p.state === 'recovering') continue;
+        assert.equal(p.recoveryHours, 0,
+          `${p.name} is ${p.state} and still has sickbay hours against them`);
+      }
+    }
+    assert.ok(hurt > 0, 'no detail hurt anybody, so this asserted nothing');
+  });
+
+  test('nobody spends a commission in sickbay', () => {
+    // The outcome, not the mechanism. Run details the way a captain would for
+    // five years and assert that everyone who went into sickbay came out of it
+    // — unless they were later lost, which is a different thing happening to a
+    // person who had already recovered.
+    let everHurt = 0;
+    for (const seed of [11n, 22n, 33n, 44n, 55n]) {
+      const g = gameWith({ seed });
+      const wentIn = new Set();
+      for (let day = 0; day < 700; day++) {
+        let guard = 0;
+        while (g.assignments.length < dutySlots(g) && guard++ < 10) {
+          // Deliberately never the sickbay rotation. A captain should not have
+          // to know that one detail out of ten is load-bearing.
+          const opts = availableAssignments(g).filter((a) => a.id !== 'sickbay_rotation');
+          if (!opts.length) break;
+          const a = opts[Number(g.rng.int(0, opts.length - 1))];
+          const team = g.dutyRoster.filter((p) => p.available).slice(0, a.team ?? 1);
+          if (team.length < (a.team ?? 1)) break;
+          if (!beginAssignment(g, a.id, team.map((p) => p.id))?.ok) break;
+        }
+        g.passTime(24);
+        for (const p of g.dutyRoster) if (p.state === 'recovering') wentIn.add(p.id);
+      }
+      everHurt += wentIn.size;
+      const stuck = g.dutyRoster.filter(
+        (p) => wentIn.has(p.id) && p.state === 'recovering'
+          && p.recoveryHours > CONVALESCENCE_HOURS,
+      );
+      assert.equal(stuck.length, 0,
+        `${stuck.length} specialists owe more sickbay than a wound is worth`);
+
+      // And the ship can still send somebody. Before this, the roster filled up
+      // with the permanently-hurt and ran dry on every seed tried.
+      const fit = g.dutyRoster.filter((p) => p.state !== 'lost' && p.state !== 'recovering');
+      assert.ok(fit.length > 0 || g.dutyRoster.every((p) => p.state === 'lost'),
+        'every specialist still aboard is in sickbay and none of them will ever leave');
+    }
+    assert.ok(everHurt > 0, 'no detail hurt anybody across five commissions');
+  });
+
+  test('the sickbay rotation is a shortcut, not the only road out', () => {
+    // The detail has to keep its point: it returns them TODAY rather than at
+    // the end of their five days.
+    const g = gameWith({ seed: 4242n });
+    const patient = g.dutyRoster[0];
+    patient.state = 'recovering';
+    patient.recoveryHours = CONVALESCENCE_HOURS;
+
+    const team = g.dutyRoster.filter((p) => p.available).slice(0, 2);
+    assert.ok(beginAssignment(g, 'sickbay_rotation', team.map((p) => p.id))?.ok);
+    advanceAssignments(g, ASSIGNMENTS.sickbay_rotation.hours + 1, g.rng);
+
+    assert.equal(patient.state, 'aboard', 'the sickbay rotation left the patient in sickbay');
+    assert.equal(patient.recoveryHours, 0, 'discharged with hours still against them');
+  });
+
+  test('a save written before sickbay had a clock does not empty it', () => {
+    // A legacy roster has people in `recovering` and no hours against them.
+    // Defaulting to zero would discharge every one of them on the next tick,
+    // which is a decision worth making on purpose rather than inheriting from a
+    // `?? 0`. They serve the same five days anybody hurt today serves.
+    const legacy = new DutyOfficer({
+      id: 'duty_0', name: 'Test', speciality: 'engineer', state: 'recovering',
+    });
+    assert.equal(legacy.recoveryHours, CONVALESCENCE_HOURS,
+      'a legacy patient walked straight out of sickbay');
+
+    // And a current one round-trips the hours it has left.
+    const half = new DutyOfficer({ state: 'recovering', recoveryHours: 60 });
+    const reloaded = new DutyOfficer(half.save());
+    assert.equal(reloaded.recoveryHours, 60, 'sickbay hours did not survive the save');
+    assert.equal(reloaded.state, 'recovering');
   });
 
   test('a specialist aboard makes a station better, and stops when they leave', () => {

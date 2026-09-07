@@ -5600,6 +5600,19 @@ export class Game {
           officer.recover?.(hours, this.character?.mechanic('recoveryRate') ?? 1);
         }
       }
+
+      // And the specialists, who are in the same sickbay.
+      //
+      // This loop healed the ten people with names on the bridge and not the
+      // twelve with names on the roster, twelve lines above the call that sends
+      // the details which hurt them. A specialist marked `recovering` had no
+      // way back except one detail out of ten, so the roster panel's "in
+      // sickbay" meant "for five days" for an officer and "for good" for a
+      // specialist — the same two words for two different fates. Same clock and
+      // the same captain's `recoveryRate`, because it is the same sickbay.
+      for (const person of this.dutyRoster ?? []) {
+        person.recover?.(hours, this.character?.mechanic('recoveryRate') ?? 1);
+      }
     }
 
     // The machine shop works too. A two-day job is a two-day job whether you
