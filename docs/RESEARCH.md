@@ -10047,6 +10047,81 @@ nothing today. That one reads the source — legitimately, by §99's distinction
 because deleting a field deletes the token.
 
 
+## 103. Four more leads that dissolved, and the property they proved was unguarded
+
+§102 filed six. This is the same hunt continued, and it went the same way: four
+more leads, all clean. What it produced is not a fix but a guard — the residue
+of a hunt that finds nothing is usually a property you can now prove, and this
+one turned out to be held by luck.
+
+### The four
+
+1. **Save and load are faithful.** A commission with real history — two fights,
+   a level-four diagnostic, a walk to sickbay, an orbit, a dock — saved, loaded
+   and saved again. **Zero differences across all 61 top-level keys.**
+
+2. **Live state the save never writes.** The stronger question, since a
+   payload diff cannot see a field that was never written. Comparing every
+   scalar on the live game against the loaded one found seven mismatches, six of
+   them `undefined → default`, which is a load initialising fields the live game
+   had not touched. The seventh is `commandKey`, and it is a **dirty-check
+   cache**: `refreshCommand` stores the `(room, con station)` pair so
+   `applyAllMods` runs when it changes rather than thirty times a second. Losing
+   it on load can only cause an *extra* rebuild, never a missed one. A cache
+   miss is safe; a false cache hit would not be, and that is not the direction
+   this fails in.
+
+3. **Long-run state drift.** Sixteen thousand ticks across twelve fights against
+   four hull classes, with the invariant watchdog running: **no violations, no
+   non-finite number anywhere** in the ship, the campaign or the captain's
+   progress, and no counter that ran backwards.
+
+4. **The commission clock.** Flagged as stalled at zero days, and it is not.
+   `campaign.elapsedDays` is a **real-time** clock — a hundred seconds of
+   `update` moved it by 0.0011574 days, which is a hundred seconds to the digit.
+   That is the design the campaign block exists for.
+
+### And two more instrument errors, both mine
+
+The clock lead produced them back to back.
+
+`passTime(24 * 30)` did not move the stardate, which looked like a month of
+repairs leaving every log entry stamped the same day. It is not the entry point:
+**`spendHours` advances the clock and then calls `passTime`**, which is the
+lower-level "ship time passes" step and was never meant to move it. Called
+properly, `spendHours` gives +14 and +30 days exactly.
+
+And the control for the walk position did not fire — because I patched
+`g.walk` at the wrong line. `Game.load` restores it a hundred and thirty lines
+further down, so the later assignment simply overwrote the sabotage. Moved to
+the site that actually restores it, the control fires on both guards.
+
+That is the running theme of §102 and this section: **eight of the ten things
+that looked wrong were the instrument.** Wrong argument shape, wrong entry
+point, wrong array, wrong key, wrong line. The measurement is only as good as
+the thing measuring, and the tell is almost always the same — an answer that is
+suspiciously constant, or a control that will not fire.
+
+### What was actually unguarded
+
+A dozen tests round-trip a `Game` and assert that some particular thing
+survived: the commission clock, the away-mission roster, a spent death save, an
+episode's variables. **Not one of them diffs the whole payload.** So "a save
+carries everything a load needs" was true by luck rather than by assertion, and
+a field added to `save()` and mishandled in `load()` would slip through until
+somebody happened to name it in a test.
+
+Two guards now hold it. The first is the round trip itself — save, load, save,
+and a deep diff naming any path that changed, because a field `load` drops
+cannot appear in the second save. The second asks the loaded *game* the
+questions a player would notice, which the payload diff structurally cannot: the
+hull she limped home on, the torpedoes left, the stardate, the rank, the
+records, and where the captain was standing.
+
+Controls, all fired: a load that drops the ship's log, one that forgets the
+hours an officer stood the con, and one that forgets where the captain was.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

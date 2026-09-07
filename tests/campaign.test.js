@@ -1426,3 +1426,93 @@ describe('the ship’s people, not only her plating', () => {
       'the report started mentioning shields');
   });
 });
+
+// Everything the save carries comes back, and nothing quietly does not.
+//
+// A dozen tests round-trip a Game and assert that some particular thing
+// survived — the commission clock, the away-mission roster, a spent death save,
+// an episode's variables. Not one of them diffs the WHOLE payload, so the
+// property "a save carries everything a load needs" was true by luck rather
+// than by assertion: a field added to `save()` and mishandled in `load()` slips
+// through until somebody happens to write a test naming it.
+//
+// The instrument is a save → load → save round trip. If `load` drops a field,
+// the second save cannot contain it, and a deep diff says exactly which one.
+describe('a save and a load are the same commission', () => {
+  /** A game with enough history to have something to lose. */
+  const lived = (now) => {
+    const g = new Game({ seed: 17n, crewMode: 'canon', crew: 'tos', shipClass: 'constitution', now });
+    for (let f = 0; f < 2; f++) {
+      const eng = g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: `K${f}` })],
+        { relentless: true });
+      for (let i = 0; i < 30000 && !eng.over; i++) {
+        if (i % 15 === 0 && eng.target) {
+          eng.comeAboutTo(eng.target);
+          g.ship.throttle = 0.6;
+          g.ship.power.applyPreset(g.ship.shieldPct < 0.35 ? 'defense' : 'attack');
+        }
+        g.update(1 / 30);
+      }
+      g.ship.restore();
+      g.spendHours(24 * 10);
+    }
+    g.diagnostic?.(4);
+    g.goToRoom?.('sickbay');
+    for (let i = 0; i < 400 && g.walkOrder; i++) g.update(1 / 30);
+    try { g.enterOrbit(); } catch { /* no body here, and that is fine */ }
+    return g;
+  };
+
+  /** Every leaf where two payloads disagree, by path. */
+  const diff = (a, b, path = '', out = []) => {
+    if (a === b) return out;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+      if (JSON.stringify(a) !== JSON.stringify(b)) out.push(path || '(root)');
+      return out;
+    }
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (!(k in a)) { out.push(`${path}.${k} (appeared)`); continue; }
+      if (!(k in b)) { out.push(`${path}.${k} (lost)`); continue; }
+      diff(a[k], b[k], `${path}.${k}`, out);
+    }
+    return out;
+  };
+
+  test('every field in the payload survives the round trip', () => {
+    const now = fakeClock();
+    const g = lived(now);
+    const saved = JSON.parse(JSON.stringify(g.save()));
+    // The same `now`, so the commission clock is not measuring the test.
+    const back = Game.load(JSON.parse(JSON.stringify(saved)), { now });
+    const again = JSON.parse(JSON.stringify(back.save()));
+
+    const gone = diff(saved, again);
+    assert.deepEqual(gone, [], `${gone.length} field(s) did not survive a save and a load`);
+    // And the payload is worth diffing in the first place.
+    assert.ok(Object.keys(saved).length >= 40,
+      `the save carries only ${Object.keys(saved).length} top-level keys`);
+  });
+
+  test('and the ship that comes back is the ship that was saved', () => {
+    // The round trip above compares payloads, which cannot see a field the
+    // save never writes. This asks the loaded GAME the questions a player
+    // would notice: the hull she limped home on, the torpedoes she has left,
+    // the record of what she did, and where the captain was standing.
+    const now = fakeClock();
+    const g = lived(now);
+    const back = Game.load(JSON.parse(JSON.stringify(g.save())), { now });
+    for (const [what, read] of [
+      ['hull', (x) => Math.round(x.ship.hull)],
+      ['torpedoes', (x) => x.ship.torpedoes],
+      ['crew', (x) => x.ship.crew],
+      ['stardate', (x) => x.clock.stardate.toFixed(3)],
+      ['experience', (x) => x.progress?.xp ?? 0],
+      ['rank', (x) => x.progress?.rank?.name ?? null],
+      ['where the captain is', (x) => x.walk?.roomId ?? null],
+      ['log length', (x) => x.log.length],
+      ['ledger records', (x) => JSON.stringify(x.ledger.counters ?? {})],
+    ]) {
+      assert.deepEqual(read(back), read(g), `${what} did not survive the save`);
+    }
+  });
+});
