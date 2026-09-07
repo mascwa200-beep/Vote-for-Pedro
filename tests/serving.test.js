@@ -356,7 +356,8 @@ describe('what the crew think of you is visible', () => {
     // fight is worth about two points to the bridge, so the crossing from
     // `correct` into `warm` at 25 lands around the thirteenth. Ten fights left
     // it at 20 and this test failed — which was the test being wrong about the
-    // rate, not the bands being wrong about the crew. Thirty fights reach 52.
+    // rate, not the bands being wrong about the crew. Thirty fights reach 60,
+    // measured as the mean of eight seeds rather than read off one.
     const seen = new Set([bridge.regardBand.id]);
     for (let f = 0; f < 16 && !g.over; f++) {
       g.startCombat([new Ship('bird_of_prey', { faction: 'klingon', name: `K${f}` })]);

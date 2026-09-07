@@ -9225,8 +9225,10 @@ Three things were true of that number at once:
   it — a watch stood, a fight won, the ship lost, a butcher's bill, an officer
   hurt on the surface — and had **zero listeners anywhere in `src/`**.
 - It moves at a rate a captain would notice if anything told them:
-  **+2 per cleanly-fought fight, +52 over thirty**, and **−9 per fight** flown
-  badly.
+  **+2.0 per cleanly-fought fight, +60 over thirty**, and **−9 per fight**
+  flown badly — which reaches the −100 floor by the sixteenth. Both are the
+  mean of eight seeds, at the two extremes `serving.test.js` already flies: a
+  Galaxy against a Bird-of-Prey, steered, and a Miranda against a Neg'Var, not.
 
 So the bridge's opinion of the captain was formed, stored, saved, loaded, and
 consulted on seven orders in ten — and never once shown or said.
@@ -9338,6 +9340,35 @@ crossing at 25 and the test failed — which was the test being wrong about the
 rate, not the bands being wrong about the crew. That is the fourth small-sample
 error in three sections, and §96's rule is now doing real work: it was caught
 because I was about to act on it.
+
+### And a fifth, which §96's rule would have let through
+
+The rate figures in this section were first written as **+52 over thirty** and a
+badly-fought commission costing **forty-five over ten**. Re-measured as the mean
+of eight seeds, at the two extremes `serving.test.js` already flies:
+
+| fights | well-fought | badly-fought |
+| ---: | ---: | ---: |
+| 1 | +2 | −9 |
+| 10 | +20 | −90 |
+| 16 | +32 | −100 (floor) |
+| 30 | +60 | −100 (floor) |
+
+So +60 and not +52, and −90 and not −45 — the second off by a factor of two,
+and both filed off a single seed. They were already written into §97, a code
+comment and a test comment, and into the description of an open pull request.
+
+§96's rule was *a measurement you are about to act on gets checked; one you are
+about to file does not*, which was meant as a description of a failure mode and
+has been quietly serving as permission. These two were pure filing: nothing
+branched on them, so the rule as stated would have let them stand. They were
+caught only because a published figure got re-measured for its own sake, while
+the pull request was still open to correct.
+
+The amendment: **a number that goes into prose is a claim, and a claim gets the
+same n as a decision.** Cheap to honour — the table above is one script and a
+few minutes — and the alternative is what nearly happened here, which is a
+wrong figure carried in three files and a merge description.
 
 
 ## 98. The miracle nobody mentioned, and a once-per-commission save that came back with every hull
