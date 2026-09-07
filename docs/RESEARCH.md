@@ -8953,6 +8953,179 @@ middle of the suite and **broke seven later checks** — the hazard this file
 records twice already, walked into a third time. Reuse the staging that exists.
 
 
+## 95. One constant doing two jobs, and the button that was always a mistake
+
+Four sections running had been episodes and models, so this one went to the part
+of the brief served least: the space combat. The question was not "is anything
+unwired" — five such leads had already dissolved when measured — but the one a
+player would ask: **does playing well beat playing badly?**
+
+### Every option was worse than not using it
+
+Subsystem targeting is on a button, in the order parser, and speakable aloud.
+Sixty seeded runs a cell, a Miranda against three Birds-of-Prey at `captain`,
+varying only what the captain aimed at:
+
+```
+aimed at        survival   95% CI
+hull (default)     58%   ±12
+engines            47%   ±13
+warpcore           37%   ±12
+weapons            28%   ±11
+shields            25%   ±11
+sensors            22%   ±10
+auxiliary          22%   ±10
+lifesupport        22%   ±10
+```
+
+Not a lever with a tradeoff — a button that was always a mistake, under a manual
+promising *"targeting a subsystem trades total damage for a specific outcome"*
+and a panel recommending targets by name.
+
+### §31 measured the right number against a different question
+
+`CALLED_SHOT_HULL = 0.7` is the share of hull damage a called shot keeps, and
+§31 chose it from a real table: price against **player deaths and median battle
+length**. Those were the right numbers for the question §31 was asking, because
+the change that prompted it was giving *enemies* called shots for the first time.
+
+It never asked whether the trade pays for the captain making it. This is the
+missing half of §31, not a contradiction of it — and the arithmetic of the miss
+is stark. Sweeping the price for the player's shots alone:
+
+```
+                 aim weapons   aim engines   aim shields    (hull baseline 65%)
+price 0.70            35%           45%           23%
+price 0.85            53%           70%           43%
+price 1.00            78%           83%           38%
+```
+
+1.00 is the free upgrade §31 correctly removed. 0.70 is the far end, where
+nothing is worth taking. The dial had been set to one end of its own range and
+the other end was the only one anybody had measured.
+
+### The fix is a split, because the two sides want opposite values
+
+Re-asking §31's own question — a pilot that never calls a shot, four matchups,
+eighty fights — with the price moved for **both** sides:
+
+```
+price (both)   player destroyed   mean battle
+        0.70          69 / 80          79s
+        0.85          75 / 80          56s
+```
+
+Moving the shared dial costs six player lives in eighty fights and takes twenty
+seconds off the average battle: exactly the trade §31 examined and declined. So
+the constant was doing two unrelated jobs. The enemy's price is a **difficulty**
+dial; the captain's is what an **option** costs the person choosing it. Split at
+0.85 and 0.70, the seam being one extra key on an options object `resolveHit` was
+already building.
+
+After, on shipped code:
+
+```
+aimed at        survival   was          §31's question, pilot never calls a shot
+hull (default)     58%    58%           player destroyed 69 / 80   battle 79s
+engines            65%    47%           (before the change: 69 / 80 and 79s)
+weapons            57%    28%
+warpcore           50%    37%
+shields            47%    25%
+sensors            35%    22%
+```
+
+Engines now beats hull fire, weapons is an even trade, and the rest are still
+worse — a choice rather than a trap or a free win. The enemy side is identical to
+the digit, which the split guarantees by construction.
+
+### And two targets that could never have paid
+
+Simulation and source agreed exactly:
+
+```
+subsystems.weapons      8 reads in src/       auxiliary      0   <- read by nothing
+subsystems.sensors      9                     lifesupport    1   <- one log line, our own casualties
+subsystems.warpcore     9
+subsystems.shields      8
+subsystems.engines      4
+```
+
+Held at zero on every hostile from the first tick — the payoff with no price at
+all — crippled auxiliary and crippled life support both leave the fight at 58%
+survival over 152 seconds, identical to crippling nothing. No price makes them
+worth aiming at, because there is nothing on the other side of the trade.
+
+The targeting panel recommended one of them by name: *"auxiliary to keep a fire
+burning"*. The comment beside it recorded, with satisfaction, having made all
+seven reachable after an older bug left `auxiliary` with no route at all. It was
+wired to the UI without anyone asking whether it was wired to anything else.
+
+They keep their words — a captain may still say "target their life support" — and
+get a straight answer instead of a silent charge of the called-shot price for
+nothing.
+
+### Four hypotheses tested and refuted, three of them mine
+
+- **"The payoff is unreachable — fights end before the cripple lands."** No: a
+  called shot drives its target to 0.00 in 92–100% of fights.
+- **"The inert targets explain the result."** No: they explain two of seven.
+- **"The captain is playing it wrong — the AI has a rule."** The AI does gate
+  called shots on the shield facing being through, which the player has no
+  equivalent of. Playing by that rule anyway: 33%, 38%, 43% — all still far
+  below 65%.
+- **"Split is justified because the AI calls shots unconditionally."** False,
+  per the above. The justification is separation of difficulty from option
+  pricing, not asymmetry of behaviour.
+
+### Two instrument errors, and what caught them
+
+- `'normal'` and `'hard'` were passed as difficulty ids. `DIFFICULTIES` is an
+  array and the ids are `story`…`fleet_admiral`, so a run compared a difficulty
+  against itself. Caught because six rows came out identical to the point, which
+  is not what noise looks like.
+- The first price sweep patched `takeDamage` for **both sides at once**, so at
+  1.00 the enemy's called shots went full-damage and swamped the player's gain —
+  producing "no price makes it pay", which is false. Caught by reading the code:
+  `damageSubsystem` is additive and does not soak hull damage, so a free called
+  shot *cannot* be worse, and a result saying it was had to be the instrument.
+
+Also corrected: at fourteen runs a cell, `engines` appeared to tie the default.
+At sixty it is 47% against 58%. The tie was small-sample noise, and the "one
+target that already pays" did not exist.
+
+### A test that was wrong about the galaxy
+
+The change shifted the dice, and a commission fuzzer failed: *"a transit ran a
+simulated year without arriving."* The ship was healthy — engines 1, warp core 1,
+hull 1, fuel in the tanks — and advancing an hour a tick exactly as it should.
+The course was Idran to the Founders' homeworld, two hops through the far side of
+the wormhole, laid at warp 2 because that was the highest factor accepted:
+**10,957 hours.** The test's stated premise, *"no charted course in the galaxy is
+a year long"*, was false.
+
+It is bounded by the course's own quoted duration now, which is the harder
+question anyway: a transit must arrive in about the time it said it would, which
+also catches a short course that overruns — something a flat year-long ceiling
+could never see.
+
+### Guards and controls
+
+Three new guards, each confirmed against a control that had to break it: the
+split reverted, so the captain pays what a hostile pays; the price set to 1.00,
+the strictly-dominant configuration §31 removed; and the two inert targets
+re-offered, which fails the targeting guard and the fuzzer's pool guard together.
+The mechanism is asserted without a simulation so it cannot be noise, and the
+outcome guard asserts the direction rather than the figure.
+
+### Recorded, not fixed
+
+**Evasive manoeuvres pay only if held permanently.** Turning evasive on when
+shields fall below 35% is worth exactly zero — 64% to 64%, 0% to 0%. Holding it
+from the first tick is +7 and +36 points in two matchups. The same shape as this
+section: a lever whose correct use the game never hints at, and a separate
+measurement of its own.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

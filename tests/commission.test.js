@@ -353,11 +353,28 @@ function playCommission(spec) {
         else if (w === 1) refused('course', r.error ?? 'refused');
       }
       if (laid) {
-        // One tick is one commission hour here, so this is a bound in hours:
-        // no charted course in the galaxy is a year long.
-        for (let i = 0; i < 24 * 365 && g.transit && !g.over; i++) pump(1);
+        // One tick is one commission hour here, so this is a bound in hours —
+        // and the bound is the course's OWN quoted length, not a flat year.
+        //
+        // It was a year, on the stated grounds that "no charted course in the
+        // galaxy is a year long". Some are. Idran to the Founders' homeworld,
+        // two hops through the far side of the wormhole, laid at warp 2 because
+        // that was the highest factor accepted: 10,957 hours. The ship was
+        // healthy — engines 1, warp core 1, hull 1, fuel in the tanks — and
+        // advancing an hour a tick exactly as it should. The assertion was
+        // wrong about the galaxy, and it failed the first time a commission
+        // wandered somewhere slow enough to prove it.
+        //
+        // Quoted-time is the better question anyway, and a strictly harder one:
+        // a transit must arrive in about the time it said it would, which also
+        // catches a SHORT course that overruns — something a flat year-long
+        // ceiling could never see.
+        const quoted = g.transit.totalHours;
+        const bound = Math.ceil(quoted * 1.5) + 48;
+        for (let i = 0; i < bound && g.transit && !g.over; i++) pump(1);
         assert.ok(!g.transit || g.over,
-          `a transit ran a simulated year without arriving — seed ${seed}, leg ${j.legs}`);
+          `a course quoted at ${quoted.toFixed(0)}h had not arrived after ${bound}h `
+          + `— seed ${seed}, leg ${j.legs}`);
       }
     }
 

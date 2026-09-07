@@ -13552,6 +13552,38 @@ const ABLATIVE_RESIST = 0.12;
 const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore', 'sensors', 'lifesupport'];
 
 /**
+ * The subsystems worth aiming at: the ones the simulation reads on a hostile.
+ *
+ * Every ship HAS all seven — random damage hits any of them, and the repair
+ * screen lists them all. But two of them do nothing when they fail on somebody
+ * else's ship, and the game was inviting the captain to shoot at those:
+ *
+ *     subsystems.weapons      8 reads in src/
+ *     subsystems.sensors      9
+ *     subsystems.warpcore     9
+ *     subsystems.shields      8
+ *     subsystems.engines      4
+ *     subsystems.auxiliary    0     <- read by nothing, anywhere
+ *     subsystems.lifesupport  1     <- one log line, about the PLAYER's casualties
+ *
+ * Measured, holding each at zero on every hostile from the first tick: crippled
+ * auxiliary and crippled life support both leave the fight at 58% survival over
+ * 152 seconds, identical to the digit to crippling nothing at all. The targeting
+ * panel's own hint recommended one of them by name — "auxiliary to keep a fire
+ * burning" — and the comment beside it recorded making all seven reachable,
+ * which wired them to the UI without asking whether they were wired to anything
+ * else.
+ *
+ * They are not removed from the vocabulary. A captain may still say "target
+ * their life support"; the answer is a straight one instead of a silent charge
+ * of the called-shot price for nothing.
+ *
+ * This is a registry, not a filter: a subsystem earns its place here by having a
+ * reader, and adding one is what should get it listed.
+ */
+const TARGETABLE_SUBSYSTEMS = ['weapons', 'shields', 'engines', 'warpcore', 'sensors'];
+
+/**
  * What a called shot costs in hull damage, as a share of what it would have
  * done aimed at the ship generally. See `takeDamage`.
  *
@@ -13574,6 +13606,38 @@ const SUBSYSTEM_KEYS = ['weapons', 'shields', 'engines', 'auxiliary', 'warpcore'
  * the log, with a whole repair and power system to answer it.
  */
 const CALLED_SHOT_HULL = 0.7;
+
+/**
+ * The same share, for a shot the CAPTAIN called.
+ *
+ * One number was doing two unrelated jobs. §31 set 0.70 by reading player deaths
+ * and battle length — the right numbers for the question it was asking, which
+ * was how hard the enemy's new called shots should land. It never asked the
+ * other half: whether the option is worth taking by the captain paying for it.
+ *
+ * It was not. Measured over sixty seeded runs a side, a Miranda against three
+ * Birds-of-Prey, every one of the seven targets came in below simply shooting
+ * at the hull — engines 47%, weapons 28%, the floor group 22%, against 58% for
+ * naming nothing. A button that is always a mistake.
+ *
+ * Sweeping the price for the player's shots alone, with the enemy left at 0.70:
+ *
+ *     price   aim weapons   aim engines   aim shields     (hull baseline 65%)
+ *      0.70        35%           45%           23%
+ *      0.85        53%           70%           43%
+ *      1.00        78%           83%           38%
+ *
+ * 1.00 is the free upgrade §31 correctly removed — two targets strictly
+ * dominant. 0.70 is the far end, where none of them is worth taking. 0.85 is a
+ * decision: engines beats hull fire, weapons and shields do not.
+ *
+ * Split rather than moved, because moving it moves the enemy too — the same
+ * sweep applied to both sides costs six more player deaths in eighty fights and
+ * takes twenty seconds off the average battle, which is exactly the trade §31
+ * examined and declined. The captain's price is an option's cost; the enemy's
+ * is a difficulty dial. They were never the same quantity.
+ */
+const CALLED_SHOT_PLAYER = 0.85;
 
 /**
  * When a single gun mount stops firing, and when it comes back.
@@ -14284,6 +14348,9 @@ class Ship {
   takeDamage(amount, {
     bearing = 0, direction = null, type = 'energy',
     shieldPiercing = 0, rng = null, subsystem = null, from = null,
+    // What a called shot costs THIS shooter. Defaulted, so every other caller —
+    // hazards, collisions, boarding, the arena — keeps the behaviour it had.
+    calledShotHull = CALLED_SHOT_HULL,
   } = {}) {
     if (this.destroyed) return { shieldDamage: 0, hullDamage: 0, facing: 'fore', penetrated: false, crewKilled: 0 };
 
@@ -14321,10 +14388,11 @@ class Ship {
     // of 1.8 on a roll it usually lost. A choice with no cost is not a choice,
     // and it stayed one only because nothing but the player could make it.
     //
-    // Three tenths of the hull damage buys the precision, for both sides — see
-    // the measurements on CALLED_SHOT_HULL. A captain who calls a shot is
-    // trading the kill for the cripple, which is what calling a shot is.
-    if (subsystem) incoming *= CALLED_SHOT_HULL;
+    // The hull damage that buys the precision — see the measurements on
+    // CALLED_SHOT_HULL and CALLED_SHOT_PLAYER. A captain who calls a shot is
+    // trading the kill for the cripple, which is what calling a shot is; the
+    // question that constant pair answers is how much of the kill.
+    if (subsystem) incoming *= calledShotHull;
 
     let shieldDamage = 0;
     let hullDamage = 0;
@@ -14887,7 +14955,9 @@ __exports.THREAT_HALF_LIFE = THREAT_HALF_LIFE;
 __exports.ADDITIVE_MODS = ADDITIVE_MODS;
 __exports.ABLATIVE_RESIST = ABLATIVE_RESIST;
 __exports.SUBSYSTEM_KEYS = SUBSYSTEM_KEYS;
+__exports.TARGETABLE_SUBSYSTEMS = TARGETABLE_SUBSYSTEMS;
 __exports.CALLED_SHOT_HULL = CALLED_SHOT_HULL;
+__exports.CALLED_SHOT_PLAYER = CALLED_SHOT_PLAYER;
 __exports.MOUNT_DISABLED_AT = MOUNT_DISABLED_AT;
 __exports.MOUNT_RESTORED_AT = MOUNT_RESTORED_AT;
 __exports.MOUNT_CONCENTRATION = MOUNT_CONCENTRATION;
@@ -17309,7 +17379,7 @@ __define("src/sim/combat.js", function (__exports, __require) {
 // character sheet, not to whether a phaser connects.
 
 const { emit } = __require("src/core/events.js");
-const { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection, FACING_LABEL } = __require("src/sim/ship.js");
+const { Ship, FACINGS, SUBSYSTEM_KEYS, inArc, facingForBearing, facingForDirection, FACING_LABEL, CALLED_SHOT_HULL, CALLED_SHOT_PLAYER, TARGETABLE_SUBSYSTEMS } = __require("src/sim/ship.js");
 const { chooseAction } = __require("src/sim/ai.js");
 const { OPEN_ARENA, buildArena, blockedBy, insideSolid, conditionsAt } = __require("src/sim/arena.js");
 const { assessEngagement, classPower, forcePower } = __require("src/sim/assess.js");
@@ -17727,6 +17797,22 @@ class Engagement {
       this.pushLog(`We have no firing solution on their ${key}, Captain.`, 'tactical');
       return false;
     }
+    // A system they have, that shooting out would not change how they fight.
+    //
+    // The order is still understood — a captain may reasonably call for it, and
+    // refusing to parse the words would be its own kind of lie. What is refused
+    // is the shot: a called shot costs hull damage, and buying nothing with it
+    // is the trap this whole change is about. `auxiliary` is read by nothing in
+    // the game and `lifesupport` by one log line about our OWN casualties, so
+    // neither does anything to the ship being shot at.
+    if (key && !TARGETABLE_SUBSYSTEMS.includes(key)) {
+      this.pushLog(
+        `Their ${key} is not something we can shoot out from here, Captain — `
+        + 'we would be spending the shot for nothing.',
+        'tactical',
+      );
+      return false;
+    }
     this.targetedSubsystem = key ?? null;
     this.pushLog(key ? `Targeting ${key}.` : 'Targeting hull.', 'tactical');
     return true;
@@ -17959,6 +18045,13 @@ class Engagement {
 
     const result = target.takeDamage(damage, {
       direction, type: dmgType, shieldPiercing: piercing, rng: this.rng, subsystem,
+      // A called shot costs the captain less than it costs a hostile, because
+      // the two numbers were never measuring the same thing: the enemy's is a
+      // difficulty dial set by §31 against player deaths and battle length, and
+      // the captain's is the price of an option they choose. At one shared
+      // value the option was worth taking by nobody — every one of the seven
+      // targets came in below shooting at the hull.
+      calledShotHull: attacker === this.player ? CALLED_SHOT_PLAYER : CALLED_SHOT_HULL,
       // Who fired. The one place in the game where a ship is hurt BY somebody
       // rather than by a hazard, and the fact the AI's target selection has
       // always claimed to use.
@@ -46261,7 +46354,7 @@ const { audio } = __require("src/audio/engine.js");
 const { chairPanel } = __require("src/ui/chair.js");
 const { commandReference } = __require("src/ui/orders.js");
 const { namesFor } = __require("src/sim/address.js");
-const { inArc, SUBSYSTEM_KEYS } = __require("src/sim/ship.js");
+const { inArc, SUBSYSTEM_KEYS, TARGETABLE_SUBSYSTEMS } = __require("src/sim/ship.js");
 const { OBJECTIVES } = __require("src/sim/combat.js");
 const { weakestFacing } = __require("src/sim/powers.js");
 
@@ -47072,16 +47165,20 @@ function tacticalScreen(app) {
   }
 
   // --- Subsystem targeting ---
-  // All seven, from SUBSYSTEM_KEYS rather than a hand-written four.
+  // The five the simulation reads on a hostile, from TARGETABLE_SUBSYSTEMS.
   //
-  // The list had four of the seven the simulation models, so sensors, life
-  // support and auxiliary could be called by voice but not tapped, and
-  // `auxiliary` could not be reached at all by either — the one subsystem in
-  // the game with no route to it. Iterating the key list is what stops that
-  // happening again: a subsystem added to the simulation appears here, and a
-  // label missing from the table below is a visible gap rather than a silent
-  // omission.
-  const subs = SUBSYSTEM_KEYS.map((key) => [key, SUBSYSTEM_TARGET_LABEL[key] ?? key]);
+  // This iterated SUBSYSTEM_KEYS — all seven — to fix an older bug where the
+  // list was a hand-written four and `auxiliary` had no route to it at all.
+  // That made every subsystem reachable without asking whether every subsystem
+  // did anything, and two of them do not: nothing in the game reads
+  // `subsystems.auxiliary`, and `subsystems.lifesupport` is read once, in a
+  // sentence about our OWN casualties. Held at zero on every hostile from the
+  // first tick, both leave the fight at exactly the survival and length of
+  // crippling nothing.
+  //
+  // So the panel offers what can be shot out. The words still parse — the order
+  // is answered rather than silently charged — see `Engagement.targetSubsystem`.
+  const subs = TARGETABLE_SUBSYSTEMS.map((key) => [key, SUBSYSTEM_TARGET_LABEL[key] ?? key]);
   side.append(panel('Target Subsystem', [
     el('div', { class: 'grid-2' }, [
       ...subs.map(([key, label]) => button(label, tap(() => {
@@ -47092,7 +47189,7 @@ function tacticalScreen(app) {
         say: `target their ${label.toLowerCase()}`,
       })),
     ]),
-    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor, auxiliary to keep a fire burning.' }),
+    el('p', { class: 'hint', text: 'Targeting a subsystem trades raw damage for a specific kill: engines to stop a runner, weapons to survive a Galor. It costs you hull damage you would otherwise be doing, so it is worth it when the cripple is worth more than the kill.' }),
   ]));
 
   // --- Weapons ---
