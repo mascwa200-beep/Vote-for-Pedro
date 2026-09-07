@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 353 choices, **67 of 353 choices carry a `requires`** —
+episodes, 154 stages and 355 choices, **69 of 355 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -10992,6 +10992,82 @@ machine for generating stale orders. Stopped.
 
 Twenty-two flags to go, three of which are act 5 and cannot move until the
 finale's place in the order is guaranteed.
+
+## 113. Two act-3 deeds, and a lead that dissolved
+
+The eighth and ninth of the thirty, both act 3, both read where the earlier deed
+is the whole of the qualification.
+
+### The procedure with his ship's name on it
+
+`tholian_border` ends, when the Merrimack comes home, with this:
+
+> A formal acknowledgement of error is now the standing Starfleet procedure for
+> the Tholian border. **It is named after this ship.**
+
+So `tholian_protocol` does not mean the captain survived a power whose reasoning
+nobody shares. It means he wrote down how, and the document carries his ship's
+name.
+
+`first_contact_grid` is six weeks past the last relay, facing a vessel with no
+crew and no life support that has been listening to Federation subspace traffic
+for two hundred and six years, and its first question is whether a thing that
+was built can consent to anything. The scene already offers *"Deflect. Establish
+protocol first"* — a captain inventing one on the spot to buy time. This is the
+earned version: open with the acknowledgement of error, as the procedure says.
+
+It rolls the same `diplomacy` check as answering honestly, at **0.4 against
+0.55**, and branches to the same two stages — a road through the scene rather
+than a shortcut around it. The difference between the two is that this captain
+has done it before and wrote it down.
+
+### The road that does not spend him
+
+`bargained`, at Khitomer: the prisoner has given up the paymaster and then asked,
+*"in the first frightened thing he has said"*, that nobody be told he gave it.
+Both roads out spend him anyway — one takes the name to the table, one uses it
+quietly.
+
+`dmz_clause_recovered` is Terok Nor, act 3: *"Take the conceded point back before
+you sign."* A captain who has reopened a concession with the pen already in his
+hand has a third road — reopen this one on its own merits. A harder argument, and
+the one that leaves a nineteen-year-old out of it.
+
+It carries `read_the_ninth` like both of its siblings, because the stage it leads
+to gates three of its four choices on having actually read the page; a road in
+that skipped it would strand a captain in a room where almost everything is
+greyed out. That is asserted rather than assumed.
+
+### The lead that dissolved
+
+§112 left three act-5 flags unreadable because nothing guarantees `homecoming` is
+played last, and the obvious follow-up was to give the finale that guarantee.
+Measured before building:
+
+- Nothing outside the episode files references `homecoming` at all. It is an
+  ordinary episode gated on `minRank: 8`, and playing it ends nothing.
+- Rank 8 is Rear Admiral at **66,000 xp**. The entire episode book pays about
+  **39,500** — so the finale cannot be reached by playing episodes alone.
+- But `combatXP` is `tier * 140 + maxHull / 20` per hostile, roughly six hundred
+  a ship and a couple of thousand a fight. The remaining ~26,500 is fifteen to
+  twenty engagements across a five-year commission, which is ordinary play.
+
+So the finale is comfortably reachable and the loose coupling between rank and
+episode progress is the design working, not a hole. **No defect**, and no
+ordering guarantee to build — inventing a constraint in order to justify content
+is backwards. The three act-5 flags stay unread with a reason.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the acknowledgement is locked without the Merrimack | drop the `requires` | ✓ ×4 |
+| and is a better roll than improvising one, to the same two stages | give it the same difficulty | ✓ |
+| reopening the page is locked without Terok Nor | drop the `requires` | ✓ ×5 |
+| and it does not name the paymaster | add `khitomer_source` to it | ✓ |
+| and it does not strand him at the ninth page | drop `read_the_ninth` from it | ✓ |
+
+Twenty flags to go.
 
 ## Attribution
 

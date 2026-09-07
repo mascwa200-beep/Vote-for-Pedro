@@ -705,3 +705,63 @@ describe('the cube at Gamma Hydra reads what you did two acts ago', () => {
     assert.ok(checked > 0, 'no within-episode flag gate was reached, so this asserted nothing');
   });
 });
+
+// §113. The Tholian border, read past the relay network.
+//
+// `tholian_border` ends, when the Merrimack comes home, with this: "A formal
+// acknowledgement of error is now the standing Starfleet procedure for the
+// Tholian border. It is named after this ship."
+//
+// So the captain carrying `tholian_protocol` did not merely survive an alien
+// power whose reasoning nobody shares — he wrote down how, and the document has
+// his ship's name on it. `first_contact_grid` is six weeks past the last relay
+// with something that has been listening for two hundred and six years and has
+// just asked whether a thing that was built can consent.
+describe('the procedure named after this ship is one he can actually run', () => {
+  const ep = EPISODES.find((e) => e.id === 'first_contact_grid');
+  const stage = ep.stages.contact;
+
+  const open = (flags) => {
+    const g = captain();
+    for (const f of flags) g.ledger.setFlag(f);
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('and only he can run it', () => {
+    const gated = stage.choices.find((c) => c.id === 'protocol');
+    assert.ok(gated, 'the acknowledgement of error is gone');
+    assert.deepEqual(gated.requires, { flag: 'tholian_protocol' });
+    assert.equal(open([]).includes('protocol'), false,
+      'offered to a captain who never brought the Merrimack home');
+    assert.ok(open(['tholian_protocol']).includes('protocol'), 'the Tholian border bought nothing');
+  });
+
+  test('it is a better roll than improvising one, which is the whole of the payoff', () => {
+    // The scene already has "Deflect. Establish protocol first" — a captain
+    // inventing one on the spot to buy time. This is the earned version, and it
+    // has to be measurably better or it is the same choice with a nicer label.
+    const earned = stage.choices.find((c) => c.id === 'protocol').effects.check;
+    const honest = stage.choices.find((c) => c.id === 'engage').effects.check;
+    assert.equal(earned.type, honest.type, 'the two answers roll different skills');
+    assert.equal(earned.hazard, honest.hazard);
+    assert.ok(earned.difficulty < honest.difficulty,
+      `the earned answer is difficulty ${earned.difficulty} against ${honest.difficulty}`);
+    // And it lands in the same two places, so it is a road through the scene
+    // rather than a shortcut around it.
+    assert.deepEqual(
+      stage.choices.find((c) => c.id === 'protocol').branch,
+      stage.choices.find((c) => c.id === 'engage').branch);
+  });
+
+  test('and the flag it reads is one an earlier act really pays', () => {
+    // Act 3 against this episode's act 4 — the ordering guard in wiring.test.js
+    // holds the general rule; this pins the specific pair the scene rests on.
+    const src = EPISODES.filter((e) => Object.values(e.stages ?? {}).some((s) =>
+      (s.choices ?? []).some((c) => [].concat(c.effects?.flag ?? []).includes('tholian_protocol'))));
+    assert.equal(src.length, 1, 'tholian_protocol is written in more than one place');
+    assert.ok(src[0].act < ep.act,
+      `${src[0].id} is act ${src[0].act} and ${ep.id} is act ${ep.act}`);
+  });
+});
