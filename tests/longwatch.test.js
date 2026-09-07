@@ -272,3 +272,98 @@ describe('and the board that reads your log actually reads it', () => {
     assert.ok(own.effects.xp > plain.effects.xp, 'and it is not worth doing at all');
   });
 });
+
+// And what the captain did in an EARLIER EPISODE.
+//
+// Everything above is about what this episode can learn about itself — the
+// letter, the dark room. §107 found the other half missing across the whole
+// book: thirty flags recorded deeds and were read by nothing, and `long_watch`
+// gated three choices, all three on its own variables. It knew everything about
+// its own night and nothing about the four acts behind it.
+//
+// Two of the thirty are about the same thing this episode is about — the gap
+// between the record and the person — and both are act 2:
+//
+//   marru_left  Rigel. "Break orbit and file it", and the ending is called
+//               `left_her`. You turned somebody into paperwork.
+//   vell_lost   Wolf 359. The pod stopped at its last stage, Lieutenant
+//               Commander Aris Vell never woke, and you entered her name in the
+//               log yourself rather than have it done for you.
+describe('and it reads what you did before you ever heard of Marchetti', () => {
+  const toMiddleWatch = ['go', 'trace', 'stores', 'bunk', 'leave', 'ask'];
+
+  test('the captain who filed Marru away is the one who thinks to ask', () => {
+    const gated = EP.stages.middle_watch.choices.find((c) => c.id === 'her_words');
+    assert.ok(gated, 'the choice that asks her is gone');
+    assert.deepEqual(gated.requires, { flag: 'marru_left' });
+
+    const g = captain();
+    const m = start(g);
+    for (const id of toMiddleWatch) play(g, m, id);
+    assert.equal(m.stageId, 'middle_watch');
+    assert.equal(openHere(g, m).includes('her_words'), false,
+      'offered to a captain who never left anybody at Rigel');
+
+    const did = captain({ flags: ['marru_left'] });
+    const m2 = start(did);
+    for (const id of toMiddleWatch) play(did, m2, id);
+    assert.ok(openHere(did, m2).includes('her_words'), 'Rigel bought nothing');
+  });
+
+  test('the captain who wrote Vell into a log knows what a name in one is worth', () => {
+    const gated = EP.stages.the_write_up.choices.find((c) => c.id === 'like_vell');
+    assert.ok(gated, 'the choice that writes her name properly is gone');
+    assert.deepEqual(gated.requires, { flag: 'vell_lost' });
+
+    const g = captain();
+    const m = start(g);
+    for (const id of [...toMiddleWatch, 'stop']) play(g, m, id);
+    assert.equal(m.stageId, 'the_write_up');
+    assert.equal(openHere(g, m).includes('like_vell'), false,
+      'offered to a captain who never wrote that entry');
+
+    const did = captain({ flags: ['vell_lost'] });
+    const m2 = start(did);
+    for (const id of [...toMiddleWatch, 'stop']) play(did, m2, id);
+    assert.equal(m2.stageId, 'the_write_up');
+    assert.ok(openHere(did, m2).includes('like_vell'), 'Wolf 359 bought nothing');
+  });
+
+  test('and asking her is read at the desk, not written and forgotten', () => {
+    // This file's own header records walking into exactly that defect while
+    // writing the episode about not overlooking things: `sat_in_the_dark` was
+    // written by three routes and read by none. `she_was_asked` is set by one
+    // choice and it had better be the reason another one opens.
+    const did = captain({ flags: ['marru_left'] });
+    const m = start(did);
+    for (const id of toMiddleWatch) play(did, m, id);
+    play(did, m, 'her_words');
+    assert.equal(m.stageId, 'the_write_up');
+    assert.equal(m.vars.she_was_asked, true, 'asking her set nothing');
+    assert.ok(openHere(did, m).includes('her_account'), 'she was asked and it changed no entry');
+
+    // The same captain, who took the case instead of asking.
+    const other = captain({ flags: ['marru_left'] });
+    const m2 = start(other);
+    for (const id of [...toMiddleWatch, 'stop']) play(other, m2, id);
+    assert.equal(m2.stageId, 'the_write_up');
+    assert.equal(openHere(other, m2).includes('her_account'), false,
+      'her account was on offer to a captain who never asked for it');
+  });
+
+  test('a road that closed at Rigel does not tell the captain to come back later', () => {
+    // §108: 29 of the book's 36 flag gates ask for a deed from an earlier
+    // episode, where "Not yet available" is a promise nothing can keep.
+    const g = captain();
+    const m = start(g);
+    for (const id of toMiddleWatch) play(g, m, id);
+    // Standing in the room first. Reading the choices from the corridor gives
+    // every one of them the room's lock reason — the mistake this file's header
+    // records, walked into again by the test asserting on lock reasons.
+    stand(g, m);
+    const shut = m.choices().find((c) => c.id === 'her_words');
+    assert.equal(shut.locked, true);
+    assert.match(shut.lockReason, /record/i,
+      `a road that closed at Rigel says "${shut.lockReason}"`);
+  });
+});
