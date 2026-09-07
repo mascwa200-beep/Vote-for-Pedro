@@ -150,6 +150,19 @@ export const CAPITAL_EPISODES = [
           { id: 'ask', label: 'Ask your tactical officer to stand second',
             next: 'duel', requires: { officer: 'tactical' },
             effects: { xp: 800, standing: { klingon: 8 }, flag: 'second_stood' } },
+          // The Neutral Zone, in act 2. You put people aboard a decloaked
+          // warbird and took her cloaking device off her by hand, and nobody
+          // comes off a boarding action carrying only the one thing they went
+          // for.
+          //
+          // Duras's whole accusation is that you are an outsider Kang vouched
+          // for. The other three blades here are borrowed, issued, or handed to
+          // you by somebody else; this is the only one in the armoury that the
+          // captain took off an enemy himself, which is the single answer that
+          // hall understands without translation.
+          { id: 'taken', label: 'Carry what you took off the Romulan yourself',
+            next: 'duel', requires: { flag: 'captured_cloak' },
+            effects: { xp: 900, standing: { klingon: 14 } } },
         ],
       },
 

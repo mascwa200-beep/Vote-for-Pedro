@@ -164,6 +164,63 @@ describe('the capitals themselves', () => {
     assert.equal(m.testWhere().ok, true, 'the captain could not reach the armoury');
   });
 
+  test('the blade you took off a Romulan yourself is a fourth one', () => {
+    // §110. The armoury scene offers two Federation blades that are wrong and a
+    // third the tactical officer will not account for. A captain who boarded a
+    // decloaked warbird in the Neutral Zone in act 2 and took her cloaking
+    // device off her by hand has a fourth, and it is the only one in the room
+    // he took off an enemy himself — which is the answer Duras's accusation
+    // actually calls for.
+    const stage = EPISODE_BY_ID.qonos_council.stages.blade;
+    const taken = stage.choices.find((c) => c.id === 'taken');
+    assert.ok(taken, 'the blade taken off the Romulan is gone');
+    assert.deepEqual(taken.requires, { flag: 'captured_cloak' });
+
+    const open = (flags) => {
+      const g = captain({ flags });
+      const m = g.missions.start('qonos_council', g);
+      g.locationId = 'qonos';
+      m.stageId = 'blade';
+      walkTo(g, 'armoury');
+      return m.choices().filter((c) => !c.locked).map((c) => c.id);
+    };
+    assert.equal(open(['kang_respects_you']).includes('taken'), false,
+      'offered to a captain who never boarded her');
+    assert.ok(open(['kang_respects_you', 'captured_cloak']).includes('taken'),
+      'the boarding bought nothing');
+  });
+
+  test('and a captain really can hold both of the flags that scene needs', () => {
+    // The warning this file already carries: granting flags with `setFlag`
+    // proves a gate READS a flag and never that anybody can hold it. Two
+    // shipped choices died that way, one of them in this very episode
+    // (`charge/own_it`, which wanted `archanis_massacre` alongside
+    // `kang_respects_you`).
+    //
+    // `wiring.test.js` holds the general guard. What is asserted here is the
+    // specific fact that makes this choice reachable: the two flags come from
+    // DIFFERENT episodes, so nothing forces a captain to choose between them.
+    // `captured_cloak` is a sibling of `spared_warbird` at one stage of
+    // `outpost_silence`, which is exactly why the same flag cannot be read
+    // inside `romulus_debt` — and nearly was, twice.
+    const from = (flag) => {
+      const out = new Set();
+      for (const ep of EPISODES) {
+        for (const stage of Object.values(ep.stages ?? {})) {
+          for (const c of stage.choices ?? []) {
+            if ([].concat(c.effects?.flag ?? []).includes(flag)) out.add(ep.id);
+          }
+        }
+      }
+      return out;
+    };
+    const cloak = from('captured_cloak');
+    const kang = from('kang_respects_you');
+    assert.ok(cloak.size && kang.size, 'one of the two flags is written by nothing');
+    assert.equal([...cloak].some((id) => kang.has(id)), false,
+      `both flags are written inside ${[...cloak].join(',')}, so a captain may have to choose`);
+  });
+
   test('a scene held in a Klingon hall is not held on your own bridge', () => {
     // Both episodes happen off the ship. The room default is 'bridge' and the
     // engine enforces it, so every such stage has to say so.

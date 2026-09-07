@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 347 choices, **61 of 347 choices carry a `requires`** —
+episodes, 154 stages and 348 choices, **62 of 348 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -10706,6 +10706,81 @@ eight lines below the comment describing it. Sixteenth and seventeenth
 instrument errors.
 
 Twenty-six flags to go.
+
+## 110. A fourth blade, and a guard I tried to build twice
+
+The fifth of the thirty. `captured_cloak` — `outpost_silence`, act 2, *"Board and
+take the cloaking device"* — is now read at Qo'noS.
+
+### The scene
+
+`qonos_council` is Duras accusing Kang of vouching for an outsider, and it turns
+on a duel. Its one shipboard stage sends the captain to the armoury, which no
+other episode has ever used:
+
+> Your armoury has two ceremonial blades, both Federation-issue, both wrong.
+> Your tactical officer has a third that is not Federation-issue at all and does
+> not explain where it came from.
+
+A captain who put people aboard a decloaked warbird in the Neutral Zone and took
+her cloaking device off her by hand has a fourth, and nobody comes off a
+boarding action carrying only the thing they went for. The other three are
+borrowed, issued, or handed to him by somebody else. This is the only one in the
+room he took off an enemy himself — which is the single answer that hall
+understands without translation.
+
+### And a correction, which is most of what this section is for
+
+The interesting part is not the blade.
+
+`captured_cloak` was the obvious candidate for `romulus_debt` — a Romulan
+tribunal, a Romulan trophy — and I checked before writing it. It cannot work:
+`captured_cloak` and `spared_warbird` are **sibling terminal choices at one
+stage** of `outpost_silence` (board her, or honour her request and stand off),
+and `romulus_debt` carries `requiresFlag: 'spared_warbird'`. No captain can hold
+both. That is the unreachability this register already recorded, found by hand
+when the original choice was deleted.
+
+So I concluded the class was unguarded, said so, and built a guard for it:
+same-stage siblings, checked against the containing episode's `requiresFlag`.
+
+**It already existed.** `wiring.test.js` carries
+*"and every gated choice is one some captain can actually unlock"*, and it is
+strictly stronger than what I wrote — it reasons about terminal choices and
+single-episode writers rather than only same-stage siblings, and it is the guard
+that caught both original cases.
+
+I found out because a control fired with a message I had not written. The first
+attempt at that control had substituted against a choice id that no longer
+exists, so it silently patched nothing and reported green; fixing it produced
+
+```
+romulus_debt/told/deadgate needs captured_cloak,
+which no captain holding spared_warbird can have
+```
+
+— wording from the existing test. **A control that would not fire, and then
+fired in somebody else's voice.** Had the first attempt worked, I would have
+shipped a weaker duplicate believing it was new.
+
+The duplicate is deleted. What is asserted instead, beside the blade, is the
+specific fact that makes *this* gate reachable where the tempting one was not:
+`captured_cloak` and `kang_respects_you` are written by different episodes, so
+nothing forces a captain to choose between them.
+
+Twice now — §107 and here — the thing I believed was missing turned out to be
+present and untested, or present and unread by me. The register's job is to stop
+the first. Reading the tests before writing one is the answer to the second.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the taken blade is locked without the boarding, open with it | drop the `requires` | ✓ ×3 |
+| a captain can hold both flags the scene needs | gate it on a flag exclusive with `kang_respects_you` | ✓ |
+| (pre-existing) no gate asks for a flag its own episode forbids | rebuild the historical `romulus_debt` bug | ✓ |
+
+Twenty-five flags to go.
 
 ## Attribution
 
