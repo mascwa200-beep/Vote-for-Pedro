@@ -410,3 +410,60 @@ test('nothing is offered as a target that cannot be shot out', () => {
       `${key} is excluded from targeting but read ${readsOf(key)} times — it may do something now`);
   }
 });
+
+test('evasive is a trade, not a free win', () => {
+  // §95 filed this as a lead reading "+7 and +36 points" and it was fourteen
+  // runs a cell. At sixty the +36 is in a matchup that reads 0% either way and
+  // the +7 is inside its own interval — the third small-sample error of the
+  // stretch, and the only one that reached a merged write-up. §96 has the
+  // withdrawal.
+  //
+  // What is actually there, and robust across six shifted blocks of thirty:
+  // evasive costs kills and saves hull, 6 of 6 both ways. It reads as free in
+  // the source — `defense + 0.16`, `maxSpeed x 1.25`, `turnRate x 1.4`, three
+  // benefits and no declared price — but the speed and the turn ARE the price:
+  // a ship jinking that hard cannot hold a firing arc.
+  const fly = (evasive, runs = 30) => {
+    let kills = 0; let hull = 0; let survived = 0;
+    for (let seed = 0; seed < runs; seed++) {
+      const g = new Game({
+        seed: BigInt(seed + 1), crewMode: 'original', difficulty: 'captain', shipClass: 'miranda',
+        character: new Character({ speciesId: 'andorian', careerId: 'tactical' }),
+      });
+      const hostiles = [];
+      for (let i = 0; i < 3; i++) hostiles.push(new Ship('bird_of_prey', { faction: 'klingon', name: `H${i}` }));
+      g.startCombat(hostiles);
+      for (let i = 0; i < 40000 && g.engagement && !g.engagement.over; i++) {
+        if (i % 15 === 0 && g.engagement.target) {
+          pilot(g);
+          if (!!g.ship.evasive !== evasive) g.engagement.evasive(evasive);
+        }
+        g.update(1 / 30);
+      }
+      kills += hostiles.filter((h) => h.destroyed).length;
+      if ((g.lastCombat?.outcome ?? g.engagement?.outcome) !== 'destroyed') { survived++; hull += g.ship.hullPct; }
+    }
+    return { kills: kills / runs, hull: survived ? hull / survived : 0 };
+  };
+  const off = fly(false);
+  const on = fly(true);
+
+  assert.ok(on.kills < off.kills,
+    `evasive killed ${on.kills.toFixed(2)} of three against ${off.kills.toFixed(2)} flying straight `
+    + '— it is supposed to cost gunnery');
+  assert.ok(on.hull > off.hull,
+    `evasive brought ${(on.hull * 100).toFixed(0)}% of hull home against ${(off.hull * 100).toFixed(0)}% `
+    + '— it is supposed to buy something for that');
+});
+
+test('and the order says what it costs', () => {
+  // A lever with a price the player cannot see is the same defect as a lever
+  // with no price at all — see §95 on the called shot. The targeting panel has
+  // explained its trade since it was written; this button had no hint of any
+  // kind while being the more consequential of the two.
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'ui', 'screens.js'), 'utf8');
+  const hint = /sub: '([^']*kill slower[^']*)'/.exec(src);
+  assert.ok(hint, 'the evasive order no longer tells the captain what it costs');
+  assert.match(hint[1], /harder to (hit|shoot)/i,
+    `the hint names a cost but not the benefit it buys: "${hint[1]}"`);
+});

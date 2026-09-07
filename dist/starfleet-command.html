@@ -47245,9 +47245,21 @@ function tacticalScreen(app) {
     }),
     el('div', { class: 'grid-2' }, [
       button('Come about', tap(() => eng.comeAboutTo(eng.target)), { say: 'come about', color: 'blue' }),
+      // The cost, said out loud. Evasive is `defense + 0.16`, `maxSpeed x 1.25`
+      // and `turnRate x 1.4` — three benefits and no declared price, which made
+      // it look free in the source. It is not: a ship jinking that hard cannot
+      // hold a firing arc, so its own gunnery falls off. Measured across six
+      // blocks of thirty runs, holding evasive cost kills in 6 of 6 and left
+      // more hull on the survivors in 6 of 6. A real trade the button never
+      // mentioned, next to a targeting panel that has explained its own since
+      // the day it was written.
       button(g.ship.evasive ? 'Evasive: on' : 'Evasive', tap(() => {
         eng.evasive(!g.ship.evasive); app.render();
-      }), { say: 'evasive', color: g.ship.evasive ? 'green' : 'blue' }),
+      }), {
+        say: 'evasive',
+        color: g.ship.evasive ? 'green' : 'blue',
+        sub: 'Harder to hit, harder to shoot: you will take less and kill slower.',
+      }),
     ]),
     powerSlider('Throttle', g.ship.throttle * 100, (v) => { g.ship.throttle = v / 100; }),
     // Elevation. The third axis is what the 3D simulation is for, and the

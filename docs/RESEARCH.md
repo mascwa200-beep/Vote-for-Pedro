@@ -9125,6 +9125,87 @@ from the first tick is +7 and +36 points in two matchups. The same shape as this
 section: a lever whose correct use the game never hints at, and a separate
 measurement of its own.
 
+> **Wrong, and corrected in §96.** Those figures are fourteen runs a cell. At
+> sixty the +36 is not there: evasive held from the first tick reads 52%
+> survival against 58% for never touching it, which is a difference inside its
+> own confidence interval. It is the same small-sample error this section
+> records making about `engines` two paragraphs earlier — caught there by
+> re-measuring, and not caught here, because a lead being carried to the *next*
+> piece of work never went through the check the shipped claim did. Evasive is a
+> real tradeoff and §96 measures what it actually costs.
+
+
+## 96. The lead that dissolved, and the third time the same sample was too small
+
+§95 closed with a lead: *"evasive manoeuvres pay only if held permanently…
+holding it from the first tick is +7 and +36 points in two matchups."* This
+section is that lead being measured, and it is wrong.
+
+### At sixty runs the effect is not there
+
+```
+miranda v 3x bird_of_prey @captain, 60 runs
+
+  evasive     survival   mean fight   hull left   kills
+  never         58%         154s         30%       1.72
+  when hurt     58%         157s         30%       1.73
+  always        52%         177s         40%       1.43
+```
+
+The +36 came from a single cell of fourteen runs in a matchup that reads 0%
+either way at sixty. The +7 is inside its own confidence interval. What survives
+is the *opposite* of the headline: holding evasive shows no survival benefit at
+all, and takes twenty-three seconds longer to kill less.
+
+### Which is because it was never free
+
+Reading the code first suggested evasive was a strictly dominant option, and
+that reading was wrong in effect. It is `defenseRating + 0.16`, `maxSpeed ×
+1.25`, `turnRate × 1.4` — three benefits and no declared cost. But the speed and
+the turn *are* the cost: a ship jinking at a quarter again its speed and half
+again its agility cannot hold a firing arc, and its own gunnery falls off. The
+price is emergent rather than written down, which is why it is invisible in the
+source and obvious in the simulation.
+
+Measured across six independent blocks of thirty runs, shifting the seeds each
+time:
+
+```
+fewer kills with evasive on : 6 / 6 blocks
+more hull left on surviving : 6 / 6 blocks
+```
+
+So evasive is a real trade, robustly: **you take less damage and you kill
+slower.** That is a legitimate design and there is nothing here to fix in the
+simulation. What was missing is that the game never said so — the button carried
+no hint at all, while the subsystem panel beside it had one. It does now.
+
+### The error, which is the third of its kind
+
+§95 caught itself making this exact mistake about `engines` — fourteen runs said
+it tied the default, sixty said 47% against 58% — and recorded the correction
+two paragraphs above the claim this section is withdrawing. The claim that was
+*shipped* got the higher-run check. The lead being carried forward to the next
+piece of work did not, because it was not what that section was about.
+
+That is the mechanism worth writing down, more than the number: **a measurement
+you are about to act on gets checked, and a measurement you are about to file
+does not.** Three small-sample errors this stretch, all the same shape, all
+caught eventually and one of them only after it had been merged into a write-up.
+The habit that catches them — re-measuring at higher n before believing an
+effect — has to apply to the register as well as to the diff.
+
+### Guards and controls
+
+Two guards, each with the control that had to break it: the trade holds in the
+direction measured — evasive costs kills and saves hull — with the control being
+either half asserted backwards; and the hint on the button names a cost, with
+the control being a hint that promises only the benefit.
+
+Both are pinned at thirty runs across the shipped seed block, and the margin was
+checked across six shifted blocks first, which is the discipline this section is
+about.
+
 
 ## Attribution
 
