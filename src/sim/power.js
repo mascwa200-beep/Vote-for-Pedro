@@ -153,12 +153,22 @@ export class PowerGrid {
     }
   }
 
-  /** Ease actual levels toward target. Called every sim step. */
-  update(dt) {
+  /**
+   * Ease actual levels toward target. Called every sim step.
+   *
+   * `rate` is a temporary multiplier from the ship's buffs — the jury-rigged
+   * EPS bypass, today. It is handed in rather than written into
+   * `transferRate`, because a grid does not know about buffs and because a
+   * field two things write is a field with no owner: the bypass used to set
+   * `transferRate` directly, and `applyAllMods` sets it from the loadout, so
+   * which value the ship actually ran on depended on which had happened last.
+   */
+  update(dt, rate = 1) {
+    const speed = this.transferRate * (Number.isFinite(rate) && rate > 0 ? rate : 1);
     for (const s of SUBSYSTEMS) {
       const diff = this.target[s] - this.levels[s];
       if (Math.abs(diff) < 0.01) { this.levels[s] = this.target[s]; continue; }
-      const step = Math.sign(diff) * Math.min(Math.abs(diff), this.transferRate * dt);
+      const step = Math.sign(diff) * Math.min(Math.abs(diff), speed * dt);
       this.levels[s] += step;
     }
   }

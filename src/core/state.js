@@ -897,9 +897,17 @@ export class Game {
     // captain's, so it is reapplied wherever he is standing.
     if (this.perk('cloak')) this.ship.cloakCapable = true;
 
+    // The grid's base speed, set here and nowhere else.
+    //
+    // This only assigned when `eps` was truthy, which made it a writer among
+    // writers rather than the owner: the machine shop's EPS bypass wrote the
+    // same field directly, so a ship's power routing was whichever of the two
+    // had happened most recently. Assigned unconditionally, this is the base
+    // and temporary effects multiply it — see `PowerGrid.update`.
     const eps = this.loadout.special('powerTransfer');
-    if (eps) this.ship.power.transferRate = 55 + eps;
-    if (this.character?.hasFeat('master_engineer')) this.ship.power.transferRate = 400;
+    this.ship.power.transferRate = this.character?.hasFeat('master_engineer')
+      ? 400
+      : 55 + (eps || 0);
 
     // The other half of Master Engineer, which said "the warp core can be
     // ejected and later recovered" and had never in its life recovered one.
