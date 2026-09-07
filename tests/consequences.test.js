@@ -38,6 +38,7 @@ import { Character } from '../src/rules/character.js';
 import { EPISODES } from '../src/missions/episodes/index.js';
 import { CONSEQUENCE_EPISODES } from '../src/missions/episodes/consequences.js';
 import { SYSTEMS } from '../src/world/systems.data.js';
+import { TRACK_LIST } from '../src/rules/reputation.js';
 
 /**
  * A flag officer, carrying whatever earlier episodes gave them.
@@ -297,10 +298,88 @@ describe('and neither writes anything down that nobody reads', () => {
     }
     // Measured, not guessed, and the two numbers here are different
     // quantities: 19 flags are gated ON, but one of them (`inquiry_summoned`)
-    // is set by the game rather than by any episode, so 18 is the count of
-    // WRITTEN decisions that gate something. It was 13.
+    // is set by the game rather than by any episode, so 18 was the count of
+    // WRITTEN decisions that gate something. It was 13 before this file.
+    //
+    // This asserted `>= 18` and called itself a number that only moves in one
+    // direction. So did the copy of it in `echoes.test.js`, at `>= 28`. By §111
+    // the true figure was 39, so one floor was twenty-one adrift and the other
+    // nine, and BOTH would have passed while a third of the book's memory was
+    // deleted. A floor that nobody tightens is not a ratchet; it is a number
+    // that used to mean something.
+    //
+    // Exact now, in both places, for the reason `WRITTEN_AND_UNREAD` is exact:
+    // reality moving has to FORCE the record to move rather than merely invite
+    // it. `echoes.test.js` carries the canonical statement and the history;
+    // this one is older and stays because it is what that file is about. They
+    // measure the same quantity and must move together.
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.ok(gated >= 18,
-      `only ${gated} of ${written.size} recorded decisions gate anything; it was 13 before this`);
+    assert.equal(gated, 39,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 39. `
+      + 'The same count is asserted in echoes.test.js and RESEARCH.md §111; move all three.');
+  });
+});
+
+// §111. The other road out of Organia.
+//
+// `our_order` has always offered "Enter what you saw at Organia into the record
+// first", gated on `observed_organia` — the captain who watched from range in
+// act 2. The counterpart was never written: a captain who beamed down, pressed
+// the council, learned what they were and then KEPT IT OUT OF THE LOG has
+// nothing to enter. He has something to admit.
+//
+// The two flags come from opposite opening choices at Organia, so no captain
+// holds both. Two roads out of act 2, one to a customer.
+describe('and the captain who buried Organia can say so', () => {
+  const ep = EPISODES.find((e) => e.id === 'vulcan_long_peace');
+  const stage = ep.stages.our_order;
+
+  test('the admission is on offer only to a captain who buried it', () => {
+    const gated = stage.choices.find((c) => c.id === 'organia_buried');
+    assert.ok(gated, 'the admission is gone');
+    assert.deepEqual(gated.requires, { flag: 'organia_secret' });
+
+    const open = (flags) => {
+      const g = captain({ flags });
+      return stage.choices
+        .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+        .map((c) => c.id);
+    };
+    const none = open([]);
+    assert.equal(none.includes('organia_buried'), false,
+      'offered to a captain who never went down');
+    assert.equal(none.includes('organia'), false,
+      'the clean version is offered to a captain who never observed either');
+
+    assert.ok(open(['organia_secret']).includes('organia_buried'), 'burying it bought nothing');
+    assert.equal(open(['organia_secret']).includes('organia'), false,
+      'a captain who buried it can also enter what he saw');
+    assert.ok(open(['observed_organia']).includes('organia'));
+  });
+
+  test('and it costs him with Starfleet, which is what makes it worth doing', () => {
+    // Every other choice at this stage pays federation standing. This one is
+    // the only line in the scene that takes it away: a delegation being told
+    // the Federation sat on a first contact is not applause, and the choice is
+    // worth nothing if it is simply the better version of the clean one.
+    const gated = stage.choices.find((c) => c.id === 'organia_buried');
+    assert.ok(gated.effects.standing.federation < 0,
+      `admitting a concealment pays ${gated.effects.standing.federation} federation standing`);
+    for (const other of stage.choices.filter((c) => c.id !== 'organia_buried')) {
+      assert.ok((other.effects.standing?.federation ?? 0) > 0,
+        `${other.id} also costs federation standing, so the admission is not distinctive`);
+    }
+  });
+
+  test('and it does not pay into a reputation track that does not exist', () => {
+    // The first draft rewarded this in `vulcan` standing. There are six tracks
+    // and Vulcan is not one of them, so it would have been a line of prose the
+    // game silently ignored — the class §104 and §105 were both about.
+    const tracks = new Set(TRACK_LIST.map((t) => t.id ?? t));
+    for (const c of stage.choices) {
+      for (const f of Object.keys(c.effects?.standing ?? {})) {
+        assert.ok(tracks.has(f), `${c.id} pays standing to "${f}", which is not a track`);
+      }
+    }
   });
 });

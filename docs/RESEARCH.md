@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 348 choices, **62 of 348 choices carry a `requires`** —
+episodes, 154 stages and 350 choices, **64 of 350 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -10781,6 +10781,114 @@ the first. Reading the tests before writing one is the answer to the second.
 | (pre-existing) no gate asks for a flag its own episode forbids | rebuild the historical `romulus_debt` bug | ✓ |
 
 Twenty-five flags to go.
+
+## 111. The ratchets that stopped ratcheting
+
+§110 ended by saying the fix for rebuilding a guard that already exists is to
+read the tests first. Doing that immediately found a guard that had quietly
+stopped working, and then two more.
+
+### The one that started it
+
+`tests/echoes.test.js` counts how many recorded decisions gate something —
+whether the book remembers what a captain did — and asserted:
+
+```js
+assert.ok(gated >= 28, ...)
+```
+
+under the comment *"A ratchet: it only moves one way, and if a later change makes
+it worse this says so."*
+
+It stopped saying so. The true figure was **37**. Content kept arriving, nobody
+tightened the floor, and eight gates could have been deleted with the suite
+green. Three of those nine were added by me in §108–§110, and I did not read the
+test I was moving the number for.
+
+`tests/consequences.test.js` carries a copy of the same measurement, with the
+same *"only moves in one direction"* language, asserting `>= 18`. **Twenty-one
+adrift.** Two guards on one quantity, both blind.
+
+And `tests/rooms.test.js` — *"how many rooms can you actually do something in"*,
+explicitly modelled on the echoes ratchet — asserted `>= 6` against a true 11.
+
+### The control that makes the point
+
+Restore the floor **and** delete a gate at the same time:
+
+```
+floor (>= 28), one gate deleted     10 passed, 0 failed
+exact (=== 39), one gate deleted     9 passed, 1 failed
+```
+
+The floor watches a captain stop being remembered for something and reports
+success. That is not a weaker guard; it is the absence of one.
+
+### Not every loose floor is wrong
+
+The distinction worth keeping, because a sweep that tightened everything would
+be wrong. A floor that proves **a fixture found something at all** —
+*"the scrape matched at least 40 phrases before I trust its silence"* — is doing
+a different job, and slack is correct there. `docs.test.js` uses exactly that
+pattern on purpose, and §107 exists because of the one time it was missing.
+
+A floor that tracks **a quality nobody otherwise watches** is a ratchet, and a
+ratchet only ratchets if somebody tightens it. Over four files and many months,
+nobody did, me included, three times. Those are now exact, in the shape
+`WRITTEN_AND_UNREAD` has always used: reality moving FORCES the record to move
+rather than merely inviting it.
+
+Two more were surveyed and left alone because they are **not** stale — they sit
+exactly on their bars and are working: `mechanics.test.js` (12 declared mechanics
+read by nothing, ceiling 12) and `skilltree.test.js` (2 skills buying nothing,
+ceiling 2). A survey that reported those as hazards would have been wrong, and
+checking cost one run each.
+
+Recorded and not fixed: a long tail of content-count floors (`>= 400` against a
+617-order corpus, `>= 25` against 26 episodes) whose quantities are already
+checked exactly elsewhere, in `docs.test.js`, against the README.
+
+### And two more deeds, the sixth and seventh of the thirty
+
+**`organia_secret` → `vulcan_long_peace`** (act 2 → act 5). `our_order` has
+always offered *"Enter what you saw at Organia into the record first"*, gated on
+`observed_organia` — the captain who watched from range. The counterpart was
+never written. A captain who beamed down, pressed the council, learned what they
+were and then **kept it out of the log** has nothing to enter. He has something
+to admit.
+
+The two flags come from opposite opening choices at Organia, so no captain holds
+both: two roads out of act 2, one to a customer. And it is the only line in that
+scene that **costs** Federation standing — a delegation being told the Federation
+sat on a first contact for three years is not applause — because a confession
+that is simply the better version of the clean choice is not a confession.
+
+The first draft paid it in **Vulcan** standing. There is no Vulcan track; the six
+are federation, klingon, romulan, cardassian, ferengi and independent. It would
+have been a line of prose the game silently ignored, which is precisely the class
+§104 and §105 were about, written by the author of both. It is now guarded: every
+standing key at that stage must name a real track.
+
+**`donatu_accord` → `khitomer_accord`** (act 3 → act 5). A Klingon technician
+with a Cardassian charge is in *your* brig on the second morning, and both roads
+out make him somebody's card — hand him over, or go down alone. A captain who
+transmitted one text to two fleets at Donatu V has a third: tell both delegations
+at once, so he stops being leverage and goes back to being a nineteen-year-old
+with a satchel. It costs the private conversation in the brig, and the ninth page
+is still there in the afternoon, which is what the week was about.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the memory count is exact, in both files | restore the floor and delete a gate | ✓ passes at the floor, fails exact |
+| the Organia admission is locked without the burial | drop the `requires` | ✓ ×5 |
+| and it costs Starfleet standing, alone in its scene | make it pay instead | ✓ |
+| and pays no track that does not exist | restore the `vulcan` line | ✓ |
+| the Donatu move is locked without Donatu | drop the `requires` | ✓ ×5 |
+| the rooms count is exact | claim one more room than is used | ✓ |
+
+Twenty-three flags to go.
 
 ## Attribution
 
