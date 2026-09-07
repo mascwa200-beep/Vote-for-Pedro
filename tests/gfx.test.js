@@ -30,6 +30,7 @@ import { drawCombatEffects, DRAWN_EFFECTS } from '../src/gfx/effects.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import {
   sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, worldMesh, limbMesh,
+  beamMesh, impactMesh, explosionMesh, shieldMesh,
   WARP_LENGTH, VOLUME,
 } from '../src/gfx/scene.js';
 import {
@@ -3588,5 +3589,175 @@ describe('every hull in the fleet carries a gradient, not just the Federation on
       jem_hadar_battleship: 18,
       borg_cube: 576,
     }, 'a hull gained or lost unmirrored geometry');
+  });
+});
+
+// The geometry a player spends a fight looking at.
+//
+// Measured over 1,849 frames of a Constitution against two Birds-of-Prey,
+// counting live effects: impact is 50.2% of effect screen-time and beam 39.6%.
+// Ninety percent of what a fight looks like was two meshes of ten and
+// twenty-four triangles carrying one flat colour each, drawn emissive — so the
+// shader discards their lighting and colour is the only channel that can carry
+// any shape at all. Nothing in this suite referenced any effect mesh: the whole
+// block below is the first assertion of any kind about how a shot LOOKS.
+//
+// Peak six live effects against a draw cap of forty, in a frame running 31
+// draws of a 60 ceiling. There was never a budget reason for it.
+describe('a shot looks like something, not like a flat cutout', () => {
+  const lum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+
+  /** A renderer that records what it was asked to draw, mesh included. */
+  const recorder = () => {
+    const calls = [];
+    return { calls, draw(key, mesh, opts) { calls.push({ key, mesh, opts }); } };
+  };
+
+  /** Walk a built effect mesh: how bright it is, and where the bright part is. */
+  const survey = (mesh) => {
+    const d = mesh.data;
+    const f = 10;
+    const tris = mesh.vertexCount / 3;
+    let lo = Infinity; let hi = -Infinity; let grad = 0;
+    const pts = [];
+    for (let v = 0; v < mesh.vertexCount; v++) {
+      const L = lum(d[v * f + 6], d[v * f + 7], d[v * f + 8]);
+      lo = Math.min(lo, L); hi = Math.max(hi, L);
+      pts.push([Math.hypot(d[v * f], d[v * f + 1], d[v * f + 2]), L]);
+    }
+    for (let t = 0; t < tris; t++) {
+      const b = t * 3;
+      const c = (k) => [d[(b + k) * f + 6], d[(b + k) * f + 7], d[(b + k) * f + 8]];
+      const c0 = c(0);
+      if ([1, 2].some((k) => c(k).some((v, j) => Math.abs(v - c0[j]) > 1e-6))) grad++;
+    }
+    // How strongly brightness falls off with distance from the mesh's middle.
+    const n = pts.length;
+    const mx = pts.reduce((a, q) => a + q[0], 0) / n;
+    const my = pts.reduce((a, q) => a + q[1], 0) / n;
+    let num = 0; let dx = 0; let dy = 0;
+    for (const q of pts) { num += (q[0] - mx) * (q[1] - my); dx += (q[0] - mx) ** 2; dy += (q[1] - my) ** 2; }
+    return { tris, lo, hi, span: hi - lo, grad, falloff: num / Math.sqrt(dx * dy) };
+  };
+
+  test('the beam is shaded along its length and is no longer a pentagon', () => {
+    // Five segments is a pentagon at any range a beam is worth looking at, and
+    // an untapered constant-colour tube reads as a rod rather than as something
+    // leaving a gun. The ramp has to run along the shot: a core inside a sheath
+    // is impossible here, because blending is one global alpha mode with depth
+    // writes on, so the outer shell's front faces occlude the inner one inside
+    // the same draw.
+    const m = beamMesh();
+    const s = survey(m);
+    assert.ok(s.tris >= 24, `the beam is ${s.tris} triangles — still a prism`);
+    assert.equal(m.vertexCount, s.tris * 3, 'the beam stopped being flat-shaded');
+    assert.ok(s.grad === s.tris,
+      `${s.tris - s.grad} of the beam's triangles carry no gradient`);
+    assert.ok(s.span > 0.4, `the beam spans only ${s.span.toFixed(2)} of brightness`);
+    assert.ok(s.lo > 0.05, `the beam has a vertex at ${s.lo.toFixed(3)} — nothing bakes to black`);
+  });
+
+  test('and it is a unit mesh on +x, because the matrix carries the shot', () => {
+    // `orientAlong` builds the shot's length into column 0 and its origin into
+    // the translation, and two tests below read both back out. A mesh that
+    // pre-scaled itself would be scaled twice; one not starting at the origin
+    // would start off the muzzle.
+    const d = beamMesh().data;
+    let minX = Infinity; let maxX = -Infinity; let maxR = 0;
+    for (let v = 0; v < beamMesh().vertexCount; v++) {
+      minX = Math.min(minX, d[v * 10]);
+      maxX = Math.max(maxX, d[v * 10]);
+      maxR = Math.max(maxR, Math.hypot(d[v * 10 + 1], d[v * 10 + 2]));
+    }
+    assert.ok(Math.abs(minX) < 1e-6, `the beam starts at x=${minX}, not at its origin`);
+    assert.ok(Math.abs(maxX - 1) < 1e-6, `the beam is ${maxX} long, not a unit`);
+    assert.ok(maxR < 1, `the beam is ${maxR.toFixed(2)} across — it is scaled by thickness, not by itself`);
+  });
+
+  test('the impact and the explosion are hottest in the middle', () => {
+    // A burst carries its shape between fragments rather than across any one of
+    // them — a gradient over a tenth-of-a-unit cube is invisible — so the thing
+    // to assert is that brightness FALLS with distance from the middle. That is
+    // what makes a cloud of debris read as a detonation with a core instead of
+    // as confetti at one brightness.
+    for (const [name, mesh] of [['impact', impactMesh()], ['explosion', explosionMesh()]]) {
+      const s = survey(mesh);
+      assert.ok(s.span > 0.15, `the ${name} spans only ${s.span.toFixed(2)} of brightness`);
+      assert.ok(s.falloff < -0.5,
+        `the ${name}'s brightness correlates ${s.falloff.toFixed(2)} with distance from its middle — it has no core`);
+      assert.ok(s.lo > 0.05, `the ${name} has a vertex at ${s.lo.toFixed(3)}`);
+      assert.equal(mesh.vertexCount, s.tris * 3, `the ${name} stopped being flat-shaded`);
+    }
+  });
+
+  test('and a hit that got through burns warm, not the shield\'s own colour', () => {
+    // The defect this replaces, stated correctly.
+    //
+    // The impact borrowed `shieldMesh`, whose vertices are the shield's blue,
+    // and `uTint` MULTIPLIES the vertex colour rather than replacing it. So the
+    // tint the source calls "white-hot" rendered [0.50, 0.72, 0.70] — a
+    // desaturated teal, GREEN-dominant, the same character as the shield case
+    // it is supposed to contrast with. Both readings were cool and the only
+    // thing telling them apart was alpha.
+    //
+    // My first version of this asserted the penetration was DIMMER than the
+    // held shield. That was wrong: it came from comparing peak channels and
+    // ignoring alpha, and counting alpha the old draw was brighter (0.62
+    // against 0.34). The fault was never brightness. It was that a hull breach
+    // and a shield holding were both blue-green, so the hint the flare is meant
+    // to give — did it get through? — was carried by nothing but opacity.
+    //
+    // Measured on the MESH THE RENDERER WAS HANDED times the tint it was handed
+    // with it, which is what the shader computes. An earlier draft measured
+    // `impactMesh()` directly and passed a control that pointed the draw back
+    // at `shieldMesh`, because it was reading a mesh the renderer no longer used.
+    const drawn = (penetrated) => {
+      const r = recorder();
+      drawCombatEffects(r, {
+        effects: [{
+          kind: 'impact', x: 100, y: 0, z: 0, life: 0.4, facing: 'fore',
+          penetrated, crit: false, classId: 'constitution',
+          from: { x: 1, y: 0, z: 0 },
+        }],
+        projectiles: [],
+      });
+      const call = r.calls.find((c) => c.key === 'impact');
+      assert.ok(call, 'the impact was not drawn at all');
+      const d = call.mesh.data;
+      let best = null; let bestL = -1;
+      for (let v = 0; v < call.mesh.vertexCount; v++) {
+        const c = [0, 1, 2].map((k) => d[v * 10 + 6 + k] * call.opts.tint[k]);
+        const L = lum(...c);
+        if (L > bestL) { bestL = L; best = c; }
+      }
+      return best;
+    };
+    const through = drawn(true);
+    const held = drawn(false);
+    assert.ok(through[0] > through[2],
+      `a hull breach renders ${through.map((v) => v.toFixed(2)).join(', ')} — more blue than red, `
+      + 'which is the shield\'s own reading and not a breach');
+    assert.ok(held[2] > held[0],
+      `a held shield renders ${held.map((v) => v.toFixed(2)).join(', ')} — it should stay the shield's colour`);
+  });
+
+  test('and every explosion gets to play its own opening', () => {
+    // The renderer aged an explosion against a hardcoded 1.6 — the lifetime a
+    // destroyed ship is pushed with — while three of the four things that
+    // explode are pushed with less. Anything shorter-lived was BORN part-way
+    // through its own animation: a point-defence kill appeared at scale 128,
+    // larger than a Constitution's 82.65, already three-quarters faded, and
+    // then shrank away. It never looked like a detonation because it never got
+    // to be one.
+    const src = readFileSync(new URL('../src/sim/combat.js', import.meta.url), 'utf8');
+    const pushes = [...src.matchAll(/kind: 'explosion'[^}]*?life: ([\d.]+)(?:, span: ([\d.]+))?/g)];
+    assert.ok(pushes.length >= 4, `only ${pushes.length} explosion sources found`);
+    for (const [, life, span] of pushes) {
+      assert.ok(span, `an explosion is pushed with life ${life} and no span of its own`);
+      assert.equal(span, life, `an explosion's span ${span} disagrees with its life ${life}`);
+    }
+    const fx = readFileSync(new URL('../src/gfx/effects.js', import.meta.url), 'utf8');
+    assert.match(fx, /1 - e\.life \/ \(e\.span/,
+      'the renderer is back to ageing every explosion against one hardcoded lifetime');
   });
 });

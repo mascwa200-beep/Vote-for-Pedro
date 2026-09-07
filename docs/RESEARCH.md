@@ -9797,6 +9797,127 @@ not depend on the price at all, which is what sent me back to check §223's clai
 rather than assume the guard was weak.
 
 
+## 101. Ninety percent of a fight, and the control that refused to fire twice
+
+§99 gave the fleet a gradient. This is the other half of the same brief: what a
+player looks at *during* a fight, rather than the ships sitting in it.
+
+Counting live effects over 1,849 frames of a Constitution against two
+Birds-of-Prey:
+
+```
+kind        instances   mean frames alive   share of effect screen-time
+impact          37            11.7                50.2%
+beam            35             9.8                39.6%
+cannon           4            10.0                 4.6%
+explosion        2            24.0                 5.6%
+```
+
+**Impact and beam are ninety percent of it**, and they were the two least
+invested meshes in the game — ten triangles and one flat colour for the beam, a
+borrowed shield sphere for the impact. Not one of the 514 triangles across all
+four effect meshes carried any per-vertex variation, and **no test anywhere
+referenced any of them**: nothing would have failed if `torpedoMesh` became a
+single triangle.
+
+There was never a budget reason. Peak **6** live effects against a cap of 40, in
+a frame running 31 draws of a 60 ceiling.
+
+### Two defects, not just flatness
+
+**Every explosion but one was born part-way through its own animation.** The
+renderer aged it as `1 - life / 1.6` — 1.6 being the lifetime a destroyed ship
+is pushed with — while three of the four things that explode are pushed with
+less:
+
+```
+source                 life   born at   scale   alpha
+a ship destroyed        1.6      0.00      30    1.00
+a decoy                 0.8      0.50      95    0.50
+a torpedo on a rock     0.5      0.69     119    0.31
+point defence           0.4      0.75     128    0.25
+```
+
+A point-defence kill appeared at a hundred and twenty-eight units — larger than
+a Constitution, which is 82.65 — already three-quarters faded, and then shrank
+away. It never looked like a detonation because it never got to be one. Each
+push now carries its own `span` and the renderer ages against that.
+
+**A hull breach read as the same colour as a shield holding.** The impact
+borrowed `shieldMesh`, whose vertices are the shield's blue, and `uTint`
+**multiplies** the vertex colour rather than replacing it. So the tint the
+source calls *"white-hot"* rendered `[0.50, 0.72, 0.70]` — a desaturated teal,
+green-dominant, the same character as the reading it exists to contrast with.
+Both were cool, and the only thing separating them was opacity.
+
+### The overclaim, and the measurement that caught it
+
+I first wrote that defect up as *the penetration renders darker than the shield
+holding*, from comparing peak channels: 0.72 against 1.00.
+
+That is wrong, and the control caught it before it shipped. Peak channel is not
+what a translucent draw contributes, and counting alpha the breach was the
+**brighter** of the two — 0.62 against 0.34. It was never the dim one.
+
+The fault was the **hue**. A hull breach and a shield holding were both
+blue-green, so the one thing the flare exists to tell a captain — *did that get
+through?* — was carried by nothing but alpha. `impactMesh` is near-white, so a
+tint is now the colour it says it is: `[0.90, 0.83, 0.63]` through the hull
+against `[0.50, 0.72, 0.90]` off the shield.
+
+### The control that refused to fire, twice
+
+Reverting the impact draw to `shieldMesh` — reintroducing the defect exactly —
+passed the guard **twice** before it passed for the right reason.
+
+The first version asserted against `impactMesh()` directly. Pointing the draw
+back at `shieldMesh` left it measuring a mesh the renderer no longer used, so it
+sailed through. That is the §51 defect and it is the third time this register
+has recorded it.
+
+Rewritten to drive `drawCombatEffects` with a recorder and read the mesh the
+renderer was actually handed, it *still* passed — because by then it was
+asserting brightness, and the old draw genuinely was brighter. **A control that
+will not fire is information, not an obstacle.** The first refusal said the test
+was measuring the wrong object; the second said the CLAIM was wrong. Only the
+third version — asserting that a breach renders warm and a held shield cool —
+describes something true that the old code fails.
+
+The existing effect tests capture the mesh in their recorder and never inspect
+it (`tests/gfx.test.js`), which is exactly how a mesh-swap defect stays
+invisible: the seam was there the whole time and nothing looked through it.
+
+### What the geometry does now
+
+```
+mesh          triangles   luminance span   corr(distance from middle, brightness)
+beam           10 -> 36      0.50..1.25            -1.000  (along the shot)
+impact        224 -> 264     0.55..0.90            -0.914  (a core)
+explosion     216 -> 216     0.58..0.94            -0.909  (a core)
+```
+
+The beam is round rather than a pentagon, tapers toward the target, and cools
+along its length. It cannot have a hot core inside a sheath: blending is one
+global alpha mode with depth writes on, so an inner shell is occluded by the
+outer one's front faces inside the same draw — the shape has to live on a single
+surface. The impact and the explosion carry theirs *between* fragments rather
+than across any one of them, because a gradient over a tenth-of-a-unit cube is
+invisible; what reads is brightness falling from the middle outward, and that is
+what the guard asserts.
+
+Peak effect load after the change: **6 draws of 40, 1,080 triangles in a frame,
+nothing dropped.**
+
+### A metric error worth keeping
+
+Measuring the explosion's brightness span by peak channel gave **0.00** — both
+its hot and cool colours have red at 1.0, so the hue shift is invisible to that
+statistic while being obvious on screen. Luminance gives 0.36. The mesh was
+right and the instrument was wrong, which is the same lesson as the overclaim
+above arriving from the other direction: a number that disagrees with the thing
+it measures is usually the number.
+
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
