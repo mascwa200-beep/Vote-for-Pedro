@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 355 choices, **69 of 355 choices carry a `requires`** —
+episodes, 154 stages and 356 choices, **70 of 356 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -11068,6 +11068,97 @@ is backwards. The three act-5 flags stay unread with a reason.
 | and it does not strand him at the ninth page | drop `read_the_ninth` from it | ✓ |
 
 Twenty flags to go.
+
+## 114. Twelve consequences paid into nothing
+
+Found while placing an act-1 gate in `rigel_syndicate`, by reading the lines
+above the one I was editing.
+
+### The defect
+
+Twelve choices across three episodes pay reputation to **`orion`** or
+**`tholian`**. Both are factions — `world/factions.data.js` has ten — and
+neither is one of the six reputation **tracks**, which are federation, klingon,
+romulan, cardassian, ferengi and independent. Every one of those lines was
+written into nothing.
+
+Six of the twelve had **no other standing line at all**:
+
+```
+vega_raid/paid/pursue           orion -14      nothing else
+rigel_syndicate/covert/loud     orion -14      nothing else
+tholian_border/start/enter      tholian -12    nothing else
+tholian_border/hail/enter       tholian -20    nothing else
+tholian_border/timetable/cross  tholian -20    nothing else
+tholian_border/inside/fight     tholian -18    nothing else
+```
+
+So crossing a Tholian border, going loud on Rigel, and pursuing the raiders who
+left *"with four hundred colonists aboard as cargo"* each cost the captain
+**nothing anywhere in the game**. `tholian_border` is the worst of it: four of
+its six standing lines are these.
+
+### The fix
+
+`independent` is *"Unaligned Worlds — earned by answering distress calls that
+nobody was required to answer"*, and it is the track that already exists for
+powers outside the majors. `core.js` was **already pairing `orion` with it** at
+two sites, which is the author's own reading of where these belong.
+
+So: where that pairing exists the dead key is dropped, because the consequence is
+already recorded and doubling it would be a balance change smuggled in as a fix.
+Everywhere else the dead key becomes `independent` at the same magnitude. Twelve
+lines, ten converted and two dropped, no number altered.
+
+Adding `orion` and `tholian` as real tracks was the other option and is a bigger
+piece of work — each track in this game carries a ladder of purchasable projects,
+and a track with an empty ladder is a half-thing. Recorded, not built.
+
+### The lesson, which is the inverse of §110's
+
+§111 added a guard for exactly this class, after I wrote `vulcan` standing into a
+scene and caught it myself. **That guard looked at one stage.**
+
+The general version is three lines longer and would have found all twelve
+immediately. §110's mistake was writing a guard that already existed; this one
+was writing a guard **narrower than the class it was defending against**, which
+is the same failure wearing better clothes — it passes, it looks like diligence,
+and it is a fence around one tree.
+
+It now walks every choice and every ending in the book, and refuses to pass on a
+fixture that examined fewer than sixty standing lines. That second assertion is
+what makes it hard to renarrow: the control that reduces it to a single episode
+now fails with *"only 2 standing lines examined, so this asserts little"* rather
+than passing green.
+
+### And the longest reach in the book
+
+`centauri_aid` — act 1, the second episode a captain ever flies. A Klingon scout
+adrift eleven million kilometres inside Federation space with a reactor that is
+*"not failed, failing, which is a slower and worse thing"*, and the lieutenant
+who answers says they require nothing. The flag is every road where he takes
+them off regardless, including after they have refused in writing.
+
+Four acts later Duras accuses Kang of vouching for an outsider. The two existing
+answers are both about Archanis — what this captain did to Klingons, and what
+Kang said to him. The new one is the plainest thing in the room and nobody had
+said it: ask the Centauri scout's crew whether I am an outsider.
+
+It costs nothing with Starfleet, unlike the answer beside it, and is worth more
+to the hall — a rescue he never mentioned to anybody, against a quotation that
+tells the Council a Federation officer once offered Kang a way out.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| every standing line in the book names a real track | restore one dead key | ✓ names it |
+| and the fixture examined enough to mean it | renarrow the guard to one episode | ✓ *"only 2 standing lines examined"* |
+| the Centauri answer is locked without the rescue | drop the `requires` | ✓ ×4 |
+| and it reaches act 1 from act 4 | — | pinned |
+| and costs nothing with Starfleet, unlike its neighbour | — | pinned |
+
+Nineteen flags to go, three of them act-5 blocked.
 
 ## Attribution
 

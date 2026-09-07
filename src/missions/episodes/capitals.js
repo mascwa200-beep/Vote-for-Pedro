@@ -97,6 +97,29 @@ export const CAPITAL_EPISODES = [
           { id: 'sent_away', label: '"He told me himself. A Klingon sent away has not withdrawn"',
             next: 'seconded', requires: { flag: 'kang_left_room' },
             effects: { xp: 800, standing: { klingon: 10, federation: -4 } } },
+          // Alpha Centauri, in ACT ONE — the longest reach in the book, and the
+          // second episode a captain ever flies.
+          //
+          // A Klingon scout adrift eleven million kilometres inside Federation
+          // space with a reactor that is "not failed, failing, which is a
+          // slower and worse thing", and the lieutenant who answers the hail
+          // says they require nothing. `centauri_aid` is every road where he
+          // takes them off regardless — aboard, by bypass, under tow, or after
+          // they have formally refused in writing.
+          //
+          // Duras's charge is that Kang vouched for an outsider. The other two
+          // answers here are about Archanis: what this captain did to Klingons,
+          // and what Kang said to him. This one is the plainest thing in the
+          // room and nobody has said it — five years before any of this, he
+          // pulled a Klingon crew off a dying ship that was too proud to ask,
+          // and never mentioned it to anybody.
+          //
+          // It costs nothing with Starfleet and it is not meant to: a hall that
+          // respects a man for what he took off an enemy (§110) respects him
+          // rather more for what he did when there was nothing in it.
+          { id: 'centauri', label: '"Ask the Centauri scout\'s crew whether I am an outsider"',
+            next: 'seconded', requires: { flag: 'centauri_aid' },
+            effects: { xp: 1000, standing: { klingon: 16 } } },
         ],
       },
 

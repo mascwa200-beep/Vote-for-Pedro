@@ -314,8 +314,8 @@ describe('and neither writes anything down that nobody reads', () => {
     // this one is older and stays because it is what that file is about. They
     // measure the same quantity and must move together.
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.equal(gated, 44,
-      `${gated} of ${written.size} recorded decisions gate something; the register says 44. `
+    assert.equal(gated, 45,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 45. `
       + 'The same count is asserted in echoes.test.js and RESEARCH.md §111; move all three.');
   });
 });
@@ -371,15 +371,43 @@ describe('and the captain who buried Organia can say so', () => {
     }
   });
 
-  test('and it does not pay into a reputation track that does not exist', () => {
-    // The first draft rewarded this in `vulcan` standing. There are six tracks
-    // and Vulcan is not one of them, so it would have been a line of prose the
-    // game silently ignored — the class §104 and §105 were both about.
+  test('and no choice in the book pays into a reputation track that does not exist', () => {
+    // §111's first draft rewarded the Organia admission in `vulcan` standing.
+    // There are six tracks and Vulcan is not one of them, so it would have been
+    // a line of prose the game silently ignored — the class §104 and §105 were
+    // both about.
+    //
+    // That version of this test looked at ONE STAGE, which is the instance and
+    // not the class. §114 widened it and found twelve shipped choices already
+    // doing it: six paying `orion` and six paying `tholian`, both of which are
+    // factions in `world/factions.data.js` and neither of which is a reputation
+    // track. SIX of the twelve had no other standing line at all, so crossing a
+    // Tholian border, going loud on Rigel and pursuing the raiders who took four
+    // hundred colonists as cargo each cost the captain nothing anywhere.
+    //
+    // The lesson is the inverse of §110's. There the mistake was writing a guard
+    // that already existed; here it was writing one narrower than the class it
+    // was defending against, when the general version was three lines away and
+    // free.
     const tracks = new Set(TRACK_LIST.map((t) => t.id ?? t));
-    for (const c of stage.choices) {
-      for (const f of Object.keys(c.effects?.standing ?? {})) {
-        assert.ok(tracks.has(f), `${c.id} pays standing to "${f}", which is not a track`);
+    const dead = [];
+    let checked = 0;
+    const visit = (where, standing) => {
+      for (const f of Object.keys(standing ?? {})) {
+        checked++;
+        if (!tracks.has(f)) dead.push(`${where} pays standing to "${f}"`);
+      }
+    };
+    for (const ep of EPISODES) {
+      for (const [sid, s] of Object.entries(ep.stages ?? {})) {
+        for (const c of s.choices ?? []) visit(`${ep.id}/${sid}/${c.id}`, c.effects?.standing);
+      }
+      // Endings pay standing too, and the narrow version never looked at one.
+      for (const [k, e] of Object.entries(ep.endings ?? {})) {
+        visit(`${ep.id}!${k}`, e.effects?.standing);
       }
     }
+    assert.ok(checked >= 60, `only ${checked} standing lines examined, so this asserts little`);
+    assert.deepEqual(dead, [], `${dead.length} standing lines name no real track`);
   });
 });

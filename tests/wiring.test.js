@@ -1851,6 +1851,11 @@ describe('every episode graph is sound', () => {
       organia_revealed: 'candidate',
       rescued_vell: 'candidate',
       romulus_witness: 'candidate',
+      // `centauri_aid` left in §114, and it is the longest reach in the book:
+      // act 1, the second episode a captain ever flies, answered in the Klingon
+      // Great Hall in act 4. He pulled a Klingon crew off a failing reactor
+      // when they had said in writing that they required nothing.
+      //
       // `tholian_protocol` and `dmz_clause_recovered` left in §113: the captain
       // who wrote the Tholian procedure — the one named after his own ship —
       // can open a first contact with it, and the one who took a conceded point

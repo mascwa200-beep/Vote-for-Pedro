@@ -350,3 +350,58 @@ describe('what the new episodes read back', () => {
       'variables the capitals write and nothing reads');
   });
 });
+
+// §114. The longest reach in the book.
+//
+// `centauri_drift` is act 1 — the second episode a captain ever flies. A Klingon
+// scout is adrift eleven million kilometres inside Federation space with a
+// reactor that is "not failed, failing, which is a slower and worse thing", and
+// the lieutenant who answers the hail says they require nothing. `centauri_aid`
+// is every road where he takes them off regardless: aboard, by bypass, under
+// tow, or after they have formally refused in writing.
+//
+// Duras's charge in act 4 is that Kang vouched for an outsider.
+describe('a Klingon crew he pulled off a dying ship in act one', () => {
+  const stage = EPISODE_BY_ID.qonos_council.stages.charge;
+
+  const open = (flags) => {
+    const g = captain({ flags: ['kang_respects_you', ...flags] });
+    return stage.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('answers the charge, and only for the captain who did it', () => {
+    const gated = stage.choices.find((c) => c.id === 'centauri');
+    assert.ok(gated, 'the Centauri answer is gone');
+    assert.deepEqual(gated.requires, { flag: 'centauri_aid' });
+    assert.equal(open([]).includes('centauri'), false,
+      'offered to a captain who let them drift');
+    assert.ok(open(['centauri_aid']).includes('centauri'), 'Alpha Centauri bought nothing');
+  });
+
+  test('and it really does reach back to the first act', () => {
+    // The reach is the point of the section, so it is asserted rather than
+    // described. `wiring.test.js` holds the general rule that a gate reads a
+    // strictly earlier act; this pins the distance.
+    const firstAct = Math.min(...EPISODES
+      .filter((ep) => Object.values(ep.stages ?? {}).some((s) => (s.choices ?? [])
+        .some((c) => [].concat(c.effects?.flag ?? []).includes('centauri_aid'))))
+      .map((ep) => ep.act));
+    assert.equal(firstAct, 1, `centauri_aid is first earned in act ${firstAct}`);
+    assert.equal(EPISODE_BY_ID.qonos_council.act, 4);
+  });
+
+  test('and it costs him nothing with his own service, unlike the answer beside it', () => {
+    // `sent_away` tells the Great Hall that a Federation officer once offered
+    // Kang a way out, and pays -4 federation for it. This one is a rescue he
+    // never mentioned to anybody, so there is nothing for Starfleet to mind.
+    const centauri = stage.choices.find((c) => c.id === 'centauri');
+    const sentAway = stage.choices.find((c) => c.id === 'sent_away');
+    assert.equal(centauri.effects.standing.federation, undefined);
+    assert.ok(sentAway.effects.standing.federation < 0,
+      'the comparison this rests on has changed');
+    assert.ok(centauri.effects.standing.klingon > sentAway.effects.standing.klingon,
+      'the hall thinks less of a rescue than of a quotation');
+  });
+});
