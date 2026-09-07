@@ -9527,6 +9527,26 @@ until it was measured, and the second where nothing at all depended on it. A
 claim nothing branches on is still a claim; it is just one whose error survives
 longer, because no test will ever fail because of it.
 
+### And the forty-eight seconds that nearly kept it wrong
+
+§97's corrected figures very nearly did not ship. Its pull request merged at
+**05:22:35**; the commit correcting two of its numbers was written at
+**05:23:23**. Forty-eight seconds.
+
+Nothing malfunctioned. A draft pull request whose checks go green is marked
+ready and merged within seconds, so a follow-up push to a PR that is already
+green is a race, and this one lost it — leaving the merged history carrying
+`+52 over thirty` and `forty-five over ten` while the branch carried the fix.
+It surfaced only because the next push was rejected as a non-fast-forward, and
+it was recovered by cherry-picking rather than by restarting the branch clean,
+which would have thrown the correction away in the name of tidiness.
+
+Two habits out of it, both cheap. **Correct before opening, not after** — the
+window between opening a PR and its merge is not a drafting period. And **after
+any late push, check that the merge commit actually contains it**, because a
+branch that holds the fix and a `main` that does not look identical from the
+branch.
+
 
 ## Attribution
 
