@@ -202,10 +202,21 @@ describe('the register states figures it has actually measured', () => {
   test('the episodes it names as gating nothing are the episodes that gate nothing', () => {
     // Scraped as a list, so an episode that gains its first gate has to leave
     // the document — and one that loses its last has to join it.
-    const block = RESEARCH.match(/Four episodes gate nothing whatsoever:\n\n((?:- `[a-z0-9_]+`\n)+)/);
+    // The count is captured rather than baked in, because the whole point of
+    // this section is that the number should fall as episodes learn to read the
+    // record — pinning "Four" here made the guard fail the first time it did.
+    // Captured, it still has to agree with the list beneath it.
+    const block = RESEARCH.match(
+      /(\w+) episodes gate nothing whatsoever:\n\n((?:- `[a-z0-9_]+`\n)+)/);
     assert.ok(block, '§107 no longer names the episodes that gate nothing');
-    const named = [...block[1].matchAll(/`([a-z0-9_]+)`/g)].map((m) => m[1]).sort();
+    const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    const stated = WORDS.indexOf(block[1].toLowerCase());
+    assert.ok(stated >= 0, `§107 says "${block[1]} episodes gate nothing", which is not a number`);
+
+    const named = [...block[2].matchAll(/`([a-z0-9_]+)`/g)].map((m) => m[1]).sort();
     assert.ok(named.length >= 1, 'the list scraped empty, so this asserted nothing');
+    assert.equal(stated, named.length,
+      `§107 says ${block[1]} episodes gate nothing and then lists ${named.length}`);
 
     const actual = EPISODES.filter((e) => gatedIn(e) === 0).map((e) => e.id).sort();
     assert.deepEqual(named, actual,

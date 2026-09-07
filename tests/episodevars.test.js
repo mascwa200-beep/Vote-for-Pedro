@@ -583,3 +583,125 @@ describe('an episode reads the captain, and failing it goes somewhere', () => {
     }
   });
 });
+
+// The same argument one level up: what the captain did in an EARLIER EPISODE.
+//
+// `requires.flag` has always worked and 36 choices in the book use it. But
+// `the_cube` — act 4, fifteen choices, a Borg cube on course for Earth — read
+// nothing a captain had done in the four acts behind it, which is what
+// RESEARCH §107 found once the discredited "wide but shallow" claim was
+// measured properly. Thirty flags were being written down and read by nothing.
+//
+// Two of the thirty are unmistakably Borg and both are act 2:
+//
+//   ran_silent    Outpost 4. "Not damaged. Excavated." You went in on passive
+//                 sensors only, and it did not notice you.
+//   wolf_scanned  Wolf 359. Thirty-nine hulls and a signal from inside a
+//                 section of saucer that should have been cold — and you
+//                 scanned it thoroughly from range instead of boarding it.
+//
+// Which is why they went first.
+describe('the cube at Gamma Hydra reads what you did two acts ago', () => {
+  const cube = EPISODES.find((e) => e.id === 'the_cube');
+
+  /** The choices on offer at a stage, for a captain who has done `flags`. */
+  function offered(flags, stageId = null) {
+    const g = captain();
+    g.locationId = 'frontier_2';
+    for (const f of flags) g.ledger.setFlag(f);
+    const m = g.missions.start('the_cube', g);
+    if (stageId) m.stageId = stageId;
+    return m.choices();
+  }
+  const find = (list, id) => list.find((c) => c.id === id);
+
+  test('a captain who crept up on Outpost 4 may creep up on this', () => {
+    const without = find(offered([]), 'study_silent');
+    assert.ok(without, 'the episode no longer offers the silent approach at all');
+    assert.equal(without.locked, true, 'the silent approach was offered to a captain who never ran silent');
+
+    const withIt = find(offered(['ran_silent']), 'study_silent');
+    assert.equal(withIt.locked, false, 'the captain ran silent at Outpost 4 and the cube did not care');
+  });
+
+  test('and it is a better road, which is the entire point of having earned it', () => {
+    // The payoff is the roll. Asserted on the episode data rather than on a
+    // sampled success rate because the difficulty IS the content here — this is
+    // the artifact under test, not a source-read standing in for behaviour —
+    // and because `difficulty` is on a documented 0.05 grid the test above
+    // already holds every check in the book to.
+    const stage = cube.stages.start.choices;
+    const plain = stage.find((c) => c.id === 'study').effects.check;
+    const silent = stage.find((c) => c.id === 'study_silent').effects.check;
+    assert.equal(silent.type, plain.type, 'the two approaches roll different skills');
+    assert.equal(silent.hazard, plain.hazard, 'creeping up on a Borg cube got safer');
+    assert.ok(silent.difficulty < plain.difficulty,
+      `the earned approach is difficulty ${silent.difficulty} against the plain ${plain.difficulty}`);
+  });
+
+  test('a captain who scanned Wolf 359 gets a second look when the first fails', () => {
+    // `no_window` is where forty hours of observation come to nothing. It had
+    // two ways out: send what you have, or go in blind.
+    const without = find(offered([], 'no_window'), 'compare');
+    assert.ok(without, 'the comparison is no longer offered');
+    assert.equal(without.locked, true, 'a captain who never scanned Wolf 359 was offered the comparison');
+
+    const withIt = find(offered(['wolf_scanned'], 'no_window'), 'compare');
+    assert.equal(withIt.locked, false, 'the Wolf 359 scan bought nothing');
+  });
+
+  test('and the second look reaches the fight the window buys', () => {
+    // The thing that has to be true for any of it to matter: the road that
+    // opens leads to the cube with its shields down. `engage_window` is the
+    // stage `has_window` selects, and the fight it stages sets `shieldsAt: 0` —
+    // which is what the top of this file measured as the whole worth of the
+    // forty hours.
+    const g = captain();
+    g.locationId = 'frontier_2';
+    g.ledger.setFlag('wolf_scanned');
+    const m = g.missions.start('the_cube', g);
+    m.stageId = 'no_window';
+    g.chooseMission('compare');
+    assert.equal(m.stageId, 'engage_window',
+      `the comparison led to ${m.stageId} rather than to the window`);
+    assert.equal(m.vars.has_window, true, 'it reached the window stage without the window set');
+
+    const fight = cube.stages.engage_window.choices.find((c) => c.id === 'fight');
+    assert.equal(fight.effects.combat.shieldsAt, 0,
+      'the window stage no longer drops the cube shields, so none of this is worth anything');
+  });
+
+  test('a locked choice does not promise a road that closed two acts ago', () => {
+    // "Not yet available" is a promise, and 29 of the book's 36 flag gates
+    // cannot keep it: they ask for a deed done in an earlier episode. Only 7
+    // gate on a flag the episode a captain is standing in could still set.
+    const closed = find(offered([]), 'study_silent');
+    assert.match(closed.lockReason, /record/i,
+      `a road that closed at Outpost 4 says "${closed.lockReason}"`);
+
+    // And the seven that ARE still reachable must still say so, or the fix has
+    // simply moved the lie.
+    let checked = 0;
+    for (const ep of EPISODES) {
+      const writes = new Set();
+      for (const s of Object.values(ep.stages ?? {})) {
+        for (const c of s.choices ?? []) for (const f of [].concat(c.effects?.flag ?? [])) writes.add(f);
+      }
+      const g = captain();
+      g.locationId = ep.system;
+      const m = g.missions.start(ep.id, g);
+      for (const [sid, s] of Object.entries(ep.stages ?? {})) {
+        for (const c of s.choices ?? []) {
+          if (!c.requires?.flag || !writes.has(c.requires.flag)) continue;
+          m.stageId = sid;
+          const got = find(m.choices(), c.id);
+          if (!got?.locked || !/available/i.test(got.lockReason ?? '')) continue;
+          checked++;
+          assert.match(got.lockReason, /not yet/i,
+            `${ep.id}/${sid}/${c.id} gates on ${c.requires.flag}, which this episode can still set`);
+        }
+      }
+    }
+    assert.ok(checked > 0, 'no within-episode flag gate was reached, so this asserted nothing');
+  });
+});

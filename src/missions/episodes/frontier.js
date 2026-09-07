@@ -709,6 +709,22 @@ export const FRONTIER_EPISODES = [
               xp: 500, flag: 'borg_data',
             },
             branch: { success: 'study', failure: 'no_window' } },
+          // Outpost 4, in act 2. Not damaged — excavated, a hundred metres of
+          // asteroid scooped out of it — and you went in on passive sensors
+          // only. You have crept up on one of these before and it did not
+          // notice you, which is the whole of the advantage: the same forty
+          // hours, run by somebody who has done it once.
+          //
+          // The first gate in this episode. It was act 4 with fifteen choices
+          // and read nothing a captain had done in the four acts behind it —
+          // RESEARCH §107.
+          { id: 'study_silent', label: 'Shadow it the way you took Outpost 4 — passive only',
+            requires: { flag: 'ran_silent' },
+            effects: {
+              check: { type: 'science', difficulty: 0.35, hazard: 'dangerous' },
+              xp: 700, flag: 'borg_data',
+            },
+            branch: { success: 'study', failure: 'no_window' } },
           { id: 'evacuate', label: 'Break off. Warn every colony on its route', next: 'evacuate',
             effects: { xp: 700, record: { lives_saved: 12000 }, flag: 'borg_warned' } },
         ],
@@ -730,6 +746,19 @@ export const FRONTIER_EPISODES = [
               record: { lives_saved: 12000, anomaly_catalogued: 1 },
               flag: 'borg_warned',
             } },
+          // Wolf 359, in act 2: thirty-nine hulls and a signal from inside a
+          // section of saucer that should have been cold, and you scanned it
+          // thoroughly from range instead of boarding it. That is the one
+          // baseline in Starfleet for what these harmonics look like from
+          // outside, and it is why the second pass finds what the first did
+          // not.
+          //
+          // Late, and it costs the transmission: this road has the window and
+          // no fleet redirecting behind it. Starfleet hears about it afterwards
+          // or not at all.
+          { id: 'compare', label: 'Run it against what was still transmitting at Wolf 359',
+            next: withWindow, requires: { flag: 'wolf_scanned' },
+            effects: { xp: 1100, setVar: { has_window: true }, flag: 'borg_weakness' } },
           { id: 'anyway', label: 'Engage without it', next: 'engage',
             effects: { xp: 400 } },
         ],
