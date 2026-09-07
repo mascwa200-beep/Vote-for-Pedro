@@ -469,17 +469,31 @@ export function windowBelt(mb, {
   // it was decorating, invisible from every angle and paid for anyway. Taking
   // both radii means a belt lies ON the hull for its whole run instead.
   const R0 = r0 * out; const R1 = r1 * out;
-  for (let i = 0; i < count; i++) {
-    const mid = phase + (i + 0.5) * pitch;
-    const a0 = mid - half; const a1 = mid + half;
-    const c0 = Math.cos(a0); const s0 = Math.sin(a0);
-    const c1 = Math.cos(a1); const s1 = Math.sin(a1);
-    const aftA = at(origin, x, c0 * R0, s0 * R0);
-    const aftB = at(origin, x, c1 * R0, s1 * R0);
-    const forA = at(origin, x + length, c0 * R1, s0 * R1);
-    const forB = at(origin, x + length, c1 * R1, s1 * R1);
-    mb.quad(aftA, aftB, forB, forA, color, glow);
-  }
+  // Lit from above, across the whole belt at once.
+  //
+  // A belt is a ring of quads at `glow: 1`, and the shader throws away the
+  // lighting on every one of them — so before this each port was a flat chip of
+  // the same colour whichever way it faced, and a belt read as a painted stripe
+  // rather than as a row of windows. The ramp is vertical and normalised over
+  // the belt's own radius, so ports on top of the hull are brighter than ports
+  // underneath it and each quad carries a gradient down its own face.
+  //
+  // Inside the helper rather than at the eight call sites, because those sites
+  // are shared: doing it here reaches every hull in the game, including the
+  // thirteen Federation classes whose belts had no gradient either.
+  shadedAlong(mb, (m) => {
+    for (let i = 0; i < count; i++) {
+      const mid = phase + (i + 0.5) * pitch;
+      const a0 = mid - half; const a1 = mid + half;
+      const c0 = Math.cos(a0); const s0 = Math.sin(a0);
+      const c1 = Math.cos(a1); const s1 = Math.sin(a1);
+      const aftA = at(origin, x, c0 * R0, s0 * R0);
+      const aftB = at(origin, x, c1 * R0, s1 * R0);
+      const forA = at(origin, x + length, c0 * R1, s0 * R1);
+      const forB = at(origin, x + length, c1 * R1, s1 * R1);
+      m.quad(aftA, aftB, forB, forA, color, glow);
+    }
+  }, [0, 1, 0], { peak: 1.18, floor: 0.58 });
   return mb;
 }
 
@@ -508,25 +522,34 @@ export function greebles(mb, {
   from = vec3(), to = vec3(1, 0, 0), count = 6, size = vec3(0.06, 0.03, 0.06),
   vary = 0.4, color = [0.5, 0.52, 0.5], glow = 0, lit = null, litEvery = 0,
 } = {}) {
-  for (let i = 0; i < count; i++) {
-    // Centres of `count` equal spans, so nothing sits on the end caps.
-    const t = (i + 0.5) / count;
-    // FNV-ish, off the index alone: two boxes at the same index are the same
-    // box, and a hull rebuilt is the hull it was.
-    const h = ((i * 2654435761) >>> 0) / 4294967296;
-    const k = 1 + (h * 2 - 1) * vary;
-    const on = litEvery > 0 && i % litEvery === 0;
-    box(mb, {
-      center: vec3(
-        from[0] + (to[0] - from[0]) * t,
-        from[1] + (to[1] - from[1]) * t,
-        from[2] + (to[2] - from[2]) * t,
-      ),
-      size: vec3(size[0] * k, size[1] * (2 - k), size[2] * k),
-      color: on ? (lit ?? color) : color,
-      glow: on ? 1 : glow,
-    });
-  }
+  // Machinery lit from above, which is the same cue `bakeOcclusion` gives a
+  // room's deck and the one thing a flat-shaded box run has never had. Gentler
+  // than the belts on purpose: a greeble that is NOT lit still takes the key
+  // light, so its baked ramp adds to real shading rather than replacing it, and
+  // a deep ramp on top of a deep key reads as dirt. The lit ones — every
+  // `litEvery`th box, the running lights along a spine — are the ones that had
+  // no shading at all to add to.
+  shadedAlong(mb, (m) => {
+    for (let i = 0; i < count; i++) {
+      // Centres of `count` equal spans, so nothing sits on the end caps.
+      const t = (i + 0.5) / count;
+      // FNV-ish, off the index alone: two boxes at the same index are the same
+      // box, and a hull rebuilt is the hull it was.
+      const h = ((i * 2654435761) >>> 0) / 4294967296;
+      const k = 1 + (h * 2 - 1) * vary;
+      const on = litEvery > 0 && i % litEvery === 0;
+      box(m, {
+        center: vec3(
+          from[0] + (to[0] - from[0]) * t,
+          from[1] + (to[1] - from[1]) * t,
+          from[2] + (to[2] - from[2]) * t,
+        ),
+        size: vec3(size[0] * k, size[1] * (2 - k), size[2] * k),
+        color: on ? (lit ?? color) : color,
+        glow: on ? 1 : glow,
+      });
+    }
+  }, [0, 1, 0], { peak: 1.1, floor: 0.74 });
   return mb;
 }
 
@@ -542,19 +565,25 @@ export function greebles(mb, {
 export function portRow(mb, {
   from = vec3(), to = vec3(1, 0, 0), count = 4, size = 0.02, color = WINDOW, glow = 1,
 } = {}) {
-  for (let i = 0; i < count; i++) {
-    const t = count === 1 ? 0.5 : (i + 0.5) / count;
-    box(mb, {
-      center: vec3(
-        from[0] + (to[0] - from[0]) * t,
-        from[1] + (to[1] - from[1]) * t,
-        from[2] + (to[2] - from[2]) * t,
-      ),
-      size: vec3(size * 1.6, size, size),
-      color,
-      glow,
-    });
-  }
+  // Same ramp as the belt, for the same reason: these are lit boxes, the shader
+  // discards their lighting, and a run of them was one flat colour end to end.
+  // Normalised over the port's own size rather than the length of the run, so
+  // the gradient falls across each box instead of being spent along the wing.
+  shadedAlong(mb, (m) => {
+    for (let i = 0; i < count; i++) {
+      const t = count === 1 ? 0.5 : (i + 0.5) / count;
+      box(m, {
+        center: vec3(
+          from[0] + (to[0] - from[0]) * t,
+          from[1] + (to[1] - from[1]) * t,
+          from[2] + (to[2] - from[2]) * t,
+        ),
+        size: vec3(size * 1.6, size, size),
+        color,
+        glow,
+      });
+    }
+  }, [0, 1, 0], { peak: 1.18, floor: 0.58 });
   return mb;
 }
 
@@ -610,6 +639,71 @@ export function shaded(mb, fn, shade) {
  * `rim` is a floor, not zero, for the same reason `bakeOcclusion` clamps at
  * 0.42: nothing on a hull should bake to black.
  */
+/**
+ * Shade everything `fn` adds by a ramp along a direction, normalised over what
+ * was ACTUALLY built.
+ *
+ * `hotCore` is a point field, which is right for one emitter with one call site
+ * — a bussard dome. It is the wrong tool for a RUN of emitters. Measured, the
+ * emissive geometry on a non-Federation hull is scattered the length of the
+ * ship: a Warbird's 556 emissive triangles fall into 37 clusters spanning the
+ * whole hull, the largest only 115. Thirty-seven hot cores is thirty-seven call
+ * sites, and the belt helpers that drew them are shared.
+ *
+ * One directional ramp over a whole run does two jobs at once. Across the run
+ * it varies element to element — ports high on a flank brighter than ports low
+ * on it, which is what a hull lit from above looks like. Across each element it
+ * varies corner to corner, which is what turns a window from a flat chip into a
+ * lit aperture. The second is the one that shows at distance, and it is the one
+ * that costs nothing, because the colour channel is already per vertex.
+ *
+ * Normalised over the run's own measured extent, and that is the whole point.
+ * A first version took a `span` from the caller — the belt's radius — and it
+ * failed on exactly the hulls it was written for: most hostile classes put
+ * their ports in a NARROW ARC on the flank, where every port sits near the same
+ * height, so a ramp normalised over the radius varied by 0.088 across a Galor's
+ * whole belt and the ports were flat chips again. Measuring the extent of what
+ * was built means a belt gets a full ramp whether it wraps the hull or occupies
+ * twenty degrees of it, and no call site has to know which.
+ *
+ * `floor` is a floor and not zero, for the same reason `hotCore` has `rim` and
+ * `bakeOcclusion` clamps at 0.42: nothing on a hull should bake to black.
+ *
+ * Z-SYMMETRY. A shared helper cannot know whether its caller wrapped it in
+ * `mirrored`, so the extent is measured per CALL. Two calls that build mirrored
+ * runs measure mirrored extents and come out identically shaded; one call
+ * inside `mirrored` is shaded before the mirror copies the colours. Both are
+ * symmetric, which the port/starboard guard asserts.
+ *
+ * Scalar, like every field here — all three channels move together, so the
+ * stored colour stays a pure multiple of the palette colour and `sameHue` in
+ * the tests still recognises what it was drawn in.
+ */
+export function shadedAlong(mb, fn, dir, { peak = 1.15, floor = 0.6 } = {}) {
+  const start = mb.positions.length;
+  fn(mb);
+  const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+  const ux = dir[0] / len; const uy = dir[1] / len; const uz = dir[2] / len;
+  const project = (i) => mb.positions[i] * ux + mb.positions[i + 1] * uy + mb.positions[i + 2] * uz;
+  let lo = Infinity; let hi = -Infinity;
+  for (let i = start; i < mb.positions.length; i += 3) {
+    const t = project(i);
+    if (t < lo) lo = t;
+    if (t > hi) hi = t;
+  }
+  const span = hi - lo;
+  for (let i = start; i < mb.positions.length; i += 3) {
+    // A run with no extent along `dir` — a single port, a belt seen edge-on —
+    // takes the middle of the range rather than a divide by zero.
+    const u = span > 1e-9 ? (project(i) - lo) / span : 0.5;
+    const s = floor + (peak - floor) * u;
+    mb.colors[i] *= s;
+    mb.colors[i + 1] *= s;
+    mb.colors[i + 2] *= s;
+  }
+  return mb;
+}
+
 export const hotCore = (cx, cy, cz, { peak = 1.15, rim = 0.55 } = {}) => (px, py, pz) => {
   const dx = px - cx;
   const dy = py - cy;

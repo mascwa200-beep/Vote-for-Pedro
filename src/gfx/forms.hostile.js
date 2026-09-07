@@ -33,7 +33,62 @@
 // Galor 372 units long inside a 2,600-unit engagement volume.
 
 import { vec3 } from './math.js';
-import { tube, box, prow, sphere, mirrored, seg, greebles, windowBelt, portRow } from './mesh.js';
+import {
+  tube, box, prow, sphere, mirrored, seg, greebles, windowBelt, portRow, shadedAlong,
+} from './mesh.js';
+
+/**
+ * One face of a Borg cube: its lattice of machinery and the conduit across it.
+ *
+ * Module-level rather than a method on `FORMS`, because a form is dispatched as
+ * a plain function and this file is an ES module — `this` is undefined inside
+ * one, which is exactly what a first attempt at calling it as `this.cubeFace`
+ * found out.
+ */
+function cubeFace(mb, p, { s, h, axis, dir, u, v, next }) {
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) {
+      // Counted by the caller, so the hash sequence runs across all six faces
+      // exactly as it did before the loop body moved out — every cell keeps the
+      // size and the emptiness it already had.
+      const n = next();
+      // Deterministic, and deliberately not a grid: two of every nine cells are
+      // left empty and the sizes vary, so the face reads as machinery rather
+      // than as tiling.
+      const k = ((n * 2654435761) >>> 0) / 4294967296;
+      if (k < 0.22) continue;
+      const centre = [0, 0, 0];
+      centre[axis] = dir * h * 0.94;
+      centre[u] = (i - 1) * s * 0.3;
+      centre[v] = (j - 1) * s * 0.3;
+      const size = [0, 0, 0];
+      size[axis] = s * (0.06 + k * 0.1);
+      size[u] = s * (0.1 + k * 0.14);
+      size[v] = s * (0.1 + (1 - k) * 0.14);
+      const lit = k > 0.92;
+      box(mb, {
+        center: vec3(centre[0], centre[1], centre[2]),
+        size: vec3(size[0], size[1], size[2]),
+        color: lit ? p.glow : p.trim,
+        glow: lit ? 1 : 0,
+      });
+    }
+  }
+  // A conduit across the face, lit. The green is the only thing on a cube that
+  // says it is powered.
+  const bar = [0, 0, 0];
+  bar[axis] = dir * h * 0.99;
+  const bs = [0, 0, 0];
+  bs[axis] = s * 0.025;
+  bs[u] = s * 0.86;
+  bs[v] = s * 0.028;
+  box(mb, {
+    center: vec3(bar[0], bar[1], bar[2]),
+    size: vec3(bs[0], bs[1], bs[2]),
+    color: p.glow,
+    glow: 1,
+  });
+}
 
 /** A bank of lit ports across a stern. What says a ship is under power. */
 function engineBank(mb, p, { x, y = 0, spread, size, count = 3 }) {
@@ -708,47 +763,25 @@ export const HOSTILE_FORMS = {
     for (const [axis, dir] of FACES) {
       const u = (axis + 1) % 3;
       const v = (axis + 2) % 3;
-      for (let i = 0; i < 3; i++) {
-        for (let j = 0; j < 3; j++) {
-          n++;
-          // Deterministic, and deliberately not a grid: two of every nine
-          // cells are left empty and the sizes vary, so the face reads as
-          // machinery rather than as tiling.
-          const k = ((n * 2654435761) >>> 0) / 4294967296;
-          if (k < 0.22) continue;
-          const centre = [0, 0, 0];
-          centre[axis] = dir * h * 0.94;
-          centre[u] = (i - 1) * s * 0.3;
-          centre[v] = (j - 1) * s * 0.3;
-          const size = [0, 0, 0];
-          size[axis] = s * (0.06 + k * 0.1);
-          size[u] = s * (0.1 + k * 0.14);
-          size[v] = s * (0.1 + (1 - k) * 0.14);
-          const lit = k > 0.92;
-          box(mb, {
-            center: vec3(centre[0], centre[1], centre[2]),
-            size: vec3(size[0], size[1], size[2]),
-            color: lit ? p.glow : p.trim,
-            glow: lit ? 1 : 0,
-          });
-        }
-      }
-      // A conduit across the face, lit. The green is the only thing on a cube
-      // that says it is powered.
-      const bar = [0, 0, 0];
-      bar[axis] = dir * h * 0.99;
-      const bs = [0, 0, 0];
-      bs[axis] = s * 0.025;
-      bs[u] = s * 0.86;
-      bs[v] = s * 0.028;
-      box(mb, {
-        center: vec3(bar[0], bar[1], bar[2]),
-        size: vec3(bs[0], bs[1], bs[2]),
-        color: p.glow,
-        glow: 1,
-      });
+      // Powered along the conduit, not lit from above.
+      //
+      // A cube has no up. The belts' vertical ramp is meaningless on a shape
+      // whose six faces are identical, and this class draws its own boxes
+      // rather than going through a shared helper, so it was the one hull left
+      // flat after those were fixed — 120 emissive triangles in 28 clusters,
+      // every one a solid chip of the same green.
+      //
+      // The ramp runs ALONG each face's conduit instead, so the light reads as
+      // travelling through the machinery rather than painted on it, and the six
+      // faces disagree with each other, which is what stops a cube from
+      // flattening into a silhouette the moment it turns.
+      const along = [0, 0, 0];
+      along[u] = 1;
+      shadedAlong(mb, (mb2) => cubeFace(mb2, p, { s, h, axis, dir, u, v, next: () => ++n }),
+        along, { peak: 1.2, floor: 0.55 });
     }
   },
+
 
   /**
    * An organic vessel: three curved prongs reaching forward off a spined body,
