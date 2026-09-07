@@ -1840,11 +1840,6 @@ describe('every episode graph is sound', () => {
       archanis_ratified: 'candidate', asked_about_hurry: 'candidate',
       badlands_run: 'candidate', borrowed_blade: 'candidate',
       came_clean: 'candidate',
-      // Was read by `romulus_debt/told/admit` until that choice was found to be
-      // unreachable and removed — the gate asked for the sibling of the arm the
-      // episode itself is premised on. Losing its only reader is the honest
-      // cost of deleting a choice nobody could take.
-      captured_cloak: 'candidate',
       centauri_reported: 'candidate', devron_blind: 'candidate',
       devron_collapsed: 'candidate', devron_data: 'candidate',
       dmz_clause_recovered: 'candidate', dmz_favourable: 'candidate',
@@ -1902,6 +1897,7 @@ describe('every episode graph is sound', () => {
       assert.ok(why === 'terminal' || why === 'candidate', `${flag}: ${why}`);
     }
   });
+
 
   test('every episode can be played to an end, by any route', () => {
     // Random legal choices, thirty runs each. The engine has no loop guard, so
