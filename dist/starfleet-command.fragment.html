@@ -24804,6 +24804,22 @@ const FRONTIER_EPISODES = [
               xp: 500, flag: 'borg_data',
             },
             branch: { success: 'study', failure: 'no_window' } },
+          // Outpost 4, in act 2. Not damaged — excavated, a hundred metres of
+          // asteroid scooped out of it — and you went in on passive sensors
+          // only. You have crept up on one of these before and it did not
+          // notice you, which is the whole of the advantage: the same forty
+          // hours, run by somebody who has done it once.
+          //
+          // The first gate in this episode. It was act 4 with fifteen choices
+          // and read nothing a captain had done in the four acts behind it —
+          // RESEARCH §107.
+          { id: 'study_silent', label: 'Shadow it the way you took Outpost 4 — passive only',
+            requires: { flag: 'ran_silent' },
+            effects: {
+              check: { type: 'science', difficulty: 0.35, hazard: 'dangerous' },
+              xp: 700, flag: 'borg_data',
+            },
+            branch: { success: 'study', failure: 'no_window' } },
           { id: 'evacuate', label: 'Break off. Warn every colony on its route', next: 'evacuate',
             effects: { xp: 700, record: { lives_saved: 12000 }, flag: 'borg_warned' } },
         ],
@@ -24825,6 +24841,19 @@ const FRONTIER_EPISODES = [
               record: { lives_saved: 12000, anomaly_catalogued: 1 },
               flag: 'borg_warned',
             } },
+          // Wolf 359, in act 2: thirty-nine hulls and a signal from inside a
+          // section of saucer that should have been cold, and you scanned it
+          // thoroughly from range instead of boarding it. That is the one
+          // baseline in Starfleet for what these harmonics look like from
+          // outside, and it is why the second pass finds what the first did
+          // not.
+          //
+          // Late, and it costs the transmission: this road has the window and
+          // no fleet redirecting behind it. Starfleet hears about it afterwards
+          // or not at all.
+          { id: 'compare', label: 'Run it against what was still transmitting at Wolf 359',
+            next: withWindow, requires: { flag: 'wolf_scanned' },
+            effects: { xp: 1100, setVar: { has_window: true }, flag: 'borg_weakness' } },
           { id: 'anyway', label: 'Engage without it', next: 'engage',
             effects: { xp: 400 } },
         ],
@@ -38401,6 +38430,30 @@ class Mission {
     return { ok: false, need, reason: `They are waiting for you in ${ROOMS[need]?.name ?? need}.` };
   }
 
+  /**
+   * Could this episode itself still write `flag`?
+   *
+   * Which decides whether a locked choice says "not yet" or says the record is
+   * closed. Computed off the definition and cached on the Mission: the answer
+   * cannot change while the episode is running, and `choices()` is called every
+   * time the panel redraws.
+   */
+  canStillSetFlag(flag) {
+    if (!this._writableFlags) {
+      const writes = new Set();
+      for (const stage of Object.values(this.def?.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          for (const f of [].concat(c.effects?.flag ?? [])) writes.add(f);
+        }
+      }
+      for (const end of Object.values(this.def?.endings ?? {})) {
+        for (const f of [].concat(end.effects?.flag ?? [])) writes.add(f);
+      }
+      this._writableFlags = writes;
+    }
+    return this._writableFlags.has(flag);
+  }
+
   /** Choices the player can currently take, with locked ones explained. */
   choices() {
     const stage = this.stage;
@@ -38437,7 +38490,17 @@ class Mission {
       }
     }
     if (req.flag && !g.ledger.has(req.flag)) {
-      return { ok: false, reason: 'Not yet available' };
+      // "Not yet" is a promise, and 29 of the 36 flag gates in the book cannot
+      // keep it: they ask for something done in an earlier episode, often four
+      // acts back, and no amount of waiting will produce it. Only 7 gate on a
+      // flag the episode a captain is standing in could still set.
+      //
+      // A locked choice is shown rather than hidden precisely so a captain can
+      // see there was a road they did not take. Telling them to come back later
+      // for a road that closed at Wolf 359 is worse than telling them nothing.
+      return this.canStillSetFlag(req.flag)
+        ? { ok: false, reason: 'Not yet available' }
+        : { ok: false, reason: 'Nothing in your record answers for this' };
     }
     if (req.notFlag && g.ledger.has(req.notFlag)) {
       return { ok: false, reason: 'No longer possible' };

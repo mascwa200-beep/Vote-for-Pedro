@@ -116,6 +116,30 @@ export class Mission {
     return { ok: false, need, reason: `They are waiting for you in ${ROOMS[need]?.name ?? need}.` };
   }
 
+  /**
+   * Could this episode itself still write `flag`?
+   *
+   * Which decides whether a locked choice says "not yet" or says the record is
+   * closed. Computed off the definition and cached on the Mission: the answer
+   * cannot change while the episode is running, and `choices()` is called every
+   * time the panel redraws.
+   */
+  canStillSetFlag(flag) {
+    if (!this._writableFlags) {
+      const writes = new Set();
+      for (const stage of Object.values(this.def?.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          for (const f of [].concat(c.effects?.flag ?? [])) writes.add(f);
+        }
+      }
+      for (const end of Object.values(this.def?.endings ?? {})) {
+        for (const f of [].concat(end.effects?.flag ?? [])) writes.add(f);
+      }
+      this._writableFlags = writes;
+    }
+    return this._writableFlags.has(flag);
+  }
+
   /** Choices the player can currently take, with locked ones explained. */
   choices() {
     const stage = this.stage;
@@ -152,7 +176,17 @@ export class Mission {
       }
     }
     if (req.flag && !g.ledger.has(req.flag)) {
-      return { ok: false, reason: 'Not yet available' };
+      // "Not yet" is a promise, and 29 of the 36 flag gates in the book cannot
+      // keep it: they ask for something done in an earlier episode, often four
+      // acts back, and no amount of waiting will produce it. Only 7 gate on a
+      // flag the episode a captain is standing in could still set.
+      //
+      // A locked choice is shown rather than hidden precisely so a captain can
+      // see there was a road they did not take. Telling them to come back later
+      // for a road that closed at Wolf 359 is worse than telling them nothing.
+      return this.canStillSetFlag(req.flag)
+        ? { ok: false, reason: 'Not yet available' }
+        : { ok: false, reason: 'Nothing in your record answers for this' };
     }
     if (req.notFlag && g.ledger.has(req.notFlag)) {
       return { ok: false, reason: 'No longer possible' };

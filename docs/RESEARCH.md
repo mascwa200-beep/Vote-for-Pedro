@@ -10468,8 +10468,8 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 342 choices, **56 of 342 choices carry a `requires`** —
-16%, and unevenly:
+episodes, 154 stages and 344 choices, **58 of 344 choices carry a `requires`** —
+and unevenly:
 
 ```
 homecoming            67%   officer, flag
@@ -10478,26 +10478,29 @@ khitomer_accord       27%   flag
 ...
 outpost_silence        7%   skill, ranks
 centauri_drift         0%
-the_cube               0%
 vega_raid              0%
 wolf359_salvage        0%
 ```
 
-Four episodes gate nothing whatsoever:
+These figures are live, not a snapshot: they are scraped out of this section and
+checked against the book on every run, so they say what is true now rather than
+what was true when the section was written. §108 is what moved them.
+
+Three episodes gate nothing whatsoever:
 
 - `centauri_drift`
-- `the_cube`
 - `vega_raid`
 - `wolf359_salvage`
 
-`vega_raid` and `centauri_drift` are act 1, where there is little history to read
-and the score is fair. `the_cube` is **act 4** with 15 choices: by then a captain
-has four acts behind them and the episode reads none of it.
+All three are act 1 and act 2, where there is little history to read and the
+score is closer to fair than it looks. The one that mattered was `the_cube` —
+**act 4** with fifteen choices, reading nothing of the four acts behind it — and
+§108 is that episode learning to read two of them.
 
-Against that sit the 30 flags marked `candidate` in `WRITTEN_AND_UNREAD`
-(`tests/wiring.test.js`) — `rescued_vell`, `ran_silent`, `came_clean`,
-`captured_cloak`, `merrimack_lost`, `organia_secret` and the rest. Deeds the game
-writes down and never once reads back.
+Against that sit the flags marked `candidate` in `WRITTEN_AND_UNREAD`
+(`tests/wiring.test.js`) — `rescued_vell`, `came_clean`, `captured_cloak`,
+`merrimack_lost`, `organia_secret` and the rest. Deeds the game writes down and
+never once reads back.
 
 That is the real open item, and it is a better one than the claim it replaces:
 **the game remembers thirty things the captain did and lets none of them
@@ -10527,6 +10530,95 @@ the first destination of each `branch`, so it undercounted by a third; counted
 properly it is 773. Fifteenth instrument error, and the correction of a
 correction — which is the right number to have found while writing a section
 about repeating figures nobody checked.
+
+## 108. The cube learns to read the record
+
+§107 replaced a discredited claim with a real one: 30 flags marked `candidate`
+in `WRITTEN_AND_UNREAD` are deeds the game writes down and never reads back, and
+`the_cube` was act 4 with fifteen choices that read nothing of the four acts
+behind them. This is the first two of the thirty.
+
+### Which two, and why those
+
+Not chosen by the name of the flag. Chosen by reading what sets it, which is the
+distinction §107 exists to make:
+
+- **`ran_silent`** — `outpost_silence`, act 2. Four Neutral Zone listening posts
+  stop answering. *"Not damaged. Excavated. Something scooped a hundred metres
+  of asteroid out of it and left the rest."* The flag is set by approaching on
+  passive sensors only.
+- **`wolf_scanned`** — `wolf359_salvage`, act 2. Thirty-nine hulls catalogued
+  and left where they fell, and a signal from inside a section of saucer hull
+  *"that should be cold."* The flag is set by choosing to scan it thoroughly
+  from range rather than board it.
+
+Both are unmistakably Borg and both are act 2, so a captain standing at Gamma
+Hydra in act 4 has had every chance to hold either. They are the two of the
+thirty that this episode has any business reading.
+
+### What they buy
+
+| deed | at the cube |
+| --- | --- |
+| `ran_silent` | shadow it the way you took Outpost 4 — the same forty hours at difficulty **0.35** instead of 0.55 |
+| `wolf_scanned` | when the first pass finds nothing, run it against what was still transmitting at Wolf 359, and find the window late |
+
+The second is the one worth having. `no_window` is where forty hours come to
+nothing, and it had two exits: send what you have, or go in blind. The
+comparison is a third, and it reaches `engage_window` — the cube fought at
+`shieldsAt: 0`, which §35 established is the entire worth of the forty hours. It
+arrives too late to transmit, so that road has the window and no fleet
+redirecting behind it. Starfleet hears afterwards or not at all.
+
+### The lock reason, which was a promise the game could not keep
+
+A gated choice is shown rather than hidden, deliberately — a captain should be
+able to see there was a road they did not take. It was shown reading **"Not yet
+available."**
+
+Measured across the book: **29 of 36 flag gates ask for a deed done in an
+earlier episode**, where no amount of waiting will produce it. Only 7 gate on a
+flag the episode the captain is standing in could still set.
+
+So the reason is now decided by whether this episode can still write the flag —
+`Mission.canStillSetFlag`, computed off the definition and cached. A road that
+closed at Wolf 359 says *"Nothing in your record answers for this."* A flag the
+current episode can still set still says *"Not yet available."* Both readings
+are now true, and the control for the second is the one that matters: making
+every gate say the record is closed passes the first assertion and fails the
+seven, which is the fix moving the lie rather than removing it.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the silent approach is locked without the deed and open with it | drop the `requires` | ✓ ×4 |
+| it is a better roll than the plain approach | give it the same difficulty | ✓ |
+| the Wolf 359 comparison is locked without the deed | (as above) | ✓ |
+| and it reaches the cube with its shields down | point it at `engage` | ✓ |
+| a closed road does not say "not yet" | restore the single reason | ✓ |
+| a still-reachable flag does still say "not yet" | make every gate say the record is closed | ✓ |
+
+The first control trips four separate guards, because removing the gate makes
+`the_cube` ungated again and frees both flags: §107's own figures, its named
+list of episodes that gate nothing, and `WRITTEN_AND_UNREAD` all disagree at
+once. That is the register working — the content and the record cannot drift
+apart, in either direction.
+
+### It caught its author within the hour
+
+§107's scrape shipped one pull request before this one, and the first thing it
+did was fail on this change: `choices: §107 says 342, actual 344` and
+`gated choices: §107 says 56, actual 58`. Then, once the prose was corrected
+from "Four episodes gate nothing" to three, the list regex stopped matching and
+the located-N-of-N assertion fired rather than passing silently — exactly the
+failure mode that section was written about.
+
+The regex had the count word baked into it. Captured instead, and the word now
+has to agree with the list beneath it, so the number can fall as episodes learn
+to read the record without the guard going quiet.
+
+Twenty-eight flags to go.
 
 ## Attribution
 

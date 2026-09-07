@@ -1854,9 +1854,14 @@ describe('every episode graph is sound', () => {
       marru_left: 'candidate', merrimack_lost: 'candidate',
       ordered_the_deck: 'candidate', organia_rebuffed: 'candidate',
       organia_revealed: 'candidate', organia_secret: 'candidate',
-      ran_silent: 'candidate', rescued_vell: 'candidate',
+      rescued_vell: 'candidate',
       romulus_witness: 'candidate', telek_acquitted: 'candidate',
-      vell_lost: 'candidate', wolf_scanned: 'candidate',
+      vell_lost: 'candidate',
+      // `ran_silent` and `wolf_scanned` left this list in §108: the cube at
+      // Gamma Hydra reads both of them now. They were the two act-2 deeds that
+      // are unmistakably Borg — the excavated outpost you crept up on, and the
+      // Wolf 359 hull you scanned from range instead of boarding — which is why
+      // they went first out of the thirty.
     };
 
     // Readers, computed from the objects rather than from the source text —
