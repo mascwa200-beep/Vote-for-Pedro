@@ -10448,7 +10448,7 @@ That measures a shape, not a depth. The worst-scoring episode in the game on it
 is `homecoming` — 4 stages, 15 choices, 14 of them terminal — and `homecoming`
 is the campaign's epilogue: a review board that branches on the ledger's own
 assessment of your command and then asks what you would like to say for
-yourself. 10 of `homecoming`'s 15 choices are gated on what you actually did,
+yourself. 13 of `homecoming`'s 18 choices are gated on what you actually did,
 on officers and on flags. It is the most consequence-aware content in the game
 and it sits at the bottom of the table that called the content shallow.
 
@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 350 choices, **64 of 350 choices carry a `requires`** —
+episodes, 154 stages and 353 choices, **67 of 353 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -10889,6 +10889,109 @@ is still there in the afternoon, which is what the week was about.
 | the rooms count is exact | claim one more room than is used | ✓ |
 
 Twenty-three flags to go.
+
+## 112. What the board could not hear, and why
+
+Rather than wire another scattered pair, I measured which of the remaining
+unread flags any later episode could **legally** read. That turned up a specific
+gap and then, in trying to fix it, the reason it exists.
+
+### The gap
+
+`homecoming` is the review board at the end of the campaign — *"every log, every
+decision, every name on the casualty list"* — and all nine of its gates reached
+back to act 4 or earlier, with **nothing from act 4's own harvest of unused
+decisions** and nothing at all from act 5.
+
+Three act-5 achievements sat written and read by nothing: `khitomer_signed`,
+`kang_owes_you` and `long_peace_signed`. A captain could widen the Khitomer
+accord, sign the long peace at Vulcan, and leave the Klingon Chancellor
+personally in his debt, then stand at a board with nothing to say about any of
+it.
+
+### Why the obvious fix is wrong
+
+I wrote those three gates. `wiring.test.js` refused them:
+
+```
+homecoming is act 5 and start/signatures reads khitomer_signed,
+first written in act 5
+```
+
+The rule is *"flags read before anything could have earned them"*: a gate must
+read a flag first written in a **strictly earlier** act, because act order is the
+only ordering the game guarantees. `homecoming` is act 5 itself, carries
+`minRank: 8` and no `requiresCompleted` — so nothing makes it the last episode
+played, and a captain may legitimately stand the review before Khitomer happens.
+
+The guard is right and I was wrong. A board that hears about the accord only if
+the captain happened to play the accord first is a promise the ordering does not
+keep. **The gap is real; its cause is a missing ordering guarantee, not an
+oversight in the episode** — and inventing one by hanging the finale off optional
+act-5 content would be a worse game.
+
+So the reach goes as far forward as the ordering allows, which is act 4, and the
+three act-5 flags stay recorded as unread with a reason rather than being forced.
+
+### What the board hears now
+
+| deed | act | at the board |
+| --- | --- | --- |
+| `ordered_the_deck` | 4 | *"Make it an order after all"* — he compelled his own people to give up one of their own, on the rec deck, and it worked |
+| `grid_candid` | 4 | *"Tell it you know what it is, and answer anyway"* — a first contact conducted without pretending |
+| `telek_acquitted` | 4 | a Romulan tribunal took his word under oath and acquitted a man on it |
+
+The first is the one worth having, and it is not a credential. The board has read
+everything before he walks in; a man who knows what is in his own file can put
+the worst page in front of them himself rather than wait for the president to
+reach it. It also turns the opening into a decision — the stage had exactly one
+choice, which is a screen that asks nothing, one of the cases §107 counted.
+
+`telek_acquitted` goes to `censured` deliberately as a **court and not a
+document**: that stage already asks for the treaties to be read on an act-3 flag,
+and a second treaty line with a bigger accord attached would be a gate rather
+than a scene. Its point is the asymmetry — his own service has decided about him
+without hearing him, and the last people to actually weigh his word were
+Romulans. It costs him Federation standing, because it should.
+
+### The guard that would have found it
+
+`finale.test.js` asserted *instances* of backward reach — act 2's
+`spared_warbird`, act 1's `falsified_report` — and that every flag the board
+reads is one an episode can set. Nothing asserted the **span**, so nothing
+noticed the hole.
+
+It now asserts that the acts the board reaches run from 1 to `act - 1` with none
+missing in between: a review that reads acts 1, 2 and 4 but nothing from act 3
+has a hole in the commission, and the upper bound is stated as `hc.act - 1` so
+the guard carries the ordering argument rather than a magic number.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the board's reach runs 1..4 with no act missing | remove all three gates | ✓ ×5 |
+| the opening is a decision, not a screen | delete the new choice | ✓ ×6 |
+| and declaring it does not change the finding | send it to `commended` instead of `byRecord` | ✓ |
+| no gate on a flag the ordering cannot guarantee | restore the act-5 gate | ✓ ×4, naming it |
+
+An existing test also caught this correctly and was right to: its per-stage lists
+of *"every flag that opens a choice here"* had to grow, or the loop below them
+would have asserted that a gated choice is unlocked for a captain who never
+earned it. Its own comment says so.
+
+### And a process fix
+
+Three check-in routines fired this session against pull requests that had merged
+forty minutes earlier, each arriving with confident and by then wrong
+instructions from my own past — *"TWENTY-FIVE REMAIN"* when the figure had moved
+twice. Every pull request in this repository, #233 through #240, has merged
+within about five minutes of opening. A check-in is worth arming for work that
+might stall; for work that lands before the timer is a tenth elapsed it is a
+machine for generating stale orders. Stopped.
+
+Twenty-two flags to go, three of which are act 5 and cannot move until the
+finale's place in the order is guaranteed.
 
 ## Attribution
 

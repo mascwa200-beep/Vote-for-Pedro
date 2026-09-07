@@ -902,6 +902,22 @@ export const FRONTIER_EPISODES = [
         choices: [
           { id: 'stand', label: 'Stand for the review', next: byRecord,
             effects: { xp: 400 } },
+          // The long watch, in act 4: "Make it an order after all." The captain
+          // stood on his own rec deck and compelled his people to give up one of
+          // their own, and it worked, and it is in the file.
+          //
+          // Not a credential. The board has read everything before he walked in,
+          // and a man who knows what is in his own record can put the worst of
+          // it on the table himself rather than wait for the president to reach
+          // that page. `byRecord` still decides how they receive him — this
+          // changes what is in front of them when it does, not what the record
+          // says he was.
+          //
+          // The stage had exactly one choice before this, which is one of the
+          // cases §107 counted: a screen that asks nothing.
+          { id: 'own_it', label: 'Put the order you gave on the rec deck in front of them first',
+            next: byRecord, requires: { flag: 'ordered_the_deck' },
+            effects: { xp: 700, standing: { federation: 4 } } },
         ],
       },
 
@@ -930,6 +946,17 @@ export const FRONTIER_EPISODES = [
             outcome: 'commended', requires: { flag: 'the_watch_stood' },
             effects: { xp: 1700, standing: { federation: 20 },
               flag: 'credited_the_crew' } },
+          // Grid 9902, in act 4: "Tell it you know what it is, and answer
+          // anyway." A first contact conducted by a captain who had worked out
+          // what he was talking to and declined to pretend otherwise.
+          //
+          // A commendation is being read into the record, and the board will
+          // take the contact itself as read — it is the outcome, and outcomes
+          // are what boards count. What is worth entering is how it was done,
+          // which is the part that does not appear in a summary.
+          { id: 'candid', label: 'Ask that the whole of the 9902 exchange be read, not the summary',
+            outcome: 'commended', requires: { flag: 'grid_candid' },
+            effects: { xp: 1800, standing: { federation: 16 } } },
         ],
       },
 
@@ -984,6 +1011,23 @@ export const FRONTIER_EPISODES = [
           { id: 'resolved', label: 'Refer them to the inquiry’s own finding',
             outcome: 'reviewed', requires: { flag: 'inquiry_resolved' },
             effects: { xp: 1200, standing: { federation: 12 } } },
+          // Romulus, in act 4. A Romulan tribunal asked this captain, under
+          // oath, whether he would have done what Telek was accused of — and
+          // acquitted the man on the answer.
+          //
+          // Deliberately NOT a second treaty line: the choice above already asks
+          // for the treaties to be read, on an act-3 flag, and a near-duplicate
+          // with a different accord attached would be a gate rather than a
+          // scene. This is a court, not a document, and the point of it is the
+          // asymmetry — his own service has decided about him without hearing
+          // him, and the last people to actually weigh his word were Romulans.
+          //
+          // It costs. A captain answering a Federation finding by producing a
+          // Romulan acquittal is not making himself easier to forgive, and the
+          // board will hear the comparison he did not quite make.
+          { id: 'tribunal', label: 'Say who last took your word under oath, and what they did with it',
+            outcome: 'reviewed', requires: { flag: 'telek_acquitted' },
+            effects: { xp: 1600, standing: { romulan: 14, federation: -4 } } },
         ],
       },
     },
