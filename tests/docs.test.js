@@ -152,6 +152,26 @@ function pathsThrough(ep) {
   return walk(ep.start, 0);
 }
 
+/**
+ * Does the per-category scrape of the registry see every entry in it?
+ *
+ * The registry packs several flags onto a line, so a regex that looks right can
+ * quietly miss most of them — which is exactly what happened in §116. Counting
+ * the same block a second way, with a pattern that cannot care about categories
+ * or line breaks, catches that without assuming anything about how many entries
+ * there should be.
+ */
+function scrapeIsComplete(block) {
+  const byCategory = ['terminal', 'candidate', 'synonym']
+    .reduce((n, c) => n + [...block.matchAll(new RegExp(`(\\w+): '${c}'`, 'g'))].length, 0);
+  const broad = [...block.matchAll(/(\w+):\s*'/g)].length;
+  return byCategory === broad
+    ? { ok: true, why: '' }
+    : { ok: false,
+      why: `the registry has ${broad} entries but the per-category scrape sees `
+        + `${byCategory} — the narrow regex is missing some, as in §116` };
+}
+
 describe('the register states figures it has actually measured', () => {
   const byId = (id) => EPISODES.find((e) => e.id === id);
 
@@ -250,8 +270,16 @@ describe('the register states figures it has actually measured', () => {
     // the same broken read — which is the whole argument for writing the number
     // down instead of computing both sides the same way.
     const candidates = [...block.matchAll(/(\w+): 'candidate'/g)].length;
-    assert.ok(candidates >= 10,
-      `only ${candidates} candidates scraped from the registry, so this asserts little`);
+    // Not a floor on the list's SIZE. The list is meant to reach zero, and a
+    // `>= 10` guard here started failing the moment it got to nine — a test
+    // breaking because the work succeeded.
+    //
+    // What the guard is actually for is §116's defect: entries pack several to
+    // a line, and a line-anchored regex counted 14 of 19 while looking healthy.
+    // So the check is that the narrow read agrees with a deliberately broad one.
+    // If the narrow regex ever under-matches again the two disagree, at any list
+    // size including none.
+    assert.equal(scrapeIsComplete(block).ok, true, scrapeIsComplete(block).why);
 
     assert.equal(stated, candidates,
       `the register's last count says ${stated} deeds still to wire; the registry lists ${candidates}`);
@@ -273,8 +301,7 @@ describe('the register states figures it has actually measured', () => {
       wiring.indexOf('const WRITTEN_AND_UNREAD = {'),
       wiring.indexOf('};', wiring.indexOf('const WRITTEN_AND_UNREAD = {')));
     const candidates = [...block.matchAll(/(\w+): 'candidate'/g)].map((m) => m[1]);
-    assert.ok(candidates.length >= 10,
-      `only ${candidates.length} candidates scraped, so this asserts little`);
+    assert.equal(scrapeIsComplete(block).ok, true, scrapeIsComplete(block).why);
 
     // The act that first writes each flag, from the episodes rather than names.
     const firstAct = new Map();

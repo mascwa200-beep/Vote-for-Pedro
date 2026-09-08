@@ -844,3 +844,104 @@ describe('the captain who paid the Orions once is known to pay', () => {
     assert.notEqual(ep.endings[buy.outcome].text, ep.endings.negotiated.text);
   });
 });
+
+// ----------------------------------------------------------- two deeds about waiting
+//
+// Kept in one block because they are one idea. Both flags are written by a
+// captain who chose to defer — signal Command and hold station at Alpha
+// Centauri, return to the ship and hold orbit at Organia — and both are read by
+// a later scene where waiting is exactly what is on offer and exactly the wrong
+// move. §120.
+describe('the captain who waited, twice, and what it is worth later', () => {
+  const ep = (id) => EPISODES.find((e) => e.id === id);
+
+  /** The choices at a stage a captain holding `flags` is actually offered. */
+  const openAt = (episodeId, stageId, flags) => {
+    const g = captain();
+    for (const f of flags) g.ledger.setFlag(f);
+    return (ep(episodeId).stages[stageId].choices ?? [])
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('the Centauri log is a defence only the captain who filed it can offer', () => {
+    const gated = ep('court_martial').stages.defence.choices.find((c) => c.id === 'centauri');
+    assert.ok(gated, 'the road that enters the Centauri log is gone');
+    assert.deepEqual(gated.requires, { flag: 'centauri_reported' });
+    assert.equal(openAt('court_martial', 'defence', []).includes('centauri'), false,
+      'offered to a captain who never signalled anybody');
+    assert.ok(openAt('court_martial', 'defence', ['centauri_reported']).includes('centauri'),
+      'four hours and eleven minutes on station bought nothing');
+  });
+
+  test('and it buys the board more than letting the exec speak, and the captain less', () => {
+    // The trade that makes it honest rather than free. He answers a question
+    // about his own judgement with a document, over the head of the officer
+    // sitting there under oath — so the finding goes better and he learns less.
+    const at = (id) => ep('court_martial').stages.defence.choices.find((c) => c.id === id);
+    const speak = at('let_speak');
+    const doc = at('centauri');
+    const fed = (c) => c.effects?.standing?.federation ?? 0;
+    assert.ok(fed(doc) > fed(speak),
+      `the board thinks no better of the document (${fed(doc)}) than of the honest answer (${fed(speak)})`);
+    assert.ok(doc.effects.xp < speak.effects.xp,
+      `the document teaches him as much (${doc.effects.xp}) as hearing his exec out (${speak.effects.xp})`);
+  });
+
+  test('and the flag it reads is the signal, not the eleven people', () => {
+    // The line says he deferred. It must not imply he watched them die, and
+    // whether it does is a fact about the graph rather than about the name:
+    // both stages that write `centauri_reported` lead to `orders`, and `orders`
+    // still has a road onward to the rescue. If that ever stops being true the
+    // comment on the choice is a lie and this should say so.
+    const drift = ep('centauri_drift');
+    const writes = Object.entries(drift.stages).flatMap(([sid, s]) =>
+      (s.choices ?? []).filter((c) =>
+        [].concat(c.effects?.flag ?? []).includes('centauri_reported')).map((c) => ({ sid, c })));
+    assert.ok(writes.length >= 2, 'centauri_reported is written in fewer places than it was');
+    for (const w of writes) {
+      assert.equal(w.c.next, 'orders', `${w.sid}/${w.c.id} no longer goes to the orders stage`);
+    }
+    // And from there the rescue is still reachable, so holding the flag does
+    // not settle what happened to them.
+    const onward = drift.stages.orders.choices.find((c) => typeof c.next === 'function');
+    assert.ok(onward, 'the orders stage no longer branches onward');
+    assert.ok((onward.next.targets ?? []).length >= 2,
+      'the road out of the orders stage no longer forks');
+  });
+
+  test('the vessel that stopped asking can be asked, by the captain Organia dismissed', () => {
+    const gated = ep('first_contact_grid').stages.misread.choices.find((c) => c.id === 'ask_back');
+    assert.ok(gated, 'the road that asks it back is gone');
+    assert.deepEqual(gated.requires, { flag: 'organia_rebuffed' });
+    assert.equal(openAt('first_contact_grid', 'misread', []).includes('ask_back'), false,
+      'offered to a captain nobody has ever walked out of a room');
+    assert.ok(openAt('first_contact_grid', 'misread', ['organia_rebuffed']).includes('ask_back'),
+      'being dismissed by the Organians bought nothing');
+  });
+
+  test('and it does not recover the contact — it reaches an ending of its own', () => {
+    const grid = ep('first_contact_grid');
+    const gated = grid.stages.misread.choices.find((c) => c.id === 'ask_back');
+    assert.ok(gated.outcome, 'the road that asks back does not end the episode');
+    assert.notEqual(gated.outcome, 'deferred',
+      'the asked road wears the ending where the Council debates for eleven months');
+    assert.notEqual(gated.outcome, 'contact',
+      'asking what happened to the other three now gets a delegation, which it must not');
+    assert.ok(grid.endings[gated.outcome], `${gated.outcome} has no ending written for it`);
+  });
+
+  test('and the one dead end in the episode is no longer one', () => {
+    // `misread` had a single choice and a single destination: refer it upward
+    // and hold station. It was the only stage in the episode shaped that way,
+    // which is what made it worth the deed rather than the deed worth a stage.
+    const grid = ep('first_contact_grid');
+    const forced = Object.entries(grid.stages)
+      .filter(([, s]) => (s.choices ?? []).length === 1 && (s.choices[0].outcome))
+      .map(([id]) => id);
+    assert.deepEqual(forced, [],
+      `${forced.join(', ')} still ends the episode without offering a choice`);
+    assert.ok((grid.stages.misread.choices ?? []).length >= 2,
+      'the misread stage is back to a single road');
+  });
+});

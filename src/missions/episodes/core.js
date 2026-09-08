@@ -811,6 +811,28 @@ export const CORE_EPISODES = [
           { id: 'concede', label: 'Concede that you fired first in the Neutral Zone',
             next: 'verdict', requires: { flag: 'fired_first_neutral_zone' },
             effects: { xp: 300, standing: { federation: 4, romulan: 6 } } },
+          // Alpha Centauri, act 1: a Klingon scout dying three light-years
+          // inside Federation space, and this captain signalled Command and
+          // held station. Starfleet acknowledged at four hours and eleven
+          // minutes to say that the ship on station was best placed to judge,
+          // which his first officer read twice and said meant nothing at all.
+          //
+          // The flag is the signal, not the outcome — `centauri_reported` is
+          // written at `report` and `stand_off`, both of which lead to `orders`,
+          // and `proceed` from there still reaches the road that gets them off.
+          // So this is a captain who deferred, not necessarily one who watched,
+          // and the line has to say the first without implying the second.
+          //
+          // It is the best answer in the room to the question actually on the
+          // table — the board is asking whether this officer can be relieved of
+          // his own judgement, and here is a filed instance of him handing it
+          // up. It also answers it over the head of the first officer standing
+          // there under oath, which is why it pays better with the board and
+          // worse in experience than letting them speak. He is buying a finding
+          // with a document instead of finding out what his own exec thinks.
+          { id: 'centauri', label: 'Enter the Centauri log, and let the board read what you did there',
+            next: 'verdict', requires: { flag: 'centauri_reported' },
+            effects: { xp: 350, standing: { federation: 8 } } },
         ],
       },
       accept: {

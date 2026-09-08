@@ -675,6 +675,39 @@ export const FRONTIER_EPISODES = [
               xp: 700, standing: { federation: 6 },
               record: { anomaly_catalogued: 1 },
             } },
+          // This stage had one choice and one ending, which made it the only
+          // dead end in the episode: answer wrong, refer it upward, hold
+          // station. Which is also, exactly, what this captain did at Alpha
+          // Centauri in act 1 — and it is the second time the book has offered
+          // him nothing to do but wait.
+          //
+          // Organia, act 2: two of them receive him in an ante-room, are
+          // courteous for precisely as long as it takes to walk him back out,
+          // and meet the word "occupation" the way one meets a remark about the
+          // weather. `organia_rebuffed` is "Return to the ship and hold orbit"
+          // — and what came next was a Klingon battle group arriving while he
+          // sat in the orbit he had been sent back to.
+          //
+          // So he is the one officer here who has been on this side of it
+          // before, and he knows the specific thing the text is describing: not
+          // a refusal, which can be argued with, but a party that has finished
+          // deciding what he is. Protocol cannot recover that and neither can
+          // the Council. What is left is to stop answering and ask.
+          //
+          // The thread the scene leaves hanging is one sentence long — "it does
+          // not say what happened to them" — and this is the only road in the
+          // episode that gets it said. It does not recover the contact. It
+          // cannot: the exchange stopped being a conversation twenty minutes
+          // ago and nothing in the captain's gift restarts it. It gets an
+          // answer instead of a delegation, and the answer is worth more to
+          // Starfleet than the delegation and worse to have heard.
+          { id: 'ask_back', label: 'Stop answering. Ask it what happened to the other three',
+            outcome: 'answered',
+            effects: {
+              xp: 1600, standing: { federation: 12 },
+              record: { anomaly_catalogued: 2, first_contact: 1 },
+            },
+            requires: { flag: 'organia_rebuffed' } },
         ],
       },
       dialogue: {
@@ -705,6 +738,20 @@ export const FRONTIER_EPISODES = [
         text: 'The Council debates for eleven months. The vessel waits, patiently, and says it is used to waiting.' },
       avoided: { label: 'Contact avoided',
         text: 'It does not follow. It does not object. It simply notes the refusal, which is somehow worse.' },
+      // Its own ending rather than a share of `deferred`, for the reason §115
+      // established when the bought road at Rigel needed one: `deferred` says
+      // the Council debates for eleven months while the vessel waits, and this
+      // captain is not waiting on anybody. Dressing this road in that one would
+      // be the quiet dishonesty this register keeps catching.
+      answered: { label: 'It said what happened to them',
+        text: 'It answers, because being asked is a different act from being '
+          + 'told, and it says so. Two of the three are still where it left '
+          + 'them. It is precise about the third and does not soften any part '
+          + 'of it. Then it withdraws, without ceremony, having got what it '
+          + 'came two hundred and six years for — which was never the answer, '
+          + 'and was always the question. Your report goes to Starfleet under '
+          + 'seal and is read by eleven people, four of whom would rather it '
+          + 'had not been written.' },
     },
   },
 

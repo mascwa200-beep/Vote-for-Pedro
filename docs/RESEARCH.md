@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 364 choices, **78 of 364 choices carry a `requires`** —
+episodes, 154 stages and 366 choices, **80 of 366 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -11682,6 +11682,113 @@ The qualifier is now scraped and checked like the count.
 Eleven flags to go. None is written in act 5; four are act-4 deeds that can reach
 only the final act. One fewer than arithmetic would give, because
 `archanis_ratified` left the list without being wired.
+
+## 120. Two deeds about waiting
+
+§119 replaced taste with structure: the eleven remaining flags sorted by the act
+that writes them, and the two at the top — one act-1, one act-2 — had twenty-three
+and eighteen possible hosts between them while the four at the bottom had five
+each. This takes the two at the top, and they turned out to be about the same
+thing.
+
+### The log that is accurate in every particular
+
+`centauri_reported` is written twice in act 2's opening episode, at *"Signal
+Starfleet and hold station"* and *"Hold at this range and keep watching"*. A
+Klingon scout is dying three light-years inside Federation space with eleven
+people aboard, and this captain sends it up the chain. Starfleet acknowledges at
+four hours and eleven minutes to say that a foreign warship inside Federation
+space is a matter for Starfleet Command, that Starfleet Command is considering
+it, and that the ship on station is best placed to judge. His first officer reads
+it twice and says that it means nothing at all.
+
+The flag is the **signal**, not the outcome — checked rather than assumed, because
+the line depends on it:
+
+```
+centauri_reported <- centauri_drift/start/report, centauri_drift/scanned/stand_off
+        both lead to `orders`, and `proceed` from there still reaches the road
+        that gets them off. centauri_aid is set at a different stage entirely.
+```
+
+So a captain can hold both, and the deed is deference rather than abandonment.
+
+Act 3, his own court-martial. The board has called his first officer and asked
+them, under oath, whether they ever considered relieving him. The three existing
+answers are to let them speak, to object, or to concede firing first in the
+Neutral Zone.
+
+The fourth is to hand the board the Centauri log. It is the best answer in the
+room to the question actually on the table — they are asking whether this officer
+can be relieved of his own judgement, and here is a filed instance of him handing
+it up voluntarily. It also answers that question over the head of the exec
+standing there under oath, which is why it pays better with the board and less in
+experience than letting them speak. He is buying a finding with a document
+instead of finding out what his own first officer thinks of him.
+
+### The room that has stopped asking
+
+`first_contact_grid` had one dead end. Answer the vessel's question wrong and you
+reach `misread`, which reads:
+
+> The answer is heard, considered, and found to be about something else. It says
+> that it has asked this question of four species and that three of them answered
+> as we have, and it does not say what happened to them. The exchange continues
+> for another twenty minutes and stops being a conversation somewhere in the
+> middle of it. It is still on station. It is simply no longer asking.
+
+And the stage had exactly one choice: refer it to the Council and hold station.
+Which is, precisely, Alpha Centauri again — the second time the book offers this
+captain nothing to do but wait.
+
+One captain has been on this side of it before. Organia, act 2: two of them
+receive him in an ante-room, are courteous for exactly as long as it takes to walk
+him back out, and meet the word "occupation" the way one meets a remark about the
+weather. `organia_rebuffed` is *"Return to the ship and hold orbit"* — and what
+came next was a Klingon battle group arriving while he sat in the orbit he had
+been sent back to.
+
+He knows the specific thing the text is describing. Not a refusal, which can be
+argued with, but a party that has finished deciding what he is. Protocol will not
+recover that and neither will the Council. What is left is to stop answering and
+ask.
+
+The thread the scene leaves hanging is one sentence long — *"it does not say what
+happened to them"* — and this is the only road in the episode that gets it said.
+It does **not** recover the contact; nothing in the captain's gift restarts a
+conversation that stopped being one twenty minutes ago. It gets an answer instead
+of a delegation, and the answer is worth more to Starfleet than the delegation and
+worse to have heard.
+
+It needed its own ending rather than a share of `deferred`, for the reason §115
+established at Rigel: `deferred` says the Council debates for eleven months while
+the vessel waits, and this captain is not waiting on anybody.
+
+### What this fixed that was not a flag
+
+`misread` was the only stage in the episode with a single choice and a single
+ending — a punishment branch with no agency in it. It has two now, and the second
+is the one the scene was written to want.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the Centauri answer is locked without the log | drop the `requires` | ✓ |
+| and it pays the board better and the captain less than letting the exec speak | invert the two | ✓ |
+| the flag is the signal, not the outcome | — | measured on the graph |
+| asking back is locked without Organia | drop the `requires` | ✓ |
+| and it reaches an ending of its own, not `deferred` | point it at `deferred` | ✓ |
+| the dead end is no longer a dead end | — | measured |
+
+### Verification
+
+- `node --test tests/*.test.js` — **2,099 passing**, 0 failing
+- `tools/verify-app.mjs` — 410/410
+- `dist/` and the APK rebuilt; manifest carries `VIBRATE` only, no `INTERNET`
+
+Nine flags to go. None is written in act 5; four are act-4 deeds that can reach
+only the final act.
 
 ## Attribution
 
