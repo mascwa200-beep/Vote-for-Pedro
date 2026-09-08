@@ -3202,9 +3202,73 @@ __define("src/gfx/room.js", function (__exports, __require) {
 // Coordinates match walk.js: x to starboard, z forward, y up, origin at the
 // centre of the room's floor.
 
-const { vec3 } = __require("src/gfx/math.js");
-const { MeshBuilder, box } = __require("src/gfx/mesh.js");
+const { vec3, normalize, cross, sub } = __require("src/gfx/math.js");
+const { MeshBuilder, box, sphere, tube, shaded } = __require("src/gfx/mesh.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
+
+/**
+ * A tapered, smooth-walled cylinder between two arbitrary points.
+ *
+ * `mesh.js` has `tube`, and `tube` cannot do this: its axis is hard-wired to
+ * +x — `foreC = at(origin, len, 0, 0)` and every ring vertex is
+ * `at(origin, 0, c*r, s*r)` — with no orientation parameter anywhere. That is
+ * fine for a nacelle, which is what it was written for, and useless for a leg.
+ *
+ * Adding an axis to `tube` was the other option and is the wrong one: thirty-one
+ * hull classes and the whole scenery set go through it, and its wall-normal
+ * formula `(r0 - r1, len·cos, len·sin)` would have to be re-derived into an
+ * arbitrary frame in shared code to serve one caller. This is that same
+ * derivation, in a local frame, in twenty lines, with a blast radius of one
+ * file.
+ *
+ * No caps. Every limb on a figure has both ends buried in a joint mass — the
+ * pelvis, the shoulder yoke, a hand, the skull — so a cap is `segments`
+ * triangles of geometry nobody can see.
+ *
+ * SEGMENTS MUST BE EVEN, and that is a test contract rather than a preference.
+ * `tests/gfx.test.js` measures the gap between a standing figure's legs as the
+ * smallest |x| below the hip and requires it strictly inside (0.01, 0.08). A
+ * vertex sits at `centre + r(cosθ·u + sinθ·v)`, and for a near-vertical limb `u`
+ * comes out along ∓x — so x is extremal at θ = 0 and θ = π. θ = 0 always lands
+ * on a vertex; θ = π lands on one only if `segments` is even. With an odd count
+ * the innermost vertex drifts inward off the true silhouette and the gap the
+ * test measures is not the gap the eye sees.
+ */
+function limb(mb, { a, b, r0 = 0.05, r1 = null, segments = 6, color }) {
+  const rEnd = r1 ?? r0;
+  const axis = sub(b, a);
+  const len = Math.hypot(axis[0], axis[1], axis[2]) || 1;
+  const d = normalize(axis);
+  // Any reference not parallel to the axis; the choice only fixes the seam.
+  const ref = Math.abs(d[2]) < 0.9 ? vec3(0, 0, 1) : vec3(0, 1, 0);
+  const u = normalize(cross(d, ref));
+  const v = normalize(cross(d, u));
+  const ring = (p, r, c, s) => vec3(
+    p[0] + (u[0] * c + v[0] * s) * r,
+    p[1] + (u[1] * c + v[1] * s) * r,
+    p[2] + (u[2] * c + v[2] * s) * r,
+  );
+  // The same wall normal `tube` derives, expressed in this frame: it leans
+  // along the axis by the taper and out by the length.
+  const wall = (c, s) => normalize(vec3(
+    (r0 - rEnd) * d[0] + len * (u[0] * c + v[0] * s),
+    (r0 - rEnd) * d[1] + len * (u[1] * c + v[1] * s),
+    (r0 - rEnd) * d[2] + len * (u[2] * c + v[2] * s),
+  ));
+  for (let i = 0; i < segments; i++) {
+    const t0 = (i / segments) * Math.PI * 2;
+    const t1 = ((i + 1) / segments) * Math.PI * 2;
+    const c0 = Math.cos(t0); const s0 = Math.sin(t0);
+    const c1 = Math.cos(t1); const s1 = Math.sin(t1);
+    mb.quad(
+      ring(a, r0, c0, s0), ring(b, rEnd, c0, s0),
+      ring(b, rEnd, c1, s1), ring(a, r0, c1, s1),
+      color, 0,
+      [wall(c0, s0), wall(c0, s0), wall(c1, s1), wall(c1, s1)],
+    );
+  }
+  return mb;
+}
 
 /**
  * The 1966 set palette.
@@ -4346,6 +4410,57 @@ const CREW_CACHE = new Map();
  * Memoised on division and posture: a ship has four hundred and thirty people
  * on it and about six ways of standing.
  */
+/**
+ * Half-angle of the cone the crew is drawn in, as a cosine.
+ *
+ * The interior lens is 88 degrees across, so the frame edge is 44 degrees off
+ * axis. This is 70, which is twenty-six degrees of slack — wide enough that a
+ * figure is long out of frame before it stops being drawn, so nothing pops
+ * while the camera turns.
+ *
+ * It is also not a number that wants tuning. Measured from the chair on the
+ * bridge, the ten figures sit at 18, 18, 27, 27, 57, 57, 89, 89, 130 and 180
+ * degrees off axis: there is a fifty-one to eighty-three degree gap with
+ * nothing in it, so anything from 60 to 80 keeps exactly the same six people.
+ */
+const CREW_CONE = Math.cos((70 * Math.PI) / 180);
+
+/**
+ * Is a figure standing at (x, z) worth drawing, from `eye` looking along `look`?
+ *
+ * This exists because the worst first-person frame was OVER the triangle budget
+ * before a single triangle was added to the crew. In orbit the bridge draws its
+ * room (1,234), the starfield (520), the world (3,024), its limb (336), up to
+ * three other bodies (1,320) and every officer aboard whichever way the camera
+ * is pointed (1,728) — 8,162 against a cap of 8,000 asserted in the harness.
+ * There is no frustum culling anywhere in this renderer; `Renderer.draw` adds
+ * `vertexCount / 3` whether or not the thing is on screen. It passed only
+ * because the sampled frame happened not to admit all three bodies, and half
+ * the systems in the galaxy carry enough bodies for it to.
+ *
+ * Horizontal only. Every figure stands on the same deck, so the vertical term
+ * carries no information and a cone about the plan-view bearing is the whole
+ * question.
+ *
+ * Pure, and exported, so the frame budget can be proved in `node --test`
+ * arithmetic rather than sampled from whatever frame the browser harness
+ * happened to catch.
+ */
+function crewVisible(x, z, eye, look) {
+  const dx = x - eye[0];
+  const dz = z - eye[2];
+  const d = Math.hypot(dx, dz);
+  // Standing on top of the camera: always draw, the cone is meaningless there.
+  if (d < 0.75) return true;
+  const lx = look[0];
+  const lz = look[2];
+  const l = Math.hypot(lx, lz) || 1;
+  const cos = (dx * lx + dz * lz) / (d * l);
+  // Widen the cone by the figure's own angular radius, so a person is admitted
+  // while any part of them could still be in frame rather than their centre.
+  const slack = Math.min(0.6, 0.36 / d);
+  return cos >= CREW_CONE - slack;
+}
 function officerMesh(crew = 'ops', mounted = 'wall') {
   const key = `${crew}:${mounted}`;
   if (CREW_CACHE.has(key)) return CREW_CACHE.get(key);
@@ -4357,104 +4472,159 @@ function officerMesh(crew = 'ops', mounted = 'wall') {
   const mb = new MeshBuilder();
   const dark = [0.16, 0.16, 0.18];
 
-  // TWO legs, not one block.
+  // A CONTACT SHADOW, first, so it is under everything.
   //
-  // The note above justifies a LOW-POLYGON figure, and it is right to: this
-  // renderer is flat-shaded with no textures and no skinning, and a detailed
-  // figure would read worse at phone size, not better. But that argument is
-  // about polygon COUNT, and a single box spanning both legs is not a
-  // legibility choice — it is one box instead of two. A gap between the legs
-  // is the cheapest silhouette cue there is and the one that most says
-  // "person" rather than "bollard" at a distance.
+  // Officers are drawn separately from the room and so never pass through
+  // `bakeOcclusion` — which darkens the deck to 0.42 around every station. A
+  // figure standing in the middle of a pool of baked shadow, casting none, is
+  // the one thing that reads as pasted on rather than standing there.
   //
-  // Sixty triangles became ninety-six. A hull in this game is a thousand.
+  // A QUAD, not a disc. Anything built as a fan — a `sphere`, a capped tube —
+  // puts a vertex on the figure's own centreline at x = 0, and the leg-gap test
+  // measures the smallest |x| below the hip and requires it ABOVE 0.01. A
+  // centreline vertex makes that zero and fails a guard about legs with a
+  // change about shadows, which is the worst kind of failure to debug.
+  if (!seated) {
+    const up = [vec3(0, 1, 0), vec3(0, 1, 0), vec3(0, 1, 0), vec3(0, 1, 0)];
+    mb.quad(
+      vec3(-0.20, 0.006, -0.18), vec3(-0.20, 0.006, 0.26),
+      vec3(0.20, 0.006, 0.26), vec3(0.20, 0.006, -0.18),
+      [0.085, 0.085, 0.095], 0, up,
+    );
+  }
+
+  // Legs.
+  //
+  // These were boxes, and the whole figure was: fourteen of them, not one
+  // curved surface anywhere, on the model the camera stands a metre from. The
+  // shape argument the previous pass made — that a gap between the legs is the
+  // cheapest silhouette cue there is — was right and is kept. What changes is
+  // that a leg is now a tapered cylinder with smooth walls rather than a prism,
+  // which costs twelve triangles a leg and is the difference between a person
+  // and a shop mannequin.
+  //
+  // A standing leg is ONE limb, not a thigh and a shin. A standing officer's
+  // leg is straight; a knee you cannot see is twelve triangles across the
+  // figure and ten figures on the bridge.
   for (const side of [-1, 1]) {
     if (seated) {
-      // A SEATED officer had no legs at all, and that is the worst thing about
-      // any figure in the game — because it is the one the player looks at most.
-      // The captain's chair faces the helm and the con, the crew chairs' backs
-      // stop below shoulder height on purpose so the officer reads over them,
-      // and what read over them was a torso floating above a seat.
-      //
-      // A thigh forward and a shin down is two boxes and fixes it completely.
-      box(mb, {
-        center: vec3(side * 0.085, hip - 0.04, 0.15),
-        size: vec3(0.13, 0.15, 0.34), color: dark,
+      // Seated, the knee is real and both segments earn their place.
+      limb(mb, {
+        // Centre at 0.102 rather than 0.094, because this limb's thick end is
+        // the one vertex ring that lands INSIDE the band the leg-gap guard
+        // measures (y < 0.45, and the hip is at 0.46). Thickening the thigh
+        // without moving it out took the gap to 0.012 against a floor of 0.010
+        // — passing, on two thousandths of a metre. Moved out instead.
+        a: vec3(side * 0.102, hip - 0.02, -0.02), b: vec3(side * 0.090, hip - 0.055, 0.235),
+        r0: 0.080, r1: 0.060, color: dark,
       });
-      box(mb, {
-        center: vec3(side * 0.085, hip * 0.45, 0.28),
-        size: vec3(0.12, hip * 0.9, 0.13), color: dark,
+      limb(mb, {
+        a: vec3(side * 0.086, hip - 0.055, 0.255), b: vec3(side * 0.078, 0.075, 0.300),
+        r0: 0.056, r1: 0.042, color: dark,
       });
     } else {
-      box(mb, {
-        center: vec3(side * 0.075, hip / 2, 0),
-        size: vec3(0.10, hip, 0.18),
-        color: dark,
+      limb(mb, {
+        a: vec3(side * 0.088, hip + 0.03, 0.004), b: vec3(side * 0.074, 0.070, 0.010),
+        r0: 0.086, r1: 0.045, color: dark,
       });
     }
-    // Feet, on both. Without them a standing figure ends at the ankle and
-    // hovers a little above the deck, which is the same complaint the neck
-    // below was added to answer at the other end of the body.
+    // Boots. Still boxes, and rightly — a boot is a boot-shaped box.
     box(mb, {
-      center: vec3(side * 0.078, seated ? 0.05 : 0.025, seated ? 0.34 : 0.03),
-      size: vec3(0.11, 0.05, 0.24), color: dark,
+      center: vec3(side * 0.078, seated ? 0.038 : 0.032, seated ? 0.360 : 0.052),
+      size: vec3(0.105, 0.062, seated ? 0.215 : 0.235), color: [0.10, 0.10, 0.12],
     });
   }
 
-  // The torso in two parts, narrower at the waist than at the shoulders.
-  // One box is a crate; two make a shape that has a direction to it.
-  const waist = hip + (shoulder - hip) * 0.42;
-  box(mb, {
-    center: vec3(0, (hip + waist) / 2, 0),
-    size: vec3(0.30, waist - hip, 0.22), color: colour,
-  });
-  box(mb, {
-    center: vec3(0, (waist + shoulder) / 2, 0),
-    size: vec3(0.40, shoulder - waist, 0.24), color: colour,
+  // A pelvis, which is what the legs run into.
+  //
+  // Kept clear of y = 0.45 deliberately: `sphere` emits pole vertices on its
+  // own axis unconditionally, so a centreline sphere reaching below that line
+  // would zero the leg gap exactly as a fan-shaped shadow would.
+  sphere(mb, {
+    origin: vec3(0, hip + (seated ? 0.115 : 0.12), 0), radius: 1,
+    segments: 6, rings: 3, scale: vec3(0.160, 0.115, 0.108), color: dark,
   });
 
-  // Arms in two parts: upper arm hanging from the shoulder, forearm carried
-  // FORWARD. At yaw 0 that is ±x and +z, which keeps the whole figure
-  // rotatable by a single quaternion.
+  // The torso, with the light on the chest.
   //
-  // One straight prism a side reads as a figure standing to attention, and
-  // almost nobody in this game is standing to attention — they are working a
-  // console. Bending the arm at the elbow is the difference between a crew and
-  // a guard of honour, and it is two boxes a side.
+  // `shaded` post-multiplies emitted vertex colours, so the ramp costs no
+  // vertex and no triangle — which matters, because three separate assertions
+  // check `vertexCount === 3 × triangleCount`.
+  //
+  // THE FIELD IS A FUNCTION OF y ONLY, and that is a correctness constraint
+  // rather than a taste. `tests/gfx.test.js` proves a figure has a front by
+  // finding a colour that appears forward of the head and nowhere behind it. A
+  // ramp with any z term would give EVERY forward vertex a triple no aft vertex
+  // shares, and that guard would then pass against a figure with no face at
+  // all. This project has recorded guards passing against their own defect
+  // three times; silently defeating one would be worse than all three.
+  const chest = (hip + shoulder) / 2 + 0.06;
+  shaded(mb, (m) => sphere(m, {
+    origin: vec3(0, chest, 0), radius: 1, segments: 8, rings: 4,
+    scale: vec3(0.163, (shoulder - hip) / 2 + 0.040, 0.106), color: colour,
+  }), (x, y) => 0.80 + 0.26 * Math.max(0, Math.min(1, (y - hip) / (shoulder - hip))));
+
+  // The shoulder yoke.
+  //
+  // `tube` is the right primitive here for exactly the reason it is the wrong
+  // one everywhere else on this figure: shoulders genuinely run along x, which
+  // is the only axis `tube` can be built on. It gives the figure deltoids, it
+  // is the mass both arms attach INTO, and it is the widest thing on the
+  // silhouette — which is what says "shoulders" from across the bridge.
+  tube(mb, {
+    origin: vec3(-0.200, shoulder - 0.035, 0), length: 0.400,
+    r0: 0.076, r1: 0.076, segments: 6, color: colour,
+  });
+
+  // Arms: upper arm from the yoke, forearm carried FORWARD to a console.
+  // At yaw 0 that is ±x and +z, so the whole figure still rotates on one
+  // quaternion. Nobody in this game is standing to attention.
   for (const side of [-1, 1]) {
-    box(mb, {
-      center: vec3(side * 0.255, shoulder - 0.11, 0),
-      size: vec3(0.11, 0.26, 0.11), color: colour,
+    limb(mb, {
+      a: vec3(side * 0.200, shoulder - 0.010, 0), b: vec3(side * 0.192, shoulder - 0.285, 0.020),
+      r0: 0.062, r1: 0.050, color: colour,
     });
-    box(mb, {
-      center: vec3(side * 0.235, shoulder - 0.27, 0.14),
-      size: vec3(0.10, 0.10, 0.28), color: colour,
+    limb(mb, {
+      a: vec3(side * 0.192, shoulder - 0.285, 0.010), b: vec3(side * 0.174, shoulder - 0.345, 0.225),
+      r0: 0.052, r1: 0.042, color: colour,
+    });
+    // A hand, at `rings: 2` — a hexagonal bipyramid with analytic normals. Six
+    // triangles more than the flat cap it replaces, and it is what turns an
+    // arm reaching at a console into a hand working one.
+    sphere(mb, {
+      origin: vec3(side * 0.171, shoulder - 0.352, 0.252), radius: 1,
+      segments: 6, rings: 2, scale: vec3(0.046, 0.040, 0.056), color: SKIN,
     });
   }
 
-  // A neck, so the head sits ON the shoulders instead of floating above a
-  // flat top. It is two centimetres of geometry and it is most of the
-  // difference between a figure and a stack of boxes.
-  box(mb, { center: vec3(0, shoulder + 0.03, 0), size: vec3(0.10, 0.06, 0.10), color: SKIN });
-  box(mb, { center: vec3(0, shoulder + 0.16, 0), size: vec3(0.19, 0.20, 0.20), color: SKIN });
-
-  // A head that has a FRONT.
-  //
-  // The head was one skin-coloured cube, and a cube is the one solid with
-  // nothing to say about which way it is facing. In first person the player
-  // stands a metre from these, and an officer who has turned to look at you
-  // was indistinguishable from one who has not.
-  //
-  // A crown that overhangs at the back and a brow band across the front are
-  // two boxes and settle it. They also stop the head reading as a cube at all,
-  // which no amount of rounding it off would have done as cheaply.
-  box(mb, {
-    center: vec3(0, shoulder + 0.265, -0.015),
-    size: vec3(0.20, 0.08, 0.21), color: [0.14, 0.12, 0.11],
+  // A neck, so the head sits ON the shoulders rather than floating above them.
+  limb(mb, {
+    a: vec3(0, shoulder - 0.02, 0), b: vec3(0, shoulder + 0.085, -0.006),
+    r0: 0.050, r1: 0.043, color: SKIN,
   });
-  box(mb, {
-    center: vec3(0, shoulder + 0.19, 0.095),
-    size: vec3(0.18, 0.05, 0.03), color: [0.20, 0.17, 0.15],
+
+  // The skull, and a hair cap for nothing.
+  //
+  // The crown used to be a separate box. It does not need to be: the colour
+  // channel is per vertex and interpolated, so darkening the top two rings of
+  // the skull gives a HAIRLINE — a soft gradient across the quad that spans the
+  // boundary — where a box gave a hard edge and twelve triangles.
+  shaded(mb, (m) => sphere(m, {
+    origin: vec3(0, shoulder + 0.190, -0.004), radius: 1, segments: 8, rings: 4,
+    scale: vec3(0.099, 0.113, 0.109), color: SKIN,
+  }), (x, y) => (y > shoulder + 0.215 ? 0.30 : 1.0));
+
+  // The brow band, which is the ONE thing that proves this figure has a front.
+  //
+  // `tests/gfx.test.js` looks above y = 1.4 for a colour forward of z = +0.02
+  // that appears nowhere aft of z = −0.02, and this band is the only carrier —
+  // skin and hair both wrap all the way round. It stays a discrete part with
+  // its own colour for that reason, and every vertex of it is forward of 0.02
+  // so none can leak aft.
+  tube(mb, {
+    origin: vec3(-0.082, shoulder + 0.150, 0.066), length: 0.164,
+    r0: 0.016, r1: 0.016, segments: 6, capFore: false, capAft: false,
+    color: [0.42, 0.31, 0.24],
   });
 
   const built = mb.build();
@@ -4699,6 +4869,8 @@ __exports.PALETTE = PALETTE;
 __exports.divisionInk = divisionInk;
 __exports.officerStandsAt = officerStandsAt;
 __exports.officerFaces = officerFaces;
+__exports.CREW_CONE = CREW_CONE;
+__exports.crewVisible = crewVisible;
 __exports.officerMesh = officerMesh;
 __exports.roomMeshes = roomMeshes;
 __exports.allRoomMeshes = allRoomMeshes;
@@ -22414,7 +22586,7 @@ __define("src/ui/firstperson.js", function (__exports, __require) {
 // instead would let the forward bulkhead paint over the screen.
 
 const { vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project, quatFromTo, quatAxisAngle, quatFromEuler } = __require("src/gfx/math.js");
-const { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } = __require("src/gfx/room.js");
+const { roomMeshes, officerMesh, officerStandsAt, officerFaces, crewVisible, PALETTE } = __require("src/gfx/room.js");
 const { occupantsOf } = __require("src/sim/occupancy.js");
 const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME } = __require("src/gfx/scene.js");
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
@@ -22436,6 +22608,44 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  * surface rather than as an edge on the near one.
  */
 const ROOM_RIM = 0.16;
+
+/**
+ * Procedural surface detail for a compartment: cycles per metre, and strength.
+ *
+ * §124 built object-space plating in the fragment shader — `vObject` and
+ * `uDetail`, no UVs, no atlas, no unwrap. §125 then declined to spend geometry
+ * on the deck and said why: "the deck is a single quad, so shader detail there
+ * is exactly free". It was free and it was never switched on. Every `detail:`
+ * in the tree went to a HULL draw; the room draws passed `model`,
+ * `normalMatrix` and `fogFar`, so `uDetail` fell through to the frame default
+ * of [0, 0] and the branch never ran. Every interior surface in the game was
+ * flat albedo, on the two largest surfaces there are.
+ *
+ * THE FREQUENCY IS NOT THE HULL'S AND CANNOT BE. `uDetail.x` is cycles per
+ * object-space unit; a hull spans about one unit nose to tail, so
+ * `HULL_DETAIL`'s 55 is a plate every two per cent of the ship. A room is
+ * authored in METRES, where 55 would be a plate every 1.8 cm. At 4.6 the seam
+ * grid — which the shader runs at `uDetail.x * 0.18` — lands on a 1.21 m cell,
+ * which is what deck plating is.
+ *
+ * The upper bound on the frequency is aliasing, and it binds harder here than
+ * on a hull. The shader fades detail with distance to avoid it, but that fade
+ * is `1 - vDepth / (uFogFar * 0.35)` and the room draw passes `fogFar: 1e6`
+ * deliberately, so `near` is 1.0 everywhere in the compartment and the fade
+ * never engages. Rather than reintroduce fog on a bulkhead an arm's length
+ * away, every feature is kept large enough not to need it: at 4.6 the finest
+ * plating octave is 10 cm, which is still 3.3 px across at the far end of the
+ * twenty-metre hangar. At 12 it would be 1.3 px, which is a shimmer.
+ *
+ * Strength 0.05 against a hull's 0.10, and that came down from 0.07 by looking:
+ * `plating` is a sum of triangle waves on all three axes, so on a DECK it reads
+ * as plates and on a vertical bulkhead it reads as a soft diagonal plaid. One
+ * draw covers every lit surface in a compartment, so the strength that suits
+ * the deck is the strength the walls get. 0.05 keeps the deck plating legible
+ * and takes the wall pattern down to something you read as a surface rather
+ * than as smearing.
+ */
+const ROOM_DETAIL = [4.6, 0.05];
 
 /**
  * Where a compartment's ambient light actually comes FROM.
@@ -22541,6 +22751,9 @@ class FirstPersonView {
     this.shake = true;
     this._up = vec3();
     this._look = vec3();
+    // The interior camera's eye and aim, stashed per frame for the crew cull.
+    this._aim = vec3(0, 0, 1);
+    this._aimFrom = vec3();
 
     this.attachGestures();
   }
@@ -22696,6 +22909,14 @@ class FirstPersonView {
       eye[0] += kick * 0.4;
       at[0] += kick * 0.4;
     }
+    // Where the camera is aimed, kept for `drawCrew`, which is called from
+    // `drawRoom` and has neither the eye nor the target.
+    this._aim[0] = at[0] - eye[0];
+    this._aim[1] = at[1] - eye[1];
+    this._aim[2] = at[2] - eye[2];
+    this._aimFrom[0] = eye[0];
+    this._aimFrom[1] = eye[1];
+    this._aimFrom[2] = eye[2];
     lookAt(eye, at, vec3(0, 1, 0), this._view);
     multiply(this._proj, this._view, this._viewProj);
 
@@ -23054,9 +23275,17 @@ class FirstPersonView {
       // terminator on a world is not drawn, it is where aiming the light at the
       // actual star puts it.
       const star = v.bodies.find((x) => x.kind === 'star') ?? null;
+      // Two other bodies while a world fills the screen, three otherwise.
+      //
+      // In standard orbit the world IS the composition: 3,024 triangles of it,
+      // plus its limb, against 440 for a far dot that is a few pixels across.
+      // Three of those dots is 1,320 triangles spent on the least of what is
+      // out there, and it was the term that put the worst interior frame over
+      // the budget — see `crewVisible` in room.js for the arithmetic.
+      const most = world ? 2 : 3;
       let drawn = 0;
       for (const b of v.bodies) {
-        if (drawn >= 3) break;
+        if (drawn >= most) break;
         if (world && b.id === world.body.id) continue;
         const dx = b.x - eye[0]; const dy = b.y - eye[1]; const dz = b.z - eye[2];
         const d = Math.hypot(dx, dy, dz) || 1;
@@ -23162,7 +23391,7 @@ class FirstPersonView {
     // Rooms are 10 metres across, not 3,000 — the tactical falloff would fog a
     // bulkhead you are standing next to.
     this.renderer.draw(`room:${key}`, m.solid, {
-      model: this._model, normalMatrix: nm, fogFar: 1e6,
+      model: this._model, normalMatrix: nm, fogFar: 1e6, detail: ROOM_DETAIL,
     });
     this.renderer.draw(`room:${key}:glow`, m.glow, {
       model: this._model, normalMatrix: nm, emissive: 1, fogFar: 1e6,
@@ -23184,6 +23413,7 @@ class FirstPersonView {
     for (const st of room.stations ?? []) {
       if (!st.crew) continue;
       const [x, z] = officerStandsAt(st);
+      if (!crewVisible(x, z, this._aimFrom, this._aim)) continue;
       const base = officerFaces(st);
 
       let yaw = base;
@@ -23221,6 +23451,7 @@ class FirstPersonView {
     // deck seven with the corridor outside standing empty. See
     // src/sim/occupancy.js — who is in a room is a function of the ship now.
     for (const who of occupantsOf(this.lastGame, room.id)) {
+      if (!crewVisible(who.at[0], who.at[1], this._aimFrom, this._aim)) continue;
       quatAxisAngle(vec3(0, 1, 0), who.facing, this._quat);
       this._pos[0] = who.at[0]; this._pos[1] = 0; this._pos[2] = who.at[1];
       compose(this._pos, this._quat, 1, this._model);
@@ -23349,6 +23580,7 @@ class FirstPersonView {
 }
 
 __exports.ROOM_RIM = ROOM_RIM;
+__exports.ROOM_DETAIL = ROOM_DETAIL;
 __exports.ROOM_SKY = ROOM_SKY;
 __exports.ROOM_GROUND = ROOM_GROUND;
 __exports.EYE_HEIGHT = EYE_HEIGHT;
