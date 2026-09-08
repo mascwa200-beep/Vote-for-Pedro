@@ -374,7 +374,7 @@ describe('the fleet has hulls', () => {
     // a budget moved on noise.
     const total = Object.values(SHIP_CLASSES)
       .reduce((n, c) => n + hullMesh(c.id, c.faction).triangles, 0);
-    // 33,898 today across thirty-one classes — the note here said 30,240 for
+    // 33,934 today across thirty-one classes — the note here said 30,240 for
     // long enough that three and a half thousand triangles went in unremarked,
     // which is most of the headroom this ceiling is supposed to be guarding.
     // Measure it before believing it. Up from 25,647 when the seven
@@ -3476,19 +3476,29 @@ describe('every hull in the fleet carries a gradient, not just the Federation on
     }
   });
 
-  test('and it cost not one triangle, across all thirty-one classes', () => {
-    // The reason a gradient is the only move available: the fleet is at 33,898
-    // of a 36,000 ceiling, about 68 triangles per class, and the heaviest hull
-    // is 222 under a 2,400 wall. Flat shading means vertexCount is exactly
-    // three per triangle, so this also catches a helper that split a face to
-    // get its gradient.
+  test('and the fleet total moves only when a change means it to', () => {
+    // §99 wrote this as "and it cost not one triangle, across all thirty-one
+    // classes", and for that change the claim was exact: a gradient rides
+    // vertices already paid for, so the fleet stayed at 33,898 of a 36,000
+    // ceiling — about 68 triangles a class, with the heaviest hull 222 under a
+    // 2,400 wall.
+    //
+    // §122 spent 36 of them on purpose, swapping two swept centreline boxes for
+    // `prow` to fix the three lopsided hulls §99 found and could not afford to
+    // repair. Renaming rather than relaxing: the assertion is still exact, and
+    // what it guards is that nothing changes this number by accident. A shading
+    // pass that silently split faces still fails here, which is what §99 wanted
+    // from it.
+    //
+    // Flat shading means vertexCount is exactly three per triangle, so that
+    // half also catches a helper that split a face to get its gradient.
     let total = 0;
     for (const cls of SHIP_LIST) {
       const m = hullMesh(cls.id, cls.faction);
       assert.equal(m.vertexCount, m.triangles * 3, `${cls.id} stopped being flat-shaded`);
       total += m.triangles;
     }
-    assert.equal(total, 33898, `the fleet is ${total} triangles — the shading went into geometry`);
+    assert.equal(total, 33934, `the fleet is ${total} triangles, not the 33,934 this pins`);
   });
 
   test('and port and starboard are still shaded the same', () => {
@@ -3544,28 +3554,21 @@ describe('every hull in the fleet carries a gradient, not just the Federation on
     }
   });
 
-  test('and the hulls that are not mirror images of themselves are named', () => {
-    // Found by the guard above, not looked for.
+  test('and the only hull that is not a mirror image of itself is the cube', () => {
+    // §99 found three lopsided hulls with this and could not fix them: swapping
+    // the swept centreline `box` for `prow` costs twelve triangles a call, and
+    // that change's entire licence was to spend none. It recorded them pinned
+    // to exact figures instead — warbird, jem_hadar_attack and
+    // jem_hadar_battleship, eighteen orphan vertices each — so they could not
+    // grow quietly while waiting for a change that could afford geometry.
     //
-    // Asking "is this vertex shaded like its mirror twin?" needs a mirror twin,
-    // and on four classes some vertices have none — geometry that exists on the
-    // starboard side of the ship and not the port side. It is pre-existing and
-    // this change does not touch geometry, but nothing in the suite had ever
-    // asked, so it goes on the record rather than into a silent `continue`.
+    // This is that change. Both call sites now use `prow`, all three go to
+    // zero, and the fleet went 33,898 -> 33,934 against a ceiling of 36,000.
     //
-    // A Borg cube is the honest case: it is not built by `mirrored` at all, its
-    // six faces are laid out independently, and asymmetry is the point. The
-    // other three are 18 vertices each — six triangles — and all three are hulls
-    // whose command head is a `box` carrying a `sweep`. This file's own header
-    // records what that means: "A swept centreline box is a parallelogram seen
-    // from above ... a Galor measured sixteen percent lopsided", which is why
-    // `prow` exists and mirrors a half-box instead. Those three forms still use
-    // the swept `box` directly.
-    //
-    // Not fixed here. Swapping in `prow` changes triangle counts, and the whole
-    // licence for this change is that it spends none — the fleet is pinned at
-    // 33,898 two tests above. Recorded, bounded, and left for a change that can
-    // afford geometry.
+    // A Borg cube stays, and stays as the honest case: it is not built by
+    // `mirrored` at all, its six faces are laid out independently, and
+    // asymmetry is the point. Asking a cube to be a mirror image of itself is
+    // asking the wrong question.
     const key = (x, y, z) => `${x.toFixed(6)}|${y.toFixed(6)}|${Math.abs(z).toFixed(6)}`;
     const lopsided = {};
     for (const cls of SHIP_LIST) {
@@ -3584,11 +3587,46 @@ describe('every hull in the fleet carries a gradient, not just the Federation on
       if (orphan) lopsided[cls.id] = orphan;
     }
     assert.deepEqual(lopsided, {
-      warbird: 18,
-      jem_hadar_attack: 18,
-      jem_hadar_battleship: 18,
       borg_cube: 576,
     }, 'a hull gained or lost unmirrored geometry');
+  });
+
+  test('and the heads that were parallelograms come to a point on the axis', () => {
+    // Zero orphan vertices is necessary and not sufficient: a head could be
+    // symmetric and still be the wrong shape. What `prow` is FOR is that the
+    // forward-most point of a swept centreline section ends up on the
+    // centreline, and that is what this measures.
+    //
+    // On the warbird it is the difference between a decoration and a defect.
+    // The sensor is mounted on the axis at x = 0.54, ahead of the head — and
+    // with the old swept box the head's forward-most point was at z = -0.0901,
+    // displaced to one side of the very thing it was supposed to be set into.
+    // That is the Galor failure `forms.hostile.js` opens by describing: "the
+    // dome floated in clear space ahead of the ship".
+    //
+    //     warbird head, forward-most point:   z -0.0901  ->  z 0.0000
+    //
+    // The band below is the head's own region of the hull, so the arms — which
+    // were always built inside `mirrored` and were never the problem — do not
+    // answer for it. A first draft of this measured the forward-most point of
+    // the whole ship and got the arms' leading edges, symmetric both before and
+    // after, which proved nothing about the head at all.
+    const m = hullMesh('warbird', 'romulan');
+    const f = m.stride / 4;
+    let front = -Infinity;
+    const inHead = [];
+    for (let i = 0; i < m.vertexCount; i++) {
+      const x = m.data[i * f]; const z = m.data[i * f + 2];
+      if (m.data[i * f + 9] > 0.5) continue;            // solid hull, not the sensor
+      if (x < 0.25 || x > 0.60 || Math.abs(z) > 0.11) continue;
+      inHead.push([x, z]);
+      front = Math.max(front, x);
+    }
+    assert.ok(inHead.length >= 8, `only ${inHead.length} hull vertices in the head's region`);
+    const tip = [...new Set(inHead.filter(([x]) => Math.abs(x - front) < 1e-9)
+      .map(([, z]) => Number(z.toFixed(6))))];
+    assert.deepEqual(tip, [0],
+      `the head's forward-most point is at z ${tip.join(', ')} rather than on the centreline`);
   });
 });
 
