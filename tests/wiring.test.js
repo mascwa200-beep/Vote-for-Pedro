@@ -1912,13 +1912,12 @@ describe('every episode graph is sound', () => {
       archanis_ratified: 'synonym',
 
       badlands_run: 'candidate', borrowed_blade: 'candidate',
-      centauri_reported: 'candidate', devron_blind: 'candidate',
+      devron_blind: 'candidate',
       devron_data: 'candidate',
       dmz_favourable: 'candidate',
       donatu_battle: 'candidate',
       grid_9902_contact: 'candidate',
       grid_answered_late: 'candidate',
-      organia_rebuffed: 'candidate',
       romulus_witness: 'candidate',
       // `asked_about_hurry` left in §119: the second option on the first screen
       // of the game — asking Utopia Planitia why the hurry, before the ship has
@@ -1931,6 +1930,20 @@ describe('every episode graph is sound', () => {
       // pass, and now the question. `consequences.test.js` recomputes the whole
       // set rather than describing it, because the register has now stated this
       // particular fact from memory twice and been wrong twice.
+      //
+      // `centauri_reported` and `organia_rebuffed` left in §120.
+      //
+      // The first is the captain who signalled Command about a dying Klingon
+      // scout inside Federation space and held station, and who can put that
+      // filed instance of deference in front of the board that is asking his
+      // first officer, under oath, whether they ever considered relieving him.
+      //
+      // The second is the captain two Organians walked back out of an
+      // ante-room, and it goes to the one dead end in `first_contact_grid` — a
+      // stage with a single choice, where something that waited two centuries
+      // has stopped finding the exchange useful. He is the only officer aboard
+      // who has been on that side of it before, and the only one who thinks to
+      // stop answering and ask.
       //
       // `devron_collapsed`, `organia_revealed` and `donatu_pressed` left in §118.
       //

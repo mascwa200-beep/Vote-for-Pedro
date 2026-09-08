@@ -314,8 +314,8 @@ describe('and neither writes anything down that nobody reads', () => {
     // this one is older and stays because it is what that file is about. They
     // measure the same quantity and must move together.
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.equal(gated, 53,
-      `${gated} of ${written.size} recorded decisions gate something; the register says 53. `
+    assert.equal(gated, 55,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 55. `
       + 'The same count is asserted in echoes.test.js and RESEARCH.md §111; move all three.');
   });
 });

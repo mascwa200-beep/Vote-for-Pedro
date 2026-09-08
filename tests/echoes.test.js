@@ -236,8 +236,8 @@ describe('and neither writes anything down that nobody reads', () => {
     const written = flagsWritten(EPISODES);
     const read = gateReads(EPISODES);
     const gated = [...written].filter((f) => read.has(f)).length;
-    assert.equal(gated, 53,
-      `${gated} of ${written.size} recorded decisions gate something; the register says 53. `
+    assert.equal(gated, 55,
+      `${gated} of ${written.size} recorded decisions gate something; the register says 55. `
       + 'If the book grew, raise this number and say so in RESEARCH.md. '
       + 'If it shrank, a captain stopped being remembered for something.');
   });
