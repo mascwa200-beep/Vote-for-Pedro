@@ -11,7 +11,7 @@
 // because a hand-maintained list of forty-odd paths will otherwise drift, and
 // drifted silently the first time a directory was added.
 
-const VERSION = 'sfc-v13';
+const VERSION = 'sfc-v14';
 const PRECACHE = [
   './',
   './index.html',
