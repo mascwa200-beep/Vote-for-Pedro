@@ -99,8 +99,27 @@ export const paletteFor = (faction) => PALETTE[faction] ?? PALETTE.independent;
  * rather than of the scene, and in ONE place because the two draw sites that
  * need it are in different files and a number written twice is a number that
  * drifts.
+ *
+ * RAISED from 0.14 to 0.32, and the reasoning above is why it could not have
+ * been before. Both of its premises have changed:
+ *
+ *   The clipping ceiling is gone. The shader rolls off above 0.75 now instead
+ *   of clamping at 1.0, so a peak past white is a bright highlight rather than
+ *   a flat white patch. At 0.32 a Starfleet hull peaks at 1.146 before the
+ *   curve and displays 0.905 after it — brighter than the old 0.874, and with
+ *   a shoulder on it rather than an edge.
+ *
+ *   There is something for it to land on. The old value was tuned against a
+ *   flat-shaded hull, where the note on HULL_SHINE below measured the term
+ *   buying FOUR levels out of 255 because the lobe fell between facets. The
+ *   curved primitives carry per-vertex normals now, so the lobe has a
+ *   continuous normal field to sweep and the highlight is a sheen sliding
+ *   across a saucer instead of a glint that is never quite there.
+ *
+ * Klingon hulls, being darker paint, still sit proportionally lower — that half
+ * of the original reasoning is untouched and still correct.
  */
-export const HULL_GLOSS = 0.14;
+export const HULL_GLOSS = 0.32;
 
 /**
  * And how tight that highlight is.
@@ -127,11 +146,47 @@ export const HULL_GLOSS = 0.14;
  *
  * The ceiling is unchanged: the specular can never exceed `HULL_GLOSS`
  * whatever the exponent, so broadening the lobe cannot make it clip.
+ *
+ * RAISED from 8 to 18, because the measurement above was of a flat-shaded hull
+ * and hulls are not flat-shaded any more.
+ *
+ * Broadening the lobe to 8 was the right answer to the wrong problem. The
+ * problem was never that the lobe was too narrow; it was that a faceted surface
+ * samples it at a few dozen fixed directions, so a narrow lobe falls between
+ * them — measured then across the fleet as 16,388 shared edges stepping by 15
+ * to 23 degrees against a lobe 13.7 degrees wide at exponent 24. Widening it
+ * until it could not be missed also spread it until it was not a highlight.
+ *
+ * With analytic normals on every sphere, tube and saucer band, the normal field
+ * is continuous and the lobe is swept rather than sampled. So the exponent can
+ * go back to describing how POLISHED the hull is, which is what it is for, and
+ * 18 is painted metal: tighter than a matte plate, broader than a mirror.
  */
-export const HULL_SHINE = 8;
+export const HULL_SHINE = 18;
 
 /** How much light a hull picks up along its own outline. See the note in gl.js. */
 export const HULL_RIM = 0.35;
+
+/**
+ * Plating, as cycles across the hull and how strongly it shows.
+ *
+ * A hull is not a uniform colour, it is plates — and this renderer has no
+ * texture to say so with, no UV to sample one through, and no unwrap to author
+ * for geometry that is generated rather than modelled. What it does have is the
+ * mesh's own object space, and a field evaluated on that in the fragment shader
+ * gives the same answer with none of the machinery. See `plating` in gl.js.
+ *
+ * 55 cycles because a hull is about one unit nose to tail in object space, so
+ * this is roughly a plate every two per cent of the ship's length — coarse
+ * enough to read as panelling at viewscreen range rather than as noise. The
+ * strength is deliberately low: at 0.10 the plates vary by a tenth either side
+ * of the authored colour, which is a surface, and much more is a paint job.
+ *
+ * It fades out with distance in the shader. There is no mipmap under a computed
+ * field, so a seam finer than a pixel would alias — and at fleet range a hull is
+ * a few dozen pixels and this correctly contributes nothing at all.
+ */
+export const HULL_DETAIL = [55, 0.10];
 
 /**
  * Hull archetypes. `build` receives a MeshBuilder, the palette, and the

@@ -33,6 +33,7 @@ varying vec3 vColor;
 varying float vDepth;
 varying vec3 vWorld;
 varying float vGlow;
+varying vec3 vObject;
 
 void main() {
   vec3 n = normalize(uNormalMatrix * aNormal);
@@ -43,6 +44,17 @@ void main() {
   vGlow = aGlow;
   vDepth = gl_Position.w;
   vWorld = world.xyz;
+  // The mesh's OWN space, which is where surface detail has to live.
+  //
+  // vWorld already exists and is the wrong thing for this: a hull that turns
+  // would have its plating slide across it, and two ships of the same class in
+  // different places would be plated differently. aPosition is cached per class
+  // and never moves, so a panel line stays welded to the plate it is on.
+  //
+  // This is what makes texture-like detail possible with no texture and no UV:
+  // there is no unwrap to author for procedurally generated geometry, and no
+  // atlas to pack, because the coordinate is already here.
+  vObject = aPosition;
 }
 `;
 
@@ -63,6 +75,7 @@ varying vec3 vColor;
 varying float vDepth;
 varying vec3 vWorld;
 varying float vGlow;
+varying vec3 vObject;
 
 uniform vec3 uKey;        // key light direction
 uniform vec3 uFill;       // fill light direction
@@ -76,6 +89,79 @@ uniform vec3 uEye;        // where the camera is, for the specular
 uniform float uGloss;     // 0 for matte, 1 for painted metal and moulded plastic
 uniform float uShine;     // the specular exponent: high is tight, low is broad
 uniform float uRim;       // light picked up along the silhouette; 0 disables
+uniform vec3 uSky;        // ambient arriving from above; white is the old flat term
+uniform vec3 uGround;     // ambient arriving from below; white is the old flat term
+uniform float uGlowGain;  // how far above white a self-lit face is driven
+uniform float uExposure;  // scene exposure, applied before the tonemap
+uniform vec2 uDetail;     // .x cycles across the object, .y strength; 0 disables
+
+// A highlight rolloff: identity below the knee, asymptotic to white above it.
+//
+// The shader had no tonemap at all, and the tell was in the material constants —
+// HULL_GLOSS is documented as tuned so its specular peak lands at exactly 1.000,
+// because anything above that clipped to a flat white chip. Without somewhere to
+// put values above white, every bright thing in the game was either kept under
+// the ceiling or destroyed by it.
+//
+// The obvious answer is a filmic S-curve, and the first draft of this was the
+// ACES approximation. That is the wrong curve for THIS renderer and it is worth
+// saying why: ACES is scene-referred, built for input where 1.0 is white paper
+// and highlights run to 16 and beyond, so applied to already display-referred
+// values it lifts every mid-tone — a 0.5 becomes 0.62. This palette has been
+// hand-tuned against the existing treatment across many sections, and a curve
+// that moves every colour in the game is a change to all of that work disguised
+// as a renderer feature.
+//
+// So: below knee this is exactly the identity, and the picture below it is
+// bit-for-bit what it was. Above, values roll off along a hyperbola that
+// approaches 1.0 and never reaches it. The join is C1-continuous — the slope is
+// 1 on both sides at the knee — so there is no visible seam where it takes over.
+//
+// Deliberately NOT paired with a gamma decode/encode either, for the same
+// reason: the correct pipeline converts albedo from sRGB to linear, lights
+// there, and encodes back, and that too would move every authored colour. That
+// is the change the chromaticity guards in the suite exist to catch, and it is
+// not this one.
+vec3 rolloff(vec3 x) {
+  const float knee = 0.75;
+  vec3 over = max(x - knee, 0.0);
+  return min(x, knee) + (1.0 - knee) * (over / (over + (1.0 - knee)));
+}
+
+// Surface detail, computed rather than sampled.
+//
+// This project ships no art it did not make, so there are no textures — and
+// there are no UV coordinates in the vertex format either, which rules out
+// generating one at load and sampling it: a procedurally generated hull has no
+// unwrap to sample it WITH. What it does have is an object-space position, and
+// a field evaluated on that gives plating and panel seams welded to the hull,
+// for one varying and no vertex format change.
+//
+// Triangle waves, not a hash. The obvious noise for this is
+// fract(sin(dot(p, k)) * large), and it must not be used here: this shader is
+// mediump, that function needs the low bits of a large product, and on a phone
+// it degenerates into banding or a constant. abs(fract(x) - 0.5) is exact at
+// any precision.
+//
+// The frequencies are mutually unrelated so the octaves never line up and
+// repeat visibly, which is the same reason terrain() in scene.js multiplies by
+// 2.07 rather than 2.
+float tri1(float x) { return abs(fract(x) - 0.5) * 2.0; }
+
+float plating(vec3 p, float f) {
+  float a = (tri1(p.x * f) + tri1(p.y * f * 0.73) + tri1(p.z * f * 1.31)) / 3.0;
+  float b = (tri1(p.x * f * 2.13 + 0.37) + tri1(p.z * f * 2.61 + 0.11)) / 2.0;
+  return a * 0.65 + b * 0.35;
+}
+
+// The narrow dark line where two plates meet. This is the term that reads as
+// panelling rather than as noise — and the one that has to fade with distance,
+// because a seam thinner than a pixel is not detail, it is aliasing, and there
+// is no mipmap under a computed field to do it for us.
+float seams(vec3 p, float f) {
+  vec3 g = abs(fract(p * f) - 0.5) * 2.0;
+  return smoothstep(0.0, 0.10, min(min(g.x, g.y), g.z));
+}
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -89,7 +175,33 @@ void main() {
   // room: a bridge lit from a ceiling ring, with pale grey walls bouncing light
   // at each other, has almost no true shadow in it. Hardcoding the vacuum value
   // rendered the interior as a black box with a few lit panels floating in it.
-  vec3 lit = vColor * uTint * (uAmbient + key * uKeyPower + fill);
+  //
+  // The ambient has a DIRECTION now. A flat scalar gives every face away from the
+  // key the same fill regardless of which way it points, which is the one thing
+  // that reliably reads as computer graphics: real ambient arrives mostly from
+  // one hemisphere — sky above a planet, deckhead above a room, the galactic
+  // plane in open space. Blending sky against ground on n.y costs one mix and is
+  // what makes a corner of a corridor read as a corner.
+  //
+  // uSky == uGround == white reproduces the old flat term exactly, which is the
+  // default, so every caller that has not been taught about this is unaffected.
+  vec3 ambient = uAmbient * mix(uGround, uSky, n.y * 0.5 + 0.5);
+
+  // Plating and panel seams, faded out with distance so they never alias.
+  //
+  // Applied to the ALBEDO, before any lighting, because that is what they are:
+  // the hull is not a uniform colour, it is plates. Modulating the lit result
+  // instead would put panel lines on top of the highlight as well, which reads
+  // as dirt on the lens rather than as a surface.
+  vec3 albedo = vColor;
+  if (uDetail.y > 0.001) {
+    float near = clamp(1.0 - vDepth / (uFogFar * 0.35), 0.0, 1.0);
+    float d = plating(vObject, uDetail.x) - 0.5;
+    float s = seams(vObject, uDetail.x * 0.18);
+    albedo *= (1.0 + d * uDetail.y * near) * mix(1.0, s, 0.35 * near);
+  }
+
+  vec3 lit = albedo * uTint * (ambient + key * uKeyPower + fill);
 
   // A specular highlight, Blinn-Phong, one term.
   //
@@ -157,8 +269,7 @@ void main() {
   // windows, bussard domes, the deflector, an impulse deck — without paying a
   // second draw call for them. A hull with no lit faces carries zeroes here and
   // renders exactly as it did before.
-  lit = mix(lit, vColor * uTint, clamp(max(uEmissive, vGlow), 0.0, 1.0));
-
+  //
   // Fog toward the far plane, so a distant hull recedes rather than hanging
   // at full contrast against the starfield.
   //
@@ -170,7 +281,32 @@ void main() {
   // a near-black disc. It is a uniform now, and the draws that are meant to be
   // far away set it accordingly.
   float fog = clamp(1.0 - vDepth / uFogFar, 0.35, 1.0);
-  gl_FragColor = vec4(lit * fog, uAlpha);
+
+  // The rolloff covers the LIT path ONLY, and this is the most important line
+  // in the change.
+  //
+  // A self-lit surface is not a measurement of arriving light — it is the
+  // colour the mesh asked for, and the whole reason the glow channel exists is
+  // that a window has to punch through the haze. Running it through a shoulder
+  // costs exactly the thing §99 spent a section buying: shadedAlong bakes a
+  // 0.58-to-1.18 ramp into every window belt, port row and greeble run in the
+  // fleet, and the display span of that ramp measures
+  //
+  //     today, clamped at 1.0      0.580 -> 1.000     span 0.420
+  //     rolled off with the lit    0.580 -> 0.908     span 0.328
+  //
+  // — a fifth of the gradient work on half the fleet's vertices, given away to
+  // a curve that was never meant to touch it. Mapping the two paths separately
+  // costs one extra mix and gives that back.
+  //
+  // uGlowGain is 1.0 by default, and at 1.0 this branch is bit-for-bit what
+  // the shader did before. Emissive surfaces are not where the glow should come
+  // from anyway: driving them above white only clips the same ramp from the
+  // other end. The glow belongs in the overlay glare pass, where it can be a
+  // halo AROUND the aperture rather than a brighter aperture.
+  vec3 mapped = rolloff(lit * fog * uExposure);
+  vec3 selfLit = clamp(vColor * uTint * uGlowGain, 0.0, 1.0) * fog;
+  gl_FragColor = vec4(mix(mapped, selfLit, clamp(max(uEmissive, vGlow), 0.0, 1.0)), uAlpha);
 }
 `;
 
@@ -218,6 +354,21 @@ export const VACUUM_LIGHT = {
   ambient: 0.22,
   keyPower: 0.85,
 };
+
+/**
+ * Scene exposure, multiplied in immediately before the highlight rolloff.
+ *
+ * 1.0 on purpose, and it is the honest default rather than a placeholder. The
+ * rolloff is the identity below its knee, so at exposure 1.0 every pixel the
+ * game drew below 0.75 is unchanged to the bit — which means this whole change
+ * can be judged on what it does to the bright end alone, with nothing else
+ * moving underneath it.
+ *
+ * It is a uniform rather than a constant because the bridge and open space want
+ * different answers eventually, and because the one thing a renderer with no
+ * tonemap could not offer was a single place to say "this scene is brighter".
+ */
+const EXPOSURE = 1.0;
 
 export class Renderer {
   /**
@@ -290,6 +441,11 @@ export class Renderer {
       gloss: gl.getUniformLocation(this.program, 'uGloss'),
       shine: gl.getUniformLocation(this.program, 'uShine'),
       rim: gl.getUniformLocation(this.program, 'uRim'),
+      sky: gl.getUniformLocation(this.program, 'uSky'),
+      ground: gl.getUniformLocation(this.program, 'uGround'),
+      glowGain: gl.getUniformLocation(this.program, 'uGlowGain'),
+      exposure: gl.getUniformLocation(this.program, 'uExposure'),
+      detail: gl.getUniformLocation(this.program, 'uDetail'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -302,6 +458,7 @@ export class Renderer {
     this._gloss = 0;
     this._shine = 24;
     this._rim = 0;
+    this._detail = [0, 0];
 
     this._onLost = (e) => { e.preventDefault(); this.lost = true; this.buffers.clear(); };
     this._onRestored = () => { this.lost = false; this.restore(); };
@@ -377,6 +534,15 @@ export class Renderer {
     gl.uniform1f(this.uniform.gloss, 0);
     gl.uniform1f(this.uniform.shine, 24);
     gl.uniform1f(this.uniform.rim, 0);
+    // The tonemap's neutral setting, and a flat white hemisphere, so a frame
+    // that never calls `setLighting` renders as it always did apart from the
+    // filmic curve itself.
+    gl.uniform3f(this.uniform.sky, 1, 1, 1);
+    gl.uniform3f(this.uniform.ground, 1, 1, 1);
+    gl.uniform1f(this.uniform.glowGain, 1);
+    gl.uniform1f(this.uniform.exposure, EXPOSURE);
+    this._detail = [0, 0];
+    gl.uniform2f(this.uniform.detail, 0, 0);
     return true;
   }
 
@@ -389,6 +555,7 @@ export class Renderer {
    */
   setLighting({
     key, fill, ambient = 0.22, keyPower = 0.85, eye, gloss = 0, shine = 24, rim = 0,
+    sky = null, ground = null, glowGain = 1, exposure = EXPOSURE,
   } = {}) {
     if (this.lost) return;
     const { gl } = this;
@@ -397,6 +564,15 @@ export class Renderer {
     if (eye) gl.uniform3f(this.uniform.eye, eye[0], eye[1], eye[2]);
     gl.uniform1f(this.uniform.ambient, ambient);
     gl.uniform1f(this.uniform.keyPower, keyPower);
+    // A caller that names neither gets a flat white hemisphere, which is the
+    // old scalar ambient exactly. Naming one and not the other is a mistake
+    // worth not silently accepting, so both fall back together.
+    const above = sky ?? ground ?? [1, 1, 1];
+    const below = ground ?? sky ?? [1, 1, 1];
+    gl.uniform3f(this.uniform.sky, above[0], above[1], above[2]);
+    gl.uniform3f(this.uniform.ground, below[0], below[1], below[2]);
+    gl.uniform1f(this.uniform.glowGain, glowGain);
+    gl.uniform1f(this.uniform.exposure, exposure);
     // The scene's default sheen. A draw may override it for one mesh; see
     // `draw`. Remembered so that an overriding draw does not leak its value
     // into the next one.
@@ -525,7 +701,7 @@ export class Renderer {
    */
   draw(key, mesh, {
     model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0,
-    gloss = null, shine = null, rim = null,
+    gloss = null, shine = null, rim = null, detail = null,
     // Default is the engagement volume, which is what almost every draw is.
     fogFar = 9000,
   }) {
@@ -558,6 +734,11 @@ export class Renderer {
     gl.uniform1f(this.uniform.gloss, gloss ?? this._gloss);
     gl.uniform1f(this.uniform.shine, shine ?? this._shine);
     gl.uniform1f(this.uniform.rim, rim ?? this._rim);
+    // Written on EVERY draw, never conditionally. A hull that asks for plating
+    // and a room that does not, drawn in that order, would otherwise put hull
+    // plating on the deck — the same leak `_gloss` above exists to prevent.
+    const det = detail ?? this._detail;
+    gl.uniform2f(this.uniform.detail, det[0], det[1]);
 
     gl.drawArrays(gl.TRIANGLES, 0, entry.vertexCount);
     this.drawCalls++;

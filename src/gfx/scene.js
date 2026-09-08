@@ -483,12 +483,19 @@ function globe(kind, seed, SEG, RINGS, coarse) {
         // Wound so the face points AWAY from the centre — round the ring first
         // and outward second. Culling is on: get this backwards and the planet
         // is not dark, it is absent.
+        //
+        // Every vertex here is already a unit vector — sin(a) and cos(a) squared
+        // sum to one — so on a sphere centred at the origin the position IS the
+        // normal, and the whole of the smooth shading is passing it twice. That
+        // is the cheapest line in this change and close to the most visible: a
+        // world in standard orbit is 3,024 facets and read as a faceted disc,
+        // and the terminator across it was a staircase.
         if (ring === 0) {
-          mb.tri(vec3(0, 1, 0), outer1, outer0, color);
+          mb.tri(vec3(0, 1, 0), outer1, outer0, color, 0, [vec3(0, 1, 0), outer1, outer0]);
         } else if (ring === RINGS - 1) {
-          mb.tri(vec3(0, -1, 0), inner0, inner1, color);
+          mb.tri(vec3(0, -1, 0), inner0, inner1, color, 0, [vec3(0, -1, 0), inner0, inner1]);
         } else {
-          mb.quad(inner0, inner1, outer1, outer0, color);
+          mb.quad(inner0, inner1, outer1, outer0, color, 0, [inner0, inner1, outer1, outer0]);
         }
       }
     }

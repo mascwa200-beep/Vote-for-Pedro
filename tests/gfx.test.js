@@ -344,6 +344,100 @@ describe('the fleet has hulls', () => {
     }
   });
 
+  test('and the round parts of it are round, while the flat parts stay flat', () => {
+    // The failure mode this exists for is silence. An implementation that keeps
+    // computing face normals passes every other assertion in this file — the
+    // triangle counts do not move, the colours do not move, nothing is NaN, and
+    // the picture is simply still faceted. Nothing here could tell.
+    //
+    // "Smooth" is measured as a triangle whose three stored normals are not all
+    // the same vector, which is only possible if a primitive handed `tri` its
+    // own. Curved primitives — sphere, tube walls, saucer bands — do; boxes,
+    // greebles, port rows and every window helper deliberately do not, because a
+    // panel should have an edge.
+    //
+    // The share is bounded on BOTH sides on purpose. Too low means the analytic
+    // normals stopped reaching the fleet; too high means something rounded off a
+    // box, which is the opposite mistake and just as wrong.
+    let smooth = 0;
+    let total = 0;
+    for (const cls of Object.values(SHIP_CLASSES)) {
+      const mesh = hullMesh(cls.id, cls.faction);
+      const f = mesh.stride / 4;
+      for (let t = 0; t < mesh.vertexCount; t += 3) {
+        total++;
+        const n = [0, 1, 2].map((k) => [3, 4, 5].map((j) => mesh.data[(t + k) * f + j]));
+        const alike = n[0].every((v, i) =>
+          Math.abs(v - n[1][i]) < 1e-9 && Math.abs(v - n[2][i]) < 1e-9);
+        if (!alike) smooth++;
+      }
+    }
+    const pct = (smooth / total) * 100;
+    assert.ok(pct > 40, `only ${pct.toFixed(1)}% of the fleet carries per-vertex normals`);
+    assert.ok(pct < 70, `${pct.toFixed(1)}% is too much — something smoothed a box`);
+  });
+
+  test('every uniform the shader declares is one the renderer can restore', () => {
+    // The renderer rebuilds itself after a lost context, and `restore()` does it
+    // by re-deriving each uniform's GLSL name from its JS key — `glowGain`
+    // becomes uGlowGain. A uniform whose key does not follow that rule is looked
+    // up as the wrong name, gets null, and every write to it is silently
+    // discarded.
+    //
+    // The failure is invisible in every normal run. It only appears after a
+    // context loss — a phone backgrounding the tab, a driver reset — which is
+    // the one situation nothing in this suite or the browser harness exercises.
+    //
+    // So it is checked as text, in both directions: nothing declared in the
+    // shader is missing from the renderer's table, and nothing in the table is
+    // absent from the shader.
+    const src = readFileSync(new URL('../src/gfx/gl.js', import.meta.url), 'utf8');
+    const declared = new Set([...src.matchAll(/^uniform\s+\w+\s+(u\w+)\s*;/gm)]
+      .map((m) => m[1]));
+    assert.ok(declared.size > 12, `only ${declared.size} uniforms found in the shader source`);
+
+    const block = src.slice(src.indexOf('this.uniform = {'),
+      src.indexOf('};', src.indexOf('this.uniform = {')));
+    const keys = [...block.matchAll(/(\w+):\s*gl\.getUniformLocation/g)].map((m) => m[1]);
+    assert.ok(keys.length > 12, `only ${keys.length} uniform keys found in the renderer`);
+
+    const fromKey = (k) => `u${k[0].toUpperCase()}${k.slice(1)}`;
+    const wired = new Set(keys.map(fromKey));
+    const unwired = [...declared].filter((u) => !wired.has(u));
+    assert.deepEqual(unwired, [],
+      `declared in the shader but not in the renderer's table: ${unwired.join(', ')}`);
+    const dangling = [...wired].filter((u) => !declared.has(u));
+    assert.deepEqual(dangling, [],
+      `in the renderer's table but not declared in the shader: ${dangling.join(', ')}`);
+  });
+
+  test('and no vertex normal disagrees with the face it belongs to', () => {
+    // An analytic normal is derived from the surface; a face normal comes out of
+    // the winding. When those disagree the surface is lit inside out, and the
+    // sign is exactly the kind of thing a derivation gets backwards — the first
+    // draft of the saucer had all 192 of its normals inverted, which this caught
+    // and nothing else would have.
+    //
+    // A dot product against the face is the honest check because it needs no
+    // knowledge of which way any particular primitive is wound. It only asks
+    // that the two agree.
+    for (const cls of Object.values(SHIP_CLASSES)) {
+      const mesh = hullMesh(cls.id, cls.faction);
+      const f = mesh.stride / 4;
+      let against = 0;
+      for (let t = 0; t < mesh.vertexCount; t += 3) {
+        const p = [0, 1, 2].map((k) =>
+          [0, 1, 2].map((j) => mesh.data[(t + k) * f + j]));
+        const face = normalize(cross(sub(p[1], p[0]), sub(p[2], p[0])));
+        for (let k = 0; k < 3; k++) {
+          const n = [3, 4, 5].map((j) => mesh.data[(t + k) * f + j]);
+          if (n[0] * face[0] + n[1] * face[1] + n[2] * face[2] < 0) against++;
+        }
+      }
+      assert.equal(against, 0, `${cls.id}: ${against} normals point into their own face`);
+    }
+  });
+
   test('meshes are cached, not rebuilt per ship', () => {
     // Six hostiles of the same class in one engagement must not build six
     // meshes; the renderer keys its GPU buffers off identity.
@@ -1780,6 +1874,70 @@ describe('a crew that can look at you', () => {
     const inner = Math.min(...[...xs].map((v) => Math.abs(Number(v))));
     assert.ok(inner > 0.01 && inner < 0.08,
       `the legs are ${(inner * 2).toFixed(3)} m apart at the inside`);
+  });
+
+  test('and a SEATED figure has legs too, which is the one the captain looks at', () => {
+    // The seated figure had none at all — the builder ran the leg block behind
+    // `if (!seated)`. That is the worst thing about any model in the game and
+    // it was also the least likely to be noticed by a test, because every
+    // assertion about crew figures above reads the standing one.
+    //
+    // It matters more than the standing case, not less. The captain's chair
+    // faces the helm and the con; the crew chairs' backs stop below shoulder
+    // height on purpose so the officer reads over them (see `crewChair`); and
+    // what read over them was a torso floating above a seat, from the camera
+    // position the game spends most of its time in.
+    //
+    // Measured the same way as the standing test, in the band below the seated
+    // hip, and asked for a thigh carried FORWARD as well — a seated figure
+    // whose legs go straight down is standing in a chair.
+    const { data, vertexCount, stride } = officerMesh('helm', 'floor');
+    const f = stride / 4;
+    const xs = new Set();
+    let forward = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * f;
+      const y = data[o + 1];
+      if (y < 0.45) xs.add(data[o].toFixed(3));
+      // The THIGH band specifically, above the foot and below the hip. The
+      // first draft of this measured every vertex under the hip and passed
+      // against a legless figure, because the feet are built outside the
+      // branch being tested and reach further forward than a thigh does.
+      if (y > 0.30 && y < 0.45) forward = Math.max(forward, data[o + 2]);
+    }
+    assert.ok(xs.size >= 4,
+      `a seated officer's legs are cut from ${xs.size / 2} block(s)`);
+    assert.ok(forward > 0.15,
+      `a seated officer's thighs reach ${forward.toFixed(2)} m forward, so they hang straight down`);
+  });
+
+  test('and a figure has a front, so a turned head reads as turned', () => {
+    // A cube has nothing to say about which way it faces, and the head was one.
+    // In first person the player stands a metre from these; an officer who has
+    // turned to look at you was indistinguishable from one who has not.
+    //
+    // Asymmetry in z ABOVE THE SHOULDERS is the measurement, because that is
+    // where the cue has to live — the torso is symmetric on purpose and the
+    // arms are carried forward on both sides equally.
+    const { data, vertexCount, stride } = officerMesh('helm', 'wall');
+    const f = stride / 4;
+    const fore = new Set();
+    const aft = new Set();
+    for (let i = 0; i < vertexCount; i++) {
+      const o = i * f;
+      if (data[o + 1] < 1.4) continue;
+      const c = [6, 7, 8].map((j) => data[o + j].toFixed(3)).join(',');
+      if (data[o + 2] > 0.02) fore.add(c);
+      if (data[o + 2] < -0.02) aft.add(c);
+    }
+    // COMPARED, not counted. The first draft asserted `fore.size + aft.size > 1`
+    // and passed against a head painted entirely in one colour, because one
+    // colour at the front and the same one at the back is still two sets of
+    // size one. What the figure needs is a colour the front has and the back
+    // does not.
+    const onlyFore = [...fore].filter((c) => !aft.has(c));
+    assert.ok(onlyFore.length > 0,
+      'nothing above the shoulders distinguishes front from back, so the head has no face');
   });
 
   test('the divisions do not wear the same colour', () => {

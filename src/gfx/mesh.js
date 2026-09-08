@@ -5,10 +5,27 @@
 // files: this project ships no art it did not make, and a mesh that is a few
 // numbers in a table costs nothing to precache.
 //
-// Flat shading throughout. Each triangle gets its own three vertices and the
-// face normal, which triples the vertex count and is worth it — faceted hulls
-// read as solid geometry at phone size in a way smooth shading does not, and it
-// removes any need for normal averaging, smoothing groups or UVs.
+// Unshared vertices throughout. Each triangle gets its own three, which triples
+// the vertex count and is worth it: no index buffer, no welding, and a per-face
+// colour or glow costs nothing to express.
+//
+// Flat NORMALS, however, are per primitive rather than a rule. This file used to
+// say flat shading throughout, on the grounds that "faceted hulls read as solid
+// geometry at phone size in a way smooth shading does not, and it removes any
+// need for normal averaging, smoothing groups or UVs".
+//
+// The second half of that is answered rather than overridden: the curved
+// primitives hand `tri` their own analytic normals — a sphere's is the offset
+// from its centre, a tube's is radial — so there is still no averaging pass, no
+// smoothing group and no UV anywhere. The first half is a real claim about
+// panels and plates, and it still holds, so `box`, `greebles`, `portRow` and
+// every window helper are unchanged and still crisp.
+//
+// What changed the balance is a measurement §72 made and did not act on: a
+// flat-shaded hull "samples the [specular] lobe at its facet normals and nowhere
+// else", and at close range the lobe is narrower than the gap between facets. The
+// renderer has had specular and rim for a long time; on round surfaces the facets
+// were throwing them away.
 //
 // Coordinate convention, matching the simulation: +x is the bow, +y is dorsal,
 // +z is starboard.
@@ -31,10 +48,29 @@ export class MeshBuilder {
    * the key and the fill, 1 is a surface that renders at its own colour no
    * matter which way it faces. It is PER VERTEX rather than per draw, which is
    * the whole reason a window exists — see the note on `windowRing` below.
+   *
+   * `normals`, when given, is three vectors — one per corner — instead of the
+   * face normal. That is the whole of the smooth-shading mechanism, and it is
+   * worth being precise about what it does NOT do.
+   *
+   * It does not weld vertices, share them, or introduce an index buffer. Every
+   * triangle still gets its own three, so `vertexCount` is still exactly three
+   * times the triangle count and the three assertions that check that still
+   * hold. Those assertions exist to catch a shading pass that splits faces to
+   * get a gradient — they count vertices, and this adds none.
+   *
+   * The caller supplies the normals analytically rather than having this
+   * average anything: a sphere knows its own normal is the offset from its
+   * centre, and a tube knows its own is radial. So there is no smoothing group
+   * to define, no averaging pass to run and no seam to reason about — which
+   * were the three costs `mesh.js` cited when it ruled smooth shading out.
    */
-  tri(a, b, c, color, glow = 0) {
-    const n = normalize(cross(sub(b, a), sub(c, a)));
-    for (const v of [a, b, c]) {
+  tri(a, b, c, color, glow = 0, normals = null) {
+    const face = normals ? null : normalize(cross(sub(b, a), sub(c, a)));
+    const corners = [a, b, c];
+    for (let i = 0; i < 3; i++) {
+      const v = corners[i];
+      const n = normals ? normals[i] : face;
       this.positions.push(v[0], v[1], v[2]);
       this.normals.push(n[0], n[1], n[2]);
       this.colors.push(color[0], color[1], color[2]);
@@ -43,9 +79,16 @@ export class MeshBuilder {
     return this;
   }
 
-  /** A quad, as two triangles. */
-  quad(a, b, c, d, color, glow = 0) {
-    return this.tri(a, b, c, color, glow).tri(a, c, d, color, glow);
+  /**
+   * A quad, as two triangles.
+   *
+   * `normals` is four vectors in the same corner order as the positions, and is
+   * split across the two triangles the same way the corners are.
+   */
+  quad(a, b, c, d, color, glow = 0, normals = null) {
+    const first = normals ? [normals[0], normals[1], normals[2]] : null;
+    const second = normals ? [normals[0], normals[2], normals[3]] : null;
+    return this.tri(a, b, c, color, glow, first).tri(a, c, d, color, glow, second);
   }
 
   get triangleCount() { return this.positions.length / 9; }
@@ -109,6 +152,22 @@ const at = (o, x, y, z) => vec3(o[0] + x, o[1] + y, o[2] + z);
  * most segments. `domeRatio` is how much of the radius the raised centre covers
  * — a Constitution's bridge dome is a small cap on a broad plate, which is what
  * separates its silhouette from a Miranda's flatter one.
+ *
+ * Three surfaces of revolution per segment, and each states its OWN normal:
+ * smooth the way round, constant the way up the slope. That is the whole reason
+ * to hand normals to `tri` analytically rather than average them afterwards —
+ * averaging would round off the rim where the upper plate meets the underside,
+ * and that rim is the edge the entire silhouette of a Federation ship hangs on.
+ * Here the two bands simply disagree at the shared circle, and the edge stays
+ * exactly as hard as it was.
+ *
+ * For a surface of revolution the outward normal has a radial part and an axial
+ * part, and they come straight off the profile: a segment running from radius
+ * p0 at height y0 to p1 at y1 has tangent (dp, dy), so the outward normal is
+ * (dy, -dp) with whichever sign points away from the hull. `stretch` then bends
+ * the horizontal part the same way an ellipse bends it, dividing x by the
+ * stretch — an ovoid Galaxy saucer would otherwise be lit as though it were a
+ * circular one.
  */
 export function saucer(mb, {
   origin = vec3(), radius = 1, thickness = 0.18, segments = 24,
@@ -129,21 +188,55 @@ export function saucer(mb, {
   // without anything being guessed.
   const sx = stretch;
 
+  // The three profiles, as (radial, axial) tangents, with the sign already
+  // chosen so each points away from the hull: up and out for the plate and the
+  // dome, down and out for the underside.
+  // Each is [radial, axial], signed to match the winding this primitive has
+  // always had rather than to match the outward direction.
+  //
+  // Those are not the same thing here, and it is worth recording why. Derived
+  // from the profile, the upper plate's outward normal points up and out — and
+  // the face normal `tri` computes from this quad's own winding points DOWN.
+  // The saucer is wound the other way round from the derivation, and has been
+  // since it was written.
+  //
+  // Which of the two is right is a real question and it is NOT this change's to
+  // answer: flipping it would relight the top of every Federation saucer in the
+  // game, which is a visible change to the fleet dressed up as a smoothing pass.
+  // Matching the existing winding means the only thing this does is make the
+  // surface continuous. Recorded for a change that can measure it on its own.
+  const plate = [-half, domeR - radius];
+  const capN = [-domeHeight, -domeR];
+  const under = [-(half + domeHeight * 0.4), radius];
+  // A profile normal, swung round to the angle `a` and squeezed by `stretch`.
+  const swing = (prof, cosA, sinA) =>
+    normalize(vec3((cosA / sx) * prof[0], prof[1], sinA * prof[0]));
+
   for (let i = 0; i < segments; i++) {
     const a0 = (i / segments) * Math.PI * 2;
     const a1 = ((i + 1) / segments) * Math.PI * 2;
-    const c0 = Math.cos(a0) * sx; const s0 = Math.sin(a0);
-    const c1 = Math.cos(a1) * sx; const s1 = Math.sin(a1);
+    const ca0 = Math.cos(a0); const s0 = Math.sin(a0);
+    const ca1 = Math.cos(a1); const s1 = Math.sin(a1);
+    const c0 = ca0 * sx; const c1 = ca1 * sx;
 
     const rimA = at(origin, c0 * radius, 0, s0 * radius);
     const rimB = at(origin, c1 * radius, 0, s1 * radius);
     const domA = at(origin, c0 * domeR, half, s0 * domeR);
     const domB = at(origin, c1 * domeR, half, s1 * domeR);
 
+    const pA = swing(plate, ca0, s0); const pB = swing(plate, ca1, s1);
+    const dA = swing(capN, ca0, s0); const dB = swing(capN, ca1, s1);
+    const uA = swing(under, ca0, s0); const uB = swing(under, ca1, s1);
+    // The apex sits on the axis, where the normal of a cone is genuinely
+    // undefined. Splitting the difference between the two ring vertices keeps
+    // the cone smooth the way round, which is the direction the eye reads.
+    const dTop = normalize(vec3(dA[0] + dB[0], dA[1] + dB[1], dA[2] + dB[2]));
+    const uBot = normalize(vec3(uA[0] + uB[0], uA[1] + uB[1], uA[2] + uB[2]));
+
     // Upper plate, dome cap, and the underside.
-    mb.quad(rimA, rimB, domB, domA, color, glow);
-    mb.tri(domA, domB, top, color, glow);
-    mb.tri(rimB, rimA, bottom, rimColor, glow);
+    mb.quad(rimA, rimB, domB, domA, color, glow, [pA, pB, pB, pA]);
+    mb.tri(domA, domB, top, color, glow, [dA, dB, dTop]);
+    mb.tri(rimB, rimA, bottom, rimColor, glow, [uB, uA, uBot]);
   }
   return mb;
 }
@@ -152,12 +245,24 @@ export function saucer(mb, {
  * A tapered cylinder along +x: engineering hulls, nacelles, pylun spars.
  * `r0` is the aft radius and `r1` the fore radius, so a nacelle tapers forward
  * and a secondary hull tapers aft.
+ *
+ * The WALL is smooth and the CAPS are flat, which is the shape being described:
+ * a nacelle is round around its axis and ends in a disc, and a disc has one
+ * normal. Rounding the caps too would bend the ends of every nacelle in the
+ * fleet outward like a balloon.
+ *
+ * The wall normal is not simply radial once the tube tapers. Parameterising the
+ * surface and taking the cross product of its two derivatives gives
+ * `(r0 - r1, len·cos, len·sin)`: on a cylinder the x term vanishes and it is the
+ * pure radial direction, and on a cone it tilts forward by exactly the slope. A
+ * plain radial normal would light a nose cone as though it were a pipe.
  */
 export function tube(mb, {
   origin = vec3(), length: len = 1, r0 = 0.2, r1 = 0.2, segments = 12,
   color = [0.66, 0.7, 0.76], capFore = true, capAft = true, glow = 0,
 } = {}) {
   const foreC = at(origin, len, 0, 0);
+  const wall = (c, s) => normalize(vec3(r0 - r1, len * c, len * s));
   for (let i = 0; i < segments; i++) {
     const a0 = (i / segments) * Math.PI * 2;
     const a1 = ((i + 1) / segments) * Math.PI * 2;
@@ -169,7 +274,9 @@ export function tube(mb, {
     const forA = at(origin, len, c0 * r1, s0 * r1);
     const forB = at(origin, len, c1 * r1, s1 * r1);
 
-    mb.quad(aftA, aftB, forB, forA, color, glow);
+    const n0 = wall(c0, s0);
+    const n1 = wall(c1, s1);
+    mb.quad(aftA, aftB, forB, forA, color, glow, [n0, n1, n1, n0]);
     if (capFore) mb.tri(forA, forB, foreC, color, glow);
     if (capAft) mb.tri(aftB, aftA, origin, color, glow);
   }
@@ -266,8 +373,19 @@ export function prow(mb, { center = vec3(), size = vec3(1, 0.1, 0.4), ...rest } 
  * third as tall as it is long, so a sphere built round and then squashed by the
  * normaliser is squashed along with everything else on the hull — and a form
  * whose one round part forces the whole ship through a 2.6x squash is a form
- * that is not built right. Flat shading takes the face normal from the vertices
- * it is given, so a non-uniform scale here needs no normal correction.
+ * that is not built right.
+ *
+ * A sphere carries ANALYTIC normals, which is the one place a non-uniform scale
+ * needs care. On a unit sphere the normal is just the offset from the centre.
+ * On the ellipsoid this actually builds it is not: the surface is
+ * x²/kx² + y²/ky² + z²/kz² = r², whose gradient — and so whose normal — is
+ * (x/kx², y/ky², z/kz²). Using the position directly would tilt every highlight
+ * on a squashed dome toward the long axis.
+ *
+ * This is why the old flat-shading note here ("a non-uniform scale needs no
+ * normal correction") was true and is no longer: face normals came out of the
+ * cross product of already-scaled corners and were correct for free. Analytic
+ * ones have to do the division themselves.
  */
 export function sphere(mb, {
   origin = vec3(), radius = 1, segments = 16, rings = 10, scale = null,
@@ -276,6 +394,8 @@ export function sphere(mb, {
   const kx = scale ? scale[0] : 1;
   const ky = scale ? scale[1] : 1;
   const kz = scale ? scale[2] : 1;
+  // The ellipsoid normal at a point, from the gradient above.
+  const nrm = (dx, dy, dz) => normalize(vec3(dx / (kx * kx), dy / (ky * ky), dz / (kz * kz)));
   for (let r = 0; r < rings; r++) {
     const t0 = (r / rings) * Math.PI;
     const t1 = ((r + 1) / rings) * Math.PI;
@@ -296,9 +416,16 @@ export function sphere(mb, {
       const B = at(origin, Math.cos(a1) * rad0 * kx, y0 * ky, Math.sin(a1) * rad0 * kz);
       const C = at(origin, Math.cos(a1) * rad1 * kx, y1 * ky, Math.sin(a1) * rad1 * kz);
       const D = at(origin, Math.cos(a0) * rad1 * kx, y1 * ky, Math.sin(a0) * rad1 * kz);
-      if (r === 0) mb.tri(A, C, D, c, glow);
-      else if (r === rings - 1) mb.tri(A, B, C, c, glow);
-      else mb.quad(A, B, C, D, c, glow);
+      // Normals from the OFFSET, not the world position — `origin` is where the
+      // dome is mounted on the hull and has nothing to do with which way its
+      // surface faces.
+      const nA = nrm(Math.cos(a0) * rad0 * kx, y0 * ky, Math.sin(a0) * rad0 * kz);
+      const nB = nrm(Math.cos(a1) * rad0 * kx, y0 * ky, Math.sin(a1) * rad0 * kz);
+      const nC = nrm(Math.cos(a1) * rad1 * kx, y1 * ky, Math.sin(a1) * rad1 * kz);
+      const nD = nrm(Math.cos(a0) * rad1 * kx, y1 * ky, Math.sin(a0) * rad1 * kz);
+      if (r === 0) mb.tri(A, C, D, c, glow, [nA, nC, nD]);
+      else if (r === rings - 1) mb.tri(A, B, C, c, glow, [nA, nB, nC]);
+      else mb.quad(A, B, C, D, c, glow, [nA, nB, nC, nD]);
     }
   }
   return mb;
