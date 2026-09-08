@@ -11,7 +11,7 @@
 // because a hand-maintained list of forty-odd paths will otherwise drift, and
 // drifted silently the first time a directory was added.
 
-const VERSION = 'sfc-v15';
+const VERSION = 'sfc-v16';
 const PRECACHE = [
   './',
   './index.html',
@@ -102,6 +102,7 @@ const PRECACHE = [
   './src/gfx/forms.klingon.js',
   './src/gfx/forms.hostile.js',
   './src/gfx/effects.js',
+  './src/gfx/glare.js',
   './src/gfx/scene.js',
   './src/gfx/vista.js',
   './src/gfx/room.js',

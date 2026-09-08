@@ -27,6 +27,7 @@ import {
 } from '../src/gfx/blueprint.js';
 import { SHIP_LIST } from '../src/world/ships.data.js';
 import { drawCombatEffects, DRAWN_EFFECTS } from '../src/gfx/effects.js';
+import { glareEmitters, glareSprite, paintGlare, GLARE_BUDGET } from '../src/gfx/glare.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import {
   sceneMeshes, starfield, gridMesh, bodyMesh, warpfield, worldMesh, limbMesh,
@@ -39,7 +40,7 @@ import {
 import {
   orbitFrame, orbitPeriod, rotationPeriod, angularRadius, orbitAxis, ORBIT_ALTITUDE,
 } from '../src/world/orbit.js';
-import { roomMeshes, allRoomMeshes, officerMesh, officerStandsAt } from '../src/gfx/room.js';
+import { roomMeshes, allRoomMeshes, officerMesh, officerStandsAt, PALETTE } from '../src/gfx/room.js';
 import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
 import { makeSurface } from '../src/world/surface.js';
 import { RNG } from '../src/core/rng.js';
@@ -3560,6 +3561,311 @@ describe('the ships and rooms a player actually looks at', () => {
         assert.equal(a.data[i], b.data[i], `${id} rebuilt differently at ${i}`);
       }
     }
+  });
+});
+
+// The trim that turned a box into a compartment. docs/RESEARCH.md §125.
+//
+// Every one of these measures the SHELL, not the furniture, and every one is
+// written against a specific way of getting the change wrong rather than
+// against the change succeeding — the two are not the same test, and §124 shipped
+// two guards that passed against the very defect they were written for because
+// they measured the second thing.
+describe('a compartment is built, not just enclosed', () => {
+  const boxRooms = ROOM_LIST.filter((r) => r.id !== 'surface' && r.shape.kind === 'box');
+
+  /** Faces whose centroid is within `d` of a bulkhead, with their normals. */
+  const nearWall = (id, lo, hi) => {
+    const room = ROOMS[id];
+    const hw = room.shape.width / 2;
+    const hd = room.shape.depth / 2;
+    const m = roomMeshes(id).solid;
+    const f = m.stride / 4;
+    const out = [];
+    for (let v = 0; v < m.vertexCount; v += 3) {
+      const at = (i, k) => m.data[(v + i) * f + k];
+      const cx = (at(0, 0) + at(1, 0) + at(2, 0)) / 3;
+      const cy = (at(0, 1) + at(1, 1) + at(2, 1)) / 3;
+      const cz = (at(0, 2) + at(1, 2) + at(2, 2)) / 3;
+      if (Math.min(hw - Math.abs(cx), hd - Math.abs(cz)) > 0.25) continue;
+      if (cy < lo || cy > hi) continue;
+      out.push({ cx, cy, cz, n: [m.data[v * f + 3], m.data[v * f + 4], m.data[v * f + 5]] });
+    }
+    return out;
+  };
+
+  test('the wall meets the deckhead on a chamfer, not on an edge', () => {
+    // The cove is the cheapest detail in the file and the longest line in
+    // frame. It has to face DOWN and INTO the room: a cove wound the other way
+    // is culled, and a cove built on the wrong side of the bulkhead is outside
+    // the ship, and neither one fails loudly.
+    for (const room of boxRooms) {
+      const h = room.shape.height ?? 2.5;
+      const band = nearWall(room.id, h - 0.1201, h - 1e-6);
+      const cove = band.filter((t) => t.n[1] < -0.2 && t.n[1] > -0.99);
+      assert.ok(cove.length >= 6, `${room.id} has ${cove.length} cove faces at the deckhead`);
+      for (const t of cove) {
+        const inward = t.n[0] * -t.cx + t.n[2] * -t.cz;
+        assert.ok(inward > -1e-6, `${room.id} has a cove facing out of the room`);
+      }
+    }
+  });
+
+  test('and the deck on a skirting you could stub a toe on', () => {
+    for (const room of boxRooms) {
+      const band = nearWall(room.id, 0.1199, 0.1201);
+      const up = band.filter((t) => t.n[1] > 0.9);
+      assert.ok(up.length >= 6, `${room.id} has ${up.length} skirting ledges`);
+    }
+  });
+
+  test('and a doorway has something standing in it', () => {
+    // Orange jambs. The ring room has had them since it was written; the
+    // sixteen box compartments had a rectangular hole in a flat wall.
+    //
+    // Two things this has to get right, both learned by getting them wrong.
+    // `bakeOcclusion` scales every solid colour, so orange is not `r > 0.8` by
+    // the time it reaches the buffer — match the CHROMATICITY, which occlusion
+    // preserves because it multiplies all three channels alike. And a jamb is a
+    // `box`, whose only vertices are its eight corners: filter on a vertex `y`
+    // and every one of them falls outside the band you meant to search.
+    const orange = (r, g, b) => r > 0.15 && g / r < 0.55 && b / r < 0.2;
+    for (const room of boxRooms) {
+      const exits = room.exits ?? [];
+      if (!exits.length) continue;
+      const m = roomMeshes(room.id).solid;
+      const f = m.stride / 4;
+      let jamb = 0;
+      for (let v = 0; v < m.vertexCount; v += 3) {
+        const o = v * f;
+        const at = (i, k) => m.data[(v + i) * f + k];
+        const cy = (at(0, 1) + at(1, 1) + at(2, 1)) / 3;
+        if (cy < 0.2 || cy > 2.0) continue;
+        if (!orange(m.data[o + 6], m.data[o + 7], m.data[o + 8])) continue;
+        const cx = (at(0, 0) + at(1, 0) + at(2, 0)) / 3;
+        const cz = (at(0, 2) + at(1, 2) + at(2, 2)) / 3;
+        if (exits.some((e) => Math.hypot(cx - e.at[0], cz - e.at[1]) < 1.4)) jamb++;
+      }
+      assert.ok(jamb >= 4,
+        `${room.id} has ${exits.length} doors and ${jamb} frame faces at any of them`);
+    }
+  });
+
+  test('and a console panel is let into its housing', () => {
+    // The bezel must be a RETURN — geometry whose pitch differs from the plate
+    // it borders — and the check has to be made AT A STATION.
+    //
+    // The first version of this counted distinct pitches at plate height across
+    // the whole compartment, and it passed with the bezel deleted: other
+    // furniture supplies a second pitch in that band whether or not a console
+    // has an edge. That is the same mistake §124 made twice, and it is only
+    // ever caught by deleting the feature and re-running, so: deleted, re-run,
+    // rewritten to look only within reach of each station.
+    for (const room of ROOM_LIST) {
+      for (const station of room.stations ?? []) {
+        const m = roomMeshes(room.id).solid;
+        const f = m.stride / 4;
+        const pitches = new Set();
+        for (let v = 0; v < m.vertexCount; v += 3) {
+          const o = v * f;
+          const at = (i, k) => m.data[(v + i) * f + k];
+          const cy = (at(0, 1) + at(1, 1) + at(2, 1)) / 3;
+          if (cy < 0.78 || cy > 1.14 || m.data[o + 4] < 0.25) continue;
+          const cx = (at(0, 0) + at(1, 0) + at(2, 0)) / 3;
+          const cz = (at(0, 2) + at(1, 2) + at(2, 2)) / 3;
+          if (Math.hypot(cx - station.at[0], cz - station.at[1]) > 0.9) continue;
+          pitches.add(m.data[o + 4].toFixed(2));
+        }
+        assert.ok(pitches.size > 1,
+          `${room.id}: the console at ${station.at} is one flat pitch — the panel is a slab`);
+      }
+    }
+  });
+
+  test('and a world is one surface, not a mosaic of flat tiles', () => {
+    // The last place a curved surface still read as facets, and the one smooth
+    // normals could not touch: `globe` sampled its terrain at each facet's
+    // CENTROID and gave the one value to all four corners, so the albedo was
+    // flat per quad however well the quad was lit.
+    //
+    // The test for that is not "how many colours are there" — a per-facet
+    // surface has plenty. It is whether two vertices at the SAME POINT agree:
+    // per-facet sampling cannot make them agree and per-vertex sampling cannot
+    // make them disagree. Before this, 86% of a planet's grid points carried
+    // conflicting colours and both poles carried 56 apiece.
+    for (const kind of ['planet', 'desert', 'ice', 'moon', 'gas']) {
+      const m = worldMesh(kind, 0);
+      const f = m.stride / 4;
+      const byPoint = new Map();
+      for (let i = 0; i < m.vertexCount; i++) {
+        const o = i * f;
+        const p = `${m.data[o].toFixed(5)},${m.data[o + 1].toFixed(5)},${m.data[o + 2].toFixed(5)}`;
+        const c = `${m.data[o + 6].toFixed(4)},${m.data[o + 7].toFixed(4)},${m.data[o + 8].toFixed(4)}`;
+        if (!byPoint.has(p)) byPoint.set(p, new Set());
+        byPoint.get(p).add(c);
+      }
+      const split = [...byPoint.values()].filter((s) => s.size > 1).length;
+      assert.equal(split, 0,
+        `${kind}: ${split} of ${byPoint.size} points on the globe carry more than one colour`);
+    }
+  });
+
+  test('and the deckhead is not the same tone as the deck', () => {
+    // §124 gave the room pass a hemisphere ambient while the PALETTE was still
+    // compensating for a downward key in albedo. Both were true at once and the
+    // deck and deckhead collapsed to within 3% of each other — the two largest
+    // surfaces in the game, rendering as one tone.
+    //
+    // Read from source because `firstperson.js` touches `document` at load and
+    // cannot be imported here; this is the same route the ROOM_RIM guard takes.
+    const fp = readFileSync(new URL('../src/ui/firstperson.js', import.meta.url), 'utf8');
+    const triple = (name) => {
+      const m = fp.match(new RegExp(`export const ${name} = \\[([^\\]]+)\\]`));
+      assert.ok(m, `${name} is not exported from firstperson.js`);
+      return m[1].split(',').map((s) => Number(s.trim()));
+    };
+    const sky = triple('ROOM_SKY');
+    const ground = triple('ROOM_GROUND');
+    const key = [0.15, 1.0, 0.1];
+    const kl = Math.hypot(...key);
+    const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+    // gl.js: ambient * mix(ground, sky, n.y * 0.5 + 0.5) + key * keyPower.
+    const render = (albedo, ny) => {
+      const t = ny * 0.5 + 0.5;
+      const k = Math.max((key[1] / kl) * ny, 0) * 0.44;
+      return lum(albedo.map((a, i) => a * (0.62 * (ground[i] + (sky[i] - ground[i]) * t) + k)));
+    };
+    const deck = render(PALETTE.floor, 1);
+    const head = render(PALETTE.ceiling, -1);
+    assert.ok(Math.abs(deck / head - 1) > 0.12,
+      `deck ${deck.toFixed(3)} and deckhead ${head.toFixed(3)} render as one tone`);
+    assert.ok(deck > head,
+      'the deckhead renders brighter than the deck, which is a room lit from its floor');
+  });
+});
+
+// The glow that was never on screen. docs/RESEARCH.md §125.
+describe('a bright thing throws light past its own edge', () => {
+  const beam = (life) => ({ kind: 'beam', life, from: { x: 0, y: 0, z: 0 }, to: { x: 100, y: 0, z: 0 } });
+  const front = (pt) => {
+    // A camera at the origin looking down +z, 90 degrees, so the arithmetic is
+    // checkable by hand: NDC x is x/z, and a point at z <= 0 is behind.
+    const [x, y, z] = pt;
+    if (z <= 1e-6) return null;
+    return { x: x / z, y: y / z, z: 0 };
+  };
+  const view = { x: 0, y: 0, w: 800, h: 600 };
+
+  test('a torpedo in flight is an emitter and a dead engagement is not', () => {
+    assert.deepEqual(glareEmitters(null, DRAWN_EFFECTS), []);
+    assert.deepEqual(glareEmitters({}, DRAWN_EFFECTS), []);
+    const e = glareEmitters({ projectiles: [{ x: 1, y: 2, z: 3 }] }, DRAWN_EFFECTS);
+    assert.equal(e.length, 1);
+    assert.ok(e[0].size > 0 && e[0].alpha > 0);
+  });
+
+  test('and an explosion is sized against its OWN span, not against a guess', () => {
+    // Three callers push explosions at 0.4, 0.8 and 1.6. A renderer that
+    // assumed 1.6 drew a point-defence kill already three-quarters faded —
+    // that bug is recorded in effects.js and this is the guard against it
+    // coming back through a second copy of the number.
+    const young = glareEmitters(
+      { effects: [{ kind: 'explosion', x: 0, y: 0, z: 0, life: 0.4, span: 0.4 }] }, DRAWN_EFFECTS)[0];
+    assert.ok(young.alpha > 0.95, `a just-born blast is already at ${young.alpha}`);
+    const old = glareEmitters(
+      { effects: [{ kind: 'explosion', x: 0, y: 0, z: 0, life: 0.02, span: 0.4 }] }, DRAWN_EFFECTS)[0];
+    assert.ok(old.alpha < 0.1 && old.size > young.size, 'a dying blast should be wide and faint');
+  });
+
+  test('and a kind nothing knows how to draw is not invented here', () => {
+    const made = glareEmitters({ effects: [{ kind: 'transporter', x: 0, y: 0, z: 0, life: 1 }] }, DRAWN_EFFECTS);
+    assert.deepEqual(made, []);
+  });
+
+  test('and a frame is never more than the glare budget', () => {
+    const projectiles = Array.from({ length: 400 }, (_, i) => ({ x: i, y: 0, z: 0 }));
+    assert.ok(glareEmitters({ projectiles }, DRAWN_EFFECTS).length <= GLARE_BUDGET);
+  });
+
+  test('nothing behind the camera is drawn in front of it', () => {
+    // The failure this exists for is not a wrong position, it is a plausible
+    // one: an emitter a metre behind the eye projects through a near-zero
+    // divide to somewhere on screen, at an enormous radius, and reads as a
+    // detonation that never happened.
+    const behind = { x: 0, y: -50, z: 0, size: 30, colour: [1, 1, 1], alpha: 1 };
+    assert.equal(glareSprite(behind, front, view), null);
+  });
+
+  test('and a halo has a size the camera can survive', () => {
+    const near = { x: 0, y: 0.01, z: 0, size: 400, colour: [1, 1, 1], alpha: 1 };
+    const s = glareSprite(near, front, view);
+    if (s) assert.ok(s.r <= view.w * 0.5, `a halo ${s.r.toFixed(0)}px across on an 800px view`);
+  });
+
+  test('and it shrinks with distance instead of staying one size', () => {
+    const at = (d) => glareSprite({ x: 0, y: d, z: 0, size: 30, colour: [1, 1, 1], alpha: 1 }, front, view);
+    const near = at(100);
+    const far = at(400);
+    assert.ok(near && far, 'both should be in front of the camera');
+    assert.ok(near.r > far.r * 2.5, `${near.r.toFixed(1)} vs ${far.r.toFixed(1)} — not perspective`);
+  });
+
+  test('and it is still sized when the camera looks straight down a world axis', () => {
+    // The bug this is written against: taking the radius from an offset along
+    // one fixed world axis gives zero whenever the camera happens to look down
+    // that axis, and every halo in the frame vanishes without an error.
+    for (const axis of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+      // A camera looking along `axis`, 90 degrees, built the same way as
+      // `front` but with the axes rolled.
+      const look = (pt) => {
+        const depth = pt[0] * axis[0] + pt[1] * axis[1] + pt[2] * axis[2];
+        if (depth <= 1e-6) return null;
+        const u = [axis[1], axis[2], axis[0]];
+        const v = [axis[2], axis[0], axis[1]];
+        const du = pt[0] * u[0] + pt[1] * u[1] + pt[2] * u[2];
+        const dv = pt[0] * v[0] + pt[1] * v[1] + pt[2] * v[2];
+        return { x: du / depth, y: dv / depth, z: 0 };
+      };
+      const at = [axis[0] * 200, axis[2] * 200, axis[1] * 200];
+      const s = glareSprite(
+        { x: at[0], y: at[1], z: at[2], size: 30, colour: [1, 1, 1], alpha: 1 }, look, view);
+      assert.ok(s && s.r > 1, `looking down ${axis} the halo came out ${s ? s.r : 'null'}`);
+    }
+  });
+
+  test('and the composite mode it sets is a mode it puts back', () => {
+    // `globalCompositeOperation` is used nowhere else in src/, and NEITHER
+    // drawOverlay wraps itself in save/restore. A mode left set here would not
+    // throw and would not look broken on the frame that set it — it would tint
+    // every label drawn after it, for the life of a canvas that is never
+    // rebuilt. So the balance is asserted rather than trusted.
+    const calls = [];
+    const ctx = {
+      globalCompositeOperation: 'source-over',
+      globalAlpha: 1,
+      save() { calls.push('save'); },
+      restore() { calls.push('restore'); },
+      beginPath() {}, moveTo() {}, lineTo() {}, closePath() {}, clip() { calls.push('clip'); },
+      drawImage() { calls.push('draw'); },
+    };
+    paintGlare(ctx, []);
+    assert.deepEqual(calls, [], 'an empty frame should not touch the context at all');
+
+    paintGlare(ctx, [{ x: 10, y: 10, r: 8, colour: [255, 255, 255], alpha: 0.5 }]);
+    assert.equal(calls.filter((c) => c === 'save').length, 1);
+    assert.equal(calls.filter((c) => c === 'restore').length, 1);
+    assert.equal(calls[0], 'save', 'the mode was changed before it was saved');
+    assert.equal(calls[calls.length - 1], 'restore', 'the mode was not put back');
+
+    calls.length = 0;
+    paintGlare(ctx, [{ x: 1, y: 1, r: 4, colour: [1, 2, 3], alpha: 1 }], [[0, 0], [9, 0], [9, 9]]);
+    assert.ok(calls.includes('clip'), 'a clip path was handed over and ignored');
+  });
+
+  test('and a beam glows at its ends rather than along its length', () => {
+    const e = glareEmitters({ effects: [beam(0.3)] }, DRAWN_EFFECTS);
+    assert.equal(e.length, 2, 'a beam should light its muzzle and where it lands');
+    assert.ok(e.some((g) => g.x === 0) && e.some((g) => g.x === 100));
   });
 });
 

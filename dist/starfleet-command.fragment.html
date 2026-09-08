@@ -1555,16 +1555,27 @@ class MeshBuilder {
    * centre, and a tube knows its own is radial. So there is no smoothing group
    * to define, no averaging pass to run and no seam to reason about — which
    * were the three costs `mesh.js` cited when it ruled smooth shading out.
+   *
+   * `colors`, when given, is three colours — one per corner — instead of the
+   * single `color`. It is the same mechanism as `normals` and it costs the same
+   * nothing: the colour channel was always per vertex in the buffer and the
+   * rasteriser was always interpolating it, so writing three different values
+   * into three vertices that already exist adds no vertex and no triangle. What
+   * it removes is the last place a curved surface still reads as facets — a
+   * globe that samples its terrain once per facet centroid and hands one flat
+   * colour to the whole quad, which no amount of smooth shading can fix because
+   * the blockiness is in the albedo rather than in the light.
    */
-  tri(a, b, c, color, glow = 0, normals = null) {
+  tri(a, b, c, color, glow = 0, normals = null, colors = null) {
     const face = normals ? null : normalize(cross(sub(b, a), sub(c, a)));
     const corners = [a, b, c];
     for (let i = 0; i < 3; i++) {
       const v = corners[i];
       const n = normals ? normals[i] : face;
+      const col = colors ? colors[i] : color;
       this.positions.push(v[0], v[1], v[2]);
       this.normals.push(n[0], n[1], n[2]);
-      this.colors.push(color[0], color[1], color[2]);
+      this.colors.push(col[0], col[1], col[2]);
       this.glows.push(glow);
     }
     return this;
@@ -1574,12 +1585,16 @@ class MeshBuilder {
    * A quad, as two triangles.
    *
    * `normals` is four vectors in the same corner order as the positions, and is
-   * split across the two triangles the same way the corners are.
+   * split across the two triangles the same way the corners are. `colors` is
+   * four colours and is split identically.
    */
-  quad(a, b, c, d, color, glow = 0, normals = null) {
+  quad(a, b, c, d, color, glow = 0, normals = null, colors = null) {
     const first = normals ? [normals[0], normals[1], normals[2]] : null;
     const second = normals ? [normals[0], normals[2], normals[3]] : null;
-    return this.tri(a, b, c, color, glow, first).tri(a, c, d, color, glow, second);
+    const cFirst = colors ? [colors[0], colors[1], colors[2]] : null;
+    const cSecond = colors ? [colors[0], colors[2], colors[3]] : null;
+    return this.tri(a, b, c, color, glow, first, cFirst)
+      .tri(a, c, d, color, glow, second, cSecond);
   }
 
   get triangleCount() { return this.positions.length / 9; }
@@ -1679,23 +1694,38 @@ function saucer(mb, {
   // without anything being guessed.
   const sx = stretch;
 
-  // The three profiles, as (radial, axial) tangents, with the sign already
-  // chosen so each points away from the hull: up and out for the plate and the
-  // dome, down and out for the underside.
-  // Each is [radial, axial], signed to match the winding this primitive has
-  // always had rather than to match the outward direction.
+  // The three profiles, as (radial, axial) tangents, each [radial, axial] and
+  // signed to match the winding this primitive has always had.
   //
-  // Those are not the same thing here, and it is worth recording why. Derived
-  // from the profile, the upper plate's outward normal points up and out — and
-  // the face normal `tri` computes from this quad's own winding points DOWN.
-  // The saucer is wound the other way round from the derivation, and has been
-  // since it was written.
+  // THIS IS CORRECT. DO NOT "FIX" IT.
   //
-  // Which of the two is right is a real question and it is NOT this change's to
-  // answer: flipping it would relight the top of every Federation saucer in the
-  // game, which is a visible change to the fleet dressed up as a smoothing pass.
-  // Matching the existing winding means the only thing this does is make the
-  // surface continuous. Recorded for a change that can measure it on its own.
+  // §124 noticed that deriving the normal from the profile gives up-and-outward
+  // for the upper plate while the winding gives DOWN, matched the winding, and
+  // left open whether the top of every Federation saucer was therefore being lit
+  // as though it faced the deck. §125 settled it: it is not, and the derivation
+  // is the thing that is wrong here, not the winding.
+  //
+  // The evidence, because two cheaper attempts at this produced confident wrong
+  // answers and the next person deserves to skip them:
+  //
+  //   - Winding convention, on shapes where "outward" is not a matter of
+  //     opinion: a sphere about the origin is 528/528 outward, a tube 60/60. So
+  //     counter-clockwise IS outward, everywhere else in this file.
+  //   - Screen-space winding through the real projection agrees with the stored
+  //     normal on 100% of faces, on a Constitution and on a cube alike. There is
+  //     no handedness flip; culling follows the normals exactly.
+  //   - Ray casting a hull from above, keeping only faces that survive culling,
+  //     finds ZERO see-through columns on every hull in the fleet, and a render
+  //     map of a bare saucer with nothing able to cover it is a solid disc.
+  //     Mean shade from directly overhead is 0.757 against a 0.833 flat-up
+  //     ideal, and that 9% is the plate's real cone slope.
+  //
+  // What misled the earlier attempts is that a saucer is a THIN double-skinned
+  // shell: its two skins are about 0.02 apart, so "which skin is highest in this
+  // column" is decided by triangulation noise, not by geometry. Both the
+  // area-split and the per-column tests were measuring that coin flip. Controls
+  // on thick hulls (a cube, a wedge) came out clean and made the noise look like
+  // a signal along the saucer/non-saucer line.
   const plate = [-half, domeR - radius];
   const capN = [-domeHeight, -domeR];
   const under = [-(half + domeHeight * 0.4), radius];
@@ -3145,13 +3175,29 @@ __define("src/gfx/room.js", function (__exports, __require) {
 // structural rather than incidental: the console faces, the transporter pads,
 // the warp core and the strip lighting are all in the second one.
 //
-// THE KEY LIGHT POINTS DOWN.
+// THE KEY LIGHT POINTS DOWN, AND THE AMBIENT NOW KNOWS THAT.
 //
-// `gl.js` fixes it at (0.55, 0.72, 0.42), so floors render bright and ceilings
-// render dark, which is upside down for a room lit from its ceiling. That is
-// compensated for in the PALETTE — dark floors, pale ceilings — rather than in
-// the shader, because the shader is shared with the tactical view where the
-// current arrangement is correct.
+// This file used to compensate for a downward key in the PALETTE — dark floors,
+// pale ceilings — because the ambient was a flat scalar and albedo was the only
+// channel that could carry "the light comes from above".
+//
+// It is not the only channel any more. §124 gave the room pass a hemisphere
+// ambient (`ROOM_SKY`/`ROOM_GROUND` in `firstperson.js`), which says the same
+// thing physically: an up-facing surface collects 1.22 of the ambient and a
+// down-facing one 0.78. Both were then true at once, and the compensation
+// stopped being a compensation and became a double count — measured, the
+// deckhead went from reading 39% BRIGHTER than the deck to 3% darker, which is
+// the exact relationship the palette existed to produce, inverted.
+//
+// So the palette is unwound rather than re-tuned. The albedos below are close to
+// what the painted flats actually were, the hemisphere term supplies the
+// direction, and the deckhead now renders dimmer than the deck — which is what a
+// ceiling between light fittings really looks like. The brightness in frame
+// comes from the strip lighting, where it always came from on the set: those are
+// in the glow mesh and ignore the light entirely.
+//
+// The three largest surfaces in the game separate by 0.195 in luminance where
+// they used to separate by 0.128. That spread IS the depth cue.
 //
 // Coordinates match walk.js: x to starboard, z forward, y up, origin at the
 // centre of the room's floor.
@@ -3164,10 +3210,11 @@ const { ROOMS } = __require("src/world/interiors.data.js");
  * The 1966 set palette.
  *
  * Sets built on a soundstage out of painted flats and coloured gel: mid greys,
- * warm off-whites, and saturated accents that only appear on the consoles. The
- * floor is darker than the ceiling to answer the downward key light — a floor
- * at the ceiling's value renders as a lightbox and the room loses its ceiling
- * entirely.
+ * warm off-whites, and saturated accents that only appear on the consoles.
+ *
+ * Deck and deckhead are near neighbours here, as they were in paint. They no
+ * longer carry the lighting direction — see the note at the head of this file
+ * for why they used to and why they stopped.
  */
 const PALETTE = {
   // docs/RESEARCH.md §8. The first build assumed a 1960s set was dark. It was
@@ -3176,11 +3223,11 @@ const PALETTE = {
   // both levels, and international orange on the rail, the turbolift doors and
   // the helm housing. The orange is the colour of a traffic cone, and it is the
   // single strongest thing in the room.
-  floor: [0.34, 0.33, 0.32],
-  floorTrim: [0.42, 0.40, 0.38],
+  floor: [0.420, 0.408, 0.395],
+  floorTrim: [0.519, 0.494, 0.469],
   wall: [0.80, 0.79, 0.77],
   wallLower: [0.66, 0.65, 0.63],
-  ceiling: [0.86, 0.85, 0.83],
+  ceiling: [0.720, 0.712, 0.695],
   orange: [0.92, 0.36, 0.05],        // international orange: rail, lift, helm
   console: [0.52, 0.52, 0.54],
   consoleTop: [0.40, 0.40, 0.43],
@@ -3213,6 +3260,20 @@ const PANEL_COLOURS = [
 ];
 
 const WALL_HEIGHT = (room) => room.shape.height ?? 2.5;
+
+// Shell trim, in metres. All of it is proud of, or cut into, a surface that was
+// previously flat from one side of the compartment to the other.
+//
+// These are small on purpose. Trim reads by catching the light at a different
+// angle from the surface it sits on, not by being large — and every one of them
+// multiplies by the panel count, so a centimetre here is a hundred triangles in
+// the hangar. Measured at eye height (1.62) rather than chosen.
+const COVE = 0.12;      // chamfer at the wall/deckhead join
+const SKIRT_H = 0.12;   // skirting height
+const SKIRT_D = 0.035;  // and how far it stands off the bulkhead
+const DADO_T = 0.05;    // dado rail thickness, on the existing seam at y = 0.9
+const DADO_D = 0.03;
+const LAMP_DROP = 0.08; // how far a ceiling light housing hangs below `h`
 
 /** A quad from four points, wound so its face points where `flip` says. */
 function face(mb, a, b, c, d, colour, flip = false) {
@@ -3427,6 +3488,34 @@ function ringShell(solid, glow, room) {
     const isViewer = room.viewscreen
       && Math.hypot(mx - room.viewscreen.at[0], mz - room.viewscreen.at[1]) < 1.6;
 
+    // Straight into the room from this bay's face.
+    //
+    // A bay is a CHORD, not an arc, so "inward" is the chord's perpendicular
+    // and not the radial direction — at the ends of a bay those differ by half
+    // the bay angle, which is enough to leave trim hanging off the wall. Taken
+    // from the chord and then pointed at the axis, so it cannot come out
+    // backwards on any bay.
+    const cdx = p1[0] - p0[0];
+    const cdz = p1[2] - p0[2];
+    const cl = Math.hypot(cdx, cdz) || 1;
+    const inx = (-cdz / cl) * ((-cdz / cl) * mx + (cdx / cl) * mz > 0 ? -1 : 1);
+    const inz = (cdx / cl) * ((-cdz / cl) * mx + (cdx / cl) * mz > 0 ? -1 : 1);
+    const into = (t, y, d) => {
+      const v = at(t, y);
+      return vec3(v[0] + inx * d, y, v[2] + inz * d);
+    };
+
+    // Coving, on every bay including the turbolift and the main viewer. Same
+    // reason as the box compartments: the deckhead join is the longest line in
+    // frame, and on the bridge it is in frame permanently.
+    face(solid, at(0, h - COVE), at(1, h - COVE), into(1, h, COVE), into(0, h, COVE),
+      PALETTE.wall, true);
+    // Skirting, likewise unbroken — the deck ring runs behind the doorway.
+    face(solid, into(0, 0, SKIRT_D), into(1, 0, SKIRT_D), into(1, SKIRT_H, SKIRT_D),
+      into(0, SKIRT_H, SKIRT_D), PALETTE.floorTrim, true);
+    face(solid, at(0, SKIRT_H), into(0, SKIRT_H, SKIRT_D), into(1, SKIRT_H, SKIRT_D),
+      at(1, SKIRT_H), PALETTE.floorTrim, true);
+
     if (door) {
       // A doorway in international orange, which is what the turbolift doors
       // were painted, with a lintel above so the gap reads as a door.
@@ -3569,10 +3658,24 @@ function boxShell(solid, glow, room) {
   for (const wall of walls) {
     const span = wall.to - wall.from;
     const panels = Math.max(3, Math.round(span / 0.9));
+
+    // How far INTO the room a given distance is, from this wall.
+    //
+    // The two axes disagree on which sign that is, because `flip` was assigned
+    // per wall to fix the winding rather than to describe a direction. The ribs
+    // already encode the answer inline (`room.js` below); everything added
+    // since goes through this instead, because getting it backwards puts trim
+    // OUTSIDE the room where it is invisible and reads as no bug at all.
+    const inward = (d) => (wall.axis === 'z'
+      ? wall.at + (wall.flip ? -d : d)
+      : wall.at + (wall.flip ? d : -d));
+
     for (let i = 0; i < panels; i++) {
       const u0 = wall.from + (span * i) / panels;
       const u1 = wall.from + (span * (i + 1)) / panels;
       const p = (u, y) => (wall.axis === 'z' ? vec3(u, y, wall.at) : vec3(wall.at, y, u));
+      // The same point, but `d` metres in from the wall face.
+      const q = (u, y, d) => (wall.axis === 'z' ? vec3(u, y, inward(d)) : vec3(inward(d), y, u));
 
       const mu = (u0 + u1) / 2;
       const mid = wall.axis === 'z' ? [mu, wall.at] : [wall.at, mu];
@@ -3580,14 +3683,74 @@ function boxShell(solid, glow, room) {
         (e) => Math.hypot(mid[0] - e.at[0], mid[1] - e.at[1]) < (e.width ?? 1.2) * 0.6,
       );
 
+      // A horizontal quad facing UP, from the wall face out to `d`.
+      //
+      // The winding for this is not the wall's winding and cannot be reasoned
+      // about per wall without getting it wrong twice: `face`'s flip already
+      // encodes which way this bulkhead turns, and threading the same flip
+      // through THIS corner order is what makes the ledge face the deckhead on
+      // all four walls. Checked against both axes and both flips.
+      const ledge = (mb, y, d, colour) =>
+        face(mb, p(u0, y), q(u0, y, d), q(u1, y, d), p(u1, y), colour, wall.flip);
+
+      // Coving, on every panel INCLUDING the doorways.
+      //
+      // The wall/ceiling join is the longest single line in a compartment and
+      // the one most often in frame — it is what you read a corridor's length
+      // along. Flat, it is the hardest edge in the room. A chamfer softens it
+      // for one quad per panel, and it is the cheapest detail in this file by a
+      // wide margin.
+      //
+      // It runs unbroken past the doorways deliberately: a cove that stopped at
+      // a door would draw the eye to the door instead of round the room, which
+      // is the opposite of what trim is for. It also needs no clearance rule of
+      // its own — the face points down and inward, so it can meet the deckhead
+      // at `h` exactly without ever presenting an up-facing triangle there.
+      face(solid, p(u0, h - COVE), p(u1, h - COVE), q(u1, h, COVE), q(u0, h, COVE),
+        PALETTE.wall, wall.flip);
+
       if (door) {
         face(solid, p(u0, 2.1), p(u1, 2.1), p(u1, h), p(u0, h), PALETTE.wall, wall.flip);
         face(glow, p(u0, 2.05), p(u1, 2.05), p(u1, 2.1), p(u0, 2.1), PALETTE.strip, wall.flip);
+
+        // Jambs and a threshold. The ring room has had these since it was
+        // written (below); the box rooms never did, so every door on sixteen of
+        // the seventeen compartments was a rectangular hole in a flat wall.
+        // Orange, because on the set the turbolift surround was the strongest
+        // colour in the room, and it lands at exactly the height you walk at.
+        for (const u of [u0, u1]) {
+          box(solid, {
+            center: wall.axis === 'z' ? vec3(u, 1.05, inward(0.02)) : vec3(inward(0.02), 1.05, u),
+            size: wall.axis === 'z' ? vec3(0.10, 2.1, 0.05) : vec3(0.05, 2.1, 0.10),
+            color: PALETTE.door,
+          });
+        }
+        ledge(solid, 0.005, 0.14, PALETTE.door);
         continue;
       }
 
       face(solid, p(u0, 0), p(u1, 0), p(u1, 0.9), p(u0, 0.9), PALETTE.wallLower, wall.flip);
       face(solid, p(u0, 0.9), p(u1, 0.9), p(u1, h), p(u0, h), PALETTE.wall, wall.flip);
+
+      // Skirting, and a dado rail on the seam that was already there.
+      //
+      // The wall/deck join had the same problem as the wall/deckhead one, plus
+      // a second: `bakeOcclusion` darkens the deck for 0.85 m out from every
+      // bulkhead, and with nothing at the join that shadow has nothing to be
+      // the shadow OF — it reads as a gradient painted on the floor rather than
+      // as a place where two surfaces meet.
+      //
+      // The dado is free in a different sense: the wall already changes colour
+      // at 0.9 (`wallLower` below, `wall` above) and always has. A rail on that
+      // line costs two quads and turns an unexplained colour break into the
+      // moulding it was standing in for.
+      face(solid, q(u0, 0, SKIRT_D), q(u1, 0, SKIRT_D), q(u1, SKIRT_H, SKIRT_D),
+        q(u0, SKIRT_H, SKIRT_D), PALETTE.floorTrim, wall.flip);
+      ledge(solid, SKIRT_H, SKIRT_D, PALETTE.floorTrim);
+
+      face(solid, q(u0, 0.9, DADO_D), q(u1, 0.9, DADO_D), q(u1, 0.9 + DADO_T, DADO_D),
+        q(u0, 0.9 + DADO_T, DADO_D), PALETTE.trim, wall.flip);
+      ledge(solid, 0.9 + DADO_T, DADO_D, PALETTE.trim);
 
       // A structural rib on the join between panels.
       //
@@ -3631,6 +3794,27 @@ function boxShell(solid, glow, room) {
       vec3(0.35, h - 0.03, z1), vec3(-0.35, h - 0.03, z1),
       PALETTE.strip,
     );
+
+    // A housing round the lit panel.
+    //
+    // Without one a ceiling light is a bright rectangle lying on the deckhead
+    // with no thickness — a decal, not a fitting. Four side quads facing out
+    // from the lamp give it a body, and that is enough: the eye reads the
+    // shadowed return between the housing and the panel, not the box.
+    //
+    // Built as an OPEN trough — four sides, no lid. A closed box here would put
+    // a cap face on the deckhead plane pointing straight up, which is what an
+    // inverted ceiling looks like, and `tests/gfx.test.js` refuses any up-facing
+    // triangle within 0.06 of `h`. The glow panel stays at exactly `h - 0.03`
+    // because the corridor tests count ceiling spans at that plane.
+    const y0 = h - LAMP_DROP;
+    const [x0, x1] = [-0.42, 0.42];
+    const [w0, w1] = [z0 - 0.07, z1 + 0.07];
+    const side = (a, b, c, d) => solid.quad(a, b, c, d, PALETTE.wallLower);
+    side(vec3(x0, y0, w0), vec3(x0, h, w0), vec3(x1, h, w0), vec3(x1, y0, w0));
+    side(vec3(x1, y0, w1), vec3(x1, h, w1), vec3(x0, h, w1), vec3(x0, y0, w1));
+    side(vec3(x0, y0, w1), vec3(x0, h, w1), vec3(x0, h, w0), vec3(x0, y0, w0));
+    side(vec3(x1, y0, w0), vec3(x1, h, w0), vec3(x1, h, w1), vec3(x1, y0, w1));
   }
 }
 
@@ -3676,6 +3860,34 @@ function console3d(solid, glow, station, index) {
   const far = bodyTop + 0.30;
   solid.quad(at(-hw, near, -hd), at(-hw, far, hd), at(hw, far, hd), at(hw, near, -hd),
     PALETTE.consoleTop);
+
+  // A rebate round the working surface.
+  //
+  // The caps sit on a plate that ran edge to edge with nothing at its border, so
+  // a console read as a slab with stickers on it. On the set every panel was let
+  // INTO its housing, and the return round the edge is most of what says so —
+  // it is the one piece of console detail permanently under the player's
+  // crosshair, because the crosshair is what you aim at a station to use it.
+  //
+  // Built as a bevel rather than a raised frame: four quads from the outer edge
+  // at plate level, up and inward to a lip. That cannot z-fight with the plate
+  // it borders (they share an edge, not an area), and it lands entirely inside
+  // the 0.11 m the cap field already leaves clear on every side, so no control
+  // moves and no cap is covered.
+  const yAt = (f) => near + ((far - near) * (f + hd)) / (2 * hd);
+  const surf = (r, f, lift = 0) => at(r, yAt(f) + lift, f);
+  const BW = 0.075;
+  const LIP = 0.022;
+  const o = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
+  const inr = [[-hw + BW, -hd + BW], [hw - BW, -hd + BW], [hw - BW, hd - BW], [-hw + BW, hd - BW]];
+  for (let k = 0; k < 4; k++) {
+    const j = (k + 3) % 4;
+    solid.quad(
+      surf(o[k][0], o[k][1]), surf(o[j][0], o[j][1]),
+      surf(inr[j][0], inr[j][1], LIP), surf(inr[k][0], inr[k][1], LIP),
+      PALETTE.trim,
+    );
+  }
 
   // And the buttons on it — the jelly beans, which is the glow.
   //
@@ -12729,12 +12941,63 @@ function globe(kind, seed, SEG, RINGS, coarse) {
     // band, flat, is what it was before and what it stays.
     const flat = kind === 'star' ? SURFACE.star[3] : null;
 
+    // The terrain, sampled once per GRID POINT rather than once per facet.
+    //
+    // Smooth normals fixed how a world takes the light; they could not fix the
+    // blockiness in the world itself, because that was never a shading problem.
+    // The field was sampled at each facet's centroid and the one value handed to
+    // all four of its corners, so the surface was flat-coloured per quad by
+    // construction and the coastlines came out as a staircase of 6.4-degree
+    // steps no matter how the light fell on them.
+    //
+    // Sampling per vertex costs nothing extra, which is the only reason it can
+    // be done at this resolution: a 56x28 sphere has 1,568 facets but only
+    // 1,514 distinct grid points, because every interior point is shared by
+    // four facets and both poles are one point rather than SEG of them. So the
+    // field is evaluated slightly FEWER times than before, not more.
+    //
+    // Measured rather than assumed, and the honest answer is that it is a wash
+    // — between 1.01x and 0.91x of the old build time depending on kind, the
+    // fewer evaluations paying for the row arrays and no more. The point of the
+    // change is the continuity, not the speed; it is recorded here only so the
+    // next person does not go looking for a win that is not there. These are
+    // memoised per kind and seed, so it is once per world either way.
+    //
+    // The seam at i = SEG-1 -> 0 closes for free, because column SEG and column
+    // 0 are the same longitude and now resolve to the same stored sample rather
+    // than to two independent centroid evaluations either side of the wrap.
+    // The poles are single points shared by every cap triangle, so they get one
+    // sample each rather than SEG of them at the same place. Rings 0 and RINGS
+    // ARE those points — sin(0) and sin(PI) are both zero, so a full row there
+    // would be SEG evaluations of the same coordinate.
+    const poleN = flat ?? surfaceColor(kind, 0, 1, 0, s, coarse);
+    const poleS = flat ?? surfaceColor(kind, 0, -1, 0, s, coarse);
+    const rows = [];
+    for (let ring = 0; ring <= RINGS; ring++) {
+      if (ring === 0 || ring === RINGS) {
+        rows.push(new Array(SEG).fill(ring === 0 ? poleN : poleS));
+        continue;
+      }
+      const a = (ring / RINGS) * Math.PI;
+      const r = Math.sin(a); const y = Math.cos(a);
+      const row = [];
+      for (let i = 0; i < SEG; i++) {
+        if (flat) { row.push(flat); continue; }
+        const t = (i / SEG) * Math.PI * 2;
+        row.push(surfaceColor(kind, Math.cos(t) * r, y, Math.sin(t) * r, s, coarse));
+      }
+      rows.push(row);
+    }
+
     for (let ring = 0; ring < RINGS; ring++) {
       const a0 = (ring / RINGS) * Math.PI;
       const a1 = ((ring + 1) / RINGS) * Math.PI;
       const r0 = Math.sin(a0); const y0 = Math.cos(a0);
       const r1 = Math.sin(a1); const y1 = Math.cos(a1);
       for (let i = 0; i < SEG; i++) {
+        const j = (i + 1) % SEG;
+        const cInner0 = rows[ring][i]; const cInner1 = rows[ring][j];
+        const cOuter1 = rows[ring + 1][j]; const cOuter0 = rows[ring + 1][i];
         const t0 = (i / SEG) * Math.PI * 2;
         const t1 = ((i + 1) / SEG) * Math.PI * 2;
         const c0 = Math.cos(t0); const s0 = Math.sin(t0);
@@ -12743,12 +13006,6 @@ function globe(kind, seed, SEG, RINGS, coarse) {
         const inner1 = vec3(c1 * r0, y0, s1 * r0);
         const outer1 = vec3(c1 * r1, y1, s1 * r1);
         const outer0 = vec3(c0 * r1, y1, s0 * r1);
-        // Centroid of the patch, normalised, is where the field is sampled.
-        const mx = (inner0[0] + outer1[0]) * 0.5;
-        const my = (inner0[1] + outer1[1]) * 0.5;
-        const mz = (inner0[2] + outer1[2]) * 0.5;
-        const len = Math.hypot(mx, my, mz) || 1;
-        const color = flat ?? surfaceColor(kind, mx / len, my / len, mz / len, s, coarse);
         // Wound so the face points AWAY from the centre — round the ring first
         // and outward second. Culling is on: get this backwards and the planet
         // is not dark, it is absent.
@@ -12760,11 +13017,14 @@ function globe(kind, seed, SEG, RINGS, coarse) {
         // world in standard orbit is 3,024 facets and read as a faceted disc,
         // and the terminator across it was a staircase.
         if (ring === 0) {
-          mb.tri(vec3(0, 1, 0), outer1, outer0, color, 0, [vec3(0, 1, 0), outer1, outer0]);
+          mb.tri(vec3(0, 1, 0), outer1, outer0, cOuter0, 0,
+            [vec3(0, 1, 0), outer1, outer0], [poleN, cOuter1, cOuter0]);
         } else if (ring === RINGS - 1) {
-          mb.tri(vec3(0, -1, 0), inner0, inner1, color, 0, [vec3(0, -1, 0), inner0, inner1]);
+          mb.tri(vec3(0, -1, 0), inner0, inner1, cInner0, 0,
+            [vec3(0, -1, 0), inner0, inner1], [poleS, cInner0, cInner1]);
         } else {
-          mb.quad(inner0, inner1, outer1, outer0, color, 0, [inner0, inner1, outer1, outer0]);
+          mb.quad(inner0, inner1, outer1, outer0, cInner0, 0,
+            [inner0, inner1, outer1, outer0], [cInner0, cInner1, cOuter1, cOuter0]);
         }
       }
     }
@@ -20055,6 +20315,244 @@ __exports.drawCombatEffects = drawCombatEffects;
 
 });
 
+__define("src/gfx/glare.js", function (__exports, __require) {
+/**
+ * Glare: the halo around a bright thing, drawn on the 2D overlay.
+ *
+ * WHY THIS IS NOT IN THE SHADER.
+ *
+ * The game is heavily emissive — 39% of every vertex in it sits at glow = 1 —
+ * and none of it glowed. The usual answer is a bloom pass, and this renderer
+ * cannot have one: WebGL 1 with no float target, no framebuffer object worth
+ * the name, and `antialias` on, which makes the default framebuffer
+ * multisampled while a WebGL 1 FBO cannot be. `gl.js` already says so at the
+ * point where it gave up, and says where the glow belongs instead — "in the
+ * overlay glare pass, where it can be a halo AROUND the aperture rather than a
+ * brighter aperture". This is that pass.
+ *
+ * Driving emissive surfaces above white does not work and is worth stating
+ * once: the ramp clips at 1.0, so a brighter aperture is the same aperture with
+ * its highlights flattened. Glow has to be drawn OUTSIDE the bright thing, over
+ * the top of the scene, which is exactly what a 2D canvas layered over the GL
+ * canvas is for.
+ *
+ * WHAT IS PURE HERE AND WHY IT MATTERS.
+ *
+ * Neither view module can be imported under Node — both touch `document` when
+ * they load — so anything written inside them is testable only as source text.
+ * The arithmetic in a glare pass is the part that can be wrong in ways nobody
+ * sees (an emitter behind the camera projected to a plausible-looking point, a
+ * radius that grows without bound as something approaches the near plane), so
+ * it lives here as plain functions over plain numbers and is tested as such.
+ * Only `paintGlare` touches a canvas.
+ */
+
+const { clamp } = __require("src/core/num.js");
+
+/** Never more sprites in one frame than this. A frame is not a light show. */
+const GLARE_BUDGET = 24;
+
+/** Widest a single halo may be drawn, as a fraction of the viewport's width. */
+const MAX_SPAN = 0.42;
+
+/**
+ * Everything in an engagement bright enough to throw a halo, in world space.
+ *
+ * Returns `{x, y, z, size, colour, alpha}` where `size` is a world-space radius
+ * and `alpha` is how far through its life the emitter is. Sorted brightest
+ * first so that trimming to the budget drops the dimmest rather than an
+ * arbitrary tail.
+ *
+ * The effect kinds come from `DRAWN_EFFECTS` in `effects.js` rather than being
+ * restated here — a second copy of that list is the thing `wiring.test.js`
+ * exists to refuse, and it is right to: the explosion span already drifted once
+ * between the simulation and the renderer holding separate copies of it.
+ */
+function glareEmitters(engagement, kinds) {
+  const out = [];
+  if (!engagement) return out;
+
+  // A torpedo in flight. The best glare candidate in the game: a point source,
+  // already emissive, and the thing the eye is following during a fight.
+  for (const p of engagement.projectiles ?? []) {
+    out.push({ x: p.x, y: p.y, z: p.z ?? 0, size: 26, colour: TORPEDO, alpha: 0.95 });
+  }
+
+  for (const e of engagement.effects ?? []) {
+    if (!kinds.includes(e.kind)) continue;
+    if (e.kind === 'explosion') {
+      // Same age law the GL pass uses, against the effect's OWN span. Reading
+      // the span off the effect rather than assuming one is not pedantry here:
+      // three callers push explosions at 0.4, 0.8 and 1.6, and a renderer that
+      // assumed 1.6 drew a point-defence kill already three-quarters faded.
+      const age = clamp(1 - e.life / (e.span || 1.6), 0, 1);
+      out.push({
+        x: e.x, y: e.y, z: e.z ?? 0,
+        size: (30 + age * 130) * 1.6, colour: BLAST, alpha: 1 - age,
+      });
+    } else if (e.kind === 'impact') {
+      const age = clamp(1 - e.life / (e.span || 0.4), 0, 1);
+      out.push({
+        x: e.x, y: e.y, z: e.z ?? 0,
+        size: 70 * (1 - age * 0.4), colour: e.penetrated ? BLAST : SHIELD, alpha: 1 - age,
+      });
+    } else if (e.kind === 'beam' || e.kind === 'cannon') {
+      // The muzzle and the landing point, not the length of the beam. A halo
+      // stretched along a line is a second beam; two halos at the ends are what
+      // a beam actually does to a camera.
+      const a = clamp(e.life * 2.4, 0, 0.9);
+      for (const at of [e.from, e.to]) {
+        if (at) out.push({ x: at.x, y: at.y, z: at.z ?? 0, size: 34, colour: BEAM, alpha: a });
+      }
+    }
+  }
+
+  out.sort((p, q) => q.alpha * q.size - p.alpha * p.size);
+  return out.length > GLARE_BUDGET ? out.slice(0, GLARE_BUDGET) : out;
+}
+
+/**
+ * One world emitter as a screen-space sprite, or null if it should not be drawn.
+ *
+ * `project` is the view's own world-to-NDC, which returns null behind the
+ * camera; `view` is the pixel rectangle the scene was rendered into, which is
+ * NOT the whole canvas in first person — the exterior is drawn through the
+ * viewscreen aperture and an emitter out in space belongs inside that hole.
+ *
+ * Two things this refuses to do, both of which look fine until they do not:
+ * it drops anything at or behind the near plane rather than letting a
+ * near-zero w produce an enormous halo in the middle of the screen, and it
+ * caps the radius, because an explosion the camera is sitting inside otherwise
+ * asks for a sprite thousands of pixels across and the cost of a radial
+ * gradient is its area.
+ */
+function glareSprite(emitter, project, view) {
+  const p = project([emitter.x, emitter.z ?? 0, emitter.y]);
+  if (!p || p.z > 1) return null;
+  const x = view.x + (p.x * 0.5 + 0.5) * view.w;
+  const y = view.y + (1 - (p.y * 0.5 + 0.5)) * view.h;
+
+  // Perspective size, without this module knowing the field of view.
+  //
+  // The radius is read off how far the projection moves a point one world
+  // radius away from the emitter — which works for any FOV, but only if the
+  // offset has some component ACROSS the view. Offsetting along a single fixed
+  // world axis does not: point the camera down that axis and the offset lies
+  // along the line of sight, the projected displacement collapses to nothing,
+  // and every halo in the frame silently disappears. On the tactical plot the
+  // camera orbits freely, so that is a view angle away, not a corner case.
+  //
+  // So all three axes are tried and the largest displacement wins. For any
+  // orientation at least one of three orthogonal directions is substantially
+  // across the view: the worst case is the camera on the (1,1,1) diagonal,
+  // where each axis still returns 0.816 of the true radius.
+  const R = emitter.size;
+  let best = 0;
+  for (const d of [[R, 0, 0], [0, R, 0], [0, 0, R]]) {
+    const q = project([emitter.x + d[0], (emitter.z ?? 0) + d[1], emitter.y + d[2]]);
+    if (!q) continue;
+    const dx = (q.x - p.x) * 0.5 * view.w;
+    const dy = (q.y - p.y) * 0.5 * view.h;
+    best = Math.max(best, Math.hypot(dx, dy));
+  }
+  const r = best;
+  if (!(r > 0.5)) return null;
+  const cap = view.w * MAX_SPAN;
+  return {
+    x, y,
+    r: Math.min(r, cap),
+    colour: emitter.colour,
+    alpha: clamp(emitter.alpha, 0, 1),
+  };
+}
+
+/** Warm white through orange: a torpedo. */
+const TORPEDO = [255, 240, 180];
+/** A detonation. */
+const BLAST = [255, 150, 60];
+/** A shot the shields held. */
+const SHIELD = [120, 190, 255];
+/** Phaser and disruptor fire. */
+const BEAM = [255, 190, 120];
+
+/**
+ * Sprite cache.
+ *
+ * A radial gradient costs its area to rasterise and this file would otherwise
+ * build one per emitter per frame — `tactical.js` does exactly that and gets
+ * away with it because the 2D plot draws a handful of effects at a time. The
+ * convention everywhere else in this renderer is that the draw path allocates
+ * nothing, so the sprites are drawn once onto small offscreen canvases and
+ * blitted after that.
+ *
+ * The radius is QUANTISED before it becomes a key. Keying on an exact float
+ * gives one cached sprite per pixel size, which is a cache that only ever
+ * misses and a leak besides — the same mistake `firstperson.js` documents at
+ * length about room mesh keys.
+ */
+const SPRITES = new Map();
+
+function sprite(colour, r) {
+  const q = Math.max(4, Math.round(r / 4) * 4);
+  const key = `${colour[0]},${colour[1]},${colour[2]}:${q}`;
+  const hit = SPRITES.get(key);
+  if (hit) return hit;
+  // Not appended to the document. Three assertions in the harness require
+  // exactly one `canvas.tactical-labels` in the tree, and a sprite sheet that
+  // joined the DOM would be a second canvas nobody asked for.
+  const c = globalThis.document?.createElement?.('canvas');
+  if (!c) return null;
+  c.width = q * 2;
+  c.height = q * 2;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(q, q, 0, q, q, q);
+  const [cr, cg, cb] = colour;
+  grad.addColorStop(0, `rgba(${cr},${cg},${cb},0.85)`);
+  grad.addColorStop(0.35, `rgba(${cr},${cg},${cb},0.30)`);
+  grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, q * 2, q * 2);
+  if (SPRITES.size > 96) SPRITES.clear();
+  SPRITES.set(key, c);
+  return c;
+}
+
+/**
+ * Blit the sprites, additively.
+ *
+ * `globalCompositeOperation` is used nowhere else in `src/`, and neither
+ * `drawOverlay` wraps itself in save/restore — so this saves and restores
+ * around its own work rather than trusting the caller. A composite mode left
+ * set here would not fail, it would quietly tint every label drawn after it,
+ * on a canvas that is never rebuilt.
+ */
+function paintGlare(ctx, sprites, clip) {
+  if (!sprites.length) return;
+  ctx.save();
+  if (clip && clip.length >= 3) {
+    ctx.beginPath();
+    ctx.moveTo(clip[0][0], clip[0][1]);
+    for (let i = 1; i < clip.length; i++) ctx.lineTo(clip[i][0], clip[i][1]);
+    ctx.closePath();
+    ctx.clip();
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const s of sprites) {
+    const img = sprite(s.colour, s.r);
+    if (!img) continue;
+    ctx.globalAlpha = s.alpha;
+    ctx.drawImage(img, s.x - s.r, s.y - s.r, s.r * 2, s.r * 2);
+  }
+  ctx.restore();
+}
+
+__exports.GLARE_BUDGET = GLARE_BUDGET;
+__exports.glareEmitters = glareEmitters;
+__exports.glareSprite = glareSprite;
+__exports.paintGlare = paintGlare;
+
+});
+
 __define("src/ui/tactical3d.js", function (__exports, __require) {
 // The tactical display, in three dimensions.
 //
@@ -20083,7 +20581,8 @@ const { starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloud
 const { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } = __require("src/gfx/vista.js");
 const { inArc } = __require("src/sim/ship.js");
 const { WEAPON_RANGE } = __require("src/sim/combat.js");
-const { drawCombatEffects } = __require("src/gfx/effects.js");
+const { drawCombatEffects, DRAWN_EFFECTS } = __require("src/gfx/effects.js");
+const { glareEmitters, glareSprite, paintGlare, GLARE_BUDGET } = __require("src/gfx/glare.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -20966,12 +21465,37 @@ class TacticalView3D {
     ctx.clearRect(0, 0, width, height);
   }
 
+  /**
+   * Halos around the bright things, in the plot's own pixel space.
+   *
+   * `view` is the rectangle the scene was rendered into. Here that is the whole
+   * canvas; in first person it is the viewscreen aperture, which is why the
+   * arithmetic takes a rectangle instead of assuming one.
+   */
+  drawGlare(ctx, engagement, view) {
+    const emitters = glareEmitters(engagement, DRAWN_EFFECTS);
+    if (!emitters.length) return;
+    const vp = this._viewProj;
+    const sprites = [];
+    for (const e of emitters) {
+      if (sprites.length >= GLARE_BUDGET) break;
+      const s = glareSprite(e, (pt) => project(pt, vp), view);
+      if (s) sprites.push(s);
+    }
+    paintGlare(ctx, sprites);
+  }
+
   /** LCARS chrome: names, hull bars, the target reticle. Plain 2D, on top. */
   drawOverlay(engagement, rect) {
     this.overlay.style.width = `${rect.width}px`;
     this.overlay.style.height = `${rect.height}px`;
     const { ctx, width, height } = fitCanvas(this.overlay);
     ctx.clearRect(0, 0, width, height);
+
+    // Glare first, so the LCARS chrome is drawn over it rather than through it.
+    // A name half-dissolved in a torpedo halo is a name you cannot read, and
+    // the labels are the only thing on this canvas carrying information.
+    this.drawGlare(ctx, engagement, { x: 0, y: 0, w: width, h: height });
 
     const forward = this.cameraMode === 'forward';
 
@@ -21896,7 +22420,8 @@ const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
 const { hullMesh, hullScale, HULL_GLOSS, HULL_SHINE, HULL_RIM, HULL_DETAIL } = __require("src/gfx/blueprint.js");
 const { vista, fovFor, noseOf, joltShake, joltTint } = __require("src/gfx/vista.js");
-const { drawCombatEffects } = __require("src/gfx/effects.js");
+const { drawCombatEffects, DRAWN_EFFECTS } = __require("src/gfx/effects.js");
+const { glareEmitters, glareSprite, paintGlare, GLARE_BUDGET } = __require("src/gfx/glare.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
 const { fitCanvas } = __require("src/ui/touch.js");
 
@@ -22135,6 +22660,14 @@ class FirstPersonView {
     const { aspect, width, height } = this.renderer.resize(
       rect.width || 320, rect.height || 320, dpr,
     );
+    // GL device pixels per CSS pixel, kept for the overlay.
+    //
+    // There are TWO device-pixel ratios in play and they are not the same
+    // number: the renderer caps at min(dpr, 2) and `fitCanvas` caps the labels
+    // canvas at min(dpr, 3). Anything measured in one space and drawn in the
+    // other — `stats.screenRect` above all — has to be converted by the ratio
+    // that actually produced it, which is this one and not the overlay's.
+    this._glScale = (width / (rect.width || 320)) || 1;
     if (!this.renderer.beginFrame()) return;
 
     const walker = game?.walk;
@@ -22247,6 +22780,15 @@ class FirstPersonView {
     let minX = Infinity; let minY = Infinity;
     let maxX = -Infinity; let maxY = -Infinity;
     let anyInFront = false;
+    // The corners themselves, kept as well as the box around them.
+    //
+    // The box is all the GL pass needs, for the reason above: the bulkhead is
+    // drawn afterwards and covers the difference between the box and the
+    // trapezoid. Nothing covers it on the 2D overlay, so anything drawn there
+    // and clipped to the box alone spills onto the bulkhead in the corners the
+    // moment you look at the screen off-axis. Cheap to keep, impossible to
+    // recover later.
+    const corners = [];
 
     for (const [u, v] of [[-hw, -vs.height / 2], [hw, -vs.height / 2], [hw, vs.height / 2], [-hw, vs.height / 2]]) {
       this._pos[0] = x + u * -nz;
@@ -22257,6 +22799,7 @@ class FirstPersonView {
       anyInFront = true;
       const sx = (p.x * 0.5 + 0.5) * width;
       const sy = (1 - (p.y * 0.5 + 0.5)) * height;
+      corners.push([sx, sy]);
       minX = Math.min(minX, sx); maxX = Math.max(maxX, sx);
       minY = Math.min(minY, sy); maxY = Math.max(maxY, sy);
     }
@@ -22266,6 +22809,7 @@ class FirstPersonView {
       x: Math.max(0, minX), y: Math.max(0, minY),
       w: Math.min(width, maxX) - Math.max(0, minX),
       h: Math.min(height, maxY) - Math.max(0, minY),
+      corners,
     };
   }
 
@@ -22744,6 +23288,29 @@ class FirstPersonView {
     this.overlay.style.height = `${rect.height}px`;
     const { ctx, width, height } = fitCanvas(this.overlay);
     ctx.clearRect(0, 0, width, height);
+
+    // Glare from whatever is happening out through the viewscreen.
+    //
+    // Two things here are not the same as on the tactical plot and both are
+    // silent when wrong. The exterior is rendered with `_screenVP`, a different
+    // camera from the room's `_viewProj`, so an emitter projected with the room
+    // camera lands somewhere plausible and wrong. And `screenRect` is in GL
+    // device pixels — `min(dpr, 2)` — while this canvas is in CSS pixels at
+    // `min(dpr, 3)`, so the rectangle has to be converted rather than used.
+    const screen = this.stats.screenRect;
+    if (screen && this._screenVP && game.engagement) {
+      const px = this._glScale || 1;
+      const view = { x: screen.x / px, y: screen.y / px, w: screen.w / px, h: screen.h / px };
+      const vp = this._screenVP;
+      const sprites = [];
+      for (const e of glareEmitters(game.engagement, DRAWN_EFFECTS)) {
+        if (sprites.length >= GLARE_BUDGET) break;
+        const s = glareSprite(e, (pt) => project(pt, vp), view);
+        if (s) sprites.push(s);
+      }
+      // Clipped to the aperture QUAD, not to the box around it.
+      paintGlare(ctx, sprites, screen.corners?.map(([sx, sy]) => [sx / px, sy / px]));
+    }
 
     const walker = game.walk;
     // `naming`, not `looking`. The reticle's job is to tell you what you are

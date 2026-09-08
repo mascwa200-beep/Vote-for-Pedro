@@ -31,7 +31,8 @@ import {
 import { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } from '../gfx/vista.js';
 import { inArc } from '../sim/ship.js';
 import { WEAPON_RANGE } from '../sim/combat.js';
-import { drawCombatEffects } from '../gfx/effects.js';
+import { drawCombatEffects, DRAWN_EFFECTS } from '../gfx/effects.js';
+import { glareEmitters, glareSprite, paintGlare, GLARE_BUDGET } from '../gfx/glare.js';
 import { fitCanvas } from './touch.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -915,12 +916,37 @@ export class TacticalView3D {
     ctx.clearRect(0, 0, width, height);
   }
 
+  /**
+   * Halos around the bright things, in the plot's own pixel space.
+   *
+   * `view` is the rectangle the scene was rendered into. Here that is the whole
+   * canvas; in first person it is the viewscreen aperture, which is why the
+   * arithmetic takes a rectangle instead of assuming one.
+   */
+  drawGlare(ctx, engagement, view) {
+    const emitters = glareEmitters(engagement, DRAWN_EFFECTS);
+    if (!emitters.length) return;
+    const vp = this._viewProj;
+    const sprites = [];
+    for (const e of emitters) {
+      if (sprites.length >= GLARE_BUDGET) break;
+      const s = glareSprite(e, (pt) => project(pt, vp), view);
+      if (s) sprites.push(s);
+    }
+    paintGlare(ctx, sprites);
+  }
+
   /** LCARS chrome: names, hull bars, the target reticle. Plain 2D, on top. */
   drawOverlay(engagement, rect) {
     this.overlay.style.width = `${rect.width}px`;
     this.overlay.style.height = `${rect.height}px`;
     const { ctx, width, height } = fitCanvas(this.overlay);
     ctx.clearRect(0, 0, width, height);
+
+    // Glare first, so the LCARS chrome is drawn over it rather than through it.
+    // A name half-dissolved in a torpedo halo is a name you cannot read, and
+    // the labels are the only thing on this canvas carrying information.
+    this.drawGlare(ctx, engagement, { x: 0, y: 0, w: width, h: height });
 
     const forward = this.cameraMode === 'forward';
 
