@@ -349,7 +349,16 @@ export const HOSTILE_FORMS = {
         color: p.trim,
       });
     });
-    box(mb, {
+    // The head, on the centreline, and `prow` for the same reason as the
+    // warbird's: swept as a whole box it came out a parallelogram, and both
+    // Jem'Hadar classes share this form, which is why §99 measured the same
+    // eighteen orphan vertices on each of them.
+    //
+    // `rake` survives the change untouched — it shears in x by HEIGHT, and
+    // mirroring is in z, so the head keeps its forward-leaning face while the
+    // plan-form becomes symmetric. The prongs on either side are already built
+    // inside `mirrored` below and were never the problem.
+    prow(mb, {
       center: vec3(len * 0.3, high * 0.2, 0),
       size: vec3(len * 0.2, high * 0.3, wide * 0.44),
       sweep: 0.16,
@@ -522,7 +531,24 @@ export const HOSTILE_FORMS = {
       color: p.trim,
     });
     // The command head, forward and low, with a lit sensor set into its nose.
-    box(mb, {
+    //
+    // `prow`, not `box`. A swept box on the centreline is a parallelogram seen
+    // from above — the +z corners carry the sweep and the -z corners do not —
+    // so this head had one bow corner reaching forward and the other raked
+    // back, and eighteen of its vertices had no mirror twin anywhere on the
+    // ship. §99 measured that and left it because its licence was to spend no
+    // triangles; this one is allowed to.
+    //
+    // The sensor below is the reason it matters here rather than being merely
+    // untidy. It is mounted at x = 0.54, ahead of the head, on the axis — and
+    // the axis was exactly where the old shape had no nose, because the sweep
+    // pulled the centreline corner aft. That is the Galor failure this file's
+    // own header records: the dome floating in clear space ahead of the ship.
+    //
+    // `prow` mirrors a half-box, so the outboard corners stay where they were
+    // and the point comes back to the centreline, under the dome. Twelve
+    // triangles.
+    prow(mb, {
       center: vec3(0.42, -high * 0.12, 0),
       size: vec3(0.3, high * 0.5, span * 0.34),
       sweep: 0.1,

@@ -11917,6 +11917,112 @@ the reading said two.
 Seven flags to go. None is written in act 5; four are act-4 deeds that can reach
 only the final act.
 
+## 122. Three hulls that were parallelograms
+
+§99 found this with a guard rather than by looking for it, and could not fix it.
+Asking *"is this vertex shaded like its mirror twin?"* needs a mirror twin, and on
+four classes some vertices had none:
+
+```
+warbird                18 starboard vertices with no port twin
+jem_hadar_attack       18
+jem_hadar_battleship   18
+borg_cube             576   (not built by `mirrored` at all — asymmetry is the point)
+```
+
+All three of the fixable ones draw their command head as a `box` carrying a
+`sweep`, and `forms.hostile.js` opens by recording what that means: *"A swept
+centreline box is a parallelogram seen from above ... a Galor measured sixteen
+percent lopsided"*. That is why `prow` exists — it mirrors a half-box, so a swept
+centreline section comes out as an arrowhead with the point on the axis. Those
+three forms never made the switch.
+
+§99 left it deliberately: `prow` costs twelve triangles a call and that change's
+entire licence was to spend none. It pinned the figures instead so they could not
+grow quietly. This is the change that can afford geometry.
+
+### What it actually looked like
+
+Rendered from the built mesh, the warbird's command head seen from above, bow to
+the right, over the same window in both cases:
+
+```
+BEFORE — a swept centreline box            AFTER — prow
+ # ## # # # # # #  # # # # # # # #              #
+   # # # # #  # # # # # # #  # # #        # ######
+   ## #  # # # # # # #  # # # # #       ######### #
+   #  ####### # # ########## # # #    # ################
+   #     # # # # # # #  # # # # #  # ########## # # ######
+   #      # # # #  # # # # # # #     # ###################
+   #       #  # # # # # # #  # #    # ########## # # #####
+   #          # # ########## # #  # #######################
+   #             # # #  # # # #     # ########## # # #####
+   #                # # # #  # #   # ########## # # ######
+   #                 # #########       # ################
+   #                    # #  # #        ######### #
+   #                      # # # #         # ######
+   #                        ### # #             #
+```
+
+The left-hand shape has one bow corner reaching forward the whole length of the
+head and the other raked back to a point at the far corner. The right-hand shape
+is symmetric about the axis.
+
+Measured rather than described:
+
+```
+warbird head, forward-most point:   z -0.0901  ->  z 0.0000
+orphan starboard vertices:          18, 18, 18  ->  0, 0, 0
+fleet triangles:                    33,898  ->  33,934   (ceiling 36,000)
+```
+
+### Why it was a defect and not untidiness
+
+The warbird mounts a lit sensor **on the axis** at x = 0.54, ahead of the head —
+the comment on it says *"with a lit sensor set into its nose"*. With the swept box
+the head's forward-most point was at z = −0.0901, displaced to one side of the
+very thing it was meant to be set into. That is the Galor failure the file's own
+header describes, on a second class, four sections after it was written down: the
+dome floating in clear space ahead of the ship.
+
+`prow` keeps the outboard corners exactly where they were — `sweep` is an absolute
+displacement applied to the +z corners, so mirroring a half-box leaves the
+outboard extremes untouched and brings the centreline forward. The silhouette from
+outboard is unchanged; the plan-form becomes an arrowhead; the dome lands on the
+nose.
+
+Both Jem'Hadar classes share the `dominion` form, which is why §99 measured the
+same eighteen vertices on each of them and why one edit fixes both. `rake`
+survives the change untouched: it shears in x by *height*, and the mirror is in z,
+so the head keeps its forward-leaning face.
+
+### A test renamed rather than relaxed
+
+§99's companion assertion was called *"and it cost not one triangle, across all
+thirty-one classes"*, and for that change the claim was exactly true. This change
+spends thirty-six on purpose, which makes the name false while the assertion is
+still worth having — so it is now *"and the fleet total moves only when a change
+means it to"*, still exact, still pinned, and still catching a shading pass that
+silently splits faces. Renaming a guard whose claim has been superseded is not the
+same as loosening it, and the difference is worth being explicit about.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| only the Borg cube is unmirrored | revert either head | ✓ names the class |
+| the warbird head comes to a point on the axis | revert that head | ✓ reports z −0.090105 |
+| the fleet total is exactly 33,934 | revert either head | ✓ |
+
+### Verification
+
+- `node --test tests/*.test.js` — **2,107 passing**, 0 failing
+- `tools/verify-app.mjs` — 410/410
+- `dist/` and the APK rebuilt; manifest carries `VIBRATE` only, no `INTERNET`
+
+The fleet has no lopsided hulls left. The only class that is not a mirror image of
+itself is the one that should not be.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
