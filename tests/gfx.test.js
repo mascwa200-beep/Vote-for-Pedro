@@ -2346,13 +2346,20 @@ describe('no two Federation classes are the same shape', () => {
     });
 
     test('and it cost nothing, which is the whole reason it is allowed', () => {
-      // Geometry is spent: 33,898 of a 36,000 fleet ceiling, about 68 triangles
-      // per class. A gradient is the one thing left that is free.
+      // Geometry is spent, which is why a gradient was the one move available
+      // to the change this belongs to: it rides vertices already paid for.
+      //
+      // The pinned count is 2,174 rather than the 2,178 this was written with.
+      // §123 did not shade anything — it stopped `mirrored` from emitting the
+      // cut face at z = 0, which on this hull was four triangles sealed inside
+      // the solid where no camera could reach them. The claim being guarded is
+      // "the shading did not go into the geometry", and that is still exactly
+      // what an unexpected change here would mean.
       for (const id of ['constitution', 'galaxy', 'constellation']) {
         const m = hullMesh(id, 'federation');
         assert.equal(m.vertexCount, m.triangles * 3, `${id} stopped being flat-shaded`);
       }
-      assert.equal(hullMesh('constitution', 'federation').triangles, 2178,
+      assert.equal(hullMesh('constitution', 'federation').triangles, 2174,
         'the Constitution changed size, so the shading went into the geometry');
     });
   });
@@ -3490,6 +3497,11 @@ describe('every hull in the fleet carries a gradient, not just the Federation on
     // pass that silently split faces still fails here, which is what §99 wanted
     // from it.
     //
+    // §123 then gave back a hundred, including twelve of §122's own thirty-six:
+    // `mirrored` no longer emits the cut face at z = 0, which was sealed inside
+    // every mirrored solid in the fleet. 33,934 -> 33,834, which is below where
+    // §122 found it.
+    //
     // Flat shading means vertexCount is exactly three per triangle, so that
     // half also catches a helper that split a face to get its gradient.
     let total = 0;
@@ -3498,7 +3510,7 @@ describe('every hull in the fleet carries a gradient, not just the Federation on
       assert.equal(m.vertexCount, m.triangles * 3, `${cls.id} stopped being flat-shaded`);
       total += m.triangles;
     }
-    assert.equal(total, 33934, `the fleet is ${total} triangles, not the 33,934 this pins`);
+    assert.equal(total, 33834, `the fleet is ${total} triangles, not the 33,834 this pins`);
   });
 
   test('and port and starboard are still shaded the same', () => {
@@ -3589,6 +3601,43 @@ describe('every hull in the fleet carries a gradient, not just the Federation on
     assert.deepEqual(lopsided, {
       borg_cube: 576,
     }, 'a hull gained or lost unmirrored geometry');
+  });
+
+  test('and no hull carries a wall sealed inside itself', () => {
+    // A half-box built to be mirrored has six faces, and one of them is the cut
+    // face at z = 0. Reflecting it puts an identical, opposite-facing triangle
+    // in the same place — and both are then interior, the port half behind one
+    // and the starboard half behind the other. Neither z-fights, because one is
+    // back-facing and the other occluded. They are paid for and never drawn.
+    //
+    // Found by auditing the fleet after §122, which had spent twelve of them
+    // without knowing it while claiming a flat "+36 triangles":
+    //
+    //     100 triangles in fifty back-to-back pairs, across seventeen classes
+    //     every `prow` call paying twelve triangles for eight of visible hull
+    //
+    // `mirrored` drops them at the source now, so this asserts the invariant
+    // rather than a list of classes: a triangle whose three vertices are all at
+    // z = 0 is interior by construction once reflected, so on anything built
+    // through `mirrored` there should be none at all.
+    //
+    // The Borg cube is exempt and is the reason this is not phrased as "no
+    // triangle anywhere lies in the plane": it is not built through `mirrored`,
+    // its six faces are laid out independently, and one of them legitimately
+    // straddles the axis.
+    const offenders = {};
+    for (const cls of SHIP_LIST) {
+      if (cls.id === 'borg_cube') continue;
+      const m = hullMesh(cls.id, cls.faction);
+      const f = m.stride / 4;
+      let n = 0;
+      for (let t = 0; t < m.vertexCount; t += 3) {
+        if ([0, 1, 2].every((k) => Math.abs(m.data[(t + k) * f + 2]) < 1e-9)) n++;
+      }
+      if (n) offenders[cls.id] = n;
+    }
+    assert.deepEqual(offenders, {},
+      'hulls carry faces sealed in the mirror plane, which nothing can ever see');
   });
 
   test('and the heads that were parallelograms come to a point on the axis', () => {

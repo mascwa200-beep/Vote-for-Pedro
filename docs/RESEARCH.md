@@ -12023,6 +12023,110 @@ same as loosening it, and the difference is worth being explicit about.
 The fleet has no lopsided hulls left. The only class that is not a mirror image of
 itself is the one that should not be.
 
+## 123. A hundred triangles sealed inside the hulls
+
+§122 said it spent thirty-six triangles. It spent thirty-six and wasted twelve of
+them, and found out by auditing the fleet afterwards rather than before.
+
+### What the audit was looking for, and what it found instead
+
+Having just changed geometry, the obvious question was whether the geometry was
+sound anywhere else. Across all thirty-one classes:
+
+```
+degenerate triangles            0
+zero-length normals             0
+normals facing backwards        0
+duplicate faces                50 pairs
+```
+
+The first three are the answer you want. The fourth is not, and none of the fifty
+is what "duplicate" usually means: every one is **opposite-winding** and lies
+**exactly in the z = 0 plane**.
+
+### Why they are there
+
+A half-box built to be mirrored has six faces, and one of them is the cut face at
+z = 0. `mirrored` reflects it along with everything else, which puts an identical,
+opposite-facing triangle in the same place. Both are then inside the finished
+solid — the port half behind one, the starboard half behind the other.
+
+Neither z-fights: one is back-facing and the other occluded. They are simply paid
+for and never drawn.
+
+```
+triangles lying entirely in the z=0 plane:   100 of 33,934   (0.29%)
+in fifty back-to-back pairs across seventeen classes
+```
+
+§122 added twelve of them, four to each hull it touched, which means every `prow`
+call was paying twelve triangles to add eight of visible hull. That is the part
+worth knowing: it raises the price of the fix §122 made, and of every future one.
+
+### The fix is in `mirrored`, not at the call sites
+
+A triangle whose three vertices are all at z = 0 is, after reflection, interior
+**by construction**. It cannot be an outside surface of a mirrored solid. So the
+cut faces are dropped before anything is reflected — one edit, reaching every call
+site including the eleven classes that adopted `prow` long before §122.
+
+```
+fleet triangles:   33,934  ->  33,834
+```
+
+Which is below where §122 found it. The lopsided hulls were fixed and the fleet
+came out sixty-four triangles cheaper than before the fix.
+
+### The assertion that proves no hole was opened
+
+The real risk is that removing a face leaves a gap. The check is boundary edges —
+edges belonging to exactly one triangle — counted class by class:
+
+```
+boundary edges, fleet total:   7,268  ->  7,268     no class changed
+```
+
+Not one. And the reason is the reason the change is right: the cut face's four
+edges were each shared with an adjacent side face, and once both cut faces are
+gone, the starboard side faces and the port side faces meet along z = 0 and pair
+up with each other. The two halves stop being two sealed solids and become one
+continuous surface, which is what they were always meant to be.
+
+### The tolerance is exact, and the control says why
+
+The comparison is `< 1e-9`, not a tolerance. A control that relaxes it to 0.05 —
+"near the plane" rather than "in it" — removes a further ninety-six triangles that
+are genuinely visible hull, and the pinned fleet total catches it at 33,738. An
+approximate version of this change quietly eats geometry.
+
+### Two counts re-pinned rather than relaxed
+
+`the Constitution changed size` guarded 2,178 and now guards 2,174; the fleet
+total guarded 33,934 and now guards 33,834. Both belong to §99's claim that
+shading must not turn into geometry, and both still assert exactly that — the four
+triangles the Constitution lost were sealed inside it. Re-pinning a count whose
+cause is understood is not the same as loosening a guard, which is the same
+distinction §122 drew when it renamed one.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| no hull carries a face sealed in the mirror plane | stop dropping them | ✓ names them |
+| the fleet total is exactly 33,834 | stop dropping them | ✓ reports 33,934 |
+| and the tolerance is exact, not approximate | relax it to 0.05 | ✓ reports 33,738 |
+| no hull gained a boundary edge | — | measured, 7,268 both ways |
+
+### Verification
+
+- `node --test tests/*.test.js` — **2,108 passing**, 0 failing
+- `tools/verify-app.mjs` — 410/410, screenshots re-read by eye
+- `dist/` and the APK rebuilt; manifest carries `VIBRATE` only, no `INTERNET`
+
+The lesson is §122's and not this section's: a change that states its cost should
+measure it. "+36 triangles" was true and incomplete, and the incompleteness was
+only found because the next thing done was to look.
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier

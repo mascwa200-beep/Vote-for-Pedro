@@ -2222,10 +2222,44 @@ const hotCore = (cx, cy, cz, { peak = 1.15, rim = 0.55 } = {}) => (px, py, pz) =
   return rim + (peak - rim) * Math.max(0, dx / len);
 };
 
-/** Mirror everything added by `fn` across the z axis, for port/starboard pairs. */
+/**
+ * Mirror everything added by `fn` across the z axis, for port/starboard pairs.
+ *
+ * Faces lying exactly IN the mirror plane are dropped rather than copied.
+ *
+ * A half-box built to be mirrored has six faces, and one of them is the cut
+ * face at z = 0. Reflecting it puts an identical, opposite-facing triangle in
+ * the same place, and both are then inside the finished solid — the port half
+ * is on the other side of one and the starboard half on the other side of the
+ * other, so no camera outside the hull can see either. Neither z-fights (one is
+ * back-facing, the other occluded); they are simply paid for and never drawn.
+ *
+ * Measured across the fleet before this dropped them: 100 triangles in fifty
+ * back-to-back pairs on seventeen classes, 0.29% of the whole budget, and every
+ * `prow` call was paying twelve triangles to add eight of visible geometry.
+ * §122 spent twelve of those without knowing it, which is what sent anybody
+ * looking.
+ *
+ * Dropping is safe for the same reason the waste exists: a triangle whose three
+ * vertices are all at z = 0 is, after reflection, interior by construction. It
+ * cannot be an outside surface of a mirrored solid. `borg_cube` is not built
+ * through here at all and keeps every face it has.
+ */
 function mirrored(mb, fn) {
   const start = mb.positions.length;
   fn(mb);
+
+  // The cut faces, removed before anything is reflected — otherwise the reflect
+  // loop below copies them and the drop has to happen twice.
+  for (let i = mb.positions.length - 9; i >= start; i -= 9) {
+    if (Math.abs(mb.positions[i + 2]) > 1e-9) continue;
+    if (Math.abs(mb.positions[i + 5]) > 1e-9) continue;
+    if (Math.abs(mb.positions[i + 8]) > 1e-9) continue;
+    mb.positions.splice(i, 9);
+    mb.normals.splice(i, 9);
+    mb.colors.splice(i, 9);
+    mb.glows.splice(i / 3, 3);
+  }
   const end = mb.positions.length;
 
   // Mirroring flips handedness, so each triangle's winding is reversed as it is
