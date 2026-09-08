@@ -1496,10 +1496,27 @@ __define("src/gfx/mesh.js", function (__exports, __require) {
 // files: this project ships no art it did not make, and a mesh that is a few
 // numbers in a table costs nothing to precache.
 //
-// Flat shading throughout. Each triangle gets its own three vertices and the
-// face normal, which triples the vertex count and is worth it — faceted hulls
-// read as solid geometry at phone size in a way smooth shading does not, and it
-// removes any need for normal averaging, smoothing groups or UVs.
+// Unshared vertices throughout. Each triangle gets its own three, which triples
+// the vertex count and is worth it: no index buffer, no welding, and a per-face
+// colour or glow costs nothing to express.
+//
+// Flat NORMALS, however, are per primitive rather than a rule. This file used to
+// say flat shading throughout, on the grounds that "faceted hulls read as solid
+// geometry at phone size in a way smooth shading does not, and it removes any
+// need for normal averaging, smoothing groups or UVs".
+//
+// The second half of that is answered rather than overridden: the curved
+// primitives hand `tri` their own analytic normals — a sphere's is the offset
+// from its centre, a tube's is radial — so there is still no averaging pass, no
+// smoothing group and no UV anywhere. The first half is a real claim about
+// panels and plates, and it still holds, so `box`, `greebles`, `portRow` and
+// every window helper are unchanged and still crisp.
+//
+// What changed the balance is a measurement §72 made and did not act on: a
+// flat-shaded hull "samples the [specular] lobe at its facet normals and nowhere
+// else", and at close range the lobe is narrower than the gap between facets. The
+// renderer has had specular and rim for a long time; on round surfaces the facets
+// were throwing them away.
 //
 // Coordinate convention, matching the simulation: +x is the bow, +y is dorsal,
 // +z is starboard.
@@ -1522,10 +1539,29 @@ class MeshBuilder {
    * the key and the fill, 1 is a surface that renders at its own colour no
    * matter which way it faces. It is PER VERTEX rather than per draw, which is
    * the whole reason a window exists — see the note on `windowRing` below.
+   *
+   * `normals`, when given, is three vectors — one per corner — instead of the
+   * face normal. That is the whole of the smooth-shading mechanism, and it is
+   * worth being precise about what it does NOT do.
+   *
+   * It does not weld vertices, share them, or introduce an index buffer. Every
+   * triangle still gets its own three, so `vertexCount` is still exactly three
+   * times the triangle count and the three assertions that check that still
+   * hold. Those assertions exist to catch a shading pass that splits faces to
+   * get a gradient — they count vertices, and this adds none.
+   *
+   * The caller supplies the normals analytically rather than having this
+   * average anything: a sphere knows its own normal is the offset from its
+   * centre, and a tube knows its own is radial. So there is no smoothing group
+   * to define, no averaging pass to run and no seam to reason about — which
+   * were the three costs `mesh.js` cited when it ruled smooth shading out.
    */
-  tri(a, b, c, color, glow = 0) {
-    const n = normalize(cross(sub(b, a), sub(c, a)));
-    for (const v of [a, b, c]) {
+  tri(a, b, c, color, glow = 0, normals = null) {
+    const face = normals ? null : normalize(cross(sub(b, a), sub(c, a)));
+    const corners = [a, b, c];
+    for (let i = 0; i < 3; i++) {
+      const v = corners[i];
+      const n = normals ? normals[i] : face;
       this.positions.push(v[0], v[1], v[2]);
       this.normals.push(n[0], n[1], n[2]);
       this.colors.push(color[0], color[1], color[2]);
@@ -1534,9 +1570,16 @@ class MeshBuilder {
     return this;
   }
 
-  /** A quad, as two triangles. */
-  quad(a, b, c, d, color, glow = 0) {
-    return this.tri(a, b, c, color, glow).tri(a, c, d, color, glow);
+  /**
+   * A quad, as two triangles.
+   *
+   * `normals` is four vectors in the same corner order as the positions, and is
+   * split across the two triangles the same way the corners are.
+   */
+  quad(a, b, c, d, color, glow = 0, normals = null) {
+    const first = normals ? [normals[0], normals[1], normals[2]] : null;
+    const second = normals ? [normals[0], normals[2], normals[3]] : null;
+    return this.tri(a, b, c, color, glow, first).tri(a, c, d, color, glow, second);
   }
 
   get triangleCount() { return this.positions.length / 9; }
@@ -1600,6 +1643,22 @@ const at = (o, x, y, z) => vec3(o[0] + x, o[1] + y, o[2] + z);
  * most segments. `domeRatio` is how much of the radius the raised centre covers
  * — a Constitution's bridge dome is a small cap on a broad plate, which is what
  * separates its silhouette from a Miranda's flatter one.
+ *
+ * Three surfaces of revolution per segment, and each states its OWN normal:
+ * smooth the way round, constant the way up the slope. That is the whole reason
+ * to hand normals to `tri` analytically rather than average them afterwards —
+ * averaging would round off the rim where the upper plate meets the underside,
+ * and that rim is the edge the entire silhouette of a Federation ship hangs on.
+ * Here the two bands simply disagree at the shared circle, and the edge stays
+ * exactly as hard as it was.
+ *
+ * For a surface of revolution the outward normal has a radial part and an axial
+ * part, and they come straight off the profile: a segment running from radius
+ * p0 at height y0 to p1 at y1 has tangent (dp, dy), so the outward normal is
+ * (dy, -dp) with whichever sign points away from the hull. `stretch` then bends
+ * the horizontal part the same way an ellipse bends it, dividing x by the
+ * stretch — an ovoid Galaxy saucer would otherwise be lit as though it were a
+ * circular one.
  */
 function saucer(mb, {
   origin = vec3(), radius = 1, thickness = 0.18, segments = 24,
@@ -1620,21 +1679,55 @@ function saucer(mb, {
   // without anything being guessed.
   const sx = stretch;
 
+  // The three profiles, as (radial, axial) tangents, with the sign already
+  // chosen so each points away from the hull: up and out for the plate and the
+  // dome, down and out for the underside.
+  // Each is [radial, axial], signed to match the winding this primitive has
+  // always had rather than to match the outward direction.
+  //
+  // Those are not the same thing here, and it is worth recording why. Derived
+  // from the profile, the upper plate's outward normal points up and out — and
+  // the face normal `tri` computes from this quad's own winding points DOWN.
+  // The saucer is wound the other way round from the derivation, and has been
+  // since it was written.
+  //
+  // Which of the two is right is a real question and it is NOT this change's to
+  // answer: flipping it would relight the top of every Federation saucer in the
+  // game, which is a visible change to the fleet dressed up as a smoothing pass.
+  // Matching the existing winding means the only thing this does is make the
+  // surface continuous. Recorded for a change that can measure it on its own.
+  const plate = [-half, domeR - radius];
+  const capN = [-domeHeight, -domeR];
+  const under = [-(half + domeHeight * 0.4), radius];
+  // A profile normal, swung round to the angle `a` and squeezed by `stretch`.
+  const swing = (prof, cosA, sinA) =>
+    normalize(vec3((cosA / sx) * prof[0], prof[1], sinA * prof[0]));
+
   for (let i = 0; i < segments; i++) {
     const a0 = (i / segments) * Math.PI * 2;
     const a1 = ((i + 1) / segments) * Math.PI * 2;
-    const c0 = Math.cos(a0) * sx; const s0 = Math.sin(a0);
-    const c1 = Math.cos(a1) * sx; const s1 = Math.sin(a1);
+    const ca0 = Math.cos(a0); const s0 = Math.sin(a0);
+    const ca1 = Math.cos(a1); const s1 = Math.sin(a1);
+    const c0 = ca0 * sx; const c1 = ca1 * sx;
 
     const rimA = at(origin, c0 * radius, 0, s0 * radius);
     const rimB = at(origin, c1 * radius, 0, s1 * radius);
     const domA = at(origin, c0 * domeR, half, s0 * domeR);
     const domB = at(origin, c1 * domeR, half, s1 * domeR);
 
+    const pA = swing(plate, ca0, s0); const pB = swing(plate, ca1, s1);
+    const dA = swing(capN, ca0, s0); const dB = swing(capN, ca1, s1);
+    const uA = swing(under, ca0, s0); const uB = swing(under, ca1, s1);
+    // The apex sits on the axis, where the normal of a cone is genuinely
+    // undefined. Splitting the difference between the two ring vertices keeps
+    // the cone smooth the way round, which is the direction the eye reads.
+    const dTop = normalize(vec3(dA[0] + dB[0], dA[1] + dB[1], dA[2] + dB[2]));
+    const uBot = normalize(vec3(uA[0] + uB[0], uA[1] + uB[1], uA[2] + uB[2]));
+
     // Upper plate, dome cap, and the underside.
-    mb.quad(rimA, rimB, domB, domA, color, glow);
-    mb.tri(domA, domB, top, color, glow);
-    mb.tri(rimB, rimA, bottom, rimColor, glow);
+    mb.quad(rimA, rimB, domB, domA, color, glow, [pA, pB, pB, pA]);
+    mb.tri(domA, domB, top, color, glow, [dA, dB, dTop]);
+    mb.tri(rimB, rimA, bottom, rimColor, glow, [uB, uA, uBot]);
   }
   return mb;
 }
@@ -1643,12 +1736,24 @@ function saucer(mb, {
  * A tapered cylinder along +x: engineering hulls, nacelles, pylun spars.
  * `r0` is the aft radius and `r1` the fore radius, so a nacelle tapers forward
  * and a secondary hull tapers aft.
+ *
+ * The WALL is smooth and the CAPS are flat, which is the shape being described:
+ * a nacelle is round around its axis and ends in a disc, and a disc has one
+ * normal. Rounding the caps too would bend the ends of every nacelle in the
+ * fleet outward like a balloon.
+ *
+ * The wall normal is not simply radial once the tube tapers. Parameterising the
+ * surface and taking the cross product of its two derivatives gives
+ * `(r0 - r1, len·cos, len·sin)`: on a cylinder the x term vanishes and it is the
+ * pure radial direction, and on a cone it tilts forward by exactly the slope. A
+ * plain radial normal would light a nose cone as though it were a pipe.
  */
 function tube(mb, {
   origin = vec3(), length: len = 1, r0 = 0.2, r1 = 0.2, segments = 12,
   color = [0.66, 0.7, 0.76], capFore = true, capAft = true, glow = 0,
 } = {}) {
   const foreC = at(origin, len, 0, 0);
+  const wall = (c, s) => normalize(vec3(r0 - r1, len * c, len * s));
   for (let i = 0; i < segments; i++) {
     const a0 = (i / segments) * Math.PI * 2;
     const a1 = ((i + 1) / segments) * Math.PI * 2;
@@ -1660,7 +1765,9 @@ function tube(mb, {
     const forA = at(origin, len, c0 * r1, s0 * r1);
     const forB = at(origin, len, c1 * r1, s1 * r1);
 
-    mb.quad(aftA, aftB, forB, forA, color, glow);
+    const n0 = wall(c0, s0);
+    const n1 = wall(c1, s1);
+    mb.quad(aftA, aftB, forB, forA, color, glow, [n0, n1, n1, n0]);
     if (capFore) mb.tri(forA, forB, foreC, color, glow);
     if (capAft) mb.tri(aftB, aftA, origin, color, glow);
   }
@@ -1757,8 +1864,19 @@ function prow(mb, { center = vec3(), size = vec3(1, 0.1, 0.4), ...rest } = {}) {
  * third as tall as it is long, so a sphere built round and then squashed by the
  * normaliser is squashed along with everything else on the hull — and a form
  * whose one round part forces the whole ship through a 2.6x squash is a form
- * that is not built right. Flat shading takes the face normal from the vertices
- * it is given, so a non-uniform scale here needs no normal correction.
+ * that is not built right.
+ *
+ * A sphere carries ANALYTIC normals, which is the one place a non-uniform scale
+ * needs care. On a unit sphere the normal is just the offset from the centre.
+ * On the ellipsoid this actually builds it is not: the surface is
+ * x²/kx² + y²/ky² + z²/kz² = r², whose gradient — and so whose normal — is
+ * (x/kx², y/ky², z/kz²). Using the position directly would tilt every highlight
+ * on a squashed dome toward the long axis.
+ *
+ * This is why the old flat-shading note here ("a non-uniform scale needs no
+ * normal correction") was true and is no longer: face normals came out of the
+ * cross product of already-scaled corners and were correct for free. Analytic
+ * ones have to do the division themselves.
  */
 function sphere(mb, {
   origin = vec3(), radius = 1, segments = 16, rings = 10, scale = null,
@@ -1767,6 +1885,8 @@ function sphere(mb, {
   const kx = scale ? scale[0] : 1;
   const ky = scale ? scale[1] : 1;
   const kz = scale ? scale[2] : 1;
+  // The ellipsoid normal at a point, from the gradient above.
+  const nrm = (dx, dy, dz) => normalize(vec3(dx / (kx * kx), dy / (ky * ky), dz / (kz * kz)));
   for (let r = 0; r < rings; r++) {
     const t0 = (r / rings) * Math.PI;
     const t1 = ((r + 1) / rings) * Math.PI;
@@ -1787,9 +1907,16 @@ function sphere(mb, {
       const B = at(origin, Math.cos(a1) * rad0 * kx, y0 * ky, Math.sin(a1) * rad0 * kz);
       const C = at(origin, Math.cos(a1) * rad1 * kx, y1 * ky, Math.sin(a1) * rad1 * kz);
       const D = at(origin, Math.cos(a0) * rad1 * kx, y1 * ky, Math.sin(a0) * rad1 * kz);
-      if (r === 0) mb.tri(A, C, D, c, glow);
-      else if (r === rings - 1) mb.tri(A, B, C, c, glow);
-      else mb.quad(A, B, C, D, c, glow);
+      // Normals from the OFFSET, not the world position — `origin` is where the
+      // dome is mounted on the hull and has nothing to do with which way its
+      // surface faces.
+      const nA = nrm(Math.cos(a0) * rad0 * kx, y0 * ky, Math.sin(a0) * rad0 * kz);
+      const nB = nrm(Math.cos(a1) * rad0 * kx, y0 * ky, Math.sin(a1) * rad0 * kz);
+      const nC = nrm(Math.cos(a1) * rad1 * kx, y1 * ky, Math.sin(a1) * rad1 * kz);
+      const nD = nrm(Math.cos(a0) * rad1 * kx, y1 * ky, Math.sin(a0) * rad1 * kz);
+      if (r === 0) mb.tri(A, C, D, c, glow, [nA, nC, nD]);
+      else if (r === rings - 1) mb.tri(A, B, C, c, glow, [nA, nB, nC]);
+      else mb.quad(A, B, C, D, c, glow, [nA, nB, nC, nD]);
     }
   }
   return mb;
@@ -4029,14 +4156,37 @@ function officerMesh(crew = 'ops', mounted = 'wall') {
   // "person" rather than "bollard" at a distance.
   //
   // Sixty triangles became ninety-six. A hull in this game is a thousand.
-  if (!seated) {
-    for (const side of [-1, 1]) {
+  for (const side of [-1, 1]) {
+    if (seated) {
+      // A SEATED officer had no legs at all, and that is the worst thing about
+      // any figure in the game — because it is the one the player looks at most.
+      // The captain's chair faces the helm and the con, the crew chairs' backs
+      // stop below shoulder height on purpose so the officer reads over them,
+      // and what read over them was a torso floating above a seat.
+      //
+      // A thigh forward and a shin down is two boxes and fixes it completely.
+      box(mb, {
+        center: vec3(side * 0.085, hip - 0.04, 0.15),
+        size: vec3(0.13, 0.15, 0.34), color: dark,
+      });
+      box(mb, {
+        center: vec3(side * 0.085, hip * 0.45, 0.28),
+        size: vec3(0.12, hip * 0.9, 0.13), color: dark,
+      });
+    } else {
       box(mb, {
         center: vec3(side * 0.075, hip / 2, 0),
         size: vec3(0.10, hip, 0.18),
         color: dark,
       });
     }
+    // Feet, on both. Without them a standing figure ends at the ankle and
+    // hovers a little above the deck, which is the same complaint the neck
+    // below was added to answer at the other end of the body.
+    box(mb, {
+      center: vec3(side * 0.078, seated ? 0.05 : 0.025, seated ? 0.34 : 0.03),
+      size: vec3(0.11, 0.05, 0.24), color: dark,
+    });
   }
 
   // The torso in two parts, narrower at the waist than at the shoulders.
@@ -4051,16 +4201,49 @@ function officerMesh(crew = 'ops', mounted = 'wall') {
     size: vec3(0.40, shoulder - waist, 0.24), color: colour,
   });
 
-  // Arms, out to either side. At yaw 0 that is ±x, which is what makes the
-  // whole figure rotatable by a single quaternion.
-  box(mb, { center: vec3(0.26, shoulder - 0.16, 0), size: vec3(0.11, 0.34, 0.11), color: colour });
-  box(mb, { center: vec3(-0.26, shoulder - 0.16, 0), size: vec3(0.11, 0.34, 0.11), color: colour });
+  // Arms in two parts: upper arm hanging from the shoulder, forearm carried
+  // FORWARD. At yaw 0 that is ±x and +z, which keeps the whole figure
+  // rotatable by a single quaternion.
+  //
+  // One straight prism a side reads as a figure standing to attention, and
+  // almost nobody in this game is standing to attention — they are working a
+  // console. Bending the arm at the elbow is the difference between a crew and
+  // a guard of honour, and it is two boxes a side.
+  for (const side of [-1, 1]) {
+    box(mb, {
+      center: vec3(side * 0.255, shoulder - 0.11, 0),
+      size: vec3(0.11, 0.26, 0.11), color: colour,
+    });
+    box(mb, {
+      center: vec3(side * 0.235, shoulder - 0.27, 0.14),
+      size: vec3(0.10, 0.10, 0.28), color: colour,
+    });
+  }
 
   // A neck, so the head sits ON the shoulders instead of floating above a
   // flat top. It is two centimetres of geometry and it is most of the
   // difference between a figure and a stack of boxes.
   box(mb, { center: vec3(0, shoulder + 0.03, 0), size: vec3(0.10, 0.06, 0.10), color: SKIN });
-  box(mb, { center: vec3(0, shoulder + 0.17, 0), size: vec3(0.19, 0.22, 0.20), color: SKIN });
+  box(mb, { center: vec3(0, shoulder + 0.16, 0), size: vec3(0.19, 0.20, 0.20), color: SKIN });
+
+  // A head that has a FRONT.
+  //
+  // The head was one skin-coloured cube, and a cube is the one solid with
+  // nothing to say about which way it is facing. In first person the player
+  // stands a metre from these, and an officer who has turned to look at you
+  // was indistinguishable from one who has not.
+  //
+  // A crown that overhangs at the back and a brow band across the front are
+  // two boxes and settle it. They also stop the head reading as a cube at all,
+  // which no amount of rounding it off would have done as cheaply.
+  box(mb, {
+    center: vec3(0, shoulder + 0.265, -0.015),
+    size: vec3(0.20, 0.08, 0.21), color: [0.14, 0.12, 0.11],
+  });
+  box(mb, {
+    center: vec3(0, shoulder + 0.19, 0.095),
+    size: vec3(0.18, 0.05, 0.03), color: [0.20, 0.17, 0.15],
+  });
 
   const built = mb.build();
   CREW_CACHE.set(key, built);
@@ -8308,6 +8491,7 @@ varying vec3 vColor;
 varying float vDepth;
 varying vec3 vWorld;
 varying float vGlow;
+varying vec3 vObject;
 
 void main() {
   vec3 n = normalize(uNormalMatrix * aNormal);
@@ -8318,6 +8502,17 @@ void main() {
   vGlow = aGlow;
   vDepth = gl_Position.w;
   vWorld = world.xyz;
+  // The mesh's OWN space, which is where surface detail has to live.
+  //
+  // vWorld already exists and is the wrong thing for this: a hull that turns
+  // would have its plating slide across it, and two ships of the same class in
+  // different places would be plated differently. aPosition is cached per class
+  // and never moves, so a panel line stays welded to the plate it is on.
+  //
+  // This is what makes texture-like detail possible with no texture and no UV:
+  // there is no unwrap to author for procedurally generated geometry, and no
+  // atlas to pack, because the coordinate is already here.
+  vObject = aPosition;
 }
 `;
 
@@ -8338,6 +8533,7 @@ varying vec3 vColor;
 varying float vDepth;
 varying vec3 vWorld;
 varying float vGlow;
+varying vec3 vObject;
 
 uniform vec3 uKey;        // key light direction
 uniform vec3 uFill;       // fill light direction
@@ -8351,6 +8547,79 @@ uniform vec3 uEye;        // where the camera is, for the specular
 uniform float uGloss;     // 0 for matte, 1 for painted metal and moulded plastic
 uniform float uShine;     // the specular exponent: high is tight, low is broad
 uniform float uRim;       // light picked up along the silhouette; 0 disables
+uniform vec3 uSky;        // ambient arriving from above; white is the old flat term
+uniform vec3 uGround;     // ambient arriving from below; white is the old flat term
+uniform float uGlowGain;  // how far above white a self-lit face is driven
+uniform float uExposure;  // scene exposure, applied before the tonemap
+uniform vec2 uDetail;     // .x cycles across the object, .y strength; 0 disables
+
+// A highlight rolloff: identity below the knee, asymptotic to white above it.
+//
+// The shader had no tonemap at all, and the tell was in the material constants —
+// HULL_GLOSS is documented as tuned so its specular peak lands at exactly 1.000,
+// because anything above that clipped to a flat white chip. Without somewhere to
+// put values above white, every bright thing in the game was either kept under
+// the ceiling or destroyed by it.
+//
+// The obvious answer is a filmic S-curve, and the first draft of this was the
+// ACES approximation. That is the wrong curve for THIS renderer and it is worth
+// saying why: ACES is scene-referred, built for input where 1.0 is white paper
+// and highlights run to 16 and beyond, so applied to already display-referred
+// values it lifts every mid-tone — a 0.5 becomes 0.62. This palette has been
+// hand-tuned against the existing treatment across many sections, and a curve
+// that moves every colour in the game is a change to all of that work disguised
+// as a renderer feature.
+//
+// So: below knee this is exactly the identity, and the picture below it is
+// bit-for-bit what it was. Above, values roll off along a hyperbola that
+// approaches 1.0 and never reaches it. The join is C1-continuous — the slope is
+// 1 on both sides at the knee — so there is no visible seam where it takes over.
+//
+// Deliberately NOT paired with a gamma decode/encode either, for the same
+// reason: the correct pipeline converts albedo from sRGB to linear, lights
+// there, and encodes back, and that too would move every authored colour. That
+// is the change the chromaticity guards in the suite exist to catch, and it is
+// not this one.
+vec3 rolloff(vec3 x) {
+  const float knee = 0.75;
+  vec3 over = max(x - knee, 0.0);
+  return min(x, knee) + (1.0 - knee) * (over / (over + (1.0 - knee)));
+}
+
+// Surface detail, computed rather than sampled.
+//
+// This project ships no art it did not make, so there are no textures — and
+// there are no UV coordinates in the vertex format either, which rules out
+// generating one at load and sampling it: a procedurally generated hull has no
+// unwrap to sample it WITH. What it does have is an object-space position, and
+// a field evaluated on that gives plating and panel seams welded to the hull,
+// for one varying and no vertex format change.
+//
+// Triangle waves, not a hash. The obvious noise for this is
+// fract(sin(dot(p, k)) * large), and it must not be used here: this shader is
+// mediump, that function needs the low bits of a large product, and on a phone
+// it degenerates into banding or a constant. abs(fract(x) - 0.5) is exact at
+// any precision.
+//
+// The frequencies are mutually unrelated so the octaves never line up and
+// repeat visibly, which is the same reason terrain() in scene.js multiplies by
+// 2.07 rather than 2.
+float tri1(float x) { return abs(fract(x) - 0.5) * 2.0; }
+
+float plating(vec3 p, float f) {
+  float a = (tri1(p.x * f) + tri1(p.y * f * 0.73) + tri1(p.z * f * 1.31)) / 3.0;
+  float b = (tri1(p.x * f * 2.13 + 0.37) + tri1(p.z * f * 2.61 + 0.11)) / 2.0;
+  return a * 0.65 + b * 0.35;
+}
+
+// The narrow dark line where two plates meet. This is the term that reads as
+// panelling rather than as noise — and the one that has to fade with distance,
+// because a seam thinner than a pixel is not detail, it is aliasing, and there
+// is no mipmap under a computed field to do it for us.
+float seams(vec3 p, float f) {
+  vec3 g = abs(fract(p * f) - 0.5) * 2.0;
+  return smoothstep(0.0, 0.10, min(min(g.x, g.y), g.z));
+}
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -8364,7 +8633,33 @@ void main() {
   // room: a bridge lit from a ceiling ring, with pale grey walls bouncing light
   // at each other, has almost no true shadow in it. Hardcoding the vacuum value
   // rendered the interior as a black box with a few lit panels floating in it.
-  vec3 lit = vColor * uTint * (uAmbient + key * uKeyPower + fill);
+  //
+  // The ambient has a DIRECTION now. A flat scalar gives every face away from the
+  // key the same fill regardless of which way it points, which is the one thing
+  // that reliably reads as computer graphics: real ambient arrives mostly from
+  // one hemisphere — sky above a planet, deckhead above a room, the galactic
+  // plane in open space. Blending sky against ground on n.y costs one mix and is
+  // what makes a corner of a corridor read as a corner.
+  //
+  // uSky == uGround == white reproduces the old flat term exactly, which is the
+  // default, so every caller that has not been taught about this is unaffected.
+  vec3 ambient = uAmbient * mix(uGround, uSky, n.y * 0.5 + 0.5);
+
+  // Plating and panel seams, faded out with distance so they never alias.
+  //
+  // Applied to the ALBEDO, before any lighting, because that is what they are:
+  // the hull is not a uniform colour, it is plates. Modulating the lit result
+  // instead would put panel lines on top of the highlight as well, which reads
+  // as dirt on the lens rather than as a surface.
+  vec3 albedo = vColor;
+  if (uDetail.y > 0.001) {
+    float near = clamp(1.0 - vDepth / (uFogFar * 0.35), 0.0, 1.0);
+    float d = plating(vObject, uDetail.x) - 0.5;
+    float s = seams(vObject, uDetail.x * 0.18);
+    albedo *= (1.0 + d * uDetail.y * near) * mix(1.0, s, 0.35 * near);
+  }
+
+  vec3 lit = albedo * uTint * (ambient + key * uKeyPower + fill);
 
   // A specular highlight, Blinn-Phong, one term.
   //
@@ -8432,8 +8727,7 @@ void main() {
   // windows, bussard domes, the deflector, an impulse deck — without paying a
   // second draw call for them. A hull with no lit faces carries zeroes here and
   // renders exactly as it did before.
-  lit = mix(lit, vColor * uTint, clamp(max(uEmissive, vGlow), 0.0, 1.0));
-
+  //
   // Fog toward the far plane, so a distant hull recedes rather than hanging
   // at full contrast against the starfield.
   //
@@ -8445,7 +8739,32 @@ void main() {
   // a near-black disc. It is a uniform now, and the draws that are meant to be
   // far away set it accordingly.
   float fog = clamp(1.0 - vDepth / uFogFar, 0.35, 1.0);
-  gl_FragColor = vec4(lit * fog, uAlpha);
+
+  // The rolloff covers the LIT path ONLY, and this is the most important line
+  // in the change.
+  //
+  // A self-lit surface is not a measurement of arriving light — it is the
+  // colour the mesh asked for, and the whole reason the glow channel exists is
+  // that a window has to punch through the haze. Running it through a shoulder
+  // costs exactly the thing §99 spent a section buying: shadedAlong bakes a
+  // 0.58-to-1.18 ramp into every window belt, port row and greeble run in the
+  // fleet, and the display span of that ramp measures
+  //
+  //     today, clamped at 1.0      0.580 -> 1.000     span 0.420
+  //     rolled off with the lit    0.580 -> 0.908     span 0.328
+  //
+  // — a fifth of the gradient work on half the fleet's vertices, given away to
+  // a curve that was never meant to touch it. Mapping the two paths separately
+  // costs one extra mix and gives that back.
+  //
+  // uGlowGain is 1.0 by default, and at 1.0 this branch is bit-for-bit what
+  // the shader did before. Emissive surfaces are not where the glow should come
+  // from anyway: driving them above white only clips the same ramp from the
+  // other end. The glow belongs in the overlay glare pass, where it can be a
+  // halo AROUND the aperture rather than a brighter aperture.
+  vec3 mapped = rolloff(lit * fog * uExposure);
+  vec3 selfLit = clamp(vColor * uTint * uGlowGain, 0.0, 1.0) * fog;
+  gl_FragColor = vec4(mix(mapped, selfLit, clamp(max(uEmissive, vGlow), 0.0, 1.0)), uAlpha);
 }
 `;
 
@@ -8493,6 +8812,21 @@ const VACUUM_LIGHT = {
   ambient: 0.22,
   keyPower: 0.85,
 };
+
+/**
+ * Scene exposure, multiplied in immediately before the highlight rolloff.
+ *
+ * 1.0 on purpose, and it is the honest default rather than a placeholder. The
+ * rolloff is the identity below its knee, so at exposure 1.0 every pixel the
+ * game drew below 0.75 is unchanged to the bit — which means this whole change
+ * can be judged on what it does to the bright end alone, with nothing else
+ * moving underneath it.
+ *
+ * It is a uniform rather than a constant because the bridge and open space want
+ * different answers eventually, and because the one thing a renderer with no
+ * tonemap could not offer was a single place to say "this scene is brighter".
+ */
+const EXPOSURE = 1.0;
 class Renderer {
   /**
    * @returns {Renderer|null} null when WebGL is unavailable, which is a
@@ -8564,6 +8898,11 @@ class Renderer {
       gloss: gl.getUniformLocation(this.program, 'uGloss'),
       shine: gl.getUniformLocation(this.program, 'uShine'),
       rim: gl.getUniformLocation(this.program, 'uRim'),
+      sky: gl.getUniformLocation(this.program, 'uSky'),
+      ground: gl.getUniformLocation(this.program, 'uGround'),
+      glowGain: gl.getUniformLocation(this.program, 'uGlowGain'),
+      exposure: gl.getUniformLocation(this.program, 'uExposure'),
+      detail: gl.getUniformLocation(this.program, 'uDetail'),
     };
 
     // Scratch float32 views. Matrices are float64 in the simulation and must be
@@ -8576,6 +8915,7 @@ class Renderer {
     this._gloss = 0;
     this._shine = 24;
     this._rim = 0;
+    this._detail = [0, 0];
 
     this._onLost = (e) => { e.preventDefault(); this.lost = true; this.buffers.clear(); };
     this._onRestored = () => { this.lost = false; this.restore(); };
@@ -8651,6 +8991,15 @@ class Renderer {
     gl.uniform1f(this.uniform.gloss, 0);
     gl.uniform1f(this.uniform.shine, 24);
     gl.uniform1f(this.uniform.rim, 0);
+    // The tonemap's neutral setting, and a flat white hemisphere, so a frame
+    // that never calls `setLighting` renders as it always did apart from the
+    // filmic curve itself.
+    gl.uniform3f(this.uniform.sky, 1, 1, 1);
+    gl.uniform3f(this.uniform.ground, 1, 1, 1);
+    gl.uniform1f(this.uniform.glowGain, 1);
+    gl.uniform1f(this.uniform.exposure, EXPOSURE);
+    this._detail = [0, 0];
+    gl.uniform2f(this.uniform.detail, 0, 0);
     return true;
   }
 
@@ -8663,6 +9012,7 @@ class Renderer {
    */
   setLighting({
     key, fill, ambient = 0.22, keyPower = 0.85, eye, gloss = 0, shine = 24, rim = 0,
+    sky = null, ground = null, glowGain = 1, exposure = EXPOSURE,
   } = {}) {
     if (this.lost) return;
     const { gl } = this;
@@ -8671,6 +9021,15 @@ class Renderer {
     if (eye) gl.uniform3f(this.uniform.eye, eye[0], eye[1], eye[2]);
     gl.uniform1f(this.uniform.ambient, ambient);
     gl.uniform1f(this.uniform.keyPower, keyPower);
+    // A caller that names neither gets a flat white hemisphere, which is the
+    // old scalar ambient exactly. Naming one and not the other is a mistake
+    // worth not silently accepting, so both fall back together.
+    const above = sky ?? ground ?? [1, 1, 1];
+    const below = ground ?? sky ?? [1, 1, 1];
+    gl.uniform3f(this.uniform.sky, above[0], above[1], above[2]);
+    gl.uniform3f(this.uniform.ground, below[0], below[1], below[2]);
+    gl.uniform1f(this.uniform.glowGain, glowGain);
+    gl.uniform1f(this.uniform.exposure, exposure);
     // The scene's default sheen. A draw may override it for one mesh; see
     // `draw`. Remembered so that an overriding draw does not leak its value
     // into the next one.
@@ -8799,7 +9158,7 @@ class Renderer {
    */
   draw(key, mesh, {
     model, normalMatrix, tint = [1, 1, 1], alpha = 1, emissive = 0,
-    gloss = null, shine = null, rim = null,
+    gloss = null, shine = null, rim = null, detail = null,
     // Default is the engagement volume, which is what almost every draw is.
     fogFar = 9000,
   }) {
@@ -8832,6 +9191,11 @@ class Renderer {
     gl.uniform1f(this.uniform.gloss, gloss ?? this._gloss);
     gl.uniform1f(this.uniform.shine, shine ?? this._shine);
     gl.uniform1f(this.uniform.rim, rim ?? this._rim);
+    // Written on EVERY draw, never conditionally. A hull that asks for plating
+    // and a room that does not, drawn in that order, would otherwise put hull
+    // plating on the deck — the same leak `_gloss` above exists to prevent.
+    const det = detail ?? this._detail;
+    gl.uniform2f(this.uniform.detail, det[0], det[1]);
 
     gl.drawArrays(gl.TRIANGLES, 0, entry.vertexCount);
     this.drawCalls++;
@@ -10839,8 +11203,27 @@ const paletteFor = (faction) => PALETTE[faction] ?? PALETTE.independent;
  * rather than of the scene, and in ONE place because the two draw sites that
  * need it are in different files and a number written twice is a number that
  * drifts.
+ *
+ * RAISED from 0.14 to 0.32, and the reasoning above is why it could not have
+ * been before. Both of its premises have changed:
+ *
+ *   The clipping ceiling is gone. The shader rolls off above 0.75 now instead
+ *   of clamping at 1.0, so a peak past white is a bright highlight rather than
+ *   a flat white patch. At 0.32 a Starfleet hull peaks at 1.146 before the
+ *   curve and displays 0.905 after it — brighter than the old 0.874, and with
+ *   a shoulder on it rather than an edge.
+ *
+ *   There is something for it to land on. The old value was tuned against a
+ *   flat-shaded hull, where the note on HULL_SHINE below measured the term
+ *   buying FOUR levels out of 255 because the lobe fell between facets. The
+ *   curved primitives carry per-vertex normals now, so the lobe has a
+ *   continuous normal field to sweep and the highlight is a sheen sliding
+ *   across a saucer instead of a glint that is never quite there.
+ *
+ * Klingon hulls, being darker paint, still sit proportionally lower — that half
+ * of the original reasoning is untouched and still correct.
  */
-const HULL_GLOSS = 0.14;
+const HULL_GLOSS = 0.32;
 
 /**
  * And how tight that highlight is.
@@ -10867,11 +11250,47 @@ const HULL_GLOSS = 0.14;
  *
  * The ceiling is unchanged: the specular can never exceed `HULL_GLOSS`
  * whatever the exponent, so broadening the lobe cannot make it clip.
+ *
+ * RAISED from 8 to 18, because the measurement above was of a flat-shaded hull
+ * and hulls are not flat-shaded any more.
+ *
+ * Broadening the lobe to 8 was the right answer to the wrong problem. The
+ * problem was never that the lobe was too narrow; it was that a faceted surface
+ * samples it at a few dozen fixed directions, so a narrow lobe falls between
+ * them — measured then across the fleet as 16,388 shared edges stepping by 15
+ * to 23 degrees against a lobe 13.7 degrees wide at exponent 24. Widening it
+ * until it could not be missed also spread it until it was not a highlight.
+ *
+ * With analytic normals on every sphere, tube and saucer band, the normal field
+ * is continuous and the lobe is swept rather than sampled. So the exponent can
+ * go back to describing how POLISHED the hull is, which is what it is for, and
+ * 18 is painted metal: tighter than a matte plate, broader than a mirror.
  */
-const HULL_SHINE = 8;
+const HULL_SHINE = 18;
 
 /** How much light a hull picks up along its own outline. See the note in gl.js. */
 const HULL_RIM = 0.35;
+
+/**
+ * Plating, as cycles across the hull and how strongly it shows.
+ *
+ * A hull is not a uniform colour, it is plates — and this renderer has no
+ * texture to say so with, no UV to sample one through, and no unwrap to author
+ * for geometry that is generated rather than modelled. What it does have is the
+ * mesh's own object space, and a field evaluated on that in the fragment shader
+ * gives the same answer with none of the machinery. See `plating` in gl.js.
+ *
+ * 55 cycles because a hull is about one unit nose to tail in object space, so
+ * this is roughly a plate every two per cent of the ship's length — coarse
+ * enough to read as panelling at viewscreen range rather than as noise. The
+ * strength is deliberately low: at 0.10 the plates vary by a tenth either side
+ * of the authored colour, which is a surface, and much more is a paint job.
+ *
+ * It fades out with distance in the shader. There is no mipmap under a computed
+ * field, so a seam finer than a pixel would alias — and at fleet range a hull is
+ * a few dozen pixels and this correctly contributes nothing at all.
+ */
+const HULL_DETAIL = [55, 0.10];
 
 /**
  * Hull archetypes. `build` receives a MeshBuilder, the palette, and the
@@ -11838,6 +12257,7 @@ __exports.paletteFor = paletteFor;
 __exports.HULL_GLOSS = HULL_GLOSS;
 __exports.HULL_SHINE = HULL_SHINE;
 __exports.HULL_RIM = HULL_RIM;
+__exports.HULL_DETAIL = HULL_DETAIL;
 __exports.DIMENSIONS = DIMENSIONS;
 __exports.BLUEPRINTS = BLUEPRINTS;
 __exports.proportionError = proportionError;
@@ -12332,12 +12752,19 @@ function globe(kind, seed, SEG, RINGS, coarse) {
         // Wound so the face points AWAY from the centre — round the ring first
         // and outward second. Culling is on: get this backwards and the planet
         // is not dark, it is absent.
+        //
+        // Every vertex here is already a unit vector — sin(a) and cos(a) squared
+        // sum to one — so on a sphere centred at the origin the position IS the
+        // normal, and the whole of the smooth shading is passing it twice. That
+        // is the cheapest line in this change and close to the most visible: a
+        // world in standard orbit is 3,024 facets and read as a faceted disc,
+        // and the terminator across it was a staircase.
         if (ring === 0) {
-          mb.tri(vec3(0, 1, 0), outer1, outer0, color);
+          mb.tri(vec3(0, 1, 0), outer1, outer0, color, 0, [vec3(0, 1, 0), outer1, outer0]);
         } else if (ring === RINGS - 1) {
-          mb.tri(vec3(0, -1, 0), inner0, inner1, color);
+          mb.tri(vec3(0, -1, 0), inner0, inner1, color, 0, [vec3(0, -1, 0), inner0, inner1]);
         } else {
-          mb.quad(inner0, inner1, outer1, outer0, color);
+          mb.quad(inner0, inner1, outer1, outer0, color, 0, [inner0, inner1, outer1, outer0]);
         }
       }
     }
@@ -19651,7 +20078,7 @@ __define("src/ui/tactical3d.js", function (__exports, __require) {
 
 const { vec3, mat4, quat, identity, multiply, perspective, lookAt, compose, normalMatrix, quatFromEuler, quatAxisAngle, quatMultiply, project, sub, length: vlength, normalize, cross } = __require("src/gfx/math.js");
 const { Renderer, VACUUM_LIGHT } = __require("src/gfx/gl.js");
-const { hullMesh, hullScale, paletteFor, HULL_GLOSS, HULL_SHINE, HULL_RIM } = __require("src/gfx/blueprint.js");
+const { hullMesh, hullScale, paletteFor, HULL_GLOSS, HULL_SHINE, HULL_RIM, HULL_DETAIL } = __require("src/gfx/blueprint.js");
 const { starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, arcMesh, VOLUME } = __require("src/gfx/scene.js");
 const { vista, bearingOf, fovFor, noseOf, VISTA_DRAW_CAP } = __require("src/gfx/vista.js");
 const { inArc } = __require("src/sim/ship.js");
@@ -20467,6 +20894,7 @@ class TacticalView3D {
       gloss: HULL_GLOSS,
       shine: HULL_SHINE,
       rim: HULL_RIM,
+      detail: HULL_DETAIL,
     });
 
     // Drop line to the grid: this is what makes altitude legible.
@@ -21466,7 +21894,7 @@ const { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } = __re
 const { occupantsOf } = __require("src/sim/occupancy.js");
 const { starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME } = __require("src/gfx/scene.js");
 const { orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE } = __require("src/world/orbit.js");
-const { hullMesh, hullScale, HULL_GLOSS, HULL_SHINE, HULL_RIM } = __require("src/gfx/blueprint.js");
+const { hullMesh, hullScale, HULL_GLOSS, HULL_SHINE, HULL_RIM, HULL_DETAIL } = __require("src/gfx/blueprint.js");
 const { vista, fovFor, noseOf, joltShake, joltTint } = __require("src/gfx/vista.js");
 const { drawCombatEffects } = __require("src/gfx/effects.js");
 const { ROOMS } = __require("src/world/interiors.data.js");
@@ -21483,6 +21911,35 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  * surface rather than as an edge on the near one.
  */
 const ROOM_RIM = 0.16;
+
+/**
+ * Where a compartment's ambient light actually comes FROM.
+ *
+ * A flat ambient scalar adds the same light to a surface facing the deckhead as
+ * to one facing the deck, and that is the single thing that most reliably reads
+ * as computer graphics rather than as a place — every corner of every
+ * compartment gets exactly the same lift, so no corner is a corner.
+ *
+ * In a room the true answer is not subtle and costs nothing to say: the light is
+ * a ring in the deckhead, and what comes back off the deck is dimmer and warmer
+ * for having bounced off it. `room.js` already knows this and has been
+ * compensating in the PALETTE — "dark floors, pale ceilings" — which is the same
+ * observation made in the one channel that could carry it at the time.
+ *
+ * The pair is deliberately centred on 1.0. A surface edge-on to both gets
+ * exactly the old flat ambient, so this changes the DIRECTION the light arrives
+ * from without changing how much of it there is, and a room that was correctly
+ * exposed before still is. Up-facing surfaces get 1.22, down-facing 0.78 — a
+ * ratio of about one and a half, which is what a deckhead ring against a grey
+ * deck actually looks like.
+ *
+ * There is no vacuum equivalent on purpose. A hull in space has nothing below it
+ * to bounce off, which is what `VACUUM_LIGHT`'s very low ambient already says;
+ * giving space a ground colour would be inventing a light source that is not
+ * there.
+ */
+const ROOM_SKY = [1.22, 1.21, 1.18];
+const ROOM_GROUND = [0.78, 0.77, 0.82];
 
 /** Eye height. A person standing, not a camera on a tripod. */
 const EYE_HEIGHT = 1.62;
@@ -21715,7 +22172,7 @@ class FirstPersonView {
     // says. At the vacuum defaults this room rendered as a black box.
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
-      ambient: 0.62, keyPower: 0.44,
+      ambient: 0.62, keyPower: 0.44, sky: ROOM_SKY, ground: ROOM_GROUND,
       eye: this.eyeOf(walker), gloss: 0.22,
     });
 
@@ -21755,7 +22212,7 @@ class FirstPersonView {
     // as fog rather than as form. It costs no triangles and no draw calls.
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
-      ambient: 0.62, keyPower: 0.44,
+      ambient: 0.62, keyPower: 0.44, sky: ROOM_SKY, ground: ROOM_GROUND,
       eye: this.eyeOf(walker), gloss: 0.22, rim: ROOM_RIM,
     });
     this.renderer.setCamera(this._viewProj);
@@ -22122,6 +22579,7 @@ class FirstPersonView {
           gloss: HULL_GLOSS,
           shine: HULL_SHINE,
           rim: HULL_RIM,
+          detail: HULL_DETAIL,
         });
       }
 
@@ -22324,6 +22782,8 @@ class FirstPersonView {
 }
 
 __exports.ROOM_RIM = ROOM_RIM;
+__exports.ROOM_SKY = ROOM_SKY;
+__exports.ROOM_GROUND = ROOM_GROUND;
 __exports.EYE_HEIGHT = EYE_HEIGHT;
 __exports.SEATED_HEIGHT = SEATED_HEIGHT;
 __exports.JOLT_SECONDS = JOLT_SECONDS;

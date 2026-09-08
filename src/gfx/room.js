@@ -1025,14 +1025,37 @@ export function officerMesh(crew = 'ops', mounted = 'wall') {
   // "person" rather than "bollard" at a distance.
   //
   // Sixty triangles became ninety-six. A hull in this game is a thousand.
-  if (!seated) {
-    for (const side of [-1, 1]) {
+  for (const side of [-1, 1]) {
+    if (seated) {
+      // A SEATED officer had no legs at all, and that is the worst thing about
+      // any figure in the game — because it is the one the player looks at most.
+      // The captain's chair faces the helm and the con, the crew chairs' backs
+      // stop below shoulder height on purpose so the officer reads over them,
+      // and what read over them was a torso floating above a seat.
+      //
+      // A thigh forward and a shin down is two boxes and fixes it completely.
+      box(mb, {
+        center: vec3(side * 0.085, hip - 0.04, 0.15),
+        size: vec3(0.13, 0.15, 0.34), color: dark,
+      });
+      box(mb, {
+        center: vec3(side * 0.085, hip * 0.45, 0.28),
+        size: vec3(0.12, hip * 0.9, 0.13), color: dark,
+      });
+    } else {
       box(mb, {
         center: vec3(side * 0.075, hip / 2, 0),
         size: vec3(0.10, hip, 0.18),
         color: dark,
       });
     }
+    // Feet, on both. Without them a standing figure ends at the ankle and
+    // hovers a little above the deck, which is the same complaint the neck
+    // below was added to answer at the other end of the body.
+    box(mb, {
+      center: vec3(side * 0.078, seated ? 0.05 : 0.025, seated ? 0.34 : 0.03),
+      size: vec3(0.11, 0.05, 0.24), color: dark,
+    });
   }
 
   // The torso in two parts, narrower at the waist than at the shoulders.
@@ -1047,16 +1070,49 @@ export function officerMesh(crew = 'ops', mounted = 'wall') {
     size: vec3(0.40, shoulder - waist, 0.24), color: colour,
   });
 
-  // Arms, out to either side. At yaw 0 that is ±x, which is what makes the
-  // whole figure rotatable by a single quaternion.
-  box(mb, { center: vec3(0.26, shoulder - 0.16, 0), size: vec3(0.11, 0.34, 0.11), color: colour });
-  box(mb, { center: vec3(-0.26, shoulder - 0.16, 0), size: vec3(0.11, 0.34, 0.11), color: colour });
+  // Arms in two parts: upper arm hanging from the shoulder, forearm carried
+  // FORWARD. At yaw 0 that is ±x and +z, which keeps the whole figure
+  // rotatable by a single quaternion.
+  //
+  // One straight prism a side reads as a figure standing to attention, and
+  // almost nobody in this game is standing to attention — they are working a
+  // console. Bending the arm at the elbow is the difference between a crew and
+  // a guard of honour, and it is two boxes a side.
+  for (const side of [-1, 1]) {
+    box(mb, {
+      center: vec3(side * 0.255, shoulder - 0.11, 0),
+      size: vec3(0.11, 0.26, 0.11), color: colour,
+    });
+    box(mb, {
+      center: vec3(side * 0.235, shoulder - 0.27, 0.14),
+      size: vec3(0.10, 0.10, 0.28), color: colour,
+    });
+  }
 
   // A neck, so the head sits ON the shoulders instead of floating above a
   // flat top. It is two centimetres of geometry and it is most of the
   // difference between a figure and a stack of boxes.
   box(mb, { center: vec3(0, shoulder + 0.03, 0), size: vec3(0.10, 0.06, 0.10), color: SKIN });
-  box(mb, { center: vec3(0, shoulder + 0.17, 0), size: vec3(0.19, 0.22, 0.20), color: SKIN });
+  box(mb, { center: vec3(0, shoulder + 0.16, 0), size: vec3(0.19, 0.20, 0.20), color: SKIN });
+
+  // A head that has a FRONT.
+  //
+  // The head was one skin-coloured cube, and a cube is the one solid with
+  // nothing to say about which way it is facing. In first person the player
+  // stands a metre from these, and an officer who has turned to look at you
+  // was indistinguishable from one who has not.
+  //
+  // A crown that overhangs at the back and a brow band across the front are
+  // two boxes and settle it. They also stop the head reading as a cube at all,
+  // which no amount of rounding it off would have done as cheaply.
+  box(mb, {
+    center: vec3(0, shoulder + 0.265, -0.015),
+    size: vec3(0.20, 0.08, 0.21), color: [0.14, 0.12, 0.11],
+  });
+  box(mb, {
+    center: vec3(0, shoulder + 0.19, 0.095),
+    size: vec3(0.18, 0.05, 0.03), color: [0.20, 0.17, 0.15],
+  });
 
   const built = mb.build();
   CREW_CACHE.set(key, built);

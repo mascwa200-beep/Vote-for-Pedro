@@ -12023,6 +12023,219 @@ same as loosening it, and the difference is worth being explicit about.
 The fleet has no lopsided hulls left. The only class that is not a mirror image of
 itself is the one that should not be.
 
+## 124. Making the lighting model land
+
+The instruction was to make every model look like a triple-A game. That literal
+target is not reachable here and saying so up front is part of the work: AAA
+fidelity is texture and post-processing — albedo, normal and roughness maps,
+baked lighting, deferred shading — and this renderer is WebGL 1 with one shader
+program, no textures, no UVs, no framebuffers and no extensions, shipping as an
+offline phone APK.
+
+What the measurement found is that the gap was not a missing lighting model. It
+was a lighting model that could not land.
+
+### §72's measurement, acted on four sections late
+
+§72 wired the existing specular to hulls and measured the result: **four levels
+out of 255** on the brightest pixel. It also explained why, and the explanation
+is this section:
+
+> "A hull a hundred pixels across … the view vector is very nearly constant over
+> all of it, the half-vector is effectively **one direction**, and a flat-shaded
+> hull samples the lobe at its facet normals and nowhere else. With an exponent
+> of 24 the lobe is narrower than the gap between facets, so it is simply
+> missed."
+
+That is not an argument that specular does not work. It is an argument that
+**flat normals waste it**. Measured again now, before changing anything:
+
+```
+16,388 shallow (<45') shared edges across the fleet, stepping 15 to 23 degrees
+specular lobe half-width at the close-range exponent of 24:   13.7 degrees
+```
+
+The lobe is narrower than the step. §72's finding still held.
+
+### Smooth normals cost nothing, and no assertion had to move
+
+§94 killed smooth shading on `mesh.js`'s own grounds: it "removes any need for
+normal averaging, smoothing groups or UVs". The exploration for this change
+agreed and went further — that smoothing would need vertex welding, an index
+buffer, and the relaxing of three `vertexCount === triangles * 3` assertions.
+
+All of that is wrong, and the reason is worth stating plainly. `vertexCount` is
+derived from `positions` alone, and those assertions count vertices. Keeping
+three unshared vertices per triangle and writing **different normals into them**
+leaves every one of them true — their own comment says what they are for:
+*"catches a helper that split a face to get its gradient"*. They are a tripwire
+for vertex duplication and say nothing about normals.
+
+And the averaging objection is answered rather than overridden: the curved
+primitives hand `tri` their own **analytic** normals. A sphere's is its offset
+from the centre, corrected for the ellipsoid; a tube's falls out of its profile;
+a saucer's three bands each state their own, which is what keeps the rim between
+them hard. No averaging pass, no smoothing group, no UV, no seam to reason about.
+
+```
+fleet triangles                     33,834  ->  33,834     unchanged
+triangles with per-vertex normals         0  ->  18,188     53.8%
+shared positions with an agreed normal 3,402  ->   9,187
+shallow facet steps remaining          6,251  ->     641
+```
+
+Zero triangles, and 90% of the faceting gone.
+
+### Two signs, and only one of them was mine to fix
+
+The saucer's first draft had all 192 of its normals inverted, caught by a guard
+that dots every vertex normal against its own face. Deriving that normal from the
+profile gives a plate whose outward direction is up — and the face normal `tri`
+computes from that quad's winding points **down**. The saucer is wound the other
+way round from the derivation and has been since it was written.
+
+Which of the two is right is a real question, and it is not this change's to
+answer: flipping it would relight the top of every Federation saucer in the game,
+which is a visible change to the fleet dressed up as a smoothing pass. The
+normals here match the existing winding, so the only thing they do is make the
+surface continuous. Recorded for a change that can measure it on its own.
+
+### A rolloff, not a filmic curve
+
+The shader had no tonemap, and the tell was in the material constants:
+`HULL_GLOSS` is documented as tuned so its specular peak lands at exactly 1.000,
+because anything above that clipped to a flat white chip.
+
+The first draft used the ACES approximation, and it is the wrong curve here. ACES
+is scene-referred, built for input where 1.0 is white paper and highlights run to
+16 — applied to already display-referred values it lifts every mid-tone, a 0.5
+becoming 0.62. This palette has been hand-tuned across many sections, and a curve
+that moves every colour in the game is a change to all of that work disguised as
+a renderer feature.
+
+So: identity below a knee at 0.75, and a hyperbola above it that approaches 1.0
+and never reaches it, C1-continuous at the join. Everything the game drew below
+0.75 is unchanged to the bit, and only what used to clip behaves differently.
+
+**And it covers the lit path only**, which is the most important line in the
+change. `shadedAlong` bakes a 0.58-to-1.18 ramp into every window belt, port row
+and greeble run in the fleet — §99's whole contribution, on half the fleet's
+vertices. Through a shoulder that ramp measures:
+
+```
+today, clamped at 1.0        0.580 -> 1.000     span 0.420
+rolled off with the lit      0.580 -> 0.908     span 0.328
+mapped separately, as built  0.580 -> 1.000     span 0.420
+```
+
+A fifth of §99's gradient work, nearly given away to a curve that was never meant
+to touch it.
+
+### What the smooth normals then paid for
+
+| constant | was | now | why it could not have been before |
+| --- | --- | --- | --- |
+| `HULL_GLOSS` | 0.14 | **0.32** | the value was the clipping ceiling, and there is no ceiling now |
+| `HULL_SHINE` | 8 | **18** | 8 was the lobe widened until facets could not miss it; a continuous normal field does not need that |
+
+`HULL_SHINE` is the clearer case. Widening the lobe was the right answer to the
+wrong problem — the problem was never that it was too narrow, it was that a
+faceted surface samples it at a few dozen fixed directions. Now the exponent can
+go back to describing how polished a hull is, which is what it is for.
+
+### Ambient with a direction, and plating without a texture
+
+**Hemisphere ambient.** A flat scalar adds the same light to a surface facing the
+deckhead as to one facing the deck, which is the single thing that most reliably
+reads as computer graphics: every corner gets the same lift, so no corner is a
+corner. The pair is centred on 1.0, so a surface edge-on to both gets exactly the
+old ambient — this changes the direction the light arrives from, not how much of
+it there is. Wired in rooms, where a deck genuinely bounces light, and **not** in
+vacuum, where inventing a ground bounce would be inventing a light source.
+
+**Procedural surface detail.** The user asked for runtime-generated textures. The
+obvious reading — build bitmaps at load and sample them — needs UV coordinates
+the vertex format does not have, and a procedurally generated hull has no unwrap
+to sample them through. Evaluating the same field on the mesh's **object-space
+position** in the fragment shader needs no UV, no atlas, no format change and no
+unwrap: one varying, and plating and panel seams welded to the plate they are on.
+
+Triangle waves rather than a hash, deliberately. The usual
+`fract(sin(dot(p, k)) * large)` needs the low bits of a large product, and this
+shader is `mediump`; on a phone that degenerates into banding or a constant.
+`abs(fract(x) - 0.5)` is exact at any precision.
+
+### The crew, and a correction
+
+I read the bridge screenshot and reported the crew as "box torso, cube head, no
+arms". That was wrong — they already had two legs, a two-part tapered torso, two
+arms and a neck. What they actually lacked was more specific and worse:
+
+- **A seated officer had no legs at all**, the leg block sitting behind
+  `if (!seated)`. The captain's chair faces the helm and the con and the crew
+  chairs' backs stop below shoulder height on purpose, so what read over them was
+  a torso floating above a seat — from the camera position the game spends most
+  of its time in.
+- The arms were single straight prisms, which reads as standing to attention.
+  Almost nobody aboard is standing to attention; they are working a console.
+- Nothing above the waist distinguished front from back, so an officer who had
+  turned to look at you was identical to one who had not.
+
+96 triangles standing and 72 seated became 168 and 192, against a frame budget of
+8,000 and one draw call either way.
+
+### Guards, and two of them that did not work first time
+
+| guard | control | fires |
+| --- | --- | --- |
+| the round parts are round and the flat parts flat | keep computing face normals | ✓ "only 0.0%" |
+| and nothing is smoothed that should not be | smooth a box | ✓ |
+| no normal disagrees with its own face | invert the saucer | ✓ 360 on a Constitution |
+| every shader uniform is one `restore()` can find | rename a key | ✓ names it |
+| a seated officer has legs | put them back behind the branch | ✓ |
+| a figure has a front | paint the head one colour | ✓ |
+
+The last two **passed against the broken code on the first attempt**, and both
+for the same kind of reason. The seated-legs guard measured every vertex below
+the hip and picked up the feet, which are built outside the branch being tested;
+it measures the thigh band now. The has-a-front guard counted colour sets and was
+satisfied by one colour at the front and the same one at the back; it compares
+them now. A guard that passes against the defect it was written for is worse than
+no guard, because it also reports that the defect is absent.
+
+### What is not in this, and why
+
+- **Room panelling, coving and console bezels.** The rooms have 2.9× their
+  budget spare and this is where geometry is most visible, so it is the obvious
+  next piece. Not done here.
+- **Planet resolution.** Smooth normals fixed the shading; the remaining
+  blockiness is `surfaceColor` sampling once per facet centroid, which is a
+  per-vertex-colour change rather than a normal one.
+- **Bloom.** The overlay canvas route is the right one — a GL bloom needs an FBO,
+  a second program and a float target this context cannot have, and `antialias`
+  means the default framebuffer is multisampled while a WebGL 1 FBO cannot be.
+- **Raised triangle ceilings.** Not needed: every change here cost zero
+  triangles. The fleet is still 33,834 of 36,000.
+
+### The claim that cannot be backed by a measurement
+
+Every performance figure this project has is from desktop Chromium at a
+phone-shaped viewport. **No build has ever run on a real phone**, and CI has no
+performance gate of any kind. This change adds fragment work — a rolloff, a
+hemisphere mix, and a two-octave field — to a renderer whose own notes call it
+fill-bound in four places and which has never measured fill anywhere.
+
+That is the one claim here with nothing behind it, and it is stated rather than
+buried.
+
+### Verification
+
+- `node --test tests/*.test.js` — **2,113 passing**, 0 failing
+- `tools/verify-app.mjs` — 410/410
+- `dist/` and the APK rebuilt; manifest carries `VIBRATE` only, no `INTERNET`
+- Screenshots re-read by eye at every step: bridge, corridor, per-class hulls,
+  orbit
+
 ## 123. A hundred triangles sealed inside the hulls
 
 §122 said it spent thirty-six triangles. It spent thirty-six and wasted twelve of

@@ -24,7 +24,7 @@ import {
   project, sub, length as vlength, normalize, cross,
 } from '../gfx/math.js';
 import { Renderer, VACUUM_LIGHT } from '../gfx/gl.js';
-import { hullMesh, hullScale, paletteFor, HULL_GLOSS, HULL_SHINE, HULL_RIM } from '../gfx/blueprint.js';
+import { hullMesh, hullScale, paletteFor, HULL_GLOSS, HULL_SHINE, HULL_RIM, HULL_DETAIL } from '../gfx/blueprint.js';
 import {
   starfield, gridMesh, shieldMesh, dropLineMesh, bodyMesh, rockMesh, cloudMesh, arcMesh, VOLUME,
 } from '../gfx/scene.js';
@@ -843,6 +843,7 @@ export class TacticalView3D {
       gloss: HULL_GLOSS,
       shine: HULL_SHINE,
       rim: HULL_RIM,
+      detail: HULL_DETAIL,
     });
 
     // Drop line to the grid: this is what makes altitude legible.

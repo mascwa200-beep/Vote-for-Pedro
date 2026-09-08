@@ -38,7 +38,7 @@ import {
 import {
   orbitFrame, orbitPeriod, rotationPeriod, angularRadius, ORBIT_TIME_SCALE,
 } from '../world/orbit.js';
-import { hullMesh, hullScale, HULL_GLOSS, HULL_SHINE, HULL_RIM } from '../gfx/blueprint.js';
+import { hullMesh, hullScale, HULL_GLOSS, HULL_SHINE, HULL_RIM, HULL_DETAIL } from '../gfx/blueprint.js';
 import { vista, fovFor, noseOf, joltShake, joltTint } from '../gfx/vista.js';
 import { drawCombatEffects } from '../gfx/effects.js';
 import { ROOMS } from '../world/interiors.data.js';
@@ -55,6 +55,35 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  * surface rather than as an edge on the near one.
  */
 export const ROOM_RIM = 0.16;
+
+/**
+ * Where a compartment's ambient light actually comes FROM.
+ *
+ * A flat ambient scalar adds the same light to a surface facing the deckhead as
+ * to one facing the deck, and that is the single thing that most reliably reads
+ * as computer graphics rather than as a place — every corner of every
+ * compartment gets exactly the same lift, so no corner is a corner.
+ *
+ * In a room the true answer is not subtle and costs nothing to say: the light is
+ * a ring in the deckhead, and what comes back off the deck is dimmer and warmer
+ * for having bounced off it. `room.js` already knows this and has been
+ * compensating in the PALETTE — "dark floors, pale ceilings" — which is the same
+ * observation made in the one channel that could carry it at the time.
+ *
+ * The pair is deliberately centred on 1.0. A surface edge-on to both gets
+ * exactly the old flat ambient, so this changes the DIRECTION the light arrives
+ * from without changing how much of it there is, and a room that was correctly
+ * exposed before still is. Up-facing surfaces get 1.22, down-facing 0.78 — a
+ * ratio of about one and a half, which is what a deckhead ring against a grey
+ * deck actually looks like.
+ *
+ * There is no vacuum equivalent on purpose. A hull in space has nothing below it
+ * to bounce off, which is what `VACUUM_LIGHT`'s very low ambient already says;
+ * giving space a ground colour would be inventing a light source that is not
+ * there.
+ */
+export const ROOM_SKY = [1.22, 1.21, 1.18];
+export const ROOM_GROUND = [0.78, 0.77, 0.82];
 
 /** Eye height. A person standing, not a camera on a tripod. */
 export const EYE_HEIGHT = 1.62;
@@ -288,7 +317,7 @@ export class FirstPersonView {
     // says. At the vacuum defaults this room rendered as a black box.
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
-      ambient: 0.62, keyPower: 0.44,
+      ambient: 0.62, keyPower: 0.44, sky: ROOM_SKY, ground: ROOM_GROUND,
       eye: this.eyeOf(walker), gloss: 0.22,
     });
 
@@ -328,7 +357,7 @@ export class FirstPersonView {
     // as fog rather than as form. It costs no triangles and no draw calls.
     this.renderer.setLighting({
       key: [0.15, 1.0, 0.1], fill: [-0.3, 0.25, -0.9],
-      ambient: 0.62, keyPower: 0.44,
+      ambient: 0.62, keyPower: 0.44, sky: ROOM_SKY, ground: ROOM_GROUND,
       eye: this.eyeOf(walker), gloss: 0.22, rim: ROOM_RIM,
     });
     this.renderer.setCamera(this._viewProj);
@@ -695,6 +724,7 @@ export class FirstPersonView {
           gloss: HULL_GLOSS,
           shine: HULL_SHINE,
           rim: HULL_RIM,
+          detail: HULL_DETAIL,
         });
       }
 
