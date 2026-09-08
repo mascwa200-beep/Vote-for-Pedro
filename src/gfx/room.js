@@ -14,13 +14,29 @@
 // structural rather than incidental: the console faces, the transporter pads,
 // the warp core and the strip lighting are all in the second one.
 //
-// THE KEY LIGHT POINTS DOWN.
+// THE KEY LIGHT POINTS DOWN, AND THE AMBIENT NOW KNOWS THAT.
 //
-// `gl.js` fixes it at (0.55, 0.72, 0.42), so floors render bright and ceilings
-// render dark, which is upside down for a room lit from its ceiling. That is
-// compensated for in the PALETTE — dark floors, pale ceilings — rather than in
-// the shader, because the shader is shared with the tactical view where the
-// current arrangement is correct.
+// This file used to compensate for a downward key in the PALETTE — dark floors,
+// pale ceilings — because the ambient was a flat scalar and albedo was the only
+// channel that could carry "the light comes from above".
+//
+// It is not the only channel any more. §124 gave the room pass a hemisphere
+// ambient (`ROOM_SKY`/`ROOM_GROUND` in `firstperson.js`), which says the same
+// thing physically: an up-facing surface collects 1.22 of the ambient and a
+// down-facing one 0.78. Both were then true at once, and the compensation
+// stopped being a compensation and became a double count — measured, the
+// deckhead went from reading 39% BRIGHTER than the deck to 3% darker, which is
+// the exact relationship the palette existed to produce, inverted.
+//
+// So the palette is unwound rather than re-tuned. The albedos below are close to
+// what the painted flats actually were, the hemisphere term supplies the
+// direction, and the deckhead now renders dimmer than the deck — which is what a
+// ceiling between light fittings really looks like. The brightness in frame
+// comes from the strip lighting, where it always came from on the set: those are
+// in the glow mesh and ignore the light entirely.
+//
+// The three largest surfaces in the game separate by 0.195 in luminance where
+// they used to separate by 0.128. That spread IS the depth cue.
 //
 // Coordinates match walk.js: x to starboard, z forward, y up, origin at the
 // centre of the room's floor.
@@ -33,10 +49,11 @@ import { ROOMS } from '../world/interiors.data.js';
  * The 1966 set palette.
  *
  * Sets built on a soundstage out of painted flats and coloured gel: mid greys,
- * warm off-whites, and saturated accents that only appear on the consoles. The
- * floor is darker than the ceiling to answer the downward key light — a floor
- * at the ceiling's value renders as a lightbox and the room loses its ceiling
- * entirely.
+ * warm off-whites, and saturated accents that only appear on the consoles.
+ *
+ * Deck and deckhead are near neighbours here, as they were in paint. They no
+ * longer carry the lighting direction — see the note at the head of this file
+ * for why they used to and why they stopped.
  */
 export const PALETTE = {
   // docs/RESEARCH.md §8. The first build assumed a 1960s set was dark. It was
@@ -45,11 +62,11 @@ export const PALETTE = {
   // both levels, and international orange on the rail, the turbolift doors and
   // the helm housing. The orange is the colour of a traffic cone, and it is the
   // single strongest thing in the room.
-  floor: [0.34, 0.33, 0.32],
-  floorTrim: [0.42, 0.40, 0.38],
+  floor: [0.420, 0.408, 0.395],
+  floorTrim: [0.519, 0.494, 0.469],
   wall: [0.80, 0.79, 0.77],
   wallLower: [0.66, 0.65, 0.63],
-  ceiling: [0.86, 0.85, 0.83],
+  ceiling: [0.720, 0.712, 0.695],
   orange: [0.92, 0.36, 0.05],        // international orange: rail, lift, helm
   console: [0.52, 0.52, 0.54],
   consoleTop: [0.40, 0.40, 0.43],
@@ -82,6 +99,20 @@ const PANEL_COLOURS = [
 ];
 
 const WALL_HEIGHT = (room) => room.shape.height ?? 2.5;
+
+// Shell trim, in metres. All of it is proud of, or cut into, a surface that was
+// previously flat from one side of the compartment to the other.
+//
+// These are small on purpose. Trim reads by catching the light at a different
+// angle from the surface it sits on, not by being large — and every one of them
+// multiplies by the panel count, so a centimetre here is a hundred triangles in
+// the hangar. Measured at eye height (1.62) rather than chosen.
+const COVE = 0.12;      // chamfer at the wall/deckhead join
+const SKIRT_H = 0.12;   // skirting height
+const SKIRT_D = 0.035;  // and how far it stands off the bulkhead
+const DADO_T = 0.05;    // dado rail thickness, on the existing seam at y = 0.9
+const DADO_D = 0.03;
+const LAMP_DROP = 0.08; // how far a ceiling light housing hangs below `h`
 
 /** A quad from four points, wound so its face points where `flip` says. */
 function face(mb, a, b, c, d, colour, flip = false) {
@@ -296,6 +327,34 @@ function ringShell(solid, glow, room) {
     const isViewer = room.viewscreen
       && Math.hypot(mx - room.viewscreen.at[0], mz - room.viewscreen.at[1]) < 1.6;
 
+    // Straight into the room from this bay's face.
+    //
+    // A bay is a CHORD, not an arc, so "inward" is the chord's perpendicular
+    // and not the radial direction — at the ends of a bay those differ by half
+    // the bay angle, which is enough to leave trim hanging off the wall. Taken
+    // from the chord and then pointed at the axis, so it cannot come out
+    // backwards on any bay.
+    const cdx = p1[0] - p0[0];
+    const cdz = p1[2] - p0[2];
+    const cl = Math.hypot(cdx, cdz) || 1;
+    const inx = (-cdz / cl) * ((-cdz / cl) * mx + (cdx / cl) * mz > 0 ? -1 : 1);
+    const inz = (cdx / cl) * ((-cdz / cl) * mx + (cdx / cl) * mz > 0 ? -1 : 1);
+    const into = (t, y, d) => {
+      const v = at(t, y);
+      return vec3(v[0] + inx * d, y, v[2] + inz * d);
+    };
+
+    // Coving, on every bay including the turbolift and the main viewer. Same
+    // reason as the box compartments: the deckhead join is the longest line in
+    // frame, and on the bridge it is in frame permanently.
+    face(solid, at(0, h - COVE), at(1, h - COVE), into(1, h, COVE), into(0, h, COVE),
+      PALETTE.wall, true);
+    // Skirting, likewise unbroken — the deck ring runs behind the doorway.
+    face(solid, into(0, 0, SKIRT_D), into(1, 0, SKIRT_D), into(1, SKIRT_H, SKIRT_D),
+      into(0, SKIRT_H, SKIRT_D), PALETTE.floorTrim, true);
+    face(solid, at(0, SKIRT_H), into(0, SKIRT_H, SKIRT_D), into(1, SKIRT_H, SKIRT_D),
+      at(1, SKIRT_H), PALETTE.floorTrim, true);
+
     if (door) {
       // A doorway in international orange, which is what the turbolift doors
       // were painted, with a lintel above so the gap reads as a door.
@@ -438,10 +497,24 @@ function boxShell(solid, glow, room) {
   for (const wall of walls) {
     const span = wall.to - wall.from;
     const panels = Math.max(3, Math.round(span / 0.9));
+
+    // How far INTO the room a given distance is, from this wall.
+    //
+    // The two axes disagree on which sign that is, because `flip` was assigned
+    // per wall to fix the winding rather than to describe a direction. The ribs
+    // already encode the answer inline (`room.js` below); everything added
+    // since goes through this instead, because getting it backwards puts trim
+    // OUTSIDE the room where it is invisible and reads as no bug at all.
+    const inward = (d) => (wall.axis === 'z'
+      ? wall.at + (wall.flip ? -d : d)
+      : wall.at + (wall.flip ? d : -d));
+
     for (let i = 0; i < panels; i++) {
       const u0 = wall.from + (span * i) / panels;
       const u1 = wall.from + (span * (i + 1)) / panels;
       const p = (u, y) => (wall.axis === 'z' ? vec3(u, y, wall.at) : vec3(wall.at, y, u));
+      // The same point, but `d` metres in from the wall face.
+      const q = (u, y, d) => (wall.axis === 'z' ? vec3(u, y, inward(d)) : vec3(inward(d), y, u));
 
       const mu = (u0 + u1) / 2;
       const mid = wall.axis === 'z' ? [mu, wall.at] : [wall.at, mu];
@@ -449,14 +522,74 @@ function boxShell(solid, glow, room) {
         (e) => Math.hypot(mid[0] - e.at[0], mid[1] - e.at[1]) < (e.width ?? 1.2) * 0.6,
       );
 
+      // A horizontal quad facing UP, from the wall face out to `d`.
+      //
+      // The winding for this is not the wall's winding and cannot be reasoned
+      // about per wall without getting it wrong twice: `face`'s flip already
+      // encodes which way this bulkhead turns, and threading the same flip
+      // through THIS corner order is what makes the ledge face the deckhead on
+      // all four walls. Checked against both axes and both flips.
+      const ledge = (mb, y, d, colour) =>
+        face(mb, p(u0, y), q(u0, y, d), q(u1, y, d), p(u1, y), colour, wall.flip);
+
+      // Coving, on every panel INCLUDING the doorways.
+      //
+      // The wall/ceiling join is the longest single line in a compartment and
+      // the one most often in frame — it is what you read a corridor's length
+      // along. Flat, it is the hardest edge in the room. A chamfer softens it
+      // for one quad per panel, and it is the cheapest detail in this file by a
+      // wide margin.
+      //
+      // It runs unbroken past the doorways deliberately: a cove that stopped at
+      // a door would draw the eye to the door instead of round the room, which
+      // is the opposite of what trim is for. It also needs no clearance rule of
+      // its own — the face points down and inward, so it can meet the deckhead
+      // at `h` exactly without ever presenting an up-facing triangle there.
+      face(solid, p(u0, h - COVE), p(u1, h - COVE), q(u1, h, COVE), q(u0, h, COVE),
+        PALETTE.wall, wall.flip);
+
       if (door) {
         face(solid, p(u0, 2.1), p(u1, 2.1), p(u1, h), p(u0, h), PALETTE.wall, wall.flip);
         face(glow, p(u0, 2.05), p(u1, 2.05), p(u1, 2.1), p(u0, 2.1), PALETTE.strip, wall.flip);
+
+        // Jambs and a threshold. The ring room has had these since it was
+        // written (below); the box rooms never did, so every door on sixteen of
+        // the seventeen compartments was a rectangular hole in a flat wall.
+        // Orange, because on the set the turbolift surround was the strongest
+        // colour in the room, and it lands at exactly the height you walk at.
+        for (const u of [u0, u1]) {
+          box(solid, {
+            center: wall.axis === 'z' ? vec3(u, 1.05, inward(0.02)) : vec3(inward(0.02), 1.05, u),
+            size: wall.axis === 'z' ? vec3(0.10, 2.1, 0.05) : vec3(0.05, 2.1, 0.10),
+            color: PALETTE.door,
+          });
+        }
+        ledge(solid, 0.005, 0.14, PALETTE.door);
         continue;
       }
 
       face(solid, p(u0, 0), p(u1, 0), p(u1, 0.9), p(u0, 0.9), PALETTE.wallLower, wall.flip);
       face(solid, p(u0, 0.9), p(u1, 0.9), p(u1, h), p(u0, h), PALETTE.wall, wall.flip);
+
+      // Skirting, and a dado rail on the seam that was already there.
+      //
+      // The wall/deck join had the same problem as the wall/deckhead one, plus
+      // a second: `bakeOcclusion` darkens the deck for 0.85 m out from every
+      // bulkhead, and with nothing at the join that shadow has nothing to be
+      // the shadow OF — it reads as a gradient painted on the floor rather than
+      // as a place where two surfaces meet.
+      //
+      // The dado is free in a different sense: the wall already changes colour
+      // at 0.9 (`wallLower` below, `wall` above) and always has. A rail on that
+      // line costs two quads and turns an unexplained colour break into the
+      // moulding it was standing in for.
+      face(solid, q(u0, 0, SKIRT_D), q(u1, 0, SKIRT_D), q(u1, SKIRT_H, SKIRT_D),
+        q(u0, SKIRT_H, SKIRT_D), PALETTE.floorTrim, wall.flip);
+      ledge(solid, SKIRT_H, SKIRT_D, PALETTE.floorTrim);
+
+      face(solid, q(u0, 0.9, DADO_D), q(u1, 0.9, DADO_D), q(u1, 0.9 + DADO_T, DADO_D),
+        q(u0, 0.9 + DADO_T, DADO_D), PALETTE.trim, wall.flip);
+      ledge(solid, 0.9 + DADO_T, DADO_D, PALETTE.trim);
 
       // A structural rib on the join between panels.
       //
@@ -500,6 +633,27 @@ function boxShell(solid, glow, room) {
       vec3(0.35, h - 0.03, z1), vec3(-0.35, h - 0.03, z1),
       PALETTE.strip,
     );
+
+    // A housing round the lit panel.
+    //
+    // Without one a ceiling light is a bright rectangle lying on the deckhead
+    // with no thickness — a decal, not a fitting. Four side quads facing out
+    // from the lamp give it a body, and that is enough: the eye reads the
+    // shadowed return between the housing and the panel, not the box.
+    //
+    // Built as an OPEN trough — four sides, no lid. A closed box here would put
+    // a cap face on the deckhead plane pointing straight up, which is what an
+    // inverted ceiling looks like, and `tests/gfx.test.js` refuses any up-facing
+    // triangle within 0.06 of `h`. The glow panel stays at exactly `h - 0.03`
+    // because the corridor tests count ceiling spans at that plane.
+    const y0 = h - LAMP_DROP;
+    const [x0, x1] = [-0.42, 0.42];
+    const [w0, w1] = [z0 - 0.07, z1 + 0.07];
+    const side = (a, b, c, d) => solid.quad(a, b, c, d, PALETTE.wallLower);
+    side(vec3(x0, y0, w0), vec3(x0, h, w0), vec3(x1, h, w0), vec3(x1, y0, w0));
+    side(vec3(x1, y0, w1), vec3(x1, h, w1), vec3(x0, h, w1), vec3(x0, y0, w1));
+    side(vec3(x0, y0, w1), vec3(x0, h, w1), vec3(x0, h, w0), vec3(x0, y0, w0));
+    side(vec3(x1, y0, w0), vec3(x1, h, w0), vec3(x1, h, w1), vec3(x1, y0, w1));
   }
 }
 
@@ -545,6 +699,34 @@ function console3d(solid, glow, station, index) {
   const far = bodyTop + 0.30;
   solid.quad(at(-hw, near, -hd), at(-hw, far, hd), at(hw, far, hd), at(hw, near, -hd),
     PALETTE.consoleTop);
+
+  // A rebate round the working surface.
+  //
+  // The caps sit on a plate that ran edge to edge with nothing at its border, so
+  // a console read as a slab with stickers on it. On the set every panel was let
+  // INTO its housing, and the return round the edge is most of what says so —
+  // it is the one piece of console detail permanently under the player's
+  // crosshair, because the crosshair is what you aim at a station to use it.
+  //
+  // Built as a bevel rather than a raised frame: four quads from the outer edge
+  // at plate level, up and inward to a lip. That cannot z-fight with the plate
+  // it borders (they share an edge, not an area), and it lands entirely inside
+  // the 0.11 m the cap field already leaves clear on every side, so no control
+  // moves and no cap is covered.
+  const yAt = (f) => near + ((far - near) * (f + hd)) / (2 * hd);
+  const surf = (r, f, lift = 0) => at(r, yAt(f) + lift, f);
+  const BW = 0.075;
+  const LIP = 0.022;
+  const o = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
+  const inr = [[-hw + BW, -hd + BW], [hw - BW, -hd + BW], [hw - BW, hd - BW], [-hw + BW, hd - BW]];
+  for (let k = 0; k < 4; k++) {
+    const j = (k + 3) % 4;
+    solid.quad(
+      surf(o[k][0], o[k][1]), surf(o[j][0], o[j][1]),
+      surf(inr[j][0], inr[j][1], LIP), surf(inr[k][0], inr[k][1], LIP),
+      PALETTE.trim,
+    );
+  }
 
   // And the buttons on it — the jelly beans, which is the glow.
   //

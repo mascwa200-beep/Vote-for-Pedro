@@ -39,7 +39,7 @@ import {
 import {
   orbitFrame, orbitPeriod, rotationPeriod, angularRadius, orbitAxis, ORBIT_ALTITUDE,
 } from '../src/world/orbit.js';
-import { roomMeshes, allRoomMeshes, officerMesh, officerStandsAt } from '../src/gfx/room.js';
+import { roomMeshes, allRoomMeshes, officerMesh, officerStandsAt, PALETTE } from '../src/gfx/room.js';
 import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
 import { makeSurface } from '../src/world/surface.js';
 import { RNG } from '../src/core/rng.js';
@@ -3560,6 +3560,186 @@ describe('the ships and rooms a player actually looks at', () => {
         assert.equal(a.data[i], b.data[i], `${id} rebuilt differently at ${i}`);
       }
     }
+  });
+});
+
+// The trim that turned a box into a compartment. docs/RESEARCH.md §125.
+//
+// Every one of these measures the SHELL, not the furniture, and every one is
+// written against a specific way of getting the change wrong rather than
+// against the change succeeding — the two are not the same test, and §124 shipped
+// two guards that passed against the very defect they were written for because
+// they measured the second thing.
+describe('a compartment is built, not just enclosed', () => {
+  const boxRooms = ROOM_LIST.filter((r) => r.id !== 'surface' && r.shape.kind === 'box');
+
+  /** Faces whose centroid is within `d` of a bulkhead, with their normals. */
+  const nearWall = (id, lo, hi) => {
+    const room = ROOMS[id];
+    const hw = room.shape.width / 2;
+    const hd = room.shape.depth / 2;
+    const m = roomMeshes(id).solid;
+    const f = m.stride / 4;
+    const out = [];
+    for (let v = 0; v < m.vertexCount; v += 3) {
+      const at = (i, k) => m.data[(v + i) * f + k];
+      const cx = (at(0, 0) + at(1, 0) + at(2, 0)) / 3;
+      const cy = (at(0, 1) + at(1, 1) + at(2, 1)) / 3;
+      const cz = (at(0, 2) + at(1, 2) + at(2, 2)) / 3;
+      if (Math.min(hw - Math.abs(cx), hd - Math.abs(cz)) > 0.25) continue;
+      if (cy < lo || cy > hi) continue;
+      out.push({ cx, cy, cz, n: [m.data[v * f + 3], m.data[v * f + 4], m.data[v * f + 5]] });
+    }
+    return out;
+  };
+
+  test('the wall meets the deckhead on a chamfer, not on an edge', () => {
+    // The cove is the cheapest detail in the file and the longest line in
+    // frame. It has to face DOWN and INTO the room: a cove wound the other way
+    // is culled, and a cove built on the wrong side of the bulkhead is outside
+    // the ship, and neither one fails loudly.
+    for (const room of boxRooms) {
+      const h = room.shape.height ?? 2.5;
+      const band = nearWall(room.id, h - 0.1201, h - 1e-6);
+      const cove = band.filter((t) => t.n[1] < -0.2 && t.n[1] > -0.99);
+      assert.ok(cove.length >= 6, `${room.id} has ${cove.length} cove faces at the deckhead`);
+      for (const t of cove) {
+        const inward = t.n[0] * -t.cx + t.n[2] * -t.cz;
+        assert.ok(inward > -1e-6, `${room.id} has a cove facing out of the room`);
+      }
+    }
+  });
+
+  test('and the deck on a skirting you could stub a toe on', () => {
+    for (const room of boxRooms) {
+      const band = nearWall(room.id, 0.1199, 0.1201);
+      const up = band.filter((t) => t.n[1] > 0.9);
+      assert.ok(up.length >= 6, `${room.id} has ${up.length} skirting ledges`);
+    }
+  });
+
+  test('and a doorway has something standing in it', () => {
+    // Orange jambs. The ring room has had them since it was written; the
+    // sixteen box compartments had a rectangular hole in a flat wall.
+    //
+    // Two things this has to get right, both learned by getting them wrong.
+    // `bakeOcclusion` scales every solid colour, so orange is not `r > 0.8` by
+    // the time it reaches the buffer — match the CHROMATICITY, which occlusion
+    // preserves because it multiplies all three channels alike. And a jamb is a
+    // `box`, whose only vertices are its eight corners: filter on a vertex `y`
+    // and every one of them falls outside the band you meant to search.
+    const orange = (r, g, b) => r > 0.15 && g / r < 0.55 && b / r < 0.2;
+    for (const room of boxRooms) {
+      const exits = room.exits ?? [];
+      if (!exits.length) continue;
+      const m = roomMeshes(room.id).solid;
+      const f = m.stride / 4;
+      let jamb = 0;
+      for (let v = 0; v < m.vertexCount; v += 3) {
+        const o = v * f;
+        const at = (i, k) => m.data[(v + i) * f + k];
+        const cy = (at(0, 1) + at(1, 1) + at(2, 1)) / 3;
+        if (cy < 0.2 || cy > 2.0) continue;
+        if (!orange(m.data[o + 6], m.data[o + 7], m.data[o + 8])) continue;
+        const cx = (at(0, 0) + at(1, 0) + at(2, 0)) / 3;
+        const cz = (at(0, 2) + at(1, 2) + at(2, 2)) / 3;
+        if (exits.some((e) => Math.hypot(cx - e.at[0], cz - e.at[1]) < 1.4)) jamb++;
+      }
+      assert.ok(jamb >= 4,
+        `${room.id} has ${exits.length} doors and ${jamb} frame faces at any of them`);
+    }
+  });
+
+  test('and a console panel is let into its housing', () => {
+    // The bezel must be a RETURN — geometry whose pitch differs from the plate
+    // it borders — and the check has to be made AT A STATION.
+    //
+    // The first version of this counted distinct pitches at plate height across
+    // the whole compartment, and it passed with the bezel deleted: other
+    // furniture supplies a second pitch in that band whether or not a console
+    // has an edge. That is the same mistake §124 made twice, and it is only
+    // ever caught by deleting the feature and re-running, so: deleted, re-run,
+    // rewritten to look only within reach of each station.
+    for (const room of ROOM_LIST) {
+      for (const station of room.stations ?? []) {
+        const m = roomMeshes(room.id).solid;
+        const f = m.stride / 4;
+        const pitches = new Set();
+        for (let v = 0; v < m.vertexCount; v += 3) {
+          const o = v * f;
+          const at = (i, k) => m.data[(v + i) * f + k];
+          const cy = (at(0, 1) + at(1, 1) + at(2, 1)) / 3;
+          if (cy < 0.78 || cy > 1.14 || m.data[o + 4] < 0.25) continue;
+          const cx = (at(0, 0) + at(1, 0) + at(2, 0)) / 3;
+          const cz = (at(0, 2) + at(1, 2) + at(2, 2)) / 3;
+          if (Math.hypot(cx - station.at[0], cz - station.at[1]) > 0.9) continue;
+          pitches.add(m.data[o + 4].toFixed(2));
+        }
+        assert.ok(pitches.size > 1,
+          `${room.id}: the console at ${station.at} is one flat pitch — the panel is a slab`);
+      }
+    }
+  });
+
+  test('and a world is one surface, not a mosaic of flat tiles', () => {
+    // The last place a curved surface still read as facets, and the one smooth
+    // normals could not touch: `globe` sampled its terrain at each facet's
+    // CENTROID and gave the one value to all four corners, so the albedo was
+    // flat per quad however well the quad was lit.
+    //
+    // The test for that is not "how many colours are there" — a per-facet
+    // surface has plenty. It is whether two vertices at the SAME POINT agree:
+    // per-facet sampling cannot make them agree and per-vertex sampling cannot
+    // make them disagree. Before this, 86% of a planet's grid points carried
+    // conflicting colours and both poles carried 56 apiece.
+    for (const kind of ['planet', 'desert', 'ice', 'moon', 'gas']) {
+      const m = worldMesh(kind, 0);
+      const f = m.stride / 4;
+      const byPoint = new Map();
+      for (let i = 0; i < m.vertexCount; i++) {
+        const o = i * f;
+        const p = `${m.data[o].toFixed(5)},${m.data[o + 1].toFixed(5)},${m.data[o + 2].toFixed(5)}`;
+        const c = `${m.data[o + 6].toFixed(4)},${m.data[o + 7].toFixed(4)},${m.data[o + 8].toFixed(4)}`;
+        if (!byPoint.has(p)) byPoint.set(p, new Set());
+        byPoint.get(p).add(c);
+      }
+      const split = [...byPoint.values()].filter((s) => s.size > 1).length;
+      assert.equal(split, 0,
+        `${kind}: ${split} of ${byPoint.size} points on the globe carry more than one colour`);
+    }
+  });
+
+  test('and the deckhead is not the same tone as the deck', () => {
+    // §124 gave the room pass a hemisphere ambient while the PALETTE was still
+    // compensating for a downward key in albedo. Both were true at once and the
+    // deck and deckhead collapsed to within 3% of each other — the two largest
+    // surfaces in the game, rendering as one tone.
+    //
+    // Read from source because `firstperson.js` touches `document` at load and
+    // cannot be imported here; this is the same route the ROOM_RIM guard takes.
+    const fp = readFileSync(new URL('../src/ui/firstperson.js', import.meta.url), 'utf8');
+    const triple = (name) => {
+      const m = fp.match(new RegExp(`export const ${name} = \\[([^\\]]+)\\]`));
+      assert.ok(m, `${name} is not exported from firstperson.js`);
+      return m[1].split(',').map((s) => Number(s.trim()));
+    };
+    const sky = triple('ROOM_SKY');
+    const ground = triple('ROOM_GROUND');
+    const key = [0.15, 1.0, 0.1];
+    const kl = Math.hypot(...key);
+    const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+    // gl.js: ambient * mix(ground, sky, n.y * 0.5 + 0.5) + key * keyPower.
+    const render = (albedo, ny) => {
+      const t = ny * 0.5 + 0.5;
+      const k = Math.max((key[1] / kl) * ny, 0) * 0.44;
+      return lum(albedo.map((a, i) => a * (0.62 * (ground[i] + (sky[i] - ground[i]) * t) + k)));
+    };
+    const deck = render(PALETTE.floor, 1);
+    const head = render(PALETTE.ceiling, -1);
+    assert.ok(Math.abs(deck / head - 1) > 0.12,
+      `deck ${deck.toFixed(3)} and deckhead ${head.toFixed(3)} render as one tone`);
+    assert.ok(deck > head,
+      'the deckhead renders brighter than the deck, which is a room lit from its floor');
   });
 });
 

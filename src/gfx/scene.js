@@ -460,12 +460,63 @@ function globe(kind, seed, SEG, RINGS, coarse) {
     // band, flat, is what it was before and what it stays.
     const flat = kind === 'star' ? SURFACE.star[3] : null;
 
+    // The terrain, sampled once per GRID POINT rather than once per facet.
+    //
+    // Smooth normals fixed how a world takes the light; they could not fix the
+    // blockiness in the world itself, because that was never a shading problem.
+    // The field was sampled at each facet's centroid and the one value handed to
+    // all four of its corners, so the surface was flat-coloured per quad by
+    // construction and the coastlines came out as a staircase of 6.4-degree
+    // steps no matter how the light fell on them.
+    //
+    // Sampling per vertex costs nothing extra, which is the only reason it can
+    // be done at this resolution: a 56x28 sphere has 1,568 facets but only
+    // 1,514 distinct grid points, because every interior point is shared by
+    // four facets and both poles are one point rather than SEG of them. So the
+    // field is evaluated slightly FEWER times than before, not more.
+    //
+    // Measured rather than assumed, and the honest answer is that it is a wash
+    // — between 1.01x and 0.91x of the old build time depending on kind, the
+    // fewer evaluations paying for the row arrays and no more. The point of the
+    // change is the continuity, not the speed; it is recorded here only so the
+    // next person does not go looking for a win that is not there. These are
+    // memoised per kind and seed, so it is once per world either way.
+    //
+    // The seam at i = SEG-1 -> 0 closes for free, because column SEG and column
+    // 0 are the same longitude and now resolve to the same stored sample rather
+    // than to two independent centroid evaluations either side of the wrap.
+    // The poles are single points shared by every cap triangle, so they get one
+    // sample each rather than SEG of them at the same place. Rings 0 and RINGS
+    // ARE those points — sin(0) and sin(PI) are both zero, so a full row there
+    // would be SEG evaluations of the same coordinate.
+    const poleN = flat ?? surfaceColor(kind, 0, 1, 0, s, coarse);
+    const poleS = flat ?? surfaceColor(kind, 0, -1, 0, s, coarse);
+    const rows = [];
+    for (let ring = 0; ring <= RINGS; ring++) {
+      if (ring === 0 || ring === RINGS) {
+        rows.push(new Array(SEG).fill(ring === 0 ? poleN : poleS));
+        continue;
+      }
+      const a = (ring / RINGS) * Math.PI;
+      const r = Math.sin(a); const y = Math.cos(a);
+      const row = [];
+      for (let i = 0; i < SEG; i++) {
+        if (flat) { row.push(flat); continue; }
+        const t = (i / SEG) * Math.PI * 2;
+        row.push(surfaceColor(kind, Math.cos(t) * r, y, Math.sin(t) * r, s, coarse));
+      }
+      rows.push(row);
+    }
+
     for (let ring = 0; ring < RINGS; ring++) {
       const a0 = (ring / RINGS) * Math.PI;
       const a1 = ((ring + 1) / RINGS) * Math.PI;
       const r0 = Math.sin(a0); const y0 = Math.cos(a0);
       const r1 = Math.sin(a1); const y1 = Math.cos(a1);
       for (let i = 0; i < SEG; i++) {
+        const j = (i + 1) % SEG;
+        const cInner0 = rows[ring][i]; const cInner1 = rows[ring][j];
+        const cOuter1 = rows[ring + 1][j]; const cOuter0 = rows[ring + 1][i];
         const t0 = (i / SEG) * Math.PI * 2;
         const t1 = ((i + 1) / SEG) * Math.PI * 2;
         const c0 = Math.cos(t0); const s0 = Math.sin(t0);
@@ -474,12 +525,6 @@ function globe(kind, seed, SEG, RINGS, coarse) {
         const inner1 = vec3(c1 * r0, y0, s1 * r0);
         const outer1 = vec3(c1 * r1, y1, s1 * r1);
         const outer0 = vec3(c0 * r1, y1, s0 * r1);
-        // Centroid of the patch, normalised, is where the field is sampled.
-        const mx = (inner0[0] + outer1[0]) * 0.5;
-        const my = (inner0[1] + outer1[1]) * 0.5;
-        const mz = (inner0[2] + outer1[2]) * 0.5;
-        const len = Math.hypot(mx, my, mz) || 1;
-        const color = flat ?? surfaceColor(kind, mx / len, my / len, mz / len, s, coarse);
         // Wound so the face points AWAY from the centre — round the ring first
         // and outward second. Culling is on: get this backwards and the planet
         // is not dark, it is absent.
@@ -491,11 +536,14 @@ function globe(kind, seed, SEG, RINGS, coarse) {
         // world in standard orbit is 3,024 facets and read as a faceted disc,
         // and the terminator across it was a staircase.
         if (ring === 0) {
-          mb.tri(vec3(0, 1, 0), outer1, outer0, color, 0, [vec3(0, 1, 0), outer1, outer0]);
+          mb.tri(vec3(0, 1, 0), outer1, outer0, cOuter0, 0,
+            [vec3(0, 1, 0), outer1, outer0], [poleN, cOuter1, cOuter0]);
         } else if (ring === RINGS - 1) {
-          mb.tri(vec3(0, -1, 0), inner0, inner1, color, 0, [vec3(0, -1, 0), inner0, inner1]);
+          mb.tri(vec3(0, -1, 0), inner0, inner1, cInner0, 0,
+            [vec3(0, -1, 0), inner0, inner1], [poleS, cInner0, cInner1]);
         } else {
-          mb.quad(inner0, inner1, outer1, outer0, color, 0, [inner0, inner1, outer1, outer0]);
+          mb.quad(inner0, inner1, outer1, outer0, cInner0, 0,
+            [inner0, inner1, outer1, outer0], [cInner0, cInner1, cOuter1, cOuter0]);
         }
       }
     }

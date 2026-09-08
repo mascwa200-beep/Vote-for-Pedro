@@ -64,16 +64,27 @@ export class MeshBuilder {
    * centre, and a tube knows its own is radial. So there is no smoothing group
    * to define, no averaging pass to run and no seam to reason about — which
    * were the three costs `mesh.js` cited when it ruled smooth shading out.
+   *
+   * `colors`, when given, is three colours — one per corner — instead of the
+   * single `color`. It is the same mechanism as `normals` and it costs the same
+   * nothing: the colour channel was always per vertex in the buffer and the
+   * rasteriser was always interpolating it, so writing three different values
+   * into three vertices that already exist adds no vertex and no triangle. What
+   * it removes is the last place a curved surface still reads as facets — a
+   * globe that samples its terrain once per facet centroid and hands one flat
+   * colour to the whole quad, which no amount of smooth shading can fix because
+   * the blockiness is in the albedo rather than in the light.
    */
-  tri(a, b, c, color, glow = 0, normals = null) {
+  tri(a, b, c, color, glow = 0, normals = null, colors = null) {
     const face = normals ? null : normalize(cross(sub(b, a), sub(c, a)));
     const corners = [a, b, c];
     for (let i = 0; i < 3; i++) {
       const v = corners[i];
       const n = normals ? normals[i] : face;
+      const col = colors ? colors[i] : color;
       this.positions.push(v[0], v[1], v[2]);
       this.normals.push(n[0], n[1], n[2]);
-      this.colors.push(color[0], color[1], color[2]);
+      this.colors.push(col[0], col[1], col[2]);
       this.glows.push(glow);
     }
     return this;
@@ -83,12 +94,16 @@ export class MeshBuilder {
    * A quad, as two triangles.
    *
    * `normals` is four vectors in the same corner order as the positions, and is
-   * split across the two triangles the same way the corners are.
+   * split across the two triangles the same way the corners are. `colors` is
+   * four colours and is split identically.
    */
-  quad(a, b, c, d, color, glow = 0, normals = null) {
+  quad(a, b, c, d, color, glow = 0, normals = null, colors = null) {
     const first = normals ? [normals[0], normals[1], normals[2]] : null;
     const second = normals ? [normals[0], normals[2], normals[3]] : null;
-    return this.tri(a, b, c, color, glow, first).tri(a, c, d, color, glow, second);
+    const cFirst = colors ? [colors[0], colors[1], colors[2]] : null;
+    const cSecond = colors ? [colors[0], colors[2], colors[3]] : null;
+    return this.tri(a, b, c, color, glow, first, cFirst)
+      .tri(a, c, d, color, glow, second, cSecond);
   }
 
   get triangleCount() { return this.positions.length / 9; }
@@ -188,23 +203,38 @@ export function saucer(mb, {
   // without anything being guessed.
   const sx = stretch;
 
-  // The three profiles, as (radial, axial) tangents, with the sign already
-  // chosen so each points away from the hull: up and out for the plate and the
-  // dome, down and out for the underside.
-  // Each is [radial, axial], signed to match the winding this primitive has
-  // always had rather than to match the outward direction.
+  // The three profiles, as (radial, axial) tangents, each [radial, axial] and
+  // signed to match the winding this primitive has always had.
   //
-  // Those are not the same thing here, and it is worth recording why. Derived
-  // from the profile, the upper plate's outward normal points up and out — and
-  // the face normal `tri` computes from this quad's own winding points DOWN.
-  // The saucer is wound the other way round from the derivation, and has been
-  // since it was written.
+  // THIS IS CORRECT. DO NOT "FIX" IT.
   //
-  // Which of the two is right is a real question and it is NOT this change's to
-  // answer: flipping it would relight the top of every Federation saucer in the
-  // game, which is a visible change to the fleet dressed up as a smoothing pass.
-  // Matching the existing winding means the only thing this does is make the
-  // surface continuous. Recorded for a change that can measure it on its own.
+  // §124 noticed that deriving the normal from the profile gives up-and-outward
+  // for the upper plate while the winding gives DOWN, matched the winding, and
+  // left open whether the top of every Federation saucer was therefore being lit
+  // as though it faced the deck. §125 settled it: it is not, and the derivation
+  // is the thing that is wrong here, not the winding.
+  //
+  // The evidence, because two cheaper attempts at this produced confident wrong
+  // answers and the next person deserves to skip them:
+  //
+  //   - Winding convention, on shapes where "outward" is not a matter of
+  //     opinion: a sphere about the origin is 528/528 outward, a tube 60/60. So
+  //     counter-clockwise IS outward, everywhere else in this file.
+  //   - Screen-space winding through the real projection agrees with the stored
+  //     normal on 100% of faces, on a Constitution and on a cube alike. There is
+  //     no handedness flip; culling follows the normals exactly.
+  //   - Ray casting a hull from above, keeping only faces that survive culling,
+  //     finds ZERO see-through columns on every hull in the fleet, and a render
+  //     map of a bare saucer with nothing able to cover it is a solid disc.
+  //     Mean shade from directly overhead is 0.757 against a 0.833 flat-up
+  //     ideal, and that 9% is the plate's real cone slope.
+  //
+  // What misled the earlier attempts is that a saucer is a THIN double-skinned
+  // shell: its two skins are about 0.02 apart, so "which skin is highest in this
+  // column" is decided by triangulation noise, not by geometry. Both the
+  // area-split and the per-column tests were measuring that coin flip. Controls
+  // on thick hulls (a cube, a wedge) came out clean and made the noise look like
+  // a signal along the saucer/non-saucer line.
   const plate = [-half, domeR - radius];
   const capN = [-domeHeight, -domeR];
   const under = [-(half + domeHeight * 0.4), radius];
