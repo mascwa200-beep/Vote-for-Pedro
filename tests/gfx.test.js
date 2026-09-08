@@ -23,7 +23,7 @@ import {
 } from '../src/gfx/mesh.js';
 import {
   BLUEPRINTS, DIMENSIONS, hullMesh, hullScale, paletteFor, UNITS_PER_METRE,
-  proportionError, HULL_RIM,
+  proportionError, HULL_RIM, HULL_DETAIL,
 } from '../src/gfx/blueprint.js';
 import { SHIP_LIST } from '../src/world/ships.data.js';
 import { drawCombatEffects, DRAWN_EFFECTS } from '../src/gfx/effects.js';
@@ -40,7 +40,9 @@ import {
 import {
   orbitFrame, orbitPeriod, rotationPeriod, angularRadius, orbitAxis, ORBIT_ALTITUDE,
 } from '../src/world/orbit.js';
-import { roomMeshes, allRoomMeshes, officerMesh, officerStandsAt, PALETTE } from '../src/gfx/room.js';
+import {
+  roomMeshes, allRoomMeshes, officerMesh, officerStandsAt, crewVisible, CREW_CONE, PALETTE,
+} from '../src/gfx/room.js';
 import { ROOMS, ROOM_LIST } from '../src/world/interiors.data.js';
 import { makeSurface } from '../src/world/surface.js';
 import { RNG } from '../src/core/rng.js';
@@ -3564,6 +3566,112 @@ describe('the ships and rooms a player actually looks at', () => {
   });
 });
 
+// The people, and the budget that had already been breached. §126.
+describe('a person is not a stack of boxes', () => {
+  const standing = () => officerMesh('helm', 'wall');
+
+  test('the figure has curved surfaces, not just flat facets', () => {
+    // `box()` calls `mb.quad` with no normals, so `tri` computes ONE face
+    // normal and writes it to all three corners. A figure built entirely of
+    // boxes therefore has zero triangles whose corner normals differ — which
+    // is what this measures, and it is unfakeable by splitting boxes finer.
+    const m = standing();
+    const f = m.stride / 4;
+    let smooth = 0;
+    const tris = m.vertexCount / 3;
+    for (let v = 0; v < m.vertexCount; v += 3) {
+      const n = (i) => [m.data[(v + i) * f + 3], m.data[(v + i) * f + 4], m.data[(v + i) * f + 5]];
+      const [a, b, c] = [n(0), n(1), n(2)];
+      const same = a.every((x, i) => Math.abs(x - b[i]) < 1e-9 && Math.abs(x - c[i]) < 1e-9);
+      if (!same) smooth++;
+    }
+    assert.ok(smooth / tris > 0.5,
+      `only ${smooth} of ${tris} triangles on an officer are smooth-shaded`);
+  });
+
+  test('and more than six directions in it', () => {
+    // The complement of the test above: it catches a figure rebuilt out of
+    // ROTATED boxes, which would pass a smoothness check on a technicality.
+    // Every box in the old figure was axis-aligned, so there were literally
+    // six distinct normals on an entire human being.
+    const m = standing();
+    const f = m.stride / 4;
+    const dirs = new Set();
+    for (let v = 0; v < m.vertexCount; v++) {
+      const o = v * f;
+      dirs.add(`${m.data[o + 3].toFixed(3)},${m.data[o + 4].toFixed(3)},${m.data[o + 5].toFixed(3)}`);
+    }
+    assert.ok(dirs.size >= 48, `an officer points in only ${dirs.size} directions`);
+  });
+
+  test('and stands on the deck rather than above it', () => {
+    // Officers never pass through `bakeOcclusion`, so they had no contact
+    // shadow at all while the deck around every station is baked down to 0.42.
+    // A figure in the middle of a pool of shadow casting none reads as pasted
+    // on. Counted as up-facing geometry within a couple of centimetres of the
+    // deck — the boots reach y = 0 but their sole faces DOWN, so this was zero.
+    const m = standing();
+    const f = m.stride / 4;
+    let n = 0;
+    for (let v = 0; v < m.vertexCount; v++) {
+      const o = v * f;
+      if (m.data[o + 1] > 0.002 && m.data[o + 1] < 0.02 && m.data[o + 4] > 0.99) n++;
+    }
+    assert.ok(n >= 3, `nothing under the figure meets the deck (${n} vertices)`);
+  });
+
+  test('and the crew is culled to what the camera can see', () => {
+    const bridge = ROOMS.bridge;
+    const chair = bridge.chair?.at ?? [0, -1.05];
+    const eye = [chair[0], 1.18, chair[1]];
+    const look = [bridge.viewscreen.at[0] - chair[0], 0, bridge.viewscreen.at[1] - chair[1]];
+    const crewed = (bridge.stations ?? []).filter((s) => s.crew);
+    const kept = crewed.filter((s) => {
+      const [x, z] = officerStandsAt(s);
+      return crewVisible(x, z, eye, look);
+    });
+    assert.ok(kept.length < crewed.length,
+      `all ${crewed.length} bridge figures are drawn whichever way the camera points`);
+    // The two at the con are the ones you are looking at from the chair; if the
+    // cone ever excludes them it is pointing the wrong way, not merely tight.
+    const seated = kept.filter((s) => s.mounted === 'floor');
+    assert.equal(seated.length, 2, 'the helm and the con were culled from the chair');
+    // Wide enough not to pop: the frame edge is 44 degrees off axis and this
+    // must be comfortably outside it.
+    assert.ok(CREW_CONE < Math.cos((55 * Math.PI) / 180),
+      'the crew cone is tight enough to cull people who are still on screen');
+  });
+
+  test('and the worst frame in the game fits inside the budget', () => {
+    // This is the guard the whole cull exists for, and it was FAILING before
+    // the change: the bridge in standard orbit draws its room, the starfield,
+    // the world, the world's limb, up to three other bodies and every officer
+    // aboard whichever way the camera faces — 8,162 against the 8,000 the
+    // browser harness asserts. There is no frustum culling in this renderer.
+    // It passed only because the sampled frame happened not to admit all three
+    // bodies, and half the systems carry enough bodies for it to.
+    //
+    // Computed here as arithmetic so it is deterministic, rather than sampled
+    // from whichever frame the harness caught.
+    const t = (m) => m.vertexCount / 3;
+    const bridge = ROOMS.bridge;
+    const built = roomMeshes('bridge');
+    const chair = bridge.chair?.at ?? [0, -1.05];
+    const eye = [chair[0], 1.18, chair[1]];
+    const look = [bridge.viewscreen.at[0] - chair[0], 0, bridge.viewscreen.at[1] - chair[1]];
+    let crew = 0;
+    for (const st of bridge.stations ?? []) {
+      if (!st.crew) continue;
+      const [x, z] = officerStandsAt(st);
+      if (crewVisible(x, z, eye, look)) crew += t(officerMesh(st.crew, st.mounted));
+    }
+    const frame = t(built.solid) + t(built.glow) + crew
+      + t(starfield()) + t(worldMesh('planet', 0)) + t(limbMesh('planet'))
+      + 2 * t(bodyMesh('planet', 0));
+    assert.ok(frame < 8000, `the worst interior frame is ${frame} triangles`);
+  });
+});
+
 // The trim that turned a box into a compartment. docs/RESEARCH.md §125.
 //
 // Every one of these measures the SHELL, not the furniture, and every one is
@@ -3708,6 +3816,32 @@ describe('a compartment is built, not just enclosed', () => {
       assert.equal(split, 0,
         `${kind}: ${split} of ${byPoint.size} points on the globe carry more than one colour`);
     }
+  });
+
+  test('and a compartment has a surface, not just a colour', () => {
+    // §125 declined to spend geometry on the deck and gave a reason: "the deck
+    // is a single quad, so shader detail there is exactly free". It was free
+    // and it was never switched on — every `detail:` in the tree went to a HULL
+    // draw, so `uDetail` fell through to [0, 0] on every room and the branch
+    // never ran. The write-up was wrong as shipped.
+    //
+    // Source text, because `firstperson.js` touches `document` at load; same
+    // route as the ROOM_RIM guard above.
+    const fp = readFileSync(new URL('../src/ui/firstperson.js', import.meta.url), 'utf8');
+    const m = fp.match(/export const ROOM_DETAIL = \[([0-9.]+), ([0-9.]+)\]/);
+    assert.ok(m, 'ROOM_DETAIL is gone');
+    const [freq, strength] = [Number(m[1]), Number(m[2])];
+    assert.ok(strength > 0, 'interior surface detail is switched off again');
+    assert.ok(/detail: ROOM_DETAIL/.test(fp), 'nothing passes ROOM_DETAIL to the renderer');
+    // The specific mistake available here is copying the hull's number.
+    // `uDetail.x` is cycles per object-space unit: a hull spans about one unit
+    // nose to tail, a room spans metres, so the hull's 55 would be a plate
+    // every 1.8 cm and every feature would alias.
+    assert.ok(freq < HULL_DETAIL[0] / 4,
+      `the interior detail frequency ${freq} is at hull scale, which is centimetres in a room`);
+    // And the floor under it: below about 3 cycles/m the "plating" is one broad
+    // stain across a bulkhead rather than plates.
+    assert.ok(freq > 2, `${freq} cycles per metre is not plating, it is a smudge`);
   });
 
   test('and the deckhead is not the same tone as the deck', () => {

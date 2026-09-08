@@ -30,7 +30,9 @@ import {
   vec3, mat4, quat, multiply, perspective, lookAt, compose, normalMatrix, project,
   quatFromTo, quatAxisAngle, quatFromEuler,
 } from '../gfx/math.js';
-import { roomMeshes, officerMesh, officerStandsAt, officerFaces, PALETTE } from '../gfx/room.js';
+import {
+  roomMeshes, officerMesh, officerStandsAt, officerFaces, crewVisible, PALETTE,
+} from '../gfx/room.js';
 import { occupantsOf } from '../sim/occupancy.js';
 import {
   starfield, bodyMesh, warpfield, worldMesh, limbMesh, WARP_LENGTH, VOLUME,
@@ -56,6 +58,44 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  * surface rather than as an edge on the near one.
  */
 export const ROOM_RIM = 0.16;
+
+/**
+ * Procedural surface detail for a compartment: cycles per metre, and strength.
+ *
+ * §124 built object-space plating in the fragment shader — `vObject` and
+ * `uDetail`, no UVs, no atlas, no unwrap. §125 then declined to spend geometry
+ * on the deck and said why: "the deck is a single quad, so shader detail there
+ * is exactly free". It was free and it was never switched on. Every `detail:`
+ * in the tree went to a HULL draw; the room draws passed `model`,
+ * `normalMatrix` and `fogFar`, so `uDetail` fell through to the frame default
+ * of [0, 0] and the branch never ran. Every interior surface in the game was
+ * flat albedo, on the two largest surfaces there are.
+ *
+ * THE FREQUENCY IS NOT THE HULL'S AND CANNOT BE. `uDetail.x` is cycles per
+ * object-space unit; a hull spans about one unit nose to tail, so
+ * `HULL_DETAIL`'s 55 is a plate every two per cent of the ship. A room is
+ * authored in METRES, where 55 would be a plate every 1.8 cm. At 4.6 the seam
+ * grid — which the shader runs at `uDetail.x * 0.18` — lands on a 1.21 m cell,
+ * which is what deck plating is.
+ *
+ * The upper bound on the frequency is aliasing, and it binds harder here than
+ * on a hull. The shader fades detail with distance to avoid it, but that fade
+ * is `1 - vDepth / (uFogFar * 0.35)` and the room draw passes `fogFar: 1e6`
+ * deliberately, so `near` is 1.0 everywhere in the compartment and the fade
+ * never engages. Rather than reintroduce fog on a bulkhead an arm's length
+ * away, every feature is kept large enough not to need it: at 4.6 the finest
+ * plating octave is 10 cm, which is still 3.3 px across at the far end of the
+ * twenty-metre hangar. At 12 it would be 1.3 px, which is a shimmer.
+ *
+ * Strength 0.05 against a hull's 0.10, and that came down from 0.07 by looking:
+ * `plating` is a sum of triangle waves on all three axes, so on a DECK it reads
+ * as plates and on a vertical bulkhead it reads as a soft diagonal plaid. One
+ * draw covers every lit surface in a compartment, so the strength that suits
+ * the deck is the strength the walls get. 0.05 keeps the deck plating legible
+ * and takes the wall pattern down to something you read as a surface rather
+ * than as smearing.
+ */
+export const ROOM_DETAIL = [4.6, 0.05];
 
 /**
  * Where a compartment's ambient light actually comes FROM.
@@ -162,6 +202,9 @@ export class FirstPersonView {
     this.shake = true;
     this._up = vec3();
     this._look = vec3();
+    // The interior camera's eye and aim, stashed per frame for the crew cull.
+    this._aim = vec3(0, 0, 1);
+    this._aimFrom = vec3();
 
     this.attachGestures();
   }
@@ -317,6 +360,14 @@ export class FirstPersonView {
       eye[0] += kick * 0.4;
       at[0] += kick * 0.4;
     }
+    // Where the camera is aimed, kept for `drawCrew`, which is called from
+    // `drawRoom` and has neither the eye nor the target.
+    this._aim[0] = at[0] - eye[0];
+    this._aim[1] = at[1] - eye[1];
+    this._aim[2] = at[2] - eye[2];
+    this._aimFrom[0] = eye[0];
+    this._aimFrom[1] = eye[1];
+    this._aimFrom[2] = eye[2];
     lookAt(eye, at, vec3(0, 1, 0), this._view);
     multiply(this._proj, this._view, this._viewProj);
 
@@ -675,9 +726,17 @@ export class FirstPersonView {
       // terminator on a world is not drawn, it is where aiming the light at the
       // actual star puts it.
       const star = v.bodies.find((x) => x.kind === 'star') ?? null;
+      // Two other bodies while a world fills the screen, three otherwise.
+      //
+      // In standard orbit the world IS the composition: 3,024 triangles of it,
+      // plus its limb, against 440 for a far dot that is a few pixels across.
+      // Three of those dots is 1,320 triangles spent on the least of what is
+      // out there, and it was the term that put the worst interior frame over
+      // the budget — see `crewVisible` in room.js for the arithmetic.
+      const most = world ? 2 : 3;
       let drawn = 0;
       for (const b of v.bodies) {
-        if (drawn >= 3) break;
+        if (drawn >= most) break;
         if (world && b.id === world.body.id) continue;
         const dx = b.x - eye[0]; const dy = b.y - eye[1]; const dz = b.z - eye[2];
         const d = Math.hypot(dx, dy, dz) || 1;
@@ -783,7 +842,7 @@ export class FirstPersonView {
     // Rooms are 10 metres across, not 3,000 — the tactical falloff would fog a
     // bulkhead you are standing next to.
     this.renderer.draw(`room:${key}`, m.solid, {
-      model: this._model, normalMatrix: nm, fogFar: 1e6,
+      model: this._model, normalMatrix: nm, fogFar: 1e6, detail: ROOM_DETAIL,
     });
     this.renderer.draw(`room:${key}:glow`, m.glow, {
       model: this._model, normalMatrix: nm, emissive: 1, fogFar: 1e6,
@@ -805,6 +864,7 @@ export class FirstPersonView {
     for (const st of room.stations ?? []) {
       if (!st.crew) continue;
       const [x, z] = officerStandsAt(st);
+      if (!crewVisible(x, z, this._aimFrom, this._aim)) continue;
       const base = officerFaces(st);
 
       let yaw = base;
@@ -842,6 +902,7 @@ export class FirstPersonView {
     // deck seven with the corridor outside standing empty. See
     // src/sim/occupancy.js — who is in a room is a function of the ship now.
     for (const who of occupantsOf(this.lastGame, room.id)) {
+      if (!crewVisible(who.at[0], who.at[1], this._aimFrom, this._aim)) continue;
       quatAxisAngle(vec3(0, 1, 0), who.facing, this._quat);
       this._pos[0] = who.at[0]; this._pos[1] = 0; this._pos[2] = who.at[1];
       compose(this._pos, this._quat, 1, this._model);

@@ -12546,6 +12546,217 @@ and by measuring centroids.
 - `dist/` rebuilt and committed; service worker at `sfc-v16`
 - manifest carries `VIBRATE` only, no `INTERNET`
 
+## 126. The people, and a claim I did not keep
+
+§124 gave the curved primitives analytic normals; §125 built the interior trim,
+per-vertex colour on worlds and the overlay glare. This is the last of the four
+areas the standing instruction names — the crew figures — plus a gap §125 left
+in its own reasoning and a budget breach that was already shipped.
+
+### The claim §125 did not keep
+
+§125 declined to spend geometry on the deck and said exactly why:
+
+> The deck deliberately got **no** geometry: `vObject`/`uDetail` from §124 does
+> plating and seams in the fragment shader for nothing, and the deck is a single
+> quad, so shader detail there is exactly free.
+
+Every `detail:` in the source tree went to a **hull** draw. The room draws
+passed `model`, `normalMatrix` and `fogFar`, so `uDetail` fell through to the
+frame default of `[0, 0]` and the `if (uDetail.y > 0.001)` branch never ran.
+**Every interior surface in the game was flat albedo.** The deck and the
+deckhead were written off as handled by the shader, and the shader was never
+switched on for them.
+
+That is worth stating plainly rather than quietly fixing, because the failure
+was not the code — it was reasoning that ended at "this will be free" without
+checking that it had happened. The write-up was wrong as shipped for a whole
+release.
+
+Where those surfaces are, by solid angle from a standing eye at 1.62 m:
+
+| surface | triangles | % of the visible hemisphere |
+| --- | --- | --- |
+| hangar deck, 16x20 | **2** | 83.7 |
+| bridge deckhead, r 4.55 | **10** | 78.9 |
+| sickbay / rec / crewquarters deckheads | **2** each | ~78 |
+| cargo and engineering decks | **2** each | ~68 |
+
+**The frequency had to be re-derived, not copied.** `uDetail.x` is cycles per
+object-space unit. A hull spans about one unit nose to tail, so `HULL_DETAIL`'s
+55 is a plate every two per cent of the ship; a room is authored in **metres**,
+where 55 is a plate every 1.8 cm. The seam grid runs at `uDetail.x * 0.18`:
+
+| `uDetail.x` | seam cell | finest octave | that octave at 20 m |
+| --- | --- | --- | --- |
+| **4.6** | **1.21 m** | 0.102 m | **3.3 px** |
+| 12 | 0.46 m | 0.039 m | 1.3 px |
+| 55 | 0.10 m | 0.009 m | 0.3 px |
+
+The last column is why the number is low. The shader fades detail with distance
+to avoid aliasing, but that fade is `1 - vDepth / (uFogFar * 0.35)` and the room
+draw passes `fogFar: 1e6` **deliberately** ("Rooms are 10 metres across, not
+3,000"). So `near` is 1.0 everywhere in a compartment and the fade never
+engages. Rather than reintroduce fog on a bulkhead an arm's length away, every
+feature is kept large enough not to need it.
+
+Strength came down from 0.07 to 0.05 **by looking at it**. `plating` is a sum of
+triangle waves on all three axes: on a deck that reads as plates, and on a
+vertical bulkhead it reads as a soft diagonal plaid. One draw covers every lit
+surface in a compartment, so the strength that suits the deck is the strength
+the walls get.
+
+### The budget was already over, and nobody knew
+
+Before a single triangle was added to the crew, the worst interior frame was
+**over the cap the harness asserts**:
+
+| term | tris |
+| --- | --- |
+| bridge room mesh | 1,234 |
+| starfield | 520 |
+| the orbited world | 3,024 |
+| its limb | 336 |
+| up to three other bodies | 1,320 |
+| every officer aboard | 1,728 |
+| **total** | **8,162** against a cap of **8,000** |
+
+There is no frustum culling anywhere in this renderer — `Renderer.draw` adds
+`vertexCount / 3` whether or not the thing is on screen, and `drawCrew` drew
+every figure in the room whichever way the camera pointed. It passed only
+because the sampled frame happened not to admit all three bodies, and **22 of
+the 43 systems** carry enough bodies for it to.
+
+Two changes, and together they pay for the rounding:
+
+- **A cone cull on the crew.** Measured from the chair, the ten bridge figures
+  sit at 18, 18, 27, 27, 57, 57, 89, 89, 130 and 180 degrees off axis. There is
+  a fifty-one to eighty-three degree gap with nothing in it, so anything from 60
+  to 80 keeps the same six people — the number is not a tuning knob. 70 was
+  chosen: the frame edge is 44 degrees off axis, so a figure is long out of shot
+  before it stops being drawn and nothing pops while the camera turns.
+- **Two other bodies in orbit instead of three.** In standard orbit the world IS
+  the composition; three far dots at 440 triangles each is 1,320 spent on the
+  least of what is out there.
+
+| | before | after |
+| --- | --- | --- |
+| worst interior frame | **8,162** (over by 162) | **7,778** (under by 222) |
+| figures drawn on the bridge | 10 | 6 |
+| triangles per figure | 168 / 192 | **290 / 312** |
+
+The frame got safer while the figure got 73% heavier. And the check moved out of
+the browser harness — where it sampled whatever frame it caught — into unit-test
+arithmetic, so it is deterministic and the crew term is part of the budget
+rather than an exemption from it.
+
+### The people
+
+`officerMesh` was **fourteen boxes**, and not one curved surface anywhere, on
+the model the camera stands a metre from.
+
+`mesh.js` has `tube`, and `tube` cannot build a leg: its axis is hard-wired to
++x — `foreC = at(origin, len, 0, 0)` — with no orientation parameter. Adding one
+was the other option and was the wrong one: thirty-one hull classes and the
+whole scenery set go through it, and its wall-normal formula would have to be
+re-derived into an arbitrary frame in shared code to serve one caller. So
+`room.js` gained a local `limb()` — the same derivation, in a local frame,
+twenty lines, blast radius of one file.
+
+**`limb`'s segment count must be even, and that is a test contract.** A vertex
+sits at `centre + r(cos(t)u + sin(t)v)`, and for a near-vertical limb `u` comes
+out along ∓x, so x is extremal at t = 0 and t = pi. t = 0 always lands on a
+vertex; t = pi lands on one only if the count is even. With an odd count the
+innermost vertex drifts off the true silhouette and the gap the leg guard
+measures is not the gap the eye sees.
+
+What the figure is now: a tapered smooth-walled limb per leg (two when seated,
+where the knee is real), an ellipsoid pelvis, an ellipsoid torso with a
+`shaded()` ramp up the chest, a `tube` shoulder yoke — the one part of a body
+that genuinely runs along x, which is the one axis `tube` can build on — tapered
+upper arms and forearms, ellipsoid hands, a neck, an ellipsoid skull, and the
+brow band.
+
+Two things bought detail for nothing. The **hair** is not geometry: the colour
+channel is per vertex and interpolated, so darkening the skull's top two rings
+gives a soft hairline across the quad that spans the boundary, where the old
+crown box gave a hard edge for twelve triangles. And the **contact shadow** —
+officers never pass through `bakeOcclusion`, so a figure stood in the middle of
+a pool of baked deck shadow casting none, which is what reads as pasted on.
+
+The shadow is a **quad, not a disc**, and that is the trap nobody had written
+down: anything built as a fan — a `sphere`, a capped tube — puts a vertex on the
+figure's own centreline at x = 0, and the leg-gap guard measures the smallest
+|x| below the hip and requires it *above* 0.01. A centreline vertex makes that
+zero and fails a guard about legs with a change about shadows. The same hazard
+binds the pelvis, which is why it is kept clear of y = 0.45 on a seated figure
+whose hip is at 0.46.
+
+### The `shaded()` ramp is a function of y only, and that is correctness
+
+`tests/gfx.test.js` proves a figure has a front by finding a colour that appears
+forward of the head and nowhere behind it. A ramp with **any z term** would give
+every forward vertex a triple no aft vertex shares, and that guard would then
+pass against a figure with no face at all.
+
+This project has now recorded guards passing against their own defect in §59,
+§124 and §125. Silently defeating one from the inside would be worse than all
+three, because none of the three would have caught it.
+
+### Every new guard, broken on purpose
+
+| guard | control | result |
+| --- | --- | --- |
+| the figure has curved surfaces | revert `officerMesh` to boxes | ✓ fails |
+| and more than six directions in it | same | ✓ fails |
+| and stands on the deck | delete the contact shadow | ✓ fails |
+| and the crew is culled | make `crewVisible` return true | ✓ fails |
+| **and the worst frame fits the budget** | same | ✓ **fails at 8,162** |
+| a compartment has a surface | set `ROOM_DETAIL` to the hull's 55 | ✓ fails |
+| same | stop passing `detail:` on the room draw | ✓ fails |
+
+The fifth row is the one that matters: removing the cull makes the budget guard
+fail, which is the proof that the 8,162 was real rather than arithmetic.
+
+Two numbers were also caught by measuring margins rather than by a test going
+red. Thickening the seated thigh took the leg gap to **0.012 against a floor of
+0.010** — passing, on two thousandths of a metre. Moved the thigh outward
+instead of thinning it, back to 0.022. A guard that passes by 20% of its
+tolerance is a guard that will fail on somebody else's unrelated change.
+
+### What is deliberately not in this
+
+**Hulls.** `17-hull-constitution.png` appears to show radial wedge tones on the
+saucer, which would mean §124's smooth normals had not landed on the
+most-looked-at ship in the game. Measured: the shading step across shared edges
+between up-facing faces is 0.0432 mean, with 41% of edges stepping more than
+0.04. Alarming — until you separate genuine creases from artefacts. At a shared
+position, do the faces touching it agree on the normal? Disagreement between
+**near-parallel** faces (under 35 degrees) is a smooth surface wrongly faceted;
+disagreement across a real crease is correct:
+
+| class | shared positions | wrongly faceted |
+| --- | --- | --- |
+| constitution | 1,266 | 62 (5%) |
+| excelsior / galaxy | 1,222 | ~58 (5%) |
+| d7, galor, **borg_cube** | — | **0** |
+
+Fleet-wide **3.1%**, with three angular hulls reporting exactly zero as
+controls. §124 landed; the wedges are real creases and a plate with a genuinely
+low `n·L`. Recorded because the screenshot is convincing and the next person to
+look will reach the same wrong conclusion.
+
+**Bridge deckhead beams**, which were planned and then not built. The
+procedural detail turned the deckhead from flat grey into a panelled surface for
+zero triangles, and the bridge is the one room where the frame budget is
+genuinely tight. The free thing did the job.
+
+### Verification
+
+- `node --test tests/*.test.js` — **2,135 passing**, 0 failing
+- `tools/verify-app.mjs` — run alone, in its own invocation
+- `dist/` and the APK rebuilt; payload byte-matches, `VIBRATE` only
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
