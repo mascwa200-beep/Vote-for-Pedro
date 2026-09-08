@@ -40,7 +40,8 @@ import {
 } from '../world/orbit.js';
 import { hullMesh, hullScale, HULL_GLOSS, HULL_SHINE, HULL_RIM, HULL_DETAIL } from '../gfx/blueprint.js';
 import { vista, fovFor, noseOf, joltShake, joltTint } from '../gfx/vista.js';
-import { drawCombatEffects } from '../gfx/effects.js';
+import { drawCombatEffects, DRAWN_EFFECTS } from '../gfx/effects.js';
+import { glareEmitters, glareSprite, paintGlare, GLARE_BUDGET } from '../gfx/glare.js';
 import { ROOMS } from '../world/interiors.data.js';
 import { fitCanvas } from './touch.js';
 
@@ -280,6 +281,14 @@ export class FirstPersonView {
     const { aspect, width, height } = this.renderer.resize(
       rect.width || 320, rect.height || 320, dpr,
     );
+    // GL device pixels per CSS pixel, kept for the overlay.
+    //
+    // There are TWO device-pixel ratios in play and they are not the same
+    // number: the renderer caps at min(dpr, 2) and `fitCanvas` caps the labels
+    // canvas at min(dpr, 3). Anything measured in one space and drawn in the
+    // other — `stats.screenRect` above all — has to be converted by the ratio
+    // that actually produced it, which is this one and not the overlay's.
+    this._glScale = (width / (rect.width || 320)) || 1;
     if (!this.renderer.beginFrame()) return;
 
     const walker = game?.walk;
@@ -392,6 +401,15 @@ export class FirstPersonView {
     let minX = Infinity; let minY = Infinity;
     let maxX = -Infinity; let maxY = -Infinity;
     let anyInFront = false;
+    // The corners themselves, kept as well as the box around them.
+    //
+    // The box is all the GL pass needs, for the reason above: the bulkhead is
+    // drawn afterwards and covers the difference between the box and the
+    // trapezoid. Nothing covers it on the 2D overlay, so anything drawn there
+    // and clipped to the box alone spills onto the bulkhead in the corners the
+    // moment you look at the screen off-axis. Cheap to keep, impossible to
+    // recover later.
+    const corners = [];
 
     for (const [u, v] of [[-hw, -vs.height / 2], [hw, -vs.height / 2], [hw, vs.height / 2], [-hw, vs.height / 2]]) {
       this._pos[0] = x + u * -nz;
@@ -402,6 +420,7 @@ export class FirstPersonView {
       anyInFront = true;
       const sx = (p.x * 0.5 + 0.5) * width;
       const sy = (1 - (p.y * 0.5 + 0.5)) * height;
+      corners.push([sx, sy]);
       minX = Math.min(minX, sx); maxX = Math.max(maxX, sx);
       minY = Math.min(minY, sy); maxY = Math.max(maxY, sy);
     }
@@ -411,6 +430,7 @@ export class FirstPersonView {
       x: Math.max(0, minX), y: Math.max(0, minY),
       w: Math.min(width, maxX) - Math.max(0, minX),
       h: Math.min(height, maxY) - Math.max(0, minY),
+      corners,
     };
   }
 
@@ -889,6 +909,29 @@ export class FirstPersonView {
     this.overlay.style.height = `${rect.height}px`;
     const { ctx, width, height } = fitCanvas(this.overlay);
     ctx.clearRect(0, 0, width, height);
+
+    // Glare from whatever is happening out through the viewscreen.
+    //
+    // Two things here are not the same as on the tactical plot and both are
+    // silent when wrong. The exterior is rendered with `_screenVP`, a different
+    // camera from the room's `_viewProj`, so an emitter projected with the room
+    // camera lands somewhere plausible and wrong. And `screenRect` is in GL
+    // device pixels — `min(dpr, 2)` — while this canvas is in CSS pixels at
+    // `min(dpr, 3)`, so the rectangle has to be converted rather than used.
+    const screen = this.stats.screenRect;
+    if (screen && this._screenVP && game.engagement) {
+      const px = this._glScale || 1;
+      const view = { x: screen.x / px, y: screen.y / px, w: screen.w / px, h: screen.h / px };
+      const vp = this._screenVP;
+      const sprites = [];
+      for (const e of glareEmitters(game.engagement, DRAWN_EFFECTS)) {
+        if (sprites.length >= GLARE_BUDGET) break;
+        const s = glareSprite(e, (pt) => project(pt, vp), view);
+        if (s) sprites.push(s);
+      }
+      // Clipped to the aperture QUAD, not to the box around it.
+      paintGlare(ctx, sprites, screen.corners?.map(([sx, sy]) => [sx / px, sy / px]));
+    }
 
     const walker = game.walk;
     // `naming`, not `looking`. The reticle's job is to tell you what you are

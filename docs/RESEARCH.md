@@ -12340,6 +12340,212 @@ The lesson is §122's and not this section's: a change that states its cost shou
 measure it. "+36 triangles" was true and incomplete, and the incompleteness was
 only found because the next thing done was to look.
 
+## 125. Where the camera actually is
+
+§124 gave the curved primitives analytic normals and left three things named:
+the interiors, the glow that never glowed, and the per-facet colour on a planet.
+This is those three, plus a regression §124 introduced and a question it left
+open.
+
+### The measurement that set the order
+
+Read off `screenshots/03c-orbit.png` — the bridge in standard orbit, which is
+the game's most-occupied camera — rather than off the orbit-only render:
+
+| what | share of frame |
+| --- | --- |
+| the room | ~90% |
+| the planet, inside the viewscreen aperture | ~60 px across |
+
+The deck and the deckhead are the two largest single surfaces in the game and
+each was **two triangles**. The planet's blockiness was real and is small from
+where the player stands. So: interiors first, glare second, planets third — a
+measurement of screen area, not a preference, and it inverts what I assumed
+going in, which was that planets were the obvious next target.
+
+### The interiors
+
+Rooms ran at 198–1,365 triangles against a 4,000 cap with one drawn at a time:
+3x to 20x under, everywhere, at the one camera position that is a metre from the
+geometry. What a standing player at eye height 1.62 was looking at was a wall
+with a single seam at 0.9 and nothing at eye level, a two-triangle ceiling, a
+two-triangle floor, hard unarticulated wall/deck and wall/deckhead lines, and
+doorways that were a rectangular hole in a flat wall with a lintel over it.
+
+Added, in order of visible detail per triangle: coving at the wall/deckhead
+join; skirting and a dado rail on the seam that was already there; orange jambs
+and a threshold on every box doorway; open troughs around the ceiling lights;
+and a rebate around every console panel.
+
+| | before | after |
+| --- | --- | --- |
+| all seventeen compartments | 10,315 | 17,135 |
+| worst single room (hangar) | 1,365 | 2,341 (59% of cap) |
+| smallest (turbolift) | 198 | 360 |
+
+The deck deliberately got **no** geometry: `vObject`/`uDetail` from §124 does
+plating and seams in the fragment shader for nothing, and the deck is a single
+quad, so shader detail there is exactly free. Geometry was spent only on
+silhouette-level things a fragment shader cannot produce.
+
+### The regression §124 introduced
+
+§124 gave the room pass a hemisphere ambient. `room.js` had been compensating
+for a downward key **in the palette** — "dark floors, pale ceilings" — since it
+was written, because albedo was the only channel that could carry it. Both were
+then true at once:
+
+| surface | before §124 | after §124 | now |
+| --- | --- | --- | --- |
+| deck | 0.379 | 0.422 | 0.522 |
+| deckhead | 0.527 | 0.411 | 0.344 |
+| deckhead vs deck | **+39.2%** | **−2.7%** | **−34.1%** |
+
+§124 inverted the exact relationship the palette existed to produce. Unwound on
+the palette side rather than re-tuned, because the ambient now carries the
+direction physically and a ceiling between light fittings really is dimmer than
+the floor — the brightness in frame comes from the strip lighting, which is in
+the glow mesh and ignores the light. The three largest surfaces now separate by
+0.195 in luminance where they separated by 0.128.
+
+This is the second time a §124 change has needed a correction found by measuring
+rather than by reading, and both times the measurement was cheap and the reading
+was confident.
+
+### Worlds are one surface now
+
+`globe` sampled its terrain at each facet's **centroid** and handed the one
+value to all four corners. That is why smooth normals did not fix the
+blockiness: it was in the albedo, not in the light.
+
+`MeshBuilder.tri`/`quad` take per-vertex colours now, exactly as they took
+per-vertex normals in §124 — no extra vertex, no extra triangle, no assertion
+relaxed, because the colour channel was always per vertex in the buffer and the
+rasteriser was always interpolating it.
+
+| worldMesh, 56x28 | grid points carrying more than one colour |
+| --- | --- |
+| planet | 1,332 of 1,541 (86.4%) → **0** |
+| desert / ice / moon | 1,179 of 1,541 (76.5%) → **0** |
+| gas | 1,149 of 1,541 (74.6%) → **0** |
+
+Each pole carried up to **56** different colours, one per cap triangle. Now one.
+
+Cost is a wash — between 1.01x and 0.91x of the old build time by kind. I
+claimed it would be cheaper on the grounds that 1,514 grid points is fewer than
+1,568 facets, and the first implementation was in fact *slower*, because it
+sampled full rows at both poles where sin(a) is zero and every sample in the row
+is the same point. Fixed, re-measured, and the comment in `scene.js` corrected to
+say "a wash" rather than "cheaper", because the arithmetic being right did not
+make the claim true.
+
+### The glow that was never on screen
+
+39% of every vertex in the game sits at `glow = 1` and none of it glowed. A GL
+bloom is structurally blocked here — WebGL 1, no float target, and `antialias`
+makes the default framebuffer multisampled while a WebGL 1 FBO cannot be — and
+`gl.js` already said where the glow belonged instead: the overlay, as a halo
+around the aperture rather than a brighter aperture. Driving emissive surfaces
+above white does not work, because the ramp clips: a brighter aperture is the
+same aperture with its highlights flattened.
+
+`src/gfx/glare.js` is the pass. The arithmetic is pure functions over plain
+numbers, tested in Node, because neither view module can be imported there —
+both touch `document` at load — and the parts of a glare pass that can be wrong
+are exactly the parts nobody sees:
+
+- An emitter **behind the camera** projects through a near-zero divide to a
+  plausible point at an enormous radius, and reads as a detonation that never
+  happened. Dropped.
+- The radius was first taken from the projected offset of a point one radius
+  along world X. Point the camera down X and the offset lies along the line of
+  sight, the displacement collapses, and **every halo in the frame silently
+  disappears** — a view angle away on a plot whose camera orbits freely. Now the
+  largest of three orthogonal offsets, which is never worse than 0.816 of the
+  true radius at any orientation.
+- `globalCompositeOperation` is used nowhere else in `src/`, and *neither*
+  `drawOverlay` wraps itself in save/restore. A mode left set would not throw
+  and would not look wrong on the frame that set it; it would tint every label
+  drawn afterwards for the life of a canvas that is never rebuilt.
+
+Two things in first person are not the same as on the tactical plot, and both
+are silent when wrong: the exterior is rendered with `_screenVP`, not the room's
+`_viewProj`; and `screenRect` is in GL device pixels at `min(dpr, 2)` while the
+labels canvas is CSS pixels at `min(dpr, 3)`. `screenRect` now also keeps its
+four projected **corners**, so glare clips to the aperture quad — clipping to
+the bounding box alone spills onto the bulkhead corners whenever you look at the
+screen off-axis, which the GL pass gets away with only because the bulkhead is
+drawn afterwards and covers the difference.
+
+### The saucer winding question, closed
+
+§124 left this open as potentially the largest single visual defect in the
+project: **has the top of every Federation saucer been lit as though it faces
+downward?** It has not. The derivation is what is wrong, not the winding.
+
+Four steps, two of which produced confident wrong answers:
+
+1. **The convention, on shapes where "outward" is not a matter of opinion.** A
+   sphere about the origin: 528/528 winding-normals point outward. A tube:
+   60/60. So counter-clockwise is outward, with zero exceptions.
+2. **The saucer against that yardstick** reads 48/48 the other way — which is
+   what §124 recorded.
+3. **Two tests that looked damning and were confounded.** A per-column "the
+   highest face must point up" test gave 26% wrong-way fleet-wide; ray casting
+   gave 45% on a Constitution and **0% on `borg_cube`, `d7` and `galor`** — an
+   apparently clean split along exactly the saucer/non-saucer line. Both were
+   measuring a coin flip. The wrong-way and correct faces sit at the *same* mean
+   height and radius (y=0.01/r=0.29 against y=0.02/r=0.27): on a shell whose two
+   skins are 0.02 apart, "which skin is highest" is not a question about
+   geometry. The controls came out clean only because a cube and a wedge are
+   thick.
+4. **What the GPU actually paints.** Screen-space winding through the real
+   `perspective`/`lookAt` agrees with the stored normal on **100%** of faces, on
+   a Constitution and on a cube — so there is no handedness flip and culling
+   follows the normals. Ray casting restricted to front-facing geometry finds
+   **zero see-through columns on every hull**, and a render map of a *bare*
+   saucer, with nothing able to cover it, is a solid disc: 376 front-facing
+   samples, 0 see-through. Mean shade from overhead is 0.757 against a 0.833
+   flat-up ideal, and that 9% is the plate's real cone slope.
+
+Recorded in `mesh.js` as "THIS IS CORRECT, DO NOT FIX IT", with the evidence,
+because the derivation is convincing and the next person to read it will
+otherwise reach for the same flip.
+
+### Every new guard, broken on purpose
+
+| guard | control | result |
+| --- | --- | --- |
+| the wall meets the deckhead on a chamfer | delete the cove | ✓ fails |
+| and the deck on a skirting | delete the ledge | ✓ fails |
+| and a doorway has something standing in it | delete the jambs | ✓ fails |
+| and a console panel is let into its housing | delete the bezel | **✗ PASSED** |
+| and a world is one surface | revert `globe` | ✓ fails |
+| and the deckhead is not the same tone as the deck | restore the old palette | ✓ fails |
+
+The bezel guard **passed against its own defect on the first attempt**. It
+counted distinct face pitches at plate height across the whole compartment, and
+other furniture supplies a second pitch in that band whether or not a console
+has an edge. Rewritten to look only within reach of each station, and
+re-controlled. That is the third time in two sections a guard has passed against
+the thing it was written for, and the only reason any of the three were caught is
+that deleting the feature and re-running is now a step rather than an option.
+
+A fourth guard was wrong in the other direction and caught a real thing about
+its own subject: the doorway guard failed at first because it matched orange as
+`r > 0.8`, and `bakeOcclusion` scales every solid colour, so orange reaches the
+buffer at 0.61. It also filtered on vertex `y` — and a jamb is a `box`, whose
+only vertices are its eight corners, so every one of them fell outside the band
+being searched. Both fixed by matching chromaticity, which occlusion preserves,
+and by measuring centroids.
+
+### Verification
+
+- `node --test tests/*.test.js` — **2,129 passing**, 0 failing
+- `tools/verify-app.mjs` — run alone, in its own invocation
+- `dist/` rebuilt and committed; service worker at `sfc-v16`
+- manifest carries `VIBRATE` only, no `INTERNET`
+
 ## Attribution
 
 Star Trek and all associated marks are the property of Paramount. This dossier
