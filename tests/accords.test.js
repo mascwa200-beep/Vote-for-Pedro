@@ -480,3 +480,137 @@ describe('the clause quoted from memory', () => {
       `only ${free.length} ungated roads out of the customs shed`);
   });
 });
+
+// ------------------------------------------------- the same battle, both captains
+//
+// §111 gave the Khitomer table a road for the captain who made two fleets accept
+// one text at Donatu V. This is the other one: the captain who engaged. Both
+// stand at the same stage on the second morning of the conference, and no
+// captain is ever offered both — which is a fact about the episode graph rather
+// than a hope, and is asserted as one. §121.
+describe('Donatu V, argued at Khitomer from both sides of it', () => {
+  const khitomer = () => EPISODES.find((e) => e.id === 'khitomer_accord');
+  const at = (id) => khitomer().stages.table.choices.find((c) => c.id === id);
+
+  const openAt = (flags) => {
+    const g = captain({ flags });
+    return khitomer().stages.table.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('the veteran road is locked without the battle and open with it', () => {
+    const gated = at('the_battle');
+    assert.ok(gated, 'the road that names the battle is gone');
+    assert.deepEqual(gated.requires, { flag: 'donatu_battle' });
+    assert.equal(openAt(['torvan_owes_you']).includes('the_battle'), false,
+      'offered to a captain who was never in it');
+    assert.ok(openAt(['torvan_owes_you', 'donatu_battle']).includes('the_battle'),
+      'having fought the battle bought nothing at the table it was about');
+    assert.equal(gated.next, 'ninth', 'it no longer reaches the page the week is about');
+  });
+
+  test('and no captain can ever be offered both Donatu roads', () => {
+    // The two flags are alternative endings of one episode. Measured by walking
+    // `donatu_standoff` rather than by reading the file, because "these look
+    // like alternatives" is exactly the judgement §119 caught being wrong in
+    // both directions.
+    const donatu = EPISODES.find((e) => e.id === 'donatu_standoff');
+    const flagsOf = (fx) => (fx ? [].concat(fx.flag ?? []) : []);
+    const routes = [];
+    const walk = (stageId, held, depth, seen) => {
+      const choices = donatu.stages?.[stageId]?.choices ?? [];
+      if (!choices.length || depth > 40) { routes.push(new Set(held)); return; }
+      for (const c of choices) {
+        const now = [...held, ...flagsOf(c.effects)];
+        if (c.outcome) {
+          routes.push(new Set([...now, ...flagsOf(donatu.endings?.[c.outcome]?.effects)]));
+          continue;
+        }
+        const dests = typeof c.next === 'function' ? (c.next.targets ?? [])
+          : c.next ? [c.next] : c.branch ? Object.values(c.branch) : [];
+        if (!dests.length) { routes.push(new Set(now)); continue; }
+        for (const d of dests) {
+          if (seen.has(d)) { routes.push(new Set(now)); continue; }
+          walk(d, now, depth + 1, new Set([...seen, d]));
+        }
+      }
+    };
+    walk(donatu.start, [], 0, new Set([donatu.start]));
+
+    assert.ok(routes.some((r) => r.has('donatu_accord')), 'nothing reaches the accord any more');
+    assert.ok(routes.some((r) => r.has('donatu_battle')), 'nothing reaches the battle any more');
+    const both = routes.filter((r) => r.has('donatu_accord') && r.has('donatu_battle'));
+    assert.equal(both.length, 0,
+      `${both.length} routes through Donatu write both flags, so one captain is offered both roads`);
+
+    // And both roads really are at the same stage, which is the point of the pair.
+    assert.ok(at('both_rooms') && at('the_battle'),
+      'the two Donatu roads are no longer alternatives at one stage');
+  });
+
+  test('and the veteran gains with the Klingons where the diplomat gains with Starfleet', () => {
+    // Naming your own dead to move a document is using them. The Klingons
+    // respect it exactly; Starfleet reads a transcript of a captain trading on
+    // casualties at a peace conference.
+    const dip = at('both_rooms').effects.standing;
+    const vet = at('the_battle').effects.standing;
+    assert.ok(vet.klingon > dip.klingon,
+      `the battle buys no more from the Klingons (${vet.klingon}) than the accord did (${dip.klingon})`);
+    assert.ok(vet.federation < dip.federation,
+      `Starfleet likes the battle road (${vet.federation}) as much as the accord (${dip.federation})`);
+  });
+});
+
+// ------------------------------------------- what the Badlands cost, in his own file
+//
+// Marrek's file says this captain suborns Cardassian officers in private. The
+// convoy is the other document, and it is his to produce. §121.
+describe('the convoy, put on the Obsidian Order\'s table', () => {
+  const debt = () => ACCORD_EPISODES.find((e) => e.id === 'cardassia_debt');
+  const at = (id) => debt().stages.order.choices.find((c) => c.id === id);
+
+  const openAt = (flags) => {
+    const g = captain({ flags: ['torvan_owes_you', ...flags] });
+    return debt().stages.order.choices
+      .filter((c) => !c.requires?.flag || g.ledger.has(c.requires.flag))
+      .map((c) => c.id);
+  };
+
+  test('is a road only the captain who ran it has', () => {
+    const gated = at('convoy');
+    assert.ok(gated, 'the road that names the Badlands is gone');
+    assert.deepEqual(gated.requires, { flag: 'badlands_run' });
+    assert.equal(openAt([]).includes('convoy'), false,
+      'offered to a captain who never crossed the plasma front');
+    assert.ok(openAt(['badlands_run']).includes('convoy'), 'the convoy bought nothing');
+  });
+
+  test('and it is the one road at that stage that costs Starfleet something', () => {
+    // The cost is the point: the names go into an Obsidian Order file and stay
+    // there. Every other answer in the room is about the recording; this one
+    // hands over something the Order did not have.
+    const paying = debt().stages.order.choices
+      .filter((c) => (c.effects?.standing?.federation ?? 0) < 0)
+      .map((c) => c.id);
+    assert.deepEqual(paying, ['convoy'],
+      `the roads that cost Starfleet standing are ${paying.join(', ') || 'none'}`);
+    assert.ok(at('convoy').effects.standing.cardassian > at('account').effects.standing.cardassian,
+      'Cardassia thinks no more of the convoy than of a complete account of a conversation');
+  });
+
+  test('and the flag it reads is the one written by continuing, not by turning back', () => {
+    // `badlands_run` is "continue" out of either storm stage. If it ever became
+    // the flag for taking the long way round, the line in the interview room —
+    // which is about what crossing cost — stops being true.
+    const run = EPISODES.find((e) => e.id === 'badlands_run');
+    const writes = Object.entries(run.stages).flatMap(([sid, s]) =>
+      (s.choices ?? []).filter((c) => [].concat(c.effects?.flag ?? []).includes('badlands_run'))
+        .map((c) => ({ sid, id: c.id })));
+    assert.ok(writes.length >= 2, 'badlands_run is written in fewer places than it was');
+    for (const w of writes) {
+      assert.equal(w.id, 'continue', `${w.sid}/${w.id} writes badlands_run without continuing`);
+      assert.match(w.sid, /^storm/, `${w.sid} is not one of the storm stages`);
+    }
+  });
+});

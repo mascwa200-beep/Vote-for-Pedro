@@ -25792,6 +25792,31 @@ const ACCORD_EPISODES = [
             effects: { xp: 400, setVar: { let_them_read: true } } },
           { id: 'refuse', label: 'Refuse the interview and invite him to charge you',
             next: 'our_record', effects: { xp: 600, standing: { cardassian: -8 } } },
+          // The Badlands, act 3: a medical convoy for Bajor that has to cross
+          // the plasma storms, and Cardassian hulls in it. `badlands_run` is
+          // "continue" out of either storm stage — the second of which is a
+          // freighter breaking up because a loaded hull is not a starship and
+          // the differential does not care whose flag is on it. Ekaterina Voss
+          // goes first and the Tobruk eleven minutes later, and there is no
+          // going back in for either of them.
+          //
+          // Marrek's file says this captain is a Starfleet officer who suborns
+          // Cardassian officers in private. The convoy is the other document,
+          // and it is his to produce: he took Cardassian crews into a plasma
+          // front under his own orders and buried them there, in the open, with
+          // both governments' names on the manifest.
+          //
+          // It is deliberately the same SHAPE as the Centauri log at the
+          // court-martial in §120 and the opposite act. There he hid behind a
+          // filed procedure to avoid a question about his judgement. Here he
+          // puts his own dead on a Cardassian interrogator's table to make a
+          // question about a private conversation look as small as it is. The
+          // Order takes the file, which is the cost — those names belong to it
+          // now, and Marrek is not a man who is handed a thing and does not use
+          // it.
+          { id: 'convoy', label: 'Tell him what the Badlands cost, and let him file that instead',
+            next: 'our_record', requires: { flag: 'badlands_run' },
+            effects: { xp: 900, standing: { cardassian: 12, federation: -4 } } },
         ],
       },
 
@@ -25928,6 +25953,31 @@ const ACCORD_EPISODES = [
           { id: 'both_rooms', label: 'Tell both delegations at once, the way you told Donatu',
             next: 'ninth', requires: { flag: 'donatu_accord' },
             effects: { xp: 1000, standing: { klingon: 12, federation: 10 } } },
+          // The same battle, the other captain.
+          //
+          // `donatu_accord` above is the one who got two fleets to accept one
+          // text a minute before they fired. `donatu_battle` is "Engage", and
+          // its ending is four sentences long: the historians will name it, and
+          // the families will not care what it is called. Measured rather than
+          // assumed — the two flags co-occur in none of the book's playthroughs,
+          // because they are alternative endings of one episode — so these two
+          // roads to the ninth page are mutually exclusive by construction and
+          // no captain is ever offered both.
+          //
+          // What he has that nobody else at the table has is the alternative,
+          // concretely. Everyone in the room is arguing about a page. He is the
+          // only one who has already seen what the page is instead of, and can
+          // say so without it being rhetoric, because the Klingons across the
+          // table were there too and some of them were shooting at him.
+          //
+          // It costs. Naming your own dead to move a document is using them,
+          // and he knows it while he does it — so this is the road that gains
+          // most with the Klingons, who respect it exactly, and least with
+          // Starfleet, who will read the transcript and see a captain trading
+          // on casualties at a peace conference.
+          { id: 'the_battle', label: 'Say what the ninth page is the alternative to. You were there.',
+            next: 'ninth', requires: { flag: 'donatu_battle' },
+            effects: { xp: 1000, standing: { klingon: 16, federation: 4 } } },
         ],
       },
 
