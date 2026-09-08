@@ -10468,7 +10468,7 @@ and reported vertices.
 ### What does measure it
 
 Whether a choice depends on anything the captain has done. Across 26 authored
-episodes, 154 stages and 366 choices, **80 of 366 choices carry a `requires`** —
+episodes, 154 stages and 368 choices, **82 of 368 choices carry a `requires`** —
 and unevenly:
 
 ```
@@ -11788,6 +11788,133 @@ is the one the scene was written to want.
 - `dist/` and the APK rebuilt; manifest carries `VIBRATE` only, no `INTERNET`
 
 Nine flags to go. None is written in act 5; four are act-4 deeds that can reach
+only the final act.
+
+## 121. The same battle, both captains
+
+Two of the five act-3 flags. Reading the other three said plainly that they are
+not equally good, and this section says which and why rather than wiring them to
+keep a number moving.
+
+### Donatu V, argued at Khitomer from both sides of it
+
+The Khitomer table, second morning. The draft is nine pages and eight of them are
+agreed; the ninth is Archanis. A Klingon technician is taken off the outpost's
+environmental deck with a Cardassian-made charge in a satchel, and because this
+captain's people took him he is in this captain's brig.
+
+§111 gave that stage a road for the captain who made two fleets accept one text at
+Donatu V a minute before they fired: *"Tell both delegations at once, the way you
+told Donatu."* The book has an obvious counterpart to that man and had never used
+him. `donatu_battle` is one word — **"Engage"** — and its ending is four sentences:
+
+> The historians will name it. The families will not care what it is called.
+
+He is the only person at that table who has seen what the ninth page is the
+alternative to. Everyone else is arguing about a document; he is the one who can
+say what happens when the document is not signed, without it being rhetoric,
+because the Klingons across the table were there and some of them were shooting at
+him.
+
+The pair is exclusive **by construction**, and that is measured rather than
+assumed — the whole lesson of §119:
+
+```
+donatu_accord and donatu_battle: 0 routes through donatu_standoff write both
+```
+
+They are alternative endings of one episode, so no captain is ever offered both
+roads, and each is the answer belonging to a different Donatu.
+
+It costs. Naming your own dead to move a document is using them, and he knows it
+while he does it, so this is the road that gains most with the Klingons — who
+respect it exactly — and least with Starfleet, who will read the transcript and
+see a captain trading on casualties at a peace conference.
+
+### What the Badlands cost, in his own file
+
+`badlands_run` is *"continue"* out of either storm stage of a medical convoy for
+Bajor. The second of those stages reads:
+
+> The Cardassian hulls break off, and so do two of ours. A loaded freighter is
+> not a starship and the differential does not care which flag is on it —
+> Ekaterina Voss goes first, and the Tobruk eleven minutes later, and there is no
+> going back in for either of them.
+
+Act 4, Cardassia Prime. Glinn Marrek of the Obsidian Order is courteous in the
+way a closed door is courteous, has a recording of a private conversation in which
+a Cardassian gul withdrew a claim after this captain spoke to him alone, and would
+like to know what was said. He already knows what was said.
+
+The file Marrek is building says this officer suborns Cardassians in private. The
+convoy is the other document and it is the captain's to produce: he took
+Cardassian crews into a plasma front under his own orders and buried them there,
+in the open, with both governments' names on the manifest.
+
+It is deliberately the same **shape** as the Centauri log at the court-martial in
+§120 and the opposite **act**. There he hid behind a filed procedure to avoid a
+question about his judgement. Here he puts his own dead on an interrogator's table
+to make a question about a private conversation look as small as it is. The Order
+takes the file, which is the cost — those names belong to it now, and Marrek is
+not a man who is handed a thing and does not use it.
+
+### Closing the blind spot §119 declared
+
+§119 shipped the always-open guard with a stated gap: implication measured within
+one episode, blind to the campaign-wide case where holding a flag means an earlier
+episode was completed which in turn always writes another. That case now has a
+guard, for the one shape the book actually has — `requiresCompleted`.
+
+It found nothing, and says so in its own comment rather than reading like a sweep
+that came back clean. Four episodes declare `requiresCompleted` and only two
+episodes in the book write anything on every route through them, so it is a
+regression guard rather than a discovery. It is worth having because the near miss
+is live:
+
+```
+court_martial cannot be finished without writing `inquiry_resolved`
+utopia_certification requires court_martial to be finished
+```
+
+A gate on `inquiry_resolved` in that episode is an entirely natural thing to reach
+for — it is the good outcome of the board the episode is about — and it would
+stand open for every captain who got in. The control adds exactly that gate and
+the guard names it.
+
+### The three that stopped, and why it is structural
+
+- **`dmz_favourable`** is cornered. Only two episodes past act 3 involve Cardassia,
+  and it never co-occurs with `torvan_owes_you` — so `cardassia_debt` is the
+  always-shut case §119 caught, and `khitomer_accord` is a Klingon conference.
+- **`devron_data`** is a third *"reported it and withdrew"* deed. §120 spent that
+  idea twice, on the two flags that carried it best.
+- **`devron_blind`** is the most interesting of the three — an inverse tachyon
+  pulse run off instruments the captain could not trust, unqualified, and it
+  worked — and both of its plausible hosts already read a Devron flag.
+
+Recorded now rather than discovered later. #247 predicted "two more batches of
+this quality"; this is the second, and it was two flags rather than three because
+the reading said two.
+
+### Guards and controls
+
+| guard | control | fires |
+| --- | --- | --- |
+| the veteran road is locked without the battle | drop the `requires` | ✓ |
+| and no captain is offered both Donatu roads | — | 0 of the episode's routes |
+| and it gains with the Klingons where the accord gains with Starfleet | give it the accord's split | ✓ |
+| the convoy road is locked without the run | drop the `requires` | ✓ |
+| and it is the only road there that costs Starfleet | remove the cost | ✓ |
+| and the flag is written by continuing, not turning back | — | measured |
+| no gate is guaranteed by a prerequisite episode | gate on `inquiry_resolved` | ✓ names it |
+
+### Verification
+
+- `node --test tests/*.test.js` — **2,106 passing**, 0 failing
+- `tools/verify-app.mjs` — 410/410
+- `dist/` and the APK rebuilt; manifest carries `VIBRATE` only, no `INTERNET`
+
+Seven flags to go. None is written in act 5; four are act-4 deeds that can reach
 only the final act.
 
 ## Attribution

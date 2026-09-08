@@ -76,6 +76,7 @@ const gameWith = (opts = {}) => new Game({
 // Endings count: a choice with an `outcome` finishes the episode, and the
 // ending's own effects are part of what that route wrote. That is the half that
 // makes `archanis_ratified` a synonym rather than a separate deed.
+const PLAYTHROUGHS_BY_EPISODE = new Map();
 const PLAYTHROUGHS = (() => {
   const out = [];
   const flagsOf = (fx) => (fx ? [].concat(fx.flag ?? []) : []);
@@ -101,7 +102,11 @@ const PLAYTHROUGHS = (() => {
         }
       }
     };
+    const before = out.length;
     walk(ep.start, [], 0, new Set([ep.start]));
+    // Kept per episode as well as flat: `requiresCompleted` asks what ONE
+    // episode always writes, which the flat list cannot answer.
+    PLAYTHROUGHS_BY_EPISODE.set(ep.id, out.slice(before));
   }
   return out;
 })();
@@ -1911,11 +1916,10 @@ describe('every episode graph is sound', () => {
       // is read by the faction-memory table and by `khitomer_accord`. §119.
       archanis_ratified: 'synonym',
 
-      badlands_run: 'candidate', borrowed_blade: 'candidate',
+      borrowed_blade: 'candidate',
       devron_blind: 'candidate',
       devron_data: 'candidate',
       dmz_favourable: 'candidate',
-      donatu_battle: 'candidate',
       grid_9902_contact: 'candidate',
       grid_answered_late: 'candidate',
       romulus_witness: 'candidate',
@@ -1930,6 +1934,18 @@ describe('every episode graph is sound', () => {
       // pass, and now the question. `consequences.test.js` recomputes the whole
       // set rather than describing it, because the register has now stated this
       // particular fact from memory twice and been wrong twice.
+      //
+      // `donatu_battle` and `badlands_run` left in §121.
+      //
+      // The first goes to the Khitomer table, beside the road §111 gave
+      // `donatu_accord` — the same battle, the other captain. The two flags
+      // co-occur in none of the book's playthroughs, being alternative endings
+      // of one episode, so no captain is ever offered both.
+      //
+      // The second goes to the Obsidian Order's interview room: a captain whose
+      // file says he suborns Cardassian officers in private, who took Cardassian
+      // crews into a plasma front under his own orders and buried them there in
+      // the open.
       //
       // `centauri_reported` and `organia_rebuffed` left in §120.
       //
@@ -2099,6 +2115,65 @@ describe('every episode graph is sound', () => {
       `only ${checked} episode-requirement/gate pairs exist, so this asserts little`);
     assert.deepEqual(offenders, [],
       `${offenders.length} gated choices are open to every captain who can reach them`);
+  });
+
+  test('and the same is true through an episode a captain had to finish first', () => {
+    // §119 wrote the guard above with a stated blind spot: implication measured
+    // within one episode, blind to the campaign-wide case where holding a flag
+    // means an earlier episode was completed, which in turn always writes
+    // another. This is that case, for the one shape of it the book actually
+    // has — `requiresCompleted`.
+    //
+    // Honest about its own size, because §114 was a guard narrower than its
+    // class that did not say so and §119 was written to fix that habit rather
+    // than repeat it: FOUR episodes declare `requiresCompleted`, and only two
+    // episodes in the book write anything on every route through them. So this
+    // is a regression guard, not a discovery — it found nothing when it was
+    // written, and it says so here rather than reading like a sweep that came
+    // back clean.
+    //
+    // It is worth having anyway, because the near miss is live:
+    //
+    //     court_martial cannot be finished without writing `inquiry_resolved`
+    //     utopia_certification requires court_martial to be finished
+    //
+    // so a gate on `inquiry_resolved` in that episode — an ordinary-looking
+    // thing to reach for, since it is the good outcome of the board the
+    // episode is about — would stand open for every captain who got in.
+    const unavoidable = (episodeId) => {
+      const mine = PLAYTHROUGHS_BY_EPISODE.get(episodeId) ?? [];
+      if (!mine.length) return new Set();
+      return new Set([...mine[0]].filter((f) => mine.every((r) => r.has(f))));
+    };
+
+    const offenders = [];
+    let pairs = 0;
+    for (const ep of EPISODES) {
+      const guaranteed = new Set();
+      for (const dep of ep.requiresCompleted ?? []) {
+        for (const f of unavoidable(dep)) guaranteed.add(f);
+      }
+      if (!guaranteed.size) continue;
+      for (const [stageId, stage] of Object.entries(ep.stages ?? {})) {
+        for (const c of stage.choices ?? []) {
+          if (!c.requires?.flag) continue;
+          pairs++;
+          if (guaranteed.has(c.requires.flag)) {
+            offenders.push(`${ep.id}/${stageId}/${c.id}: requires ${c.requires.flag}, `
+              + `which finishing ${ep.requiresCompleted.join(', ')} always writes`);
+          }
+        }
+      }
+    }
+    // The near miss, pinned. If `court_martial` ever gains a road that skips
+    // `inquiry_resolved`, this stops being a trap and the comment above is
+    // stale — better to be told than to leave the reasoning unchecked.
+    assert.ok(unavoidable('court_martial').has('inquiry_resolved'),
+      'court_martial no longer always writes inquiry_resolved, so the case above has changed');
+    assert.ok(EPISODES.some((e) => (e.requiresCompleted ?? []).includes('court_martial')),
+      'nothing requires court_martial any more, so this asserts nothing');
+    assert.deepEqual(offenders, [],
+      `${offenders.length} of ${pairs} gates are guaranteed by a prerequisite episode`);
   });
 
 
